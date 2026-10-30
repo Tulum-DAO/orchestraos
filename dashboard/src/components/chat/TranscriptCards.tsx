@@ -4,26 +4,29 @@
  *  - ThinkingCard     (collapsed by default)
  *  - ToolCard         (tool_use + paired result, collapsible; long output scrolls)
  *  - ToolGroupCard    (two or more consecutive calls folded to one line per turn)
- * Assistant prose is rendered by <Markdown/>.
+ * Assistant prose is the thread kit's Message (components/kit/Message.tsx).
  */
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { ChevronRight, ChevronDown, FileText } from 'lucide-react';
-import Markdown from './Markdown';
-import CopyButton from '../CopyButton';
-import ToolCalls, { type ToolRunEntry } from './ToolCalls';
+import Markdown from '../kit/Markdown';
+import { withRefs } from '../kit/RefText';
+import { scrubIds } from '../../lib/cardRefs';
+import Message from '../kit/Message';
+import ResultCard from '../kit/ResultCard';
+import ToolCalls, { type ToolRunEntry } from '../kit/ToolCard';
 import { AnsweredMultiPart } from './MultiPartCard';
 import { fromAskUserQuestion, matchBatchRecord, type BatchRecord } from '../../lib/multiPart';
 import { useBatchRecords } from '../../lib/batchRecords';
 import { fromBlock } from '../../lib/toolCalls';
-import { splitAttachments } from '../../lib/markdownBlocks';
+import { splitAttachments } from '../../lib/threadKit/markdown';
 import { type ToolBlock, type RenderNode } from '../../lib/transcript';
 import { type GroupedNode, type ToolGroupNode } from '../../lib/toolGroups';
 import { parseMessageSegments, hasPasteMarkers } from '../../lib/pastedText';
 import { parseSystemMessage, type SystemMessage, type MachineKind } from '../../lib/systemMessages';
 import AgentMessage from './AgentMessage';
-import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
-import VoiceCallCard from './VoiceCallCard';
+import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/threadKit/calls';
+import CallCard from '../kit/CallCard';
 import { type ToolDensity } from '../../lib/toolCardDetail';
 
 /**
@@ -177,7 +180,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
       )}
       {(words || !attachments.length) && (
         <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-[13px] leading-relaxed text-white whitespace-pre-wrap break-words">
-          {words}
+          {withRefs(words)}
         </div>
       )}
       {queued && (
@@ -213,19 +216,19 @@ export function SystemMessageCard({ msg, raw }: { msg: SystemMessage; raw: strin
       <div className={clsx('max-w-[85%] min-w-0 rounded-xl border bg-neutral-950/80 px-2.5 py-1.5', border)}>
         <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 text-left">
           <span className={clsx('text-[11px] w-3.5 text-center shrink-0', accent)} aria-hidden>{glyph}</span>
-          <span className="text-[11px] font-semibold text-neutral-200 truncate">{msg.headline}</span>
+          <span className="text-[11px] font-semibold text-neutral-200 truncate">{scrubIds(msg.headline)}</span>
           {msg.urgent && <span className="text-[10px] text-amber-300">· {msg.detail}</span>}
           <span className="ml-auto pl-2"><Caret open={open} /></span>
         </button>
         {open ? (
-          <div className="mt-1 max-h-80 overflow-y-auto text-[11px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words select-text">{raw}</div>
+          <div className="mt-1 max-h-80 overflow-y-auto text-[11px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words select-text">{withRefs(raw)}</div>
         ) : (
           <div className="mt-0.5 pl-5 space-y-0.5 select-text">
-            {msg.subject && <div className="text-[12px] text-neutral-200 break-words">{msg.subject}</div>}
+            {msg.subject && <div className="text-[12px] text-neutral-200 break-words">{withRefs(msg.subject)}</div>}
             {msg.detail && !msg.urgent && msg.kind !== 'task' && msg.kind !== 'approval' && (
-              <div className={clsx('text-[12px] font-medium break-words', accent)}>→ {msg.detail}</div>
+              <div className={clsx('text-[12px] font-medium break-words', accent)}>→ {withRefs(msg.detail)}</div>
             )}
-            {msg.note && <div className="text-[11px] text-neutral-500 break-words">{msg.note}</div>}
+            {msg.note && <div className="text-[11px] text-neutral-500 break-words">{withRefs(msg.note)}</div>}
           </div>
         )}
       </div>
@@ -242,7 +245,7 @@ export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'qu
     <div className="flex flex-col items-end" data-testid="pending-bubble" data-pending-kind={kind}>
       <div className={clsx('max-w-[85%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words',
         waiting ? 'bg-blue-600/25 text-white/70' : 'bg-blue-600/50 text-white/85')}>
-        {text}
+        {withRefs(text)}
       </div>
       {kind !== 'sent' && (
         <span className="mt-0.5 text-[9px] uppercase tracking-wide text-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
@@ -283,7 +286,7 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
                   <span className="text-[10px] text-neutral-500">{relativeAgo(e.sent_ts)}</span>
                 </div>
                 <div className="mt-0.5 text-[12px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words">
-                  {e.body}
+                  {withRefs(e.body)}
                 </div>
               </div>
               );
@@ -314,11 +317,11 @@ export function ThinkingCard({ text }: { text: string }) {
           className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300 italic"
         >
           <Caret open={open} />
-          <span>💭 {open ? 'Thinking' : firstLine + '…'}</span>
+          <span>💭 {open ? 'Thinking' : scrubIds(firstLine) + '…'}</span>
         </button>
         {open && (
           <div className="mt-1 pl-4 border-l-2 border-neutral-800 text-[12px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words">
-            {text}
+            {withRefs(text)}
           </div>
         )}
       </div>
@@ -347,7 +350,7 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
   const records = useBatchRecords();
   const asked = answeredQuestion(block, records);
   if (asked) return asked;
-  // The one tool card (components/chat/ToolCalls.tsx), shared with Arturo's page.
+  // The kit's one tool card (components/kit/ToolCard.tsx), shared with Arturo's page.
   return (
     <div className="flex justify-start">
       <ToolCalls calls={[fromBlock(block)]} density={density} />
@@ -406,7 +409,7 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
           <div className="flex flex-col items-stretch gap-1">
             {segs.map((s, i) =>
               s.kind === 'voicecall' ? (
-                <div key={i} className="flex justify-start"><VoiceCallCard callId={s.callId} /></div>
+                <div key={i} className="flex justify-start"><CallCard skin="bubbles" callId={s.callId} /></div>
               ) : hasPasteMarkers(s.text) ? (
                 <MessageGroup key={i} text={s.text} sender="user" />
               ) : (
@@ -422,22 +425,13 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
     }
     case 'queued_batch':
       return <QueuedBatchCard count={node.count} entries={node.entries} />;
+    case 'result':
+      return <ResultCard results={node.results} skin="bubbles" view={node.view} />;
     case 'assistant':
       return hasPasteMarkers(node.text)
         ? <MessageGroup text={node.text} sender="assistant" />
-        : (
-          <div className="flex justify-start group">
-            <div className="w-full">
-              <Markdown text={node.text} />
-              {/* The reply's time, and a copy button (the words, as written) that shows on hover, or always on touch. */}
-              <div className="flex items-center gap-1">
-                <MessageTime ts={node.ts} />
-                <CopyButton text={node.text} label="Copy reply" size={12}
-                            className="mt-0.5 text-neutral-500 hover:text-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
-              </div>
-            </div>
-          </div>
-        );
+        // The kit's reply: the time, and a copy button (the words, as written) that shows on hover, or always on touch.
+        : <Message text={node.text} skin="bubbles" meta={<MessageTime ts={node.ts} />} />;
     case 'thinking':
       return <ThinkingCard text={node.text} />;
     case 'tool':

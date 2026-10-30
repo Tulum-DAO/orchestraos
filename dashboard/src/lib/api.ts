@@ -127,6 +127,8 @@ export const fetchAgents = () => get('/agents');
 export interface AgentMessageBody {
   id: string; from_agent: string; to_agent: string; priority: string | null;
   subject: string | null; body: string | null; created_at: string | null;
+  /** msg_store's type; phase_report and handoff are drawn as a result card. Absent on an older server. */
+  type?: string | null;
 }
 export const fetchAgentMessage = (agentId: string, msgId: string) =>
   get<AgentMessageBody>(`/agents/${encodeURIComponent(agentId)}/messages/${encodeURIComponent(msgId)}`);

@@ -17,7 +17,8 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchQuestionnaire } from '../lib/api';
 import { questionnaireSummary } from '../lib/questionnaireForm';
 import { questionnaireAnswers, questionnaireBody, questionnaireParts, type PartAnswer, type QuestionnaireQuestion } from '../lib/multiPart';
-import { AnsweredQuestionCard, QuestionCard } from './chat/MultiPartCard';
+import { AnsweredQuestionCard, QuestionCard, type CardReport } from './chat/MultiPartCard';
+import { refState } from '../lib/cardRefs';
 import Markdown from './chat/Markdown';
 
 interface LiveDetail {
@@ -31,7 +32,7 @@ interface LiveDetail {
 
 interface SubmitResult { ok?: boolean; applied?: boolean; missing?: number[]; status?: string; error?: string }
 
-export default function QuestionnaireForm({ id }: { id: string }) {
+export default function QuestionnaireForm({ id, onAnswered }: { id: string; /** After a send (a chip's popover closes). */ onAnswered?: () => void }) {
   const [dismissed, setDismissed] = useState(false);
   const { data, isLoading, error } = useQuery({
     queryKey: ['questionnaire', id],
@@ -48,12 +49,14 @@ export default function QuestionnaireForm({ id }: { id: string }) {
   const context = summary ? <div className="text-[13px] leading-relaxed text-card-foreground/85" data-testid="qnr-summary"><Markdown text={summary} /></div> : null;
   const title = data.title || 'Questionnaire';
   const meta = data.from_agent ? <>· {data.from_agent}</> : null;
+  const report: CardReport = { id: data.id, kind: 'questionnaire', from: data.from_agent ?? null, question: title, summary: summary || null };
 
   if (data.status !== 'pending') {
     return (
       <div data-testid="qnr-done">
         <AnsweredQuestionCard title={title} meta={meta} context={context} parts={parts}
-          answers={questionnaireAnswers(parts, data.questions)} note={`This questionnaire is ${data.status}.`} />
+          answers={questionnaireAnswers(parts, data.questions)} note={`This questionnaire is ${data.status}.`}
+          report={{ ...report, state: refState(data.status) }} />
       </div>
     );
   }
@@ -71,7 +74,7 @@ export default function QuestionnaireForm({ id }: { id: string }) {
       return 'Couldn’t reach OrchestraOS. Nothing was sent.';
     }
     // Sent: the answered card stays until the page's own poll moves the questionnaire out of the pending list.
-    if (r.applied) return null;
+    if (r.applied) { onAnswered?.(); return null; }
     if (r.missing?.length) return `Question ${r.missing.join(', ')} still needs an answer. Go Back to it.`;
     return r.status ? `This questionnaire is ${r.status}.` : 'Couldn’t send. Try again.';
   };
@@ -92,7 +95,8 @@ export default function QuestionnaireForm({ id }: { id: string }) {
   return (
     <div data-testid="qnr-form">
       <QuestionCard key={data.id} title={title} meta={meta} context={context} parts={parts}
-        initial={questionnaireAnswers(parts, data.questions)} onSubmit={submit} onDismiss={dismiss} dismissed={dismissed} />
+        initial={questionnaireAnswers(parts, data.questions)} onSubmit={submit} onDismiss={dismiss} dismissed={dismissed}
+        report={report} />
     </div>
   );
 }

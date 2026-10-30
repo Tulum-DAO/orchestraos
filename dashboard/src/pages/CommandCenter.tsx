@@ -92,17 +92,17 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
   return (
     <div
       className={clsx(
-        'rounded-xl border bg-neutral-900 overflow-hidden',
-        isClient ? 'border-l-4 border-l-violet-500 border-neutral-800' : 'border-neutral-800',
+        'rounded-xl border bg-tone-900 overflow-hidden',
+        isClient ? 'border-l-4 border-l-violet-500 border-tone-800' : 'border-tone-800',
       )}
     >
       {/* Header */}
       <div className="p-5 pb-0">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="text-lg font-semibold text-white truncate">{project.slug}</h3>
+            <h3 className="text-lg font-semibold text-tone-white truncate">{project.slug}</h3>
             {isClient && (
-              <p className="text-xs text-violet-400 mt-0.5">{project.client!.name}</p>
+              <p className="text-xs text-tone-violet-400 mt-0.5">{project.client!.name}</p>
             )}
           </div>
 
@@ -114,7 +114,7 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
                 href={project.deliverables_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-violet-500/15 text-violet-400 hover:bg-violet-500/25 transition-colors font-medium"
+                className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-violet-500/15 text-tone-violet-400 hover:bg-violet-500/25 transition-colors font-medium"
               >
                 <ExternalLink size={12} /> Deliverables
               </a>
@@ -125,7 +125,7 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
                 href={project.staging_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-300 hover:text-white hover:bg-neutral-700 transition-colors"
+                className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-tone-800 text-tone-300 hover:text-tone-white hover:bg-tone-700 transition-colors"
               >
                 <ExternalLink size={12} /> Staging
               </a>
@@ -139,20 +139,20 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
         {/* Last commit */}
         {project.git && (
           <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs text-neutral-500">
+            <div className="flex items-center gap-2 text-xs text-tone-500">
               <GitCommit size={12} />
-              <span className="font-mono text-neutral-400">{project.git.hash}</span>
+              <span className="font-mono text-tone-400">{project.git.hash}</span>
               <span>{timeAgo(project.git.date)}</span>
-              <span className="ml-auto text-neutral-600">{project.git.author}</span>
+              <span className="ml-auto text-tone-600">{project.git.author}</span>
             </div>
-            <p className="text-sm text-neutral-400 truncate">{truncate(project.git.message, 80)}</p>
+            <p className="text-sm text-tone-400 truncate">{truncate(project.git.message, 80)}</p>
           </div>
         )}
 
         {/* Activity bar */}
         <div className="space-y-1">
-          <p className="text-xs text-neutral-500">{project.commits_14d} commits in 14 days</p>
-          <div className="h-1.5 rounded-full bg-neutral-800 overflow-hidden">
+          <p className="text-xs text-tone-500">{project.commits_14d} commits in 14 days</p>
+          <div className="h-1.5 rounded-full bg-tone-800 overflow-hidden">
             <div
               className="h-full rounded-full bg-violet-500/70 transition-all"
               style={{ width: `${commitPct}%` }}
@@ -167,13 +167,13 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
               <div
                 key={agent.id}
                 title={`${agent.name} (${agent.tier}) — ${agent.alive ? 'online' : 'stopped'}`}
-                className="relative w-7 h-7 rounded-full bg-neutral-800 flex items-center justify-center text-[10px] font-bold text-neutral-300 cursor-default"
+                className="relative w-7 h-7 rounded-full bg-tone-800 flex items-center justify-center text-[10px] font-bold text-tone-300 cursor-default"
               >
                 {agent.name.charAt(0).toUpperCase()}
                 <span
                   className={clsx(
-                    'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-neutral-900',
-                    agent.alive ? 'bg-green-500' : 'bg-neutral-600',
+                    'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-tone-900',
+                    agent.alive ? 'bg-green-500' : 'bg-tone-600',
                   )}
                 />
               </div>
@@ -185,14 +185,14 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
         {roadmap && roadmap.total_phases > 0 && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-neutral-400">
+              <span className="text-tone-400">
                 Phase {roadmap.current_phase}/{roadmap.total_phases}
               </span>
-              <span className="text-neutral-500 truncate ml-2 max-w-[60%] text-right">
+              <span className="text-tone-500 truncate ml-2 max-w-[60%] text-right">
                 {roadmap.phase_label}
               </span>
             </div>
-            <div className="h-1.5 rounded-full bg-neutral-800 overflow-hidden">
+            <div className="h-1.5 rounded-full bg-tone-800 overflow-hidden">
               <div
                 className="h-full rounded-full bg-blue-500/70 transition-all"
                 style={{ width: `${roadmapPct}%` }}
@@ -205,22 +205,22 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
         {project.tasks.total > 0 && (
           <div className="flex flex-wrap gap-2">
             {project.tasks.pending > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-400">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-tone-800 text-tone-400">
                 {project.tasks.pending} pending
               </span>
             )}
             {project.tasks.in_progress > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-tone-blue-400">
                 {project.tasks.in_progress} active
               </span>
             )}
             {project.tasks.completed > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-tone-green-400">
                 {project.tasks.completed} done
               </span>
             )}
             {project.tasks.blocked > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-tone-red-400">
                 {project.tasks.blocked} blocked
               </span>
             )}
@@ -231,12 +231,12 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
       {/* Blockers */}
       {hasBlockers && (
         <div className="border-t border-red-500/20 bg-red-500/5 px-5 py-3">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-red-400 mb-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-tone-red-400 mb-1.5">
             <AlertTriangle size={12} /> Blockers
           </div>
           <ul className="space-y-1">
             {project.blockers.map((b, i) => (
-              <li key={i} className="text-xs text-red-300/80 truncate">
+              <li key={i} className="text-xs text-tone-red-300/80 truncate">
                 {b.title || b.description || 'Unnamed blocker'}
               </li>
             ))}
@@ -268,18 +268,18 @@ const REFERENCE_HUBS: ReferenceHub[] = [];
 const ACCENT_STYLES = {
   violet: {
     border: 'border-l-violet-500',
-    icon: 'text-violet-400',
-    btn: 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25',
+    icon: 'text-tone-violet-400',
+    btn: 'bg-violet-500/15 text-tone-violet-400 hover:bg-violet-500/25',
   },
   green: {
     border: 'border-l-emerald-500',
-    icon: 'text-emerald-400',
-    btn: 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25',
+    icon: 'text-tone-emerald-400',
+    btn: 'bg-emerald-500/15 text-tone-emerald-400 hover:bg-emerald-500/25',
   },
   amber: {
     border: 'border-l-amber-500',
-    icon: 'text-amber-400',
-    btn: 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25',
+    icon: 'text-tone-amber-400',
+    btn: 'bg-amber-500/15 text-tone-amber-400 hover:bg-amber-500/25',
   },
 };
 
@@ -288,7 +288,7 @@ function ReferenceHubCard({ hub }: { hub: ReferenceHub }) {
   return (
     <div
       className={clsx(
-        'rounded-xl border bg-neutral-900 overflow-hidden border-l-4 border-neutral-800',
+        'rounded-xl border bg-tone-900 overflow-hidden border-l-4 border-tone-800',
         accent.border,
       )}
     >
@@ -297,8 +297,8 @@ function ReferenceHubCard({ hub }: { hub: ReferenceHub }) {
           <div className="min-w-0 flex items-start gap-3">
             <BookOpen size={20} className={clsx('shrink-0 mt-0.5', accent.icon)} />
             <div className="min-w-0">
-              <h3 className="text-lg font-semibold text-white truncate">{hub.title}</h3>
-              <p className="text-xs text-neutral-500 mt-0.5">{hub.subtitle}</p>
+              <h3 className="text-lg font-semibold text-tone-white truncate">{hub.title}</h3>
+              <p className="text-xs text-tone-500 mt-0.5">{hub.subtitle}</p>
             </div>
           </div>
           <a
@@ -313,7 +313,7 @@ function ReferenceHubCard({ hub }: { hub: ReferenceHub }) {
             <ExternalLink size={12} /> Docs
           </a>
         </div>
-        <p className="text-sm text-neutral-400 mt-3 leading-relaxed">{hub.description}</p>
+        <p className="text-sm text-tone-400 mt-3 leading-relaxed">{hub.description}</p>
       </div>
     </div>
   );
@@ -371,8 +371,8 @@ export default function CommandCenter() {
   if (isLoading) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-neutral-100 mb-6">Command Center</h1>
-        <p className="text-neutral-500">Loading projects...</p>
+        <h1 className="text-2xl font-bold text-foreground mb-6">Command Center</h1>
+        <p className="text-tone-500">Loading projects...</p>
       </div>
     );
   }
@@ -380,8 +380,8 @@ export default function CommandCenter() {
   if (error) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-neutral-100 mb-6">Command Center</h1>
-        <p className="text-red-400">Failed to load project status.</p>
+        <h1 className="text-2xl font-bold text-foreground mb-6">Command Center</h1>
+        <p className="text-tone-red-400">Failed to load project status.</p>
       </div>
     );
   }
@@ -393,11 +393,11 @@ export default function CommandCenter() {
     <div className="p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-neutral-100">Command Center</h1>
-        <p className="text-sm text-neutral-500 mt-0.5">
+        <h1 className="text-2xl font-bold text-foreground">Command Center</h1>
+        <p className="text-sm text-tone-500 mt-0.5">
           {projects.length} projects &middot; {totalAgents} agents online
           {totalBlockers > 0 && (
-            <span className="text-red-400"> &middot; {totalBlockers} blocker{totalBlockers !== 1 ? 's' : ''}</span>
+            <span className="text-tone-red-400"> &middot; {totalBlockers} blocker{totalBlockers !== 1 ? 's' : ''}</span>
           )}
         </p>
       </div>
@@ -405,7 +405,7 @@ export default function CommandCenter() {
       {/* Reference Hubs — vendor docs / internal aggregators */}
       {REFERENCE_HUBS.length > 0 && (
         <div>
-          <h2 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+          <h2 className="text-xs font-semibold text-tone-500 uppercase tracking-wider mb-3">
             Reference Hubs
           </h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
@@ -418,7 +418,7 @@ export default function CommandCenter() {
 
       {/* Projects */}
       <div>
-        <h2 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+        <h2 className="text-xs font-semibold text-tone-500 uppercase tracking-wider mb-3">
           Projects
         </h2>
         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
@@ -429,7 +429,7 @@ export default function CommandCenter() {
       </div>
 
       {projects.length === 0 && (
-        <p className="text-neutral-600 text-center py-12">No projects found</p>
+        <p className="text-tone-600 text-center py-12">No projects found</p>
       )}
     </div>
   );

@@ -104,8 +104,8 @@ export default function Overview() {
   if (agentsLoading || tasksLoading) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-neutral-100 mb-6">Overview</h1>
-        <p className="text-neutral-500">Loading...</p>
+        <h1 className="text-2xl font-bold text-foreground mb-6">Overview</h1>
+        <p className="text-tone-500">Loading...</p>
       </div>
     );
   }
@@ -148,15 +148,15 @@ export default function Overview() {
       {/* Confirmation Dialog */}
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="rounded-xl border border-neutral-700 bg-neutral-900 p-6 max-w-md w-full shadow-2xl">
-            <h3 className="text-lg font-semibold text-neutral-100 mb-2">Going Dark</h3>
-            <p className="text-sm text-neutral-400 mb-4">
+          <div className="rounded-xl border border-tone-700 bg-tone-900 p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-lg font-semibold text-tone-100 mb-2">Going Dark</h3>
+            <p className="text-sm text-tone-400 mb-4">
               Snapshot Mac agents and switch to VPS-only mode? The VPS will continue work autonomously while you're away.
             </p>
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setShowConfirm(false)}
-                className="px-4 py-2 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors"
+                className="px-4 py-2 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors"
               >
                 Cancel
               </button>
@@ -175,27 +175,27 @@ export default function Overview() {
       {/* Return Report Modal */}
       {showReport && transitReport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="rounded-xl border border-neutral-700 bg-neutral-900 p-6 max-w-md w-full shadow-2xl">
-            <h3 className="text-lg font-semibold text-neutral-100 mb-3">Transit Report</h3>
+          <div className="rounded-xl border border-tone-700 bg-tone-900 p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-lg font-semibold text-tone-100 mb-3">Transit Report</h3>
             <div className="space-y-2 text-sm mb-4">
-              <div className="flex justify-between text-neutral-300">
-                <span className="text-neutral-500">Duration</span>
+              <div className="flex justify-between text-tone-300">
+                <span className="text-tone-500">Duration</span>
                 <span>{transitReport.duration_minutes} minutes</span>
               </div>
-              <div className="flex justify-between text-neutral-300">
-                <span className="text-neutral-500">Agents recovered</span>
+              <div className="flex justify-between text-tone-300">
+                <span className="text-tone-500">Agents recovered</span>
                 <span>{transitReport.mac_agents_recovered}</span>
               </div>
-              <div className="flex justify-between text-neutral-300">
-                <span className="text-neutral-500">Tasks continued</span>
+              <div className="flex justify-between text-tone-300">
+                <span className="text-tone-500">Tasks continued</span>
                 <span>{transitReport.tasks_continued}</span>
               </div>
-              <div className="flex justify-between text-neutral-300">
-                <span className="text-neutral-500">Tasks completed</span>
-                <span className="text-green-400">{transitReport.tasks_completed}</span>
+              <div className="flex justify-between text-tone-300">
+                <span className="text-tone-500">Tasks completed</span>
+                <span className="text-tone-green-400">{transitReport.tasks_completed}</span>
               </div>
               {transitReport.summary && (
-                <p className="text-neutral-400 mt-2 pt-2 border-t border-neutral-800">
+                <p className="text-tone-400 mt-2 pt-2 border-t border-tone-800">
                   {transitReport.summary}
                 </p>
               )}
@@ -203,7 +203,7 @@ export default function Overview() {
             <div className="flex justify-end">
               <button
                 onClick={() => setShowReport(false)}
-                className="px-4 py-2 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors"
+                className="px-4 py-2 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors"
               >
                 Got it
               </button>
@@ -217,10 +217,10 @@ export default function Overview() {
           endpoints and the transit banner above are untouched). */}
       {/* md:mr-28: the layout's fixed top-right Arturo + bell cluster (DashboardLayout) floats over this corner on desktop */}
       <div className="flex items-center justify-between md:mr-28">
-        <h1 className="text-2xl font-bold text-neutral-100">Overview</h1>
+        <h1 className="text-2xl font-bold text-foreground">Overview</h1>
         {showNewAgent() && <button
           onClick={() => setShowNewAgentModal(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-blue-900/50 border border-blue-700/50 text-blue-200 hover:bg-blue-800/60 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-tone-blue-900/50 border border-blue-700/50 text-tone-blue-200 hover:bg-tone-blue-800/60 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path strokeLinecap="round" d="M12 5v14M5 12h14" />
@@ -239,10 +239,10 @@ export default function Overview() {
       {/* Needs You — a dead feed must not render as calm */}
       {attentionFailed && (
         <div className="mb-6">
-          <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-3">Needs You</h2>
-          <div className="p-3 rounded-lg bg-neutral-800/50 border-l-2 border-red-500">
-            <div className="text-sm text-red-300">Attention feed unavailable</div>
-            <div className="text-xs text-neutral-400 mt-1">
+          <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider mb-3">Needs You</h2>
+          <div className="p-3 rounded-lg bg-tone-800/50 border-l-2 border-red-500">
+            <div className="text-sm text-tone-red-300">Attention feed unavailable</div>
+            <div className="text-xs text-tone-400 mt-1">
               <code>/api/context/needs-attention</code> is not responding — this panel is
               NOT saying nothing needs you. Check the Inbox and Approvals pages directly.
             </div>
@@ -251,12 +251,12 @@ export default function Overview() {
       )}
       {!attentionFailed && attentionItems.length > 0 && (
         <div className="mb-6">
-          <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-3">Needs You</h2>
+          <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider mb-3">Needs You</h2>
           <div className="space-y-2">
             {attentionItems.map((item: any, i: number) => (
               <div
                 key={i}
-                className={`p-3 rounded-lg bg-neutral-800/50 border-l-2 ${
+                className={`p-3 rounded-lg bg-tone-800/50 border-l-2 ${
                   item.type === 'messages'
                     ? 'border-blue-500'
                     : item.type === 'stale'
@@ -268,15 +268,15 @@ export default function Overview() {
                   <span
                     className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                       item.type === 'messages'
-                        ? 'bg-blue-500/20 text-blue-400'
+                        ? 'bg-blue-500/20 text-tone-blue-400'
                         : item.type === 'stale'
-                          ? 'bg-amber-500/20 text-amber-400'
-                          : 'bg-purple-500/20 text-purple-400'
+                          ? 'bg-amber-500/20 text-tone-amber-400'
+                          : 'bg-purple-500/20 text-tone-purple-400'
                     }`}
                   >
                     {item.type}
                   </span>
-                  <span className="text-sm text-neutral-200">{item.label}</span>
+                  <span className="text-sm text-tone-200">{item.label}</span>
                 </div>
               </div>
             ))}
@@ -322,14 +322,14 @@ export default function Overview() {
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Agent Fleet Table */}
-        <div className="lg:col-span-2 rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
+        <div className="lg:col-span-2 rounded-xl border border-tone-800 bg-tone-900 p-4 overflow-x-auto">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider">Agent Fleet</h2>
+            <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider">Agent Fleet</h2>
             <FleetRecoveryModal />
           </div>
           <table className="w-full text-sm min-w-[500px]">
             <thead>
-              <tr className="text-neutral-500 text-xs uppercase tracking-wider">
+              <tr className="text-tone-500 text-xs uppercase tracking-wider">
                 <th className="text-left pb-2 font-medium">Agent</th>
                 <th className="text-left pb-2 font-medium">Tier</th>
                 <th className="text-left pb-2 font-medium">Machine</th>
@@ -338,28 +338,28 @@ export default function Overview() {
             </thead>
             <tbody>
               {sortedAgents.map((agent: any) => (
-                <tr key={agent.id} className="border-t border-neutral-800/50 hover:bg-neutral-800/30">
+                <tr key={agent.id} className="border-t border-tone-800/50 hover:bg-tone-800/30">
                   <td className="py-2 flex items-center gap-2">
                     <StatusDot status={agent.alive ? 'running' : 'stopped'} />
-                    <span className="text-neutral-100">{agent.name}</span>
+                    <span className="text-tone-100">{agent.name}</span>
                   </td>
                   <td className="py-2"><TierBadge tier={agent.tier} /></td>
-                  <td className="py-2 text-neutral-400">{agent.machine || '\u2014'}</td>
-                  <td className="py-2 text-neutral-500 truncate max-w-[200px]">
+                  <td className="py-2 text-tone-400">{agent.machine || '\u2014'}</td>
+                  <td className="py-2 text-tone-500 truncate max-w-[200px]">
                     {agent.current_task || agent.state || '\u2014'}
                   </td>
                 </tr>
               ))}
               {sortedAgents.length === 0 && (
-                <tr><td colSpan={4} className="py-4 text-neutral-600 text-center">No agents registered</td></tr>
+                <tr><td colSpan={4} className="py-4 text-tone-600 text-center">No agents registered</td></tr>
               )}
             </tbody>
           </table>
         </div>
 
         {/* Live Activity Feed */}
-        <div className="lg:col-span-1 rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-3">Live Activity</h2>
+        <div className="lg:col-span-1 rounded-xl border border-tone-800 bg-tone-900 p-4">
+          <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider mb-3">Live Activity</h2>
           <div className="max-h-96 overflow-y-auto">
             <LiveFeed limit={30} />
           </div>
@@ -369,52 +369,52 @@ export default function Overview() {
       {/* Bottom sections: Current Focus + Today's Progress */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         {/* Current Focus */}
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4 border-l-4 border-l-amber-500/70">
-          <h2 className="text-xs font-semibold text-amber-400/70 uppercase tracking-wider mb-2">
+        <div className="rounded-xl border border-tone-800 bg-tone-900 p-4 border-l-4 border-l-amber-500/70">
+          <h2 className="text-xs font-semibold text-tone-amber-400/70 uppercase tracking-wider mb-2">
             Current Focus
           </h2>
           {context?.top_of_mind ? (
-            <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">
+            <p className="text-sm text-tone-300 leading-relaxed whitespace-pre-wrap">
               {context.top_of_mind}
             </p>
           ) : (
-            <p className="text-sm text-neutral-600 italic">No focus set — update on the Strategy page</p>
+            <p className="text-sm text-tone-600 italic">No focus set — update on the Strategy page</p>
           )}
         </div>
 
         {/* Today's Progress */}
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-          <h2 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-2">
+        <div className="rounded-xl border border-tone-800 bg-tone-900 p-4">
+          <h2 className="text-xs font-semibold text-tone-400 uppercase tracking-wider mb-2">
             Today's Progress
           </h2>
           {completedTasks.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-sm text-green-400">
+              <p className="text-sm text-tone-green-400">
                 {completedTasks.length} task{completedTasks.length !== 1 ? 's' : ''} completed today
               </p>
               <div className="space-y-1.5 mt-2">
                 {completedTasks.slice(0, 8).map((task: any, i: number) => (
                   <div key={task.id || i} className="flex items-center gap-2 text-xs">
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
-                    <span className="text-neutral-300 truncate">{task.name || task.title || 'Untitled task'}</span>
+                    <span className="text-tone-300 truncate">{task.name || task.title || 'Untitled task'}</span>
                     {task.agent && (
-                      <span className="ml-auto text-neutral-600 shrink-0">{task.agent}</span>
+                      <span className="ml-auto text-tone-600 shrink-0">{task.agent}</span>
                     )}
                   </div>
                 ))}
                 {completedTasks.length > 8 && (
-                  <p className="text-xs text-neutral-600 mt-1">
+                  <p className="text-xs text-tone-600 mt-1">
                     +{completedTasks.length - 8} more
                   </p>
                 )}
               </div>
             </div>
           ) : tasksToday > 0 ? (
-            <p className="text-sm text-neutral-500">
+            <p className="text-sm text-tone-500">
               {tasksToday} task{tasksToday !== 1 ? 's' : ''} in progress — no completions yet today
             </p>
           ) : (
-            <p className="text-sm text-neutral-600">No completions yet today</p>
+            <p className="text-sm text-tone-600">No completions yet today</p>
           )}
         </div>
       </div>
@@ -473,21 +473,21 @@ function TransitBanner({
   }, [startedAt]);
 
   return (
-    <div className="rounded-xl border border-amber-700/60 bg-amber-950/60 px-5 py-3 flex flex-wrap items-center gap-4">
+    <div className="rounded-xl border border-amber-700/60 bg-tone-amber-950/60 px-5 py-3 flex flex-wrap items-center gap-4">
       <div className="flex items-center gap-2 shrink-0">
-        <svg className="w-5 h-5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+        <svg className="w-5 h-5 text-tone-amber-400" fill="currentColor" viewBox="0 0 20 20">
           <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
         </svg>
-        <span className="text-sm font-semibold text-amber-300 uppercase tracking-wider">Transit Mode</span>
+        <span className="text-sm font-semibold text-tone-amber-300 uppercase tracking-wider">Transit Mode</span>
       </div>
-      <span className="text-sm text-amber-200/70">
+      <span className="text-sm text-tone-amber-200/70">
         Mac offline — VPS continuing {taskCount} task{taskCount !== 1 ? 's' : ''}
       </span>
-      <span className="ml-auto text-sm font-mono text-amber-300/80">{elapsed}</span>
+      <span className="ml-auto text-sm font-mono text-tone-amber-300/80">{elapsed}</span>
       <button
         onClick={onReturn}
         disabled={returning}
-        className="ml-2 px-4 py-1.5 text-sm rounded-lg bg-green-700 text-green-100 hover:bg-green-600 transition-colors disabled:opacity-50 shrink-0"
+        className="ml-2 px-4 py-1.5 text-sm rounded-lg bg-green-700 text-tone-green-100 hover:bg-green-600 transition-colors disabled:opacity-50 shrink-0"
       >
         {returning ? 'Returning...' : "I'm Back"}
       </button>
@@ -548,45 +548,45 @@ function MachineStatusSection({ system, agents = [] }: { system: any; agents?: M
     ? Date.now() - new Date(sync.last_sync).getTime()
     : null;
   const syncColor = !syncAge
-    ? 'text-neutral-500'
+    ? 'text-tone-500'
     : syncAge < 5 * 60_000
-      ? 'text-green-400'
+      ? 'text-tone-green-400'
       : syncAge < 15 * 60_000
-        ? 'text-yellow-400'
-        : 'text-red-400';
+        ? 'text-tone-yellow-400'
+        : 'text-tone-red-400';
 
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* Mac card */}
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <div className="rounded-xl border border-tone-800 bg-tone-900 p-4">
           <div className="flex items-center gap-2 mb-2">
             <span className={`inline-block w-2.5 h-2.5 rounded-full ${STATUS_DOT[macStatus] || 'bg-red-500'}`} />
-            <h3 className="text-sm font-semibold text-neutral-100">MacBook</h3>
-            <span className="text-xs text-neutral-500 capitalize">{macStatus}</span>
+            <h3 className="text-sm font-semibold text-tone-100">MacBook</h3>
+            <span className="text-xs text-tone-500 capitalize">{macStatus}</span>
           </div>
-          <div className="space-y-1 text-sm text-neutral-400">
+          <div className="space-y-1 text-sm text-tone-400">
             <p>{countOf(mac?.agents_hosted)} registered</p>
             <p>{aliveOnMachine(agents, 'mac')} alive</p>
-            <p className="text-xs text-neutral-600">{mac?.agents_alive ?? 0} tmux sessions</p>
+            <p className="text-xs text-tone-600">{mac?.agents_alive ?? 0} tmux sessions</p>
             <p>Last heartbeat: {relativeTime(mac?.last_heartbeat)}</p>
             {mac?.consecutive_failures > 0 && (
-              <p className="text-amber-400">{mac.consecutive_failures} consecutive failure{mac.consecutive_failures !== 1 ? 's' : ''}</p>
+              <p className="text-tone-amber-400">{mac.consecutive_failures} consecutive failure{mac.consecutive_failures !== 1 ? 's' : ''}</p>
             )}
           </div>
         </div>
 
         {/* VPS card */}
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <div className="rounded-xl border border-tone-800 bg-tone-900 p-4">
           <div className="flex items-center gap-2 mb-2">
             <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" />
-            <h3 className="text-sm font-semibold text-neutral-100">VPS {vps?.hostname ? `(${vps.hostname})` : ''}</h3>
-            <span className="text-xs text-neutral-500 capitalize">{vpsStatus}</span>
+            <h3 className="text-sm font-semibold text-tone-100">VPS {vps?.hostname ? `(${vps.hostname})` : ''}</h3>
+            <span className="text-xs text-tone-500 capitalize">{vpsStatus}</span>
           </div>
-          <div className="space-y-1 text-sm text-neutral-400">
+          <div className="space-y-1 text-sm text-tone-400">
             <p>{countOf(vps?.agents_hosted)} registered</p>
             <p>{aliveOnMachine(agents, 'vps')} alive</p>
-            <p className="text-xs text-neutral-600">{vps?.agents_alive ?? 0} tmux sessions</p>
+            <p className="text-xs text-tone-600">{vps?.agents_alive ?? 0} tmux sessions</p>
             <p>Always on</p>
           </div>
         </div>
@@ -595,11 +595,11 @@ function MachineStatusSection({ system, agents = [] }: { system: any; agents?: M
       {/* Sync status */}
       {sync && (
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-neutral-500">Sync:</span>
+          <span className="text-tone-500">Sync:</span>
           <span className={syncColor}>
             {sync.last_sync ? `Last sync ${relativeTime(sync.last_sync)}` : 'No sync data'}
           </span>
-          {sync.stale && <span className="text-amber-400 font-medium">(stale)</span>}
+          {sync.stale && <span className="text-tone-amber-400 font-medium">(stale)</span>}
         </div>
       )}
     </div>

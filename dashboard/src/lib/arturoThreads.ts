@@ -16,6 +16,11 @@
  *     should not mute context in another) and it persists, so it survives a reload.
  */
 import type { ArturoContext } from './arturo';
+// Same card-id shape as cardRefs.ts, kept local: importing cardRefs pulls the decisions graph into
+// this module, and arturoThreads.test.mjs runs under plain Node type stripping, which cannot resolve
+// that graph's extensionless imports.
+const CARD_ID = /\b(?:apr|qnr)_[0-9a-f]{8}_\d{1,8}\b/;
+const hasRefs = (text: string): boolean => CARD_ID.test(String(text ?? ''));
 
 /** `gist`: the conversation's own summary (services/arturo: kept current as it grows and when a call ends). */
 export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string; gist?: string }
@@ -23,7 +28,9 @@ export interface ThreadSummary { id: string; title: string; created?: number; up
 export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: string; title?: string; status?: string;
   steps?: import('./arturoJobs').JobStep[]; call_id?: string;
   /** A reply that showed a choice card (kind "card"): the card, its id, and whether it was closed unanswered. */
-  card_id?: string; choices?: import('./arturo').ChoiceCard; dismissed?: boolean }
+  card_id?: string; choices?: import('./arturo').ChoiceCard; dismissed?: boolean;
+  /** The card's answer as the server keeps it (the turn that answered it said so): picks and words, and when. */
+  answer?: { picks?: string[]; words?: string; at?: number } }
 export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
 export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
@@ -81,12 +88,14 @@ const PRETTY: Record<string, string> = {
   overview: 'Overview',
 };
 
-/** What the card SAYS. Plain English — it is a card in a chat, not a debug line, so
- *  "Approvals · apr_1a2b3c4d", never "route=/approvals entity=approvals:apr_1a2b3c4d". */
-export function contextCardLabel(ctx?: ArturoContext | null): string {
+/** What the card SAYS. Plain English — it is a card in a chat, not a debug line, never "route=/approvals
+ *  entity=approvals:…". A card on screen is named by its question (`cards`: lib/screenCards screenLabel, "Approvals ·
+ *  Which size?"), and a card id is never shown: a page focused on one says only the page. */
+export function contextCardLabel(ctx?: ArturoContext | null, cards?: string | null): string {
   if (!ctx) return '';
   const kind = PRETTY[ctx.entityKind || ''] || (ctx.entityKind ? ctx.entityKind[0].toUpperCase() + ctx.entityKind.slice(1) : 'This page');
-  return ctx.entityId ? `${kind} · ${ctx.entityId}` : kind;
+  if (cards) return `${kind} · ${cards}`;
+  return ctx.entityId && !hasRefs(ctx.entityId) ? `${kind} · ${ctx.entityId}` : kind;
 }
 
 export function contextCardFor(ctx?: ArturoContext | null): ContextCard | null {

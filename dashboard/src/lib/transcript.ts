@@ -16,6 +16,7 @@
 // synced transcript.gen.ts). Do not hand-declare wire shapes here — that is
 // the exact web-vs-iOS drift the contract exists to kill.
 import type { ChatItem as GenChatItem, TranscriptEnvelope } from './transcript.gen';
+import type { ResultNode } from './threadKit/results';
 
 export type ChatItem = GenChatItem;
 export type TranscriptResponse = TranscriptEnvelope;
@@ -31,6 +32,8 @@ export interface ToolBlock {
   ts?: string;
   /** When the paired tool_result arrived; the call's own `ts` is when it STARTED. */
   resultTs?: string;
+  /** The tool call's id (tool_use id): a background job's notice names the call that started it. */
+  id?: string;
   key: string;
 }
 
@@ -39,11 +42,15 @@ export interface BatchEntryNode { agent: string; sent_ts: string; body: string }
 export type RenderNode =
   | { kind: 'user'; text: string; ts?: string; key: string; isSystem?: boolean; queued?: boolean;
       /** The server's tag for a line a machine wrote (a decision answer, another agent's message, ...). */
-      machine?: string }
+      machine?: string;
+      /** A job notice that arrived while the agent was mid-turn: it does not start a turn. */
+      midTurn?: boolean }
   | { kind: 'assistant'; text: string; ts?: string; key: string }
   | { kind: 'thinking'; text: string; ts?: string; key: string }
   | { kind: 'queued_batch'; count: number; entries: BatchEntryNode[]; ts?: string; key: string }
-  | ToolBlock;
+  | ToolBlock
+  /** Finished work (lib/threadKit/results.ts markResults): one result or a stack. Built on the client. */
+  | ResultNode;
 
 /**
  * Pair tool_result items under their originating tool_use, drop empty items,
@@ -79,7 +86,9 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         const isSystem = flagged || bootLine || (!firstUserSeen && (text.length > 800 || /^You are\b/.test(text)));
         if (!flagged) firstUserSeen = true;
         const machine = (it as { machine?: string }).machine;
-        nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}) });
+        const midTurn = (it as { mid_turn?: boolean }).mid_turn === true;
+        nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}),
+          ...(midTurn ? { midTurn } : {}) });
       } else {
         nodes.push({ kind: 'assistant', text, ts: it.ts, key });
       }
@@ -113,6 +122,7 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         isError: paired?.isError,
         ts: it.ts,
         ...(paired?.ts ? { resultTs: paired.ts } : {}),
+        ...(it.id ? { id: it.id } : {}),
         key,
       });
       continue;

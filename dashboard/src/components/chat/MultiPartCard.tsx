@@ -28,14 +28,48 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { clsx } from 'clsx';
 import { Check, ListChecks, Loader2, PenLine } from 'lucide-react';
 import { DismissButton } from './DecisionCard';
+import { withRefs } from '../kit/RefText';
 import {
   answered, back, canNext, canSkip, captureProblem, cardKey, cardNote, choose, letter, next, nothingAnswered, outcome, partRows, setWords,
   skipPart, startState, submitAnswers, takesWords, type CardState, type MenuPart, type PartAnswer, type Step,
 } from '../../lib/multiPart';
+import { answerStep, partView, type ScreenCard } from '../../lib/screenCards';
+import { useScreenCard } from '../../lib/threadKit/useScreenCard';
+import type { RefCardKind, RefCardState } from '../../lib/cardRefs';
 
 const PILL = 'hit-44 text-xs font-medium px-3 py-1 rounded-full border transition-colors disabled:opacity-40';
 const PILL_QUIET = `${PILL} border-border text-muted-foreground hover:bg-muted hover:text-foreground`;
 const PILL_MAIN = `${PILL} border-info bg-info text-info-foreground hover:bg-info/90`;
+
+/** What a card is, for the cards-on-screen context Arturo reads (lib/screenCards.ts): its id, kind and who asked.
+ *  The card adds its state, the part on show and what is picked, typed or answered. */
+export interface CardReport {
+  id: string;
+  kind: RefCardKind;
+  from?: string | null;
+  /** The card's question when it is not its first part's (a questionnaire's title). */
+  question?: string;
+  summary?: string | null;
+  /** An answered card that is not answered (dismissed, expired…). */
+  state?: RefCardState;
+}
+
+/** An answered card's answer in one line: each part's picks and words, parts joined by "; ". */
+function answerLine(parts: MenuPart[], answers: PartAnswer[]): string {
+  return parts.map((p, i) => {
+    const o = outcome(p, answers[i]);
+    const a = o.skipped ? 'Skipped' : [o.labels.join(', '), o.words].filter(Boolean).join(' — ');
+    return parts.length > 1 ? `${p.question}: ${a}` : a;
+  }).join('; ');
+}
+
+function screenCard(r: CardReport, parts: MenuPart[], state: RefCardState, view: CardState, answer?: string | null): ScreenCard {
+  return {
+    id: r.id, kind: r.kind, from: r.from ?? null, state, question: (r.question || parts[0]?.question || '').trim(),
+    ...(r.summary ? { summary: r.summary } : {}), ...(answer ? { answer } : {}),
+    ...(parts.length ? { part: partView(parts, view) } : {}),
+  };
+}
 
 /** Space kept free above and below the card when it is capped at the viewport. */
 const VIEWPORT_MARGIN = 24;
@@ -90,6 +124,13 @@ function usePartCap(frame: React.RefObject<HTMLDivElement | null>, parts: React.
       // The viewport, or the scrolling area the card sits in when that is smaller (a chat under a top bar).
       let vh = window.visualViewport?.height ?? window.innerHeight;
       for (let el = f.parentElement; el; el = el.parentElement) {
+        // A floating box that grows with its card up to a cap (a chip's popover): the cap is the room, not its
+        // current height, which is the card's own and would shrink it.
+        if (el.dataset.capRoot !== undefined) {
+          const mh = parseFloat(getComputedStyle(el).maxHeight);
+          if (mh > 0) vh = Math.min(vh, mh);
+          break;
+        }
         const oy = getComputedStyle(el).overflowY;
         if ((oy === 'auto' || oy === 'scroll') && el.clientHeight > 0) { vh = Math.min(vh, el.clientHeight); break; }
       }
@@ -146,7 +187,7 @@ function Dots({ answers, at }: { answers: PartAnswer[]; at: number }) {
 function Question({ part }: { part: MenuPart }) {
   return (
     <div className="pb-2">
-      <div className="text-[14.5px] font-semibold leading-snug">{part.question}</div>
+      <div className="text-[14.5px] font-semibold leading-snug">{withRefs(part.question)}</div>
       {part.select === 'multi' && <div className="text-[11px] text-muted-foreground mt-0.5">Pick any</div>}
     </div>
   );
@@ -214,11 +255,13 @@ export interface QuestionCardProps {
   answeredNote?: ReactNode;
   id?: string;
   highlighted?: boolean;
+  /** Reports the card into the cards-on-screen context (lib/screenCards.ts). */
+  report?: CardReport;
 }
 
 /** The answer area, framed: takes the answers one part at a time and sends them all at the end. */
 export function QuestionCard({ title, meta, context, parts, initial, onSubmit, onDismiss, dismissed, waiting, hint,
-  answeredNote, id, highlighted }: QuestionCardProps) {
+  answeredNote, id, highlighted, report }: QuestionCardProps) {
   const [s, setS] = useState<CardState>(() => ({ ...startState(parts), ...(initial ? { answers: initial } : {}) }));
   const [phase, setPhase] = useState<'answer' | 'sending' | 'done'>('answer');
   const [problem, setProblem] = useState<string | null>(null);
@@ -238,6 +281,18 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
   };
   const step = (r: Step) => { setS(r.state); setProblem(null); if (r.submit) void send(r.state); };
   const open = phase === 'answer';
+
+  // On screen for Arturo: the part on show and what is picked or typed; an answer he hands back takes the same step
+  // the taps would (so it sends through this card's own route, with the same send states).
+  useScreenCard(frame, report && phase !== 'done' ? screenCard(report, parts, dismissed ? 'dismissed' : 'waiting', s) : null,
+    (a) => {
+      if (phase !== 'answer' || dismissed) return 'That card is already being answered.';
+      if (waiting && s.at === parts.length - 1) return waiting;
+      const r = answerStep(parts, s, a);
+      if ('error' in r) return r.error;
+      step(r);
+      return null;
+    });
 
   // Keys while the card has focus: A–Z pick on the part on show, Return moves on.
   const latest = useRef({ open, parts, s, step });
@@ -266,7 +321,7 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
   }
   if (phase === 'done') {
     return <AnsweredQuestionCard title={title} meta={meta} context={context} parts={parts} answers={s.answers}
-                                 note={answeredNote} id={id} highlighted={highlighted} />;
+                                 note={answeredNote} id={id} highlighted={highlighted} report={report} />;
   }
 
   const part = parts[s.at];
@@ -342,16 +397,19 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
 
 /** An answered question card: dimmed, only what was chosen per part ("Skipped" where nothing was), paged with Back
  *  and Next. Typed words are drawn like a chosen option, never in quotes. */
-export function AnsweredQuestionCard({ title, meta, context, parts, answers, note, id, highlighted, elsewhere }: {
+export function AnsweredQuestionCard({ title, meta, context, parts, answers, note, id, highlighted, elsewhere, report }: {
   title: string; meta?: ReactNode; context?: ReactNode; parts: MenuPart[]; answers: PartAnswer[]; note?: ReactNode;
   id?: string; highlighted?: boolean;
   /** The answer is shown elsewhere (a message in the chat), so the card says where instead of repeating it. */
   elsewhere?: string | null;
+  report?: CardReport;
 }) {
   const [at, setAt] = useState(0);
   const frame = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const cap = usePartCap(frame, box);
+  useScreenCard(frame, report ? screenCard(report, parts, report.state ?? 'answered', { answers, at },
+    elsewhere ? null : answerLine(parts, answers)) : null);
   const paged = parts.length > 1;
   return (
     <Frame title={title} meta={meta} context={context} dimmed id={id} highlighted={highlighted} frameRef={frame}
@@ -427,8 +485,10 @@ function submitProblem(status: number, body: GatewayReply): string {
 }
 
 /** An agent's multi-part menu: reads every part, then the shared card takes the answers. */
-export function MultiPartAnswer({ agentId, agentName, cardId, onDismiss, dismissed, id, highlighted }: {
+export function MultiPartAnswer({ agentId, agentName, cardId, onDismiss, dismissed, id, highlighted, onAnswered }: {
   agentId: string;
+  /** After a send went through (a chip's popover closes). */
+  onAnswered?: () => void;
   agentName?: string | null;
   /** The server's card for this question: the answers are bound to it. Null until it arrives. */
   cardId: string | null;
@@ -460,7 +520,8 @@ export function MultiPartAnswer({ agentId, agentName, cardId, onDismiss, dismiss
   const submit = async (answers: PartAnswer[]): Promise<string | null> => {
     const { status, body } = await postJson(`/api/agents/${encodeURIComponent(agentId)}/menu-submit`,
       { answers: submitAnswers(parts!, answers), card_id: cardId, confirm: true });
-    return status === 200 && body.ok !== false ? null : submitProblem(status, body);
+    if (status === 200 && body.ok !== false) { onAnswered?.(); return null; }
+    return submitProblem(status, body);
   };
 
   if (!parts || dismissed) {
@@ -480,7 +541,8 @@ export function MultiPartAnswer({ agentId, agentName, cardId, onDismiss, dismiss
   }
   return (
     <QuestionCard key={tries} title={agent} parts={parts} onSubmit={submit} onDismiss={onDismiss} id={id} highlighted={highlighted}
-      waiting={cardId ? null : 'You can answer in a moment, once this question reaches the server.'} />
+      waiting={cardId ? null : 'You can answer in a moment, once this question reaches the server.'}
+      report={{ id: cardId ?? `menu:${agentId}`, kind: 'multipart', from: agent }} />
   );
 }
 

@@ -1,0 +1,165 @@
+{
+ "note": "A stored voice-call thread and its saved call record (shape as served by GET /api/arturo/threads/:id and GET /api/voice/call), names and ids made neutral.",
+ "thread": {
+  "id": "pill_sample_call",
+  "title": "Hey, can you hear me okay",
+  "turns": [
+   {
+    "role": "assistant",
+    "content": "Hey--",
+    "mode": "voice",
+    "ts": 1792821510.3851342
+   },
+   {
+    "role": "user",
+    "content": "Hey, can you hear me okay",
+    "mode": "voice",
+    "ts": 1792821513.1496625
+   },
+   {
+    "role": "assistant",
+    "content": "Yep, loud and clear.",
+    "mode": "voice",
+    "ts": 1792821513.1615252
+   },
+   {
+    "role": "user",
+    "content": "Alright, cool. I'm just going to do a couple of tests real quick",
+    "mode": "voice",
+    "ts": 1792821517.7089097
+   },
+   {
+    "role": "assistant",
+    "content": "Sure thing. Go ahead.",
+    "mode": "voice",
+    "ts": 1792821519.824406
+   },
+   {
+    "role": "user",
+    "content": "Alright, what did I type to you before this call",
+    "mode": "voice",
+    "ts": 1792821526.3627932
+   },
+   {
+    "role": "assistant",
+    "content": "Lemme check real quick.",
+    "mode": "voice",
+    "ts": 1792821529.2524216
+   },
+   {
+    "role": "assistant",
+    "content": "Could you do that in the assistant chat on your dashboard? I'll help you there.",
+    "mode": "voice",
+    "ts": 1792821536.0030487
+   },
+   {
+    "role": "user",
+    "content": "I'm in the floating the assistant pane on my dashboard",
+    "mode": "voice",
+    "ts": 1792821542.5687563
+   },
+   {
+    "role": "assistant",
+    "content": "I'll check in on that.",
+    "mode": "voice",
+    "ts": 1792821545.1576421
+   },
+   {
+    "role": "assistant",
+    "content": "Okay, sorry. I see you're already in the right place. I just don't see anything you typed before this call. That could tie into the missing saved conversations you flagged yesterday. Could you tell me roughly what you typed so I can see what made it through?",
+    "mode": "voice",
+    "ts": 1792821567.8058994
+   },
+   {
+    "role": "user",
+    "content": "Nope, this was a new chat, so I just wanted to double check you have access to my old uh, conversations with you",
+    "mode": "voice",
+    "ts": 1792821576.1752214
+   },
+   {
+    "role": "assistant",
+    "content": "Checking right now.",
+    "mode": "voice",
+    "ts": 1792821577.9751372
+   },
+   {
+    "role": "assistant",
+    "content": "I can't do that from this call. Ask me in the assistant chat on your dashboard and I'll handle it there.",
+    "mode": "voice",
+    "ts": 1792821587.4667106
+   },
+   {
+    "role": "assistant",
+    "content": "Call ended (vc_sample_call01). [voice-call: vc_sample_call01 /data/state/voice-calls/vc_sample_call01.json]",
+    "mode": "voice",
+    "ts": 1792821590.6483753,
+    "meta": {
+     "call_id": "vc_sample_call01",
+     "kind": "call_end"
+    }
+   }
+  ]
+ },
+ "record": {
+  "call_id": "vc_sample_call01",
+  "started_at": 1792821513.1598678,
+  "ended_at": 1792821590.6466758,
+  "status": "ended",
+  "summary": "Voice call: 9 turns, 1 tool runs.\nI can't do that from a voice call. Ask me in the assistant chat on your dashboard and I'll do it there.",
+  "turns": [
+   {
+    "role": "user",
+    "text": "Hey, can you hear me okay",
+    "ts": 1792821513.1606045
+   },
+   {
+    "role": "user",
+    "text": "Alright, cool. I'm just going to do a couple of tests real quick",
+    "ts": 1792821519.822883
+   },
+   {
+    "role": "arturo",
+    "text": "Sure thing. Go ahead.",
+    "ts": 1792821519.823269
+   },
+   {
+    "role": "user",
+    "text": "(on the call) Alright, what did I type to you before this call",
+    "ts": 1792821526.3773406
+   },
+   {
+    "role": "arturo",
+    "text": "I can't do that from a voice call. Ask me in the assistant chat on your dashboard and I'll do it there.",
+    "ts": 1792821530.0569613
+   },
+   {
+    "role": "user",
+    "text": "(on the call) I'm in the floating the assistant pane on my dashboard",
+    "ts": 1792821542.5849104
+   },
+   {
+    "role": "tool",
+    "tool": "read_screen_context",
+    "input": {},
+    "result": "dispatched",
+    "status": "done",
+    "ts": 1792821553.0660422
+   },
+   {
+    "role": "arturo",
+    "text": "Got it, you're already in the right place, so my bad on that. I don't see anything you typed before this call in my context, so either the typed chat isn't carrying over into voice or it didn't reach me. That could tie into the missing saved conversations you flagged yesterday. Can you tell me roughly what you typed so I can see what made it through?",
+    "ts": 1792821553.066348
+   },
+   {
+    "role": "user",
+    "text": "(on the call) Nope, this was a new chat, so I just wanted to double check you have access to my old uh, conversations with you",
+    "ts": 1792821576.1906235
+   },
+   {
+    "role": "arturo",
+    "text": "I can't do that from a voice call. Ask me in the assistant chat on your dashboard and I'll do it there.",
+    "ts": 1792821580.4922583
+   }
+  ]
+ }
+}

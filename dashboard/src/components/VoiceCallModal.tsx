@@ -100,20 +100,20 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
               ? isSpeaking
                 ? 'bg-green-600 scale-110 shadow-green-500/40 animate-pulse'
                 : 'bg-green-700 shadow-green-500/20'
-              : 'bg-neutral-700 animate-pulse'
+              : 'bg-tone-700 animate-pulse'
           )}
         >
-          {isSpeaking ? <Volume2 size={22} className="text-white" /> : <Mic size={22} className="text-white" />}
+          {isSpeaking ? <Volume2 size={22} className="text-tone-white" /> : <Mic size={22} className="text-tone-white" />}
         </button>
 
         {/* Info pill */}
-        <div className="bg-neutral-900 border border-neutral-700 rounded-full px-3 py-1.5 flex items-center gap-2 shadow-xl">
-          <span className="text-xs text-neutral-300 font-medium">{pmId}</span>
-          <span className="text-xs text-neutral-500">{formatDuration(callDuration)}</span>
-          <button onClick={toggleMute} className={clsx('ml-1', muted ? 'text-amber-400 hover:text-amber-300' : 'text-neutral-500 hover:text-neutral-300')}>
+        <div className="bg-tone-900 border border-tone-700 rounded-full px-3 py-1.5 flex items-center gap-2 shadow-xl">
+          <span className="text-xs text-tone-300 font-medium">{pmId}</span>
+          <span className="text-xs text-tone-500">{formatDuration(callDuration)}</span>
+          <button onClick={toggleMute} className={clsx('ml-1', muted ? 'text-tone-amber-400 hover:text-tone-amber-300' : 'text-tone-500 hover:text-tone-300')}>
             {muted ? <MicOff size={14} /> : <Mic size={14} />}
           </button>
-          <button onClick={handleEnd} className="text-red-400 hover:text-red-300">
+          <button onClick={handleEnd} className="text-tone-red-400 hover:text-tone-red-300">
             <PhoneOff size={14} />
           </button>
         </div>
@@ -123,15 +123,15 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
 
   // Expanded floating panel (bottom-right, not full screen)
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-72 bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl shadow-black/50 overflow-hidden">
+    <div className="fixed bottom-4 right-4 z-50 w-72 bg-tone-900 border border-tone-700 rounded-2xl shadow-2xl shadow-black/50 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-tone-800">
         <div className="flex items-center gap-2">
           <span className={clsx('w-2 h-2 rounded-full', isConnected ? 'bg-green-500' : 'bg-amber-500 animate-pulse')} />
           <span className="text-sm font-medium">{pmId}</span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={() => setMinimized(true)} className="p-1 text-neutral-500 hover:text-neutral-300">
+          <button onClick={() => setMinimized(true)} className="p-1 text-tone-500 hover:text-tone-300">
             <Minimize2 size={14} />
           </button>
         </div>
@@ -145,29 +145,29 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
             'w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300',
             isConnected
               ? isSpeaking
-                ? 'bg-green-900/60 text-green-400 scale-110 shadow-lg shadow-green-500/20'
-                : 'bg-green-900/30 text-green-500'
+                ? 'bg-tone-green-900/60 text-tone-green-400 scale-110 shadow-lg shadow-green-500/20'
+                : 'bg-tone-green-900/30 text-green-500'
               : conversation.status === 'error'
-                ? 'bg-red-900/30 text-red-500'
-                : 'bg-neutral-800 text-neutral-500 animate-pulse'
+                ? 'bg-tone-red-900/30 text-red-500'
+                : 'bg-tone-800 text-tone-500 animate-pulse'
           )}>
             {isSpeaking ? <Volume2 size={24} className="animate-pulse" /> : <Mic size={24} />}
           </div>
         </div>
 
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-tone-500">
           {isConnected ? `Connected  ${formatDuration(callDuration)}` :
            conversation.status === 'connecting' ? 'Connecting...' :
            conversation.status === 'error' ? 'Failed' : 'Initializing...'}
         </p>
 
         {isConnected && (
-          <p className={clsx('mt-1 text-[10px]', isSpeaking ? 'text-green-400' : 'text-neutral-600')}>
+          <p className={clsx('mt-1 text-[10px]', isSpeaking ? 'text-tone-green-400' : 'text-tone-600')}>
             {isSpeaking ? 'Speaking...' : 'Listening...'}
           </p>
         )}
 
-        {error && <p className="mt-2 text-[10px] text-red-400">{error}</p>}
+        {error && <p className="mt-2 text-[10px] text-tone-red-400">{error}</p>}
       </div>
 
       {/* Controls */}
@@ -178,7 +178,7 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
             'px-4 py-2 min-h-[44px] rounded-full text-sm font-medium inline-flex items-center gap-2 transition-colors',
             muted
               ? 'bg-amber-600 hover:bg-amber-500 text-white'
-              : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'
+              : 'bg-tone-700 hover:bg-tone-600 text-tone-200'
           )}
         >
           {muted ? <MicOff size={16} /> : <Mic size={16} />}

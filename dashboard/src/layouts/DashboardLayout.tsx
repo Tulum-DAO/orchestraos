@@ -190,11 +190,11 @@ export function DashboardLayout() {
 
       {/* Main content */}
       <main className={`flex-1 min-w-0 flex flex-col safe-top safe-bottom ${isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-        {/* Mobile header with hamburger */}
-        <div ref={topbarRef} className={`dark sticky top-0 z-[25] items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden ${isChatRoute ? 'hidden' : 'flex'}`}>
+        {/* Mobile header with hamburger: it follows the theme (tone colours), so no forced dark scope here */}
+        <div ref={topbarRef} className={`sticky top-0 z-[25] items-center gap-3 border-b border-tone-800 bg-tone-950/90 backdrop-blur px-4 py-3 md:hidden ${isChatRoute ? 'hidden' : 'flex'}`}>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1 -ml-1 text-neutral-400 hover:text-white"
+            className="p-1 -ml-1 text-tone-400 hover:text-tone-white"
             aria-label="Toggle sidebar"
           >
             {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
@@ -202,16 +202,16 @@ export function DashboardLayout() {
           {/* The page's title lives HERE on a phone, not in a second row under this bar. */}
           {onAgents ? (
             <div className="flex items-center gap-1 min-w-0">
-              <span className="text-lg font-bold tracking-tight text-white">Agents</span>
+              <span className="text-lg font-bold tracking-tight text-tone-white">Agents</span>
               {showNewAgent() && (
                 <button type="button" onClick={() => window.dispatchEvent(new Event(NEW_AGENT_EVENT))} aria-label="New agent" title="New agent"
-                  className="touch-circle shrink-0 rounded-full flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800">
+                  className="touch-circle shrink-0 rounded-full flex items-center justify-center text-tone-400 hover:text-tone-white hover:bg-tone-800">
                   <Plus size={22} />
                 </button>
               )}
             </div>
           ) : (
-            <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
+            <span className="text-sm font-bold tracking-tight text-tone-white">orchestraOS</span>
           )}
           {/* Arturo's one spot, then the shared bell's phone home (portalled in below). */}
           <div className="ml-auto flex items-center gap-1">

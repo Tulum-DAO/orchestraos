@@ -57,3 +57,8 @@ test('services and external seats are labelled, and external claims no state', (
     assert.equal(railStatus(byName['remote-seat'], det), 'unknown', String(det));  // never down, never live
   }
 });
+
+test('100% left is no reading (the status line before its first reply after a resume): nothing is shown', () => {
+  assert.equal(contextLeftLabel({ status: 'idle', context_left_pct: 100 }), null);
+  assert.equal(contextLeftLabel({ status: 'idle', context_left_pct: 99 }), '99% left');
+});

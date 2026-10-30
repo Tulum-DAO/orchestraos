@@ -46,16 +46,16 @@ export function AgentGenerations({ agentId, total }: { agentId: string; total?: 
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-left text-[11px] uppercase tracking-wider text-neutral-500 hover:text-neutral-300 transition-colors"
+        className="flex w-full items-center gap-1.5 text-left text-[11px] uppercase tracking-wider text-tone-500 hover:text-tone-300 transition-colors"
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         Generations
-        <span className="ml-auto normal-case tracking-normal text-neutral-400">{total}</span>
+        <span className="ml-auto normal-case tracking-normal text-tone-400">{total}</span>
       </button>
       {open && (
         // Capped and scrollable: a deep lineage (gm has 55) must not push the live feed and
         // the message composer off the bottom of the drawer.
-        <div className="mt-1.5 max-h-60 overflow-y-auto overscroll-contain rounded-lg border border-neutral-800 bg-neutral-950/60 px-2">
+        <div className="mt-1.5 max-h-60 overflow-y-auto overscroll-contain rounded-lg border border-tone-800 bg-tone-950/60 px-2">
           <GenerationList rows={rows} />
         </div>
       )}

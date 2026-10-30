@@ -64,32 +64,32 @@ export default function ConversationRail({ activeThread, onSelect, onNew }: Prop
     <div
       data-testid="conversation-rail"
       data-rail-state={state}
-      className="flex flex-col h-full w-64 border-r border-neutral-800 bg-neutral-950 shrink-0"
+      className="flex flex-col h-full w-64 border-r border-tone-800 bg-tone-950 shrink-0"
     >
-      <div className="p-2 border-b border-neutral-800 space-y-2 shrink-0">
+      <div className="p-2 border-b border-tone-800 space-y-2 shrink-0">
         <button
           data-testid="new-chat"
           onClick={onNew}
-          className="flex items-center gap-2 w-full px-2.5 py-2 rounded-lg text-sm bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 transition-colors"
+          className="flex items-center gap-2 w-full px-2.5 py-2 rounded-lg text-sm bg-blue-500/15 text-tone-blue-400 hover:bg-blue-500/25 transition-colors"
         >
           <Plus size={15} /> New chat
         </button>
-        <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5 focus-within:border-neutral-600">
-          <Search size={13} className="text-neutral-500 shrink-0" />
+        <div className="flex items-center gap-1.5 bg-tone-900 border border-tone-800 rounded-lg px-2.5 py-1.5 focus-within:border-tone-600">
+          <Search size={13} className="text-tone-500 shrink-0" />
           <input
             data-testid="thread-search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search conversations…"
-            className="flex-1 bg-transparent text-xs text-neutral-300 placeholder-neutral-600 focus:outline-none"
+            className="flex-1 bg-transparent text-xs text-tone-300 placeholder-tone-600 focus:outline-none"
           />
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1 min-h-0">
-        {state === 'loading' && <p className="text-[11px] text-neutral-600 px-2 py-3">Loading…</p>}
-        {state === 'error' && <p className="text-[11px] text-red-400/80 px-2 py-3">Couldn't load conversations.</p>}
-        {state === 'empty' && <p className="text-[11px] text-neutral-600 px-2 py-3">No conversations{q ? ' match' : ' yet'}.</p>}
+        {state === 'loading' && <p className="text-[11px] text-tone-600 px-2 py-3">Loading…</p>}
+        {state === 'error' && <p className="text-[11px] text-tone-red-400/80 px-2 py-3">Couldn't load conversations.</p>}
+        {state === 'empty' && <p className="text-[11px] text-tone-600 px-2 py-3">No conversations{q ? ' match' : ' yet'}.</p>}
         {threads.map((t) => (
           <button
             key={t.thread}
@@ -98,19 +98,19 @@ export default function ConversationRail({ activeThread, onSelect, onNew }: Prop
             onClick={() => onSelect(t.thread)}
             className={clsx(
               'w-full text-left px-2.5 py-2 rounded-lg transition-colors',
-              t.thread === activeThread ? 'bg-neutral-800' : 'hover:bg-neutral-900',
+              t.thread === activeThread ? 'bg-tone-800' : 'hover:bg-tone-900',
             )}
           >
             <div className="flex items-center gap-1.5">
-              {t.pinned && <Pin size={10} className="text-amber-400 shrink-0" />}
-              <span className="text-xs font-medium text-neutral-200 truncate flex-1">{t.title}</span>
-              <span className="text-[10px] text-neutral-600 shrink-0">{relTime(t.updatedAt)}</span>
+              {t.pinned && <Pin size={10} className="text-tone-amber-400 shrink-0" />}
+              <span className="text-xs font-medium text-tone-200 truncate flex-1">{t.title}</span>
+              <span className="text-[10px] text-tone-600 shrink-0">{relTime(t.updatedAt)}</span>
             </div>
-            <p className="text-[11px] text-neutral-500 truncate mt-0.5">{t.preview}</p>
+            <p className="text-[11px] text-tone-500 truncate mt-0.5">{t.preview}</p>
             <div className="flex items-center gap-1 mt-1">
               {t.sourceChannels.map((c) => {
                 const Icon = CHANNEL_ICON[c];
-                return <Icon key={c} size={10} className="text-neutral-600" aria-label={c} />;
+                return <Icon key={c} size={10} className="text-tone-600" aria-label={c} />;
               })}
             </div>
           </button>

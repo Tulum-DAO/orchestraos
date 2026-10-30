@@ -17,7 +17,10 @@ import { logAction } from '../lib/user-actions';
 import { OPEN_SIDEBAR_EVENT } from '../lib/headerSlot';
 import DeliverNowBanner from '../components/agent/DeliverNowBanner';
 import { ArturoPanel } from '../components/arturo/ArturoPanel';
-import { useChatStyle, loadPrefs } from '../lib/agentPrefs';
+import { useChatStyle, loadPrefs, chooseStyle, defaultStyle } from '../lib/agentPrefs';
+import { asChip, chipNeedsYou } from '../lib/agentChip';
+import { useHeadlessDev } from '../hooks/useHeadlessDev';
+import HeadlessDevBanner from '../components/agent/HeadlessDevBanner';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
@@ -25,7 +28,7 @@ export default function AgentPage() {
   const [resuming, setResuming] = useState(false);
   // Chat (transcript + composer) or Dev (the seat's live terminal): the chat style you chose for THIS agent in its
   // panel, saved for you on the server (lib/agentPrefs.ts). Switching never loses the draft (stores/composerDrafts).
-  const mode: 'chat' | 'dev' = useChatStyle(agentId) === 'dev' ? 'dev' : 'chat';
+  const chosenMode: 'chat' | 'dev' = useChatStyle(agentId) === 'dev' ? 'dev' : 'chat';
   useEffect(() => { void loadPrefs(agentId); }, [agentId]);
   const [panelOpen, setPanelOpen] = useState(false);
   const gearRef = useRef<HTMLButtonElement>(null);
@@ -53,6 +56,10 @@ export default function AgentPage() {
   const seatStatus = (seatRow as { status?: string } | undefined)?.status;
   const seatMenu = (seatRow as { pending_menu?: unknown } | undefined)?.pending_menu;
   const canStop = canStopTurn({ state: seatStatus, pendingMenu: seatMenu });
+  // A headless seat's Dev switches its terminal on and off: the terminal shows once it is open (a tmux seat's view
+  // is the chosen style, unchanged).
+  const dev = useHeadlessDev(agentId, chosenMode, seatStatus, seat?.name || agentId);
+  const mode = dev.view;
   const stopTurn = () => {
     logAction('agent.stop', agentId);
     return sendKeyToAgent(agentId, 'escape');
@@ -92,7 +99,8 @@ export default function AgentPage() {
       <TopBar
         onMenuOpen={() => window.dispatchEvent(new Event(OPEN_SIDEBAR_EVENT))}
         seat={seat}
-        mode={mode}
+        mode={chosenMode}
+        onBackToChat={() => { void chooseStyle(agentId, defaultStyle(agentId)); logAction('agent.back-to-chat', agentId); }}
         onSettings={() => { setPanelOpen((o) => !o); logAction('agent.panel', agentId); }}
         settingsOpen={panelOpen}
         settingsRef={gearRef}
@@ -105,6 +113,8 @@ export default function AgentPage() {
             provider: (seatRow as { runtime?: string; provider?: string } | undefined)?.runtime
               || (seatRow as { provider?: string } | undefined)?.provider,
             subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
+            contextLeftPct: asChip((seatRow as { chip?: unknown } | undefined)?.chip)?.context_left_pct ?? null,
+            waiting: chipNeedsYou(asChip((seatRow as { chip?: unknown } | undefined)?.chip)) || !!seatMenu,
           }} />
       )}
 
@@ -121,7 +131,7 @@ export default function AgentPage() {
             />
           </div>
           {/* special keys (arrows, Esc, Tab, ...): a phone has no keyboard for them */}
-          <div data-arturo-avoid data-keyboard-native className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
+          <div data-arturo-avoid data-keyboard-native className="px-3 py-2 border-t border-border shrink-0 bg-tone-950">
             <ActionBar
               agentId={agentId}
               outputLines={[]}
@@ -134,6 +144,7 @@ export default function AgentPage() {
         </>
       ) : (
         <div ref={chatRef} className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+        <HeadlessDevBanner dev={dev} />
         {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two.
             The transcript fills the column and scrolls UNDER the floating composer below. */}
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">

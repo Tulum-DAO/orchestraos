@@ -1,5 +1,5 @@
 /**
- * toolDisplay.ts — how one of Arturo's tool calls reads on the shared tool card (components/chat/ToolCalls.tsx).
+ * toolDisplay.ts — how one of Arturo's tool calls reads on the shared tool card (components/kit/ToolCard.tsx).
  *
  * Plain actions, never raw identifiers. One rule is Arturo's, not styling: its deep brain
  * (gm_command / async_task / inject_message) is Arturo thinking, never a separate "GM" — the

@@ -23,6 +23,9 @@ import { useAssistantName } from '../../lib/assistantName';
 import { ARTURO_ID } from '../avatar/agentState';
 import { senderAgent, senderName, type AgentLike } from '../../lib/agentMessage';
 import { serviceNoticeText, type SystemMessage } from '../../lib/systemMessages';
+import { handbackResult } from '../../lib/threadKit/results';
+import ResultCard from '../kit/ResultCard';
+import { scrubIds } from '../../lib/cardRefs';
 
 export default function AgentMessage({ msg }: { msg: SystemMessage }) {
   const viewerId = useContext(ChatAgentContext);
@@ -50,6 +53,8 @@ export default function AgentMessage({ msg }: { msg: SystemMessage }) {
     retry: false,
   });
   const text = (full.data?.body || '').trim() || msg.subject || '';
+  // A hand-back (phase_report, handoff) is finished work: its report is drawn as a result card under the line.
+  const handback = full.data ? handbackResult(full.data, name) : null;
 
   if (!face) {
     return (
@@ -57,10 +62,10 @@ export default function AgentMessage({ msg }: { msg: SystemMessage }) {
         <div className="touch-compact flex justify-center px-4">
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
             className="hit-44 max-w-full truncate text-[13px] text-muted-foreground hover:text-foreground">
-            {serviceNoticeText(msg, full.data?.body)}
+            {scrubIds(serviceNoticeText(msg, full.data?.body))}
           </button>
         </div>
-        {open && text && <Bubble text={text} />}
+        {handback ? <ResultCard results={[handback]} skin="bubbles" /> : open && text && <Bubble text={text} />}
       </div>
     );
   }
@@ -75,7 +80,7 @@ export default function AgentMessage({ msg }: { msg: SystemMessage }) {
           onClick={() => navigate(face.href)} />
         {msg.note?.includes('loop') && <span>· possible reply loop</span>}
       </div>
-      {text && <Bubble text={text} />}
+      {handback ? <ResultCard results={[handback]} skin="bubbles" /> : text && <Bubble text={text} />}
     </div>
   );
 }

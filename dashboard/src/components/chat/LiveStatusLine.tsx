@@ -34,7 +34,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
   // DISCONNECTED OUTRANKS EVERY AGENT STATE: with no live feed we cannot claim what it is doing.
   if (feed && isDegraded(feed)) {
     return (
-      <div className="w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px] text-neutral-400" role="status">
+      <div className="w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px] text-tone-400" role="status">
         <WifiOff size={12} className="shrink-0" />
         <span>{feed.health === 'disconnected' ? 'Not connected' : 'Connection lost'} · {lastSeenLabel(feed.lastSeenAt)}</span>
       </div>
@@ -45,7 +45,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
   // Say that, muted; never the grey "Connection lost", never a stale "Working · 3m".
   if (feed && feed.health === 'updating') {
     return (
-      <div className="w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px] text-neutral-500" role="status">
+      <div className="w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px] text-tone-500" role="status">
         <Loader2 size={12} className="animate-spin shrink-0 opacity-60" />
         <span>Status updating…</span>
       </div>
@@ -61,7 +61,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
     const where = tool ? ` · ${tool}` : '';
     const how = elapsed(stateAgeS);
     return (
-      <div className={`${base} text-orange-300`} role="status">
+      <div className={`${base} text-tone-orange-300`} role="status">
         <Loader2 size={12} className="animate-spin shrink-0" />
         <span>Working{how ? ` · ${how}` : ''}{where}</span>
       </div>
@@ -70,7 +70,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
 
   if (st === 'waiting' || st === 'stranded') {
     return (
-      <div className={`${base} text-amber-300`} role="status">
+      <div className={`${base} text-tone-amber-300`} role="status">
         <HandMetal size={12} className="shrink-0" />
         <span>{st === 'waiting' ? 'Waiting for you to answer' : 'An unsent draft is in its composer'}</span>
       </div>
@@ -92,7 +92,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
   if (st === 'stopped' || st === 'crashed' || st === 'offline' || st === 'retired') {
     const why = st === 'crashed' ? 'Crashed' : st === 'offline' ? 'Offline' : st === 'retired' ? 'Retired' : 'Stopped';
     return (
-      <div className={`${base} text-neutral-400`} role="status">
+      <div className={`${base} text-tone-400`} role="status">
         <CircleSlash size={12} className="shrink-0" />
         <span>{why} — it will not see a message until it is running.</span>
         {/* NOT offered for a RETIRED seat. Retired means intentionally decommissioned — the
@@ -101,7 +101,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
             restarting something that fell over. The other three states are failures. */}
         {onResume && offersResume(st) && (
           <button type="button" onClick={onResume}
-            className="ml-auto px-2 py-0.5 rounded border border-neutral-700 text-neutral-200 hover:bg-neutral-800">
+            className="ml-auto px-2 py-0.5 rounded border border-tone-700 text-tone-200 hover:bg-tone-800">
             Resume
           </button>
         )}
@@ -111,7 +111,7 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
 
   if (st === 'idle') {
     return (
-      <div className={`${base} text-green-400`} role="status">
+      <div className={`${base} text-tone-green-400`} role="status">
         <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
         <span>Idle · at the prompt, ready for a message</span>
       </div>
@@ -120,8 +120,8 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
 
   // unknown: claim NOTHING. An honest blank is better than a guess.
   return (
-    <div className={`${base} text-neutral-500`} role="status">
-      <span className="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0" />
+    <div className={`${base} text-tone-500`} role="status">
+      <span className="w-1.5 h-1.5 rounded-full bg-tone-600 shrink-0" />
       <span>State unknown</span>
     </div>
   );

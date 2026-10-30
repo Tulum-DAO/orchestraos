@@ -71,20 +71,20 @@ function extractTable(rawLines: string[]): { table: TableData; beforeIdx: number
 
 function renderTable(table: TableData) {
   return (
-    <div className="overflow-x-auto my-1.5 -mx-1 rounded-lg border border-neutral-700/50">
+    <div className="overflow-x-auto my-1.5 -mx-1 rounded-lg border border-tone-700/50">
       <table className="text-[11px] border-collapse w-full min-w-max">
         <thead>
-          <tr className="bg-neutral-800/60">
+          <tr className="bg-tone-800/60">
             {table.headers.map((h, i) => (
-              <th key={i} className="text-left px-3 py-1.5 text-neutral-300 font-medium whitespace-nowrap border-b border-neutral-700">{h}</th>
+              <th key={i} className="text-left px-3 py-1.5 text-tone-300 font-medium whitespace-nowrap border-b border-tone-700">{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {table.rows.map((row, ri) => (
-            <tr key={ri} className="border-b border-neutral-700/50 last:border-0 hover:bg-neutral-800/30">
+            <tr key={ri} className="border-b border-tone-700/50 last:border-0 hover:bg-tone-800/30">
               {row.map((cell, ci) => (
-                <td key={ci} className="px-3 py-1.5 text-neutral-300 align-top whitespace-nowrap">{cell}</td>
+                <td key={ci} className="px-3 py-1.5 text-tone-300 align-top whitespace-nowrap">{cell}</td>
               ))}
             </tr>
           ))}
@@ -118,7 +118,7 @@ export default function MessageBubble({ event }: Props) {
     <div className={clsx('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div className={clsx(
         'text-xs px-3 py-2 rounded-2xl max-w-[85%] break-words leading-relaxed',
-        isUser ? 'bg-blue-600/20 text-blue-200 rounded-br-md whitespace-pre-wrap' : 'bg-neutral-800 text-neutral-200 rounded-bl-md',
+        isUser ? 'bg-blue-600/20 text-tone-blue-200 rounded-br-md whitespace-pre-wrap' : 'bg-tone-800 text-tone-200 rounded-bl-md',
         !isUser && !hasTable && 'whitespace-pre-wrap'
       )}>
         {hasTable ? renderContent(event.content) : event.content}

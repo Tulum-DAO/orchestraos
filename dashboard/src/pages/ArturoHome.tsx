@@ -17,20 +17,19 @@
  * Every turn goes through POST /api/arturo/text (gateway → :5071/text), which runs the full
  * tool-enabled turn on whichever brain the install has (api key / authed CLI / none).
  */
-import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, PhoneOff } from 'lucide-react';
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
 import { ArturoPanel } from '../components/arturo/ArturoPanel';
-import Markdown from '../components/chat/Markdown';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, isArturoDisabled, waitForArturo, STARTING_TEXT, ARTURO_DISABLED_TEXT, sendOutcomeText, firstStep, onboardingTurn, onboardingDone,
-  HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
-  type ChoiceCard, type PairCard,
+  HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER,
+  cardRefusal, type CardAnswer, type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { loadThread, dismissCard } from '../lib/arturoThreads';
 import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy } from '../lib/arturoResume';
@@ -41,20 +40,17 @@ import { arturoComposerText, arturoShownText } from '../lib/arturoComposer';
 import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoiceDecisionCard from '../components/chat/ChoiceCard';
-import { isCardEcho } from '../lib/choiceCard';
+import ThreadView from '../components/kit/ThreadView';
+import { loadPrefs, useChatStyle } from '../lib/agentPrefs';
+import { arturoRows, lastUserKey } from '../lib/threadKit/view';
+import type { FinishedResult } from '../lib/threadKit/results';
+import { cardAnswer, isCardEcho, storedAnswerText } from '../lib/choiceCard';
 import PairCodeCard from '../components/arturo/PairCodeCard';
-import ToolCalls from '../components/chat/ToolCalls';
-import { fromPart } from '../lib/toolCalls';
-import CopyReply from '../components/arturo/CopyReply';
-import { replyCopyText } from '../lib/arturoCopy';
 import JobTray from '../components/arturo/JobTray';
 import { useStickToBottom } from '../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
-import { ArturoCallCard } from '../components/arturo/ArturoCallCard';
 import AgentIdentityPill from '../components/avatar/AgentIdentityPill';
-import { groupCalls } from '../lib/arturoCallGroups';
-import { hasVoiceCallMarker, parseVoiceSegments } from '../lib/voiceCall';
-import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
+import { applyTextDelta, applyToolCall, applyToolResult, hasToolParts, type TurnPart } from '../lib/turnParts';
 import { Settings, ChevronRight, X } from 'lucide-react';
 import { AgentAvatar } from '../components/avatar/AgentAvatar';
 import { LookPickerPopover } from '../components/avatar/LookPicker';
@@ -85,6 +81,8 @@ type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[
   voice?: boolean;
   /** The call-ended line of this call id (stored threads tag it): closes the call's card. */
   callEnd?: string;
+  /** A finished background job: drawn as a result card; consecutive ones stack (lib/threadKit/results.ts). */
+  result?: FinishedResult;
   ts?: number };
 type Step = 'runtime' | 'onboarding' | 'done';
 
@@ -107,25 +105,6 @@ function subscribePhoneBar(cb: () => void) {
   return () => mq.removeEventListener('change', cb);
 }
 const isPhoneBar = () => window.matchMedia(PHONE_BAR_QUERY).matches;
-
-function renderText(t: string) {
-  // The one Markdown renderer every agent's messages use (lists, tables, links, code), at the reply's own size.
-  return <Markdown text={t} size="modern" />;
-}
-
-/** An ended call's "Call ended (vc_…). [voice-call: …]" line is a call card (collapsed; opens to the transcript),
- *  never the raw marker. Any other words in the turn stay as text. */
-const CALL_ENDED_RE = /^\s*Call ended \(vc_[A-Za-z0-9_-]+\)\.?\s*$/;
-function renderReply(t: string) {
-  if (!hasVoiceCallMarker(t)) return <div className="txt">{renderText(t)}</div>;
-  return (
-    <div className="txt">
-      {parseVoiceSegments(t).map((seg, i) => seg.kind === 'voicecall'
-        ? <ArturoCallCard key={i} callId={seg.callId} turns={[]} live={false} />
-        : CALL_ENDED_RE.test(seg.text) ? null : <div key={i}>{renderText(seg.text)}</div>)}
-    </div>
-  );
-}
 
 export default function ArturoHome() {
   const registerEndSlot = useContext(HeaderEndSlotContext);
@@ -226,7 +205,6 @@ export default function ArturoHome() {
     setTurns([]);
   }
 
-  const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
   const feedRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const nextId = useRef(1);
@@ -260,12 +238,15 @@ export default function ArturoHome() {
     })();
     return () => { alive = false; };
   }, []);
-  // New turns and live captions push the feed up only while you're at the bottom; scrolled up, it stays put.
+  // New turns and live captions push the feed up only while you're at the bottom; scrolled up, it stays put. The
+  // thread view follows whenever what it draws grows (the turns, a live call's captions); the page jumps to the
+  // bottom itself on a send or a thread switch.
   const stick = useStickToBottom(feedRef);
-  useEffect(() => { stick.follow(); }, [turns]); // eslint-disable-line react-hooks/exhaustive-deps
-  // A live call's captions grow below the last turn: follow them, or they stay below the fold until the
-  // turn commits (they looked like they only appeared once each side finished speaking).
-  useEffect(() => { stick.follow(); }, [call.liveUser, call.liveArturo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = useMemo(() => arturoRows(turns, call.inCall, aname), [turns, call.inCall, aname]);
+  // How you see him (lib/agentPrefs.ts): Modern, his own look, or Bubbles, the agent chat's. Switching it in his panel
+  // only re-draws the thread: the conversation, the draft and any send in flight are untouched.
+  const threadSkin = useChatStyle(ARTURO_ID) === 'bubbles' ? 'bubbles' : 'modern';
+  useEffect(() => { void loadPrefs(ARTURO_ID); }, []);
 
   const say = (text: string, extra: Partial<Turn> = {}) => {
     const id = nextId.current++;
@@ -273,6 +254,9 @@ export default function ArturoHome() {
     return id;
   };
   const patch = (id: number, extra: Partial<Turn>) => setTurns((t) => t.map((x) => x.id === id ? { ...x, ...extra } : x));
+  // The thread view names a turn by its message key (lib/threadKit/view turnKey: `t<id>`).
+  const byKey = (key: string) => turns.find((x) => `t${x.id}` === key);
+  const patchKey = (key: string, extra: Partial<Turn>) => setTurns((t) => t.map((x) => `t${x.id}` === key ? { ...x, ...extra } : x));
 
   // --- onboarding thread -------------------------------------------------------------
   useEffect(() => {
@@ -389,8 +373,9 @@ export default function ArturoHome() {
 
   const user = (text: string, state?: SendState, extra: Partial<Turn> = {}) => { const id = nextId.current++; setTurns((t) => [...t, { id, role: 'user', text, state, ...extra }]); return id; };
 
-  /** Send the composer's text, or `picked`: the words of a card option the operator tapped. */
-  async function send(picked?: string) {
+  /** Send the composer's text, or `picked`: the words of a card option the operator tapped, with the card it answers
+   *  (`answer`, kept on that card on the server with this turn; a message typed in the box answers no card there). */
+  async function send(picked?: string, answer?: CardAnswer) {
     const text = picked === undefined
       ? arturoComposerText(draft, attachments.length)
       : picked.trim();
@@ -464,7 +449,7 @@ export default function ArturoHome() {
     // One send, one id (DEC-1791518421640932): busy, a hop still starting, a timeout or a dropped stream are
     // resolved by asking the server what became of THIS send; it runs at most once.
     const r = await arturoTurn(sent, convId.current, null, {
-      onSent, brain: turnBrain, onDelta, onToolCall, onToolResult, onReset,
+      onSent, brain: turnBrain, onDelta, onToolCall, onToolResult, onReset, ...(answer ? { cardAnswer: answer } : {}),
       // G15: still booting -> say so, wait for health; the send then goes again with the same id.
       onStarting: async () => {
         patch(id, { pending: false, text: STARTING_TEXT, parts: undefined });
@@ -479,6 +464,21 @@ export default function ArturoHome() {
     if (!r.ok) { streamed = ''; parts = []; patch(id, { pending: true, streaming: false, text: '', parts: undefined }); }
     setBusy(false);
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
+    // The card could no longer take this answer (answered from another tab or device, or closed): nothing ran. The
+    // card shows what it holds, and the reply says so, instead of an error.
+    const closed = answer ? cardRefusal(r) : null;
+    if (closed) {
+      const card = answer!.card_id;
+      setTurns((t) => t.map((x) => x.choices?.card_id !== card ? x
+        : closed.kind === 'answered' ? { ...x, answered: storedAnswerText(x.choices.options, closed.answer) }
+          : closed.kind === 'dismissed' ? { ...x, answered: undefined, dismissed: true } : { ...x, answered: undefined }));
+      patch(uid, { cardEcho: false });
+      patch(id, { pending: false, text: closed.kind === 'answered'
+        ? 'That card was already answered, so I did not send this. Its answer is on the card.'
+        : closed.kind === 'dismissed' ? 'That card was closed, so I did not send this.'
+          : 'That card is no longer in this conversation, so I did not send this.' });
+      return;
+    }
     if (!r.ok) {
       const chosenErr = describeTurnError(r);
       patch(id, { pending: false, text: sendOutcomeText(r) ?? (isStarting(r)
@@ -581,49 +581,40 @@ export default function ArturoHome() {
             {arturoDisabled && <div className="tools" style={{ color: 'var(--grey)', fontSize: 13 }}>{named(ARTURO_DISABLED_TEXT, aname)}</div>}
             {lookCard}
           </div>
-        ) : [lookCard, ...groupCalls(turns, call.inCall).map((item) => item.kind === 'call' ? (
-          <ArturoCallCard key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
-            liveSince={item.live ? callSince : null} liveUser={item.live ? call.liveUser : undefined} liveArturo={item.live ? call.liveArturo : undefined}
-            connecting={item.live && call.callState === 'connecting'} />
-        ) : ((t: Turn, i: number) => t.role === 'user' && t.cardEcho && t.state !== 'failed' ? null : t.role === 'user' ? (
-          <div key={t.id} className="turn-user">{t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}<div className="bubble-user">{t.text}</div>
-            {(t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}</div>
         ) : (
-          <div key={t.id} className="turn-assistant">
-            {t.pending ? <span className="thinking" aria-label="thinking" />
-              : hasToolParts(t.parts) ? (
-                // In the order it happened. Indices are stable: parts only ever grow at the end.
-                <div className="turn-parts">
-                  {groupParts(t.parts!).map((g, gi) => g.kind === 'tools'
-                    ? <ToolCalls key={gi} calls={g.tools.map(fromPart)} />
-                    : <div key={gi} className="txt">{renderText(g.text)}</div>)}
-                </div>
-              )
-              : renderReply(t.text)}
-            {!hasToolParts(t.parts) && t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
-            {!t.pending && !t.streaming && replyCopyText(t.text, t.parts) && <CopyReply text={replyCopyText(t.text, t.parts)} />}
-            <SpawnedAgentCard ids={t.spawned} />
-            {t.pairCard && <PairCodeCard card={t.pairCard} />}
-            {/* The one decision card (components/chat/ChoiceCard.tsx): his cards answer with words in this chat. */}
-            {t.choices && (
-              <ChoiceDecisionCard note={t.choices.note} options={t.choices.options} multi={t.choices.multi}
-                exclusive={t.choices.exclusive} answered={t.answered} dismissed={t.dismissed}
-                onAnswer={(text) => { void send(text); }}
-                onDismiss={t.choices.card_id ? async () => {
-                  const err = await dismissCard(convId.current, t.choices!.card_id!);
-                  if (!err) patch(t.id, { dismissed: true });
+          <>
+            {lookCard}
+            {/* His thread through the kit's thread view (components/kit/ThreadView.tsx): replies, tool runs, calls,
+                finished work, his choice cards; the page adds only what it alone has (extras). */}
+            <ThreadView rows={rows} skin={threadSkin} by={aname} lastUserKey={lastUserKey(turns)} stick={stick}
+              call={{ liveSince: callSince, liveUser: call.liveUser, liveArturo: call.liveArturo, connecting: call.callState === 'connecting' }}
+              choice={{
+                onAnswer: (m, text, a) => { const c = m.choices!; void send(text, c.card_id ? cardAnswer(c.card_id, c.options, a.picked, a.words) : undefined); },
+                onDismiss: async (m) => {
+                  const err = await dismissCard(convId.current, m.choices!.card_id!);
+                  if (!err) patchKey(m.key, { dismissed: true });
                   return err;
-                } : undefined} />
-            )}
-            {t.decision && (
-              <ChoiceDecisionCard options={t.decision.options} onAnswer={(text) => {
-                // An option runs its step; anything typed instead is an ordinary message to him.
-                if (t.decision!.options.includes(text)) { patch(t.id, { decision: undefined }); t.decision!.onPick(text); }
-                else void send(text);
+                },
+              }}
+              extras={(m) => {
+                const t = byKey(m.key);
+                if (!t) return null;
+                return (
+                  <>
+                    <SpawnedAgentCard ids={t.spawned} />
+                    {t.pairCard && <PairCodeCard card={t.pairCard} />}
+                    {t.decision && (
+                      <ChoiceDecisionCard options={t.decision.options} onAnswer={(text) => {
+                        // An option runs its step; anything typed instead is an ordinary message to him.
+                        if (t.decision!.options.includes(text)) { patch(t.id, { decision: undefined }); t.decision!.onPick(text); }
+                        else void send(text);
+                      }} />
+                    )}
+                  </>
+                );
               }} />
-            )}
-          </div>
-        ))(item.turn, item.index))]}
+          </>
+        )}
       </div>
 
       {(onboardShell || shellError) && (

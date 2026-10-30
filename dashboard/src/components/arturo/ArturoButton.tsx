@@ -25,12 +25,12 @@ export function ArturoButton({ small = false }: { small?: boolean } = {}) {
       className={`${small ? 'touch-circle shadow-lg shadow-black/40' : 'touch-circle min-[769px]:h-10 min-[769px]:w-10'} relative shrink-0 rounded-full flex items-center justify-center border transition-colors ${
         // Arturo's own colour, filled, in both themes: the one control in the row that is not a plain
         // icon. Open adds a ring (the pane below is its).
-        open ? 'bg-[#d97757] border-transparent text-white ring-2 ring-[#d97757]/40 ring-offset-2 ring-offset-background' : 'bg-[#d97757] border-transparent text-white hover:bg-[#c96747]'
+        open ? 'bg-[#d97757] border-transparent text-tone-white ring-2 ring-[#d97757]/40 ring-offset-2 ring-offset-background' : 'bg-[#d97757] border-transparent text-tone-white hover:bg-[#c96747]'
       }`}
     >
       <Mic size={small ? 18 : 20} />
       {exchanges > 0 && !open && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-neutral-200 text-neutral-900 text-[10px] leading-4 font-semibold text-center">
+        <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-tone-200 text-tone-900 text-[10px] leading-4 font-semibold text-center">
           {exchanges}
         </span>
       )}

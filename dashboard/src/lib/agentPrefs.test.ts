@@ -8,10 +8,11 @@ test('which styles each agent can show today, and why not', () => {
   const agent = Object.fromEntries(styleOptions('dev-demo').map((o) => [o.id, o]));
   assert.equal(agent.bubbles.available, true);
   assert.equal(agent.dev.available, true);
-  assert.equal(agent.modern.available, false);
-  assert.match(agent.modern.reason ?? '', /shared thread/);
+  assert.equal(agent.modern.available, true);
+  assert.equal(agent.modern.reason, undefined);
   const arturo = Object.fromEntries(styleOptions('arturo').map((o) => [o.id, o]));
   assert.equal(arturo.modern.available, true);
+  assert.equal(arturo.bubbles.available, true);
   assert.match(arturo.dev.reason ?? '', /no terminal/);
 });
 
@@ -19,7 +20,8 @@ test('an agent is drawn in its saved style only when it can show it, else its de
   assert.equal(defaultStyle('arturo'), 'modern');
   assert.equal(defaultStyle('dev-demo'), 'bubbles');
   assert.equal(effectiveStyle('dev-demo', 'dev'), 'dev');
-  assert.equal(effectiveStyle('dev-demo', 'modern'), 'bubbles');     // not yet: its default
+  assert.equal(effectiveStyle('dev-demo', 'modern'), 'modern');
+  assert.equal(effectiveStyle('arturo', 'bubbles'), 'bubbles');
   assert.equal(effectiveStyle('arturo', 'dev'), 'modern');
   assert.equal(effectiveStyle('pm-demo', null), 'bubbles');
 });

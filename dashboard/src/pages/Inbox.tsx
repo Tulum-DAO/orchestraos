@@ -162,25 +162,25 @@ export default function Inbox() {
   const totalPending = allItems.length;
   const isLoading = approvalsLoading || qLoading;
 
-  if (isLoading) return <p className="text-neutral-500 p-8">Loading...</p>;
+  if (isLoading) return <p className="text-tone-500 p-8">Loading...</p>;
 
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-bold text-white">Inbox</h1>
+        <h1 className="text-2xl font-bold text-foreground">Inbox</h1>
         {totalPending > 0 && (
           <span className="bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
             {totalPending}
           </span>
         )}
-        <div className="ml-auto text-xs text-neutral-500">
+        <div className="ml-auto text-xs text-tone-500">
           {pendingApprovals.length} approvals · {pendingQuestionnaires.length} questionnaires
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-neutral-900 rounded-lg p-1 overflow-x-auto">
+      <div className="flex gap-1 bg-tone-900 rounded-lg p-1 overflow-x-auto">
         {TABS.map(({ key, label, icon: Icon }) => {
           const count = key === 'all'
             ? totalPending
@@ -193,7 +193,7 @@ export default function Inbox() {
               onClick={() => setTab(key)}
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap',
-                tab === key ? 'bg-neutral-700 text-white' : 'text-neutral-500 hover:text-neutral-300'
+                tab === key ? 'bg-tone-700 text-tone-white' : 'text-tone-500 hover:text-tone-300'
               )}
             >
               <Icon size={13} />
@@ -208,9 +208,9 @@ export default function Inbox() {
 
       {/* Empty state */}
       {filtered.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-neutral-500">
-          <InboxIcon className="w-12 h-12 mb-3 text-neutral-600" />
-          <p className="text-lg font-medium text-neutral-400">Inbox clear</p>
+        <div className="flex flex-col items-center justify-center py-16 text-tone-500">
+          <InboxIcon className="w-12 h-12 mb-3 text-tone-600" />
+          <p className="text-lg font-medium text-tone-400">Inbox clear</p>
           <p className="text-sm">No pending items{tab !== 'all' ? ` in ${tab}` : ''}</p>
         </div>
       )}
@@ -276,26 +276,26 @@ export default function Inbox() {
           const isExpanded = expandedId === `q-${q.id}`;
 
           return (
-            <div key={`q-${q.id}`} className="rounded-xl border-l-4 border-l-amber-500 border border-neutral-800 bg-neutral-900 overflow-hidden">
+            <div key={`q-${q.id}`} className="rounded-xl border-l-4 border-l-amber-500 border border-tone-800 bg-tone-900 overflow-hidden">
               <div className="p-4 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-400 border border-amber-500/30 flex items-center gap-1">
                     <ClipboardList size={9} /> questionnaire
                   </span>
-                  <span className="text-xs text-neutral-500 flex items-center gap-1">
+                  <span className="text-xs text-tone-500 flex items-center gap-1">
                     <MessageSquare size={11} /> {q.question_count} questions
                   </span>
-                  <span className="text-xs text-neutral-500 flex items-center gap-1">
+                  <span className="text-xs text-tone-500 flex items-center gap-1">
                     <Clock size={11} /> {relativeTime(q.created_at)}
                   </span>
                 </div>
 
-                <h3 className="text-sm font-medium text-neutral-100 leading-snug">{q.title}</h3>
-                <p className="text-xs text-neutral-500">{q.description}</p>
+                <h3 className="text-sm font-medium text-tone-100 leading-snug">{q.title}</h3>
+                <p className="text-xs text-tone-500">{q.description}</p>
 
                 <button
                   onClick={() => setExpandedId(isExpanded ? null : `q-${q.id}`)}
-                  className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 transition-colors font-medium"
+                  className="flex items-center gap-1.5 text-xs text-tone-amber-400 hover:text-tone-amber-300 transition-colors font-medium"
                 >
                   {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   {isExpanded ? 'Close questionnaire' : 'Open questionnaire'}
@@ -321,27 +321,27 @@ export default function Inbox() {
 
       {/* Seat mail — every message between seats, newest first, with its delivery/ack state */}
       <div className="space-y-2">
-        <div className="flex items-center gap-2 text-sm font-semibold text-neutral-300">
+        <div className="flex items-center gap-2 text-sm font-semibold text-tone-300">
           <MessageSquare size={14} /> Seat mail
-          <span className="ml-auto text-xs font-normal text-neutral-500">{mail.length} recent · msg_store</span>
+          <span className="ml-auto text-xs font-normal text-tone-500">{mail.length} recent · msg_store</span>
         </div>
         {mail.length === 0 ? (
-          <p className="text-xs text-neutral-500">No seat-to-seat messages yet. Send one: <code>python3 msg_store.py send --from a --to b --subject hi --body-file note.txt</code></p>
+          <p className="text-xs text-tone-500">No seat-to-seat messages yet. Send one: <code>python3 msg_store.py send --from a --to b --subject hi --body-file note.txt</code></p>
         ) : (
-          <div className="divide-y divide-neutral-800 rounded-lg border border-neutral-800 bg-neutral-900/60">
+          <div className="divide-y divide-tone-800 rounded-lg border border-tone-800 bg-tone-900/60">
             {mail.map((m) => (
               <div key={m.id} className="flex items-center gap-3 px-3 py-2 text-xs" data-testid="mail-row">
-                <span className="font-mono text-neutral-400 w-44 truncate" title={m.id}>{m.id}</span>
-                <span className="text-neutral-200 truncate">
-                  <span className="text-sky-400">{m.from_agent}</span> → <span className="text-emerald-400">{m.to_agent}</span>
+                <span className="font-mono text-tone-400 w-44 truncate" title={m.id}>{m.id}</span>
+                <span className="text-tone-200 truncate">
+                  <span className="text-tone-sky-400">{m.from_agent}</span> → <span className="text-tone-emerald-400">{m.to_agent}</span>
                 </span>
-                <span className="text-neutral-400 truncate flex-1">{m.subject ?? ''}</span>
+                <span className="text-tone-400 truncate flex-1">{m.subject ?? ''}</span>
                 <span className={clsx('px-1.5 py-0.5 rounded font-medium',
-                  m.status === 'acknowledged' ? 'bg-emerald-900/50 text-emerald-300'
-                  : m.status === 'pending' ? 'bg-amber-900/50 text-amber-300' : 'bg-neutral-800 text-neutral-300')}>
+                  m.status === 'acknowledged' ? 'bg-tone-emerald-900/50 text-tone-emerald-300'
+                  : m.status === 'pending' ? 'bg-tone-amber-900/50 text-tone-amber-300' : 'bg-tone-800 text-tone-300')}>
                   {m.status ?? '?'}
                 </span>
-                <span className="text-neutral-500 w-24 text-right" title={m.created_at ?? ''}>{m.created_at ? relativeTime(m.created_at) : ''}</span>
+                <span className="text-tone-500 w-24 text-right" title={m.created_at ?? ''}>{m.created_at ? relativeTime(m.created_at) : ''}</span>
               </div>
             ))}
           </div>

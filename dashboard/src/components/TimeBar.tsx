@@ -55,7 +55,7 @@ export function TimeBar({
 
   return (
     <div className="flex flex-wrap items-center gap-3 py-2 text-xs">
-      <div className="flex rounded-lg border border-neutral-700 overflow-hidden shrink-0">
+      <div className="flex rounded-lg border border-tone-700 overflow-hidden shrink-0">
         {WINDOW_OPTIONS.map((h) => (
           <button
             key={h}
@@ -65,8 +65,8 @@ export function TimeBar({
             className={clsx(
               'px-2.5 py-1 transition-colors',
               windowHours === h
-                ? 'bg-neutral-700 text-neutral-100'
-                : 'bg-neutral-900 text-neutral-400 hover:bg-neutral-800',
+                ? 'bg-tone-700 text-tone-100'
+                : 'bg-tone-900 text-tone-400 hover:bg-tone-800',
             )}
           >
             {h}h
@@ -94,7 +94,7 @@ export function TimeBar({
         />
       </label>
 
-      <span className={clsx('shrink-0 tabular-nums', live ? 'text-green-400' : 'text-amber-300')}>
+      <span className={clsx('shrink-0 tabular-nums', live ? 'text-tone-green-400' : 'text-tone-amber-300')}>
         {label}
       </span>
 
@@ -105,8 +105,8 @@ export function TimeBar({
         className={clsx(
           'flex items-center gap-1 px-2 py-1 rounded-lg border shrink-0 transition-colors',
           live
-            ? 'border-neutral-800 text-neutral-600 cursor-default'
-            : 'border-green-800 bg-green-950/40 text-green-300 hover:bg-green-900/40',
+            ? 'border-tone-800 text-tone-600 cursor-default'
+            : 'border-tone-green-800 bg-tone-green-950/40 text-tone-green-300 hover:bg-tone-green-900/40',
         )}
       >
         <Radio size={12} />

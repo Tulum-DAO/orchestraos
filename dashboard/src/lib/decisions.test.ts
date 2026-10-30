@@ -44,6 +44,16 @@ test('a long summary previews at a line break and never shows a stray ** or back
   assert.equal((noBreak.match(/`/g) ?? []).length % 2, 0);
 });
 
+test('a preview cut inside a code block ends before the block, with no stray backticks', () => {
+  const block = '```\n' + 'git -C ~/sample log --oneline   →  one commit\n'.repeat(8) + '```\n\nMore after the block.';
+  const p = previewText('Intro line.\n\n## The gap\n\n' + block, 280);
+  assert.equal(p, 'Intro line.\n\n## The gap…');
+  // a block closed before the cut is kept whole
+  const closed = previewText('Intro.\n\n```\nshort code\n```\n\n' + 'word '.repeat(80), 120);
+  assert.ok(closed.includes('```\nshort code\n```') && closed.endsWith('…'));
+  assert.equal((closed.match(/```/g) ?? []).length, 2);
+});
+
 test('an answered bubble says what was chosen, by whom, where and when', () => {
   const line = outcomeLine(d({ state: 'answered', option_n: '1', answered_by: operatorUserId(), answer_surface: 'web',
                                answered_at: '2026-10-24T17:20:00Z' }));

@@ -39,10 +39,10 @@ function hashName(name: string): number {
 }
 
 const MACHINE_BADGE_STYLES: Record<string, string> = {
-  'mac-online': 'bg-green-500/15 text-green-400',
-  'mac-sleeping': 'bg-amber-500/15 text-amber-400',
-  'mac-offline': 'bg-red-500/15 text-red-400',
-  'vps': 'bg-blue-500/15 text-blue-400',
+  'mac-online': 'bg-green-500/15 text-tone-green-400',
+  'mac-sleeping': 'bg-amber-500/15 text-tone-amber-400',
+  'mac-offline': 'bg-red-500/15 text-tone-red-400',
+  'vps': 'bg-blue-500/15 text-tone-blue-400',
 };
 
 function getMachineBadgeStyle(machine: string, machineStatus: string): string {
@@ -311,17 +311,17 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   };
 
   return (
-    <div data-agent-id={agent.id} className="relative rounded-xl border border-neutral-800 bg-neutral-900 p-4 hover:border-neutral-700 transition">
+    <div data-agent-id={agent.id} className="relative rounded-xl border border-tone-800 bg-tone-900 p-4 hover:border-tone-700 transition">
       {/* Mac sleeping/offline overlay */}
       {isMacUnavailable && (
-        <div className="absolute inset-0 bg-neutral-950/60 flex items-center justify-center rounded-xl z-10">
-          <span className="text-sm font-medium text-neutral-400">{overlayLabel}</span>
+        <div className="absolute inset-0 bg-tone-950/60 flex items-center justify-center rounded-xl z-10">
+          <span className="text-sm font-medium text-tone-400">{overlayLabel}</span>
         </div>
       )}
 
       {/* Top row */}
       <div className="flex items-center gap-3">
-        <div className={clsx('w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0', color)}>
+        <div className={clsx('w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-tone-white shrink-0', color)}>
           {initial}
         </div>
         {/* The name is a link to the agent's page; a click anywhere else on this block opens the chat
@@ -348,43 +348,43 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           </div>
         </div>
         <div className="relative" ref={menuRef}>
-          <button onClick={() => { setShowMenu(!showMenu); logAction('agent.menu', agent.id); }} className="text-neutral-600 hover:text-neutral-400 transition shrink-0" aria-label="Menu">
+          <button onClick={() => { setShowMenu(!showMenu); logAction('agent.menu', agent.id); }} className="text-tone-600 hover:text-tone-400 transition shrink-0" aria-label="Menu">
             <MoreVertical size={16} />
           </button>
           {showMenu && (
-            <div className="absolute right-0 top-8 z-40 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl py-1 w-48 text-xs">
-              <button onClick={() => { loadPrompt(); setShowPromptModal(true); setPromptEditing(false); setShowMenu(false); logAction('agent.viewPrompt', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-neutral-300 hover:bg-neutral-800 transition-colors">
-                <Eye size={13} className="text-neutral-500" /> View Prompt
+            <div className="absolute right-0 top-8 z-40 bg-tone-900 border border-tone-700 rounded-lg shadow-xl py-1 w-48 text-xs">
+              <button onClick={() => { loadPrompt(); setShowPromptModal(true); setPromptEditing(false); setShowMenu(false); logAction('agent.viewPrompt', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-tone-300 hover:bg-tone-800 transition-colors">
+                <Eye size={13} className="text-tone-500" /> View Prompt
               </button>
               {!isProtected && (
-                <button onClick={() => { loadPrompt(); setShowPromptModal(true); setPromptEditing(true); setShowMenu(false); logAction('agent.editPrompt', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-neutral-300 hover:bg-neutral-800 transition-colors">
-                  <Edit3 size={13} className="text-neutral-500" /> Edit Prompt
+                <button onClick={() => { loadPrompt(); setShowPromptModal(true); setPromptEditing(true); setShowMenu(false); logAction('agent.editPrompt', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-tone-300 hover:bg-tone-800 transition-colors">
+                  <Edit3 size={13} className="text-tone-500" /> Edit Prompt
                 </button>
               )}
-              <div className="border-t border-neutral-800 my-1" />
-              <button onClick={() => { navigator.clipboard.writeText(agent.tmux_session || agent.id); setShowMenu(false); logAction('agent.copySession', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-neutral-300 hover:bg-neutral-800 transition-colors">
-                <Copy size={13} className="text-neutral-500" /> Copy Session Name
+              <div className="border-t border-tone-800 my-1" />
+              <button onClick={() => { navigator.clipboard.writeText(agent.tmux_session || agent.id); setShowMenu(false); logAction('agent.copySession', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-tone-300 hover:bg-tone-800 transition-colors">
+                <Copy size={13} className="text-tone-500" /> Copy Session Name
               </button>
-              <button onClick={() => { navigator.clipboard.writeText(agent.id); setShowMenu(false); logAction('agent.copyId', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-neutral-300 hover:bg-neutral-800 transition-colors">
-                <Copy size={13} className="text-neutral-500" /> Copy Agent ID
+              <button onClick={() => { navigator.clipboard.writeText(agent.id); setShowMenu(false); logAction('agent.copyId', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-tone-300 hover:bg-tone-800 transition-colors">
+                <Copy size={13} className="text-tone-500" /> Copy Agent ID
               </button>
-              <button onClick={async () => { const res = await fetch(`/api/agents/${agent.id}/prompt`); const data = await res.json(); if (data.content) { const blob = new Blob([data.content], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${agent.id}-prompt.md`; a.click(); URL.revokeObjectURL(url); } setShowMenu(false); logAction('agent.downloadPrompt', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-neutral-300 hover:bg-neutral-800 transition-colors">
-                <Download size={13} className="text-neutral-500" /> Download Prompt
+              <button onClick={async () => { const res = await fetch(`/api/agents/${agent.id}/prompt`); const data = await res.json(); if (data.content) { const blob = new Blob([data.content], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${agent.id}-prompt.md`; a.click(); URL.revokeObjectURL(url); } setShowMenu(false); logAction('agent.downloadPrompt', agent.id); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-tone-300 hover:bg-tone-800 transition-colors">
+                <Download size={13} className="text-tone-500" /> Download Prompt
               </button>
-              <div className="border-t border-neutral-800 my-1" />
+              <div className="border-t border-tone-800 my-1" />
               {agent.alive && onKill && onSpawn && confirmKill !== 'restart' && (
-                <button onClick={() => { setConfirmKill('restart'); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-amber-400 hover:bg-neutral-800 transition-colors">
+                <button onClick={() => { setConfirmKill('restart'); }} className="flex items-center gap-2 w-full px-3 py-2 text-left text-tone-amber-400 hover:bg-tone-800 transition-colors">
                   <RotateCcw size={13} /> Restart Agent
                 </button>
               )}
               {agent.alive && onKill && onSpawn && confirmKill === 'restart' && (
                 <div className="flex items-center gap-2 px-3 py-2">
-                  <span className="text-[11px] text-amber-400">Restart?</span>
-                  <button onClick={() => { onKill(agent.id); setTimeout(() => onSpawn(agent.id), 3000); setShowMenu(false); setConfirmKill(null); logAction('agent.restart', agent.id); }} className="text-xs px-2 py-1 rounded bg-amber-500/25 text-amber-400 hover:bg-amber-500/40 transition-colors font-medium">Yes</button>
-                  <button onClick={() => setConfirmKill(null)} className="text-xs px-2 py-1 rounded bg-neutral-800 text-neutral-400 hover:bg-neutral-700 transition-colors font-medium">No</button>
+                  <span className="text-[11px] text-tone-amber-400">Restart?</span>
+                  <button onClick={() => { onKill(agent.id); setTimeout(() => onSpawn(agent.id), 3000); setShowMenu(false); setConfirmKill(null); logAction('agent.restart', agent.id); }} className="text-xs px-2 py-1 rounded bg-amber-500/25 text-tone-amber-400 hover:bg-amber-500/40 transition-colors font-medium">Yes</button>
+                  <button onClick={() => setConfirmKill(null)} className="text-xs px-2 py-1 rounded bg-tone-800 text-tone-400 hover:bg-tone-700 transition-colors font-medium">No</button>
                 </div>
               )}
-              <div className="px-3 py-2 text-[10px] text-neutral-600 border-t border-neutral-800 mt-1">
+              <div className="px-3 py-2 text-[10px] text-tone-600 border-t border-tone-800 mt-1">
                 <div>Tier: {agent.tier} · {machine}</div>
                 <div>Session: {agent.tmux_session || agent.id}</div>
               </div>
@@ -403,12 +403,12 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           {machine}
         </span>
         {(agent.tags || []).filter((t: string) => t.startsWith('client:')).map((t: string) => (
-          <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-violet-500/15 text-violet-400">
+          <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-violet-500/15 text-tone-violet-400">
             {t.slice(7)}
           </span>
         ))}
         {(agent.tags || []).filter((t: string) => t.startsWith('owner:') && t !== 'owner:operator').map((t: string) => (
-          <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-cyan-500/15 text-cyan-400">
+          <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-cyan-500/15 text-tone-cyan-400">
             {t.slice(6)}
           </span>
         ))}
@@ -417,7 +417,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       {/* Working on + live state */}
       <div className="mt-3">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wider text-neutral-500">Working on:</span>
+          <span className="text-[11px] uppercase tracking-wider text-tone-500">Working on:</span>
           {/* These badges keyed off `agent.live_state`, a field that appears
               NOWHERE in the API — zero hits across api/src, null on all 172
               rows — so Active/Waiting/Idle have never once rendered. Rebound to
@@ -451,36 +451,36 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             red dot never reads as "dead, spawn another" (operator report 2026-10-08: gm's pane
             was running a nested tmux client). */}
         {agent.alive && agent.pane_command && normalizeAgentState(agent.status) === 'stopped' && (
-          <p className="text-xs mt-0.5 text-red-300" role="status">{agent.activity}</p>
+          <p className="text-xs mt-0.5 text-tone-red-300" role="status">{agent.activity}</p>
         )}
-        <p className={clsx('text-sm mt-0.5 leading-snug', truncatedTask ? 'text-neutral-300' : 'text-neutral-600')}>
+        <p className={clsx('text-sm mt-0.5 leading-snug', truncatedTask ? 'text-tone-300' : 'text-tone-600')}>
           {/* was 'Idle' — which reads as a STATE and now sits next to a state
               badge that can say "working", so an active agent with no recorded
               task rendered "working / Idle". The badge owns state; this line
               owns the task and says only whether one exists. */}
           {truncatedTask || staleTaskNote || 'No task recorded'}
           {truncatedTask && taskAgeLabel && (
-            <span className="text-neutral-500"> · {taskAgeLabel}</span>
+            <span className="text-tone-500"> · {taskAgeLabel}</span>
           )}
         </p>
       </div>
 
       {/* Bottom: kill left, expand/focus right */}
-      <div className="mt-3 pt-3 border-t border-neutral-800 flex items-center justify-between">
+      <div className="mt-3 pt-3 border-t border-tone-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
           {agent.alive && onKill && confirmKill === 'kill' && (
             <div className="flex items-center gap-1">
-              <span className="text-[10px] text-red-400 mr-1">Kill?</span>
+              <span className="text-[10px] text-tone-red-400 mr-1">Kill?</span>
               <button
                 onClick={() => { onKill(agent.id); logAction('agent.kill', agent.id, agent.name); setConfirmKill(null); }}
                 disabled={killing}
-                className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-red-500/25 text-red-400 hover:bg-red-500/40 transition-colors"
+                className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-red-500/25 text-tone-red-400 hover:bg-red-500/40 transition-colors"
               >
                 Yes
               </button>
               <button
                 onClick={() => setConfirmKill(null)}
-                className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:bg-neutral-700 transition-colors"
+                className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-tone-800 text-tone-400 hover:bg-tone-700 transition-colors"
               >
                 No
               </button>
@@ -491,7 +491,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               onClick={() => setConfirmKill('kill')}
               disabled={killing || isMacUnavailable}
               className={clsx('flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium transition-colors',
-                killing ? 'bg-red-500/10 text-red-400/50 cursor-wait' : isMacUnavailable ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed' : 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
+                killing ? 'bg-red-500/10 text-tone-red-400/50 cursor-wait' : isMacUnavailable ? 'bg-tone-800 text-tone-600 cursor-not-allowed' : 'bg-red-500/15 text-tone-red-400 hover:bg-red-500/25'
               )}
             >
               <Square size={12} />
@@ -503,7 +503,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               onClick={() => { onSpawn(agent.id); logAction('agent.spawn', agent.id, agent.name); }}
               disabled={spawning || isMacUnavailable}
               className={clsx('flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium transition-colors',
-                spawning ? 'bg-green-500/10 text-green-400/50 cursor-wait' : isMacUnavailable ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed' : 'bg-green-500/15 text-green-400 hover:bg-green-500/25'
+                spawning ? 'bg-green-500/10 text-tone-green-400/50 cursor-wait' : isMacUnavailable ? 'bg-tone-800 text-tone-600 cursor-not-allowed' : 'bg-green-500/15 text-tone-green-400 hover:bg-green-500/25'
               )}
             >
               <Play size={12} />
@@ -516,7 +516,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             <>
               <button
                 onClick={() => { setExpanded(!expanded); logAction(expanded ? 'agent.collapse' : 'agent.expand', agent.id, agent.name); if (!expanded) trackRecentAgent(agent.id, agent.name || agent.id, agent.tier); }}
-                className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
+                className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-tone-800 text-tone-400 hover:text-tone-200 transition-colors"
                 aria-label={`${expanded ? 'Hide' : 'Show'} terminal for ${displayName}`}
                 aria-expanded={expanded}
               >
@@ -526,7 +526,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               </button>
               <button
                 onClick={openChat}
-                className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
+                className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-tone-800 text-tone-400 hover:text-tone-200 transition-colors"
                 aria-label={`Open chat with ${displayName}`}
               >
                 <Maximize2 size={12} />
@@ -539,7 +539,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             // (QA run: a fresh install's three demo seats showed no way into a chat at all).
             <button
               disabled
-              className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-500 opacity-60 cursor-not-allowed"
+              className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-tone-800 text-tone-500 opacity-60 cursor-not-allowed"
               aria-label={`Open chat with ${displayName} (start it first)`}
               title="Start the agent first"
             >
@@ -552,7 +552,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
 
       {/* Expanded: Chat Interface */}
       {expanded && agent.alive && (
-        <div className="mt-3 pt-3 border-t border-neutral-800 space-y-3">
+        <div className="mt-3 pt-3 border-t border-tone-800 space-y-3">
           {/* Chat Messages — transcript-driven renderer in compact mode */}
           <TranscriptChatView
             agentId={agent.id}
@@ -580,7 +580,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 onChange={(e) => setInjectText(e.target.value)}
                 placeholder="Message this agent..."
                 rows={2}
-                className="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-xs text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none focus:border-neutral-600"
+                className="flex-1 bg-tone-950 border border-tone-800 rounded-lg px-2.5 py-1.5 text-xs text-tone-300 placeholder-tone-600 resize-none focus:outline-none focus:border-tone-600"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault();
@@ -595,8 +595,8 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   className={clsx(
                     'flex items-center gap-1 px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-medium transition-colors',
                     injecting || !injectText.trim()
-                      ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
-                      : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
+                      ? 'bg-tone-800 text-tone-600 cursor-not-allowed'
+                      : 'bg-blue-500/15 text-tone-blue-400 hover:bg-blue-500/25'
                   )}
                 >
                   <Send size={12} />
@@ -605,7 +605,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               </div>
             </div>
             {injectResult && (
-              <span className={clsx('text-[10px] mt-1 block', injectOk ? 'text-green-500' : 'text-red-400')}>
+              <span className={clsx('text-[10px] mt-1 block', injectOk ? 'text-green-500' : 'text-tone-red-400')}>
                 {injectResult}
               </span>
             )}
@@ -639,10 +639,10 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
             className={clsx(
-              'bg-neutral-900 flex flex-col shadow-2xl',
+              'bg-tone-900 flex flex-col shadow-2xl',
               devMode
                 ? 'w-full rounded-none border-0'
-                : 'border border-neutral-700 rounded-2xl w-full max-w-2xl max-h-[90vh]'
+                : 'border border-tone-700 rounded-2xl w-full max-w-2xl max-h-[90vh]'
             )}
             // Dev fills the visible screen; Chat is capped to it, so its composer is never below the
             // fold or under the keyboard (max-h-[90vh] alone counted Safari's toolbar strip).
@@ -655,24 +655,24 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           >
             {/* Swipe destination pill (mobile deck navigation) */}
             {swipePill && (
-              <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-full bg-neutral-800/95 border border-neutral-600 text-xs text-neutral-100 shadow-lg pointer-events-none">
+              <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-full bg-tone-800/95 border border-tone-600 text-xs text-tone-100 shadow-lg pointer-events-none">
                 {swipePill}
               </div>
             )}
             {/* Modal header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-tone-800 shrink-0">
               <div className="flex items-center gap-3">
-                <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0', color)}>
+                <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-tone-white shrink-0', color)}>
                   {initial}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-neutral-100 font-semibold text-sm">{agent.name}</span>
+                    <span className="text-tone-100 font-semibold text-sm">{agent.name}</span>
                     <AgentStatusDot status={agent.status} />
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <TierBadge tier={agent.tier} />
-                    <span className="text-[11px] text-neutral-500">{machine}</span>
+                    <span className="text-[11px] text-tone-500">{machine}</span>
                   </div>
                 </div>
               </div>
@@ -683,19 +683,19 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 {agent.machine === 'vps' && (
                   <button
                     onClick={() => setShowAuthFlow(true)}
-                    className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-amber-500/10 text-amber-400/80 hover:text-amber-300 transition-colors"
+                    className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-amber-500/10 text-tone-amber-400/80 hover:text-tone-amber-300 transition-colors"
                     title="Re-authenticate Claude on VPS"
                   >
                     <KeyRound size={12} />
                   </button>
                 )}
                 {/* Chat / Dev toggle */}
-                <div className="flex rounded-md border border-neutral-700 overflow-hidden">
+                <div className="flex rounded-md border border-tone-700 overflow-hidden">
                   <button
                     onClick={() => { setDevMode(false); logAction('agent.mode.chat', agent.id); }}
                     className={clsx(
                       'text-[11px] px-2.5 py-1 transition-colors',
-                      !devMode ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
+                      !devMode ? 'bg-tone-700 text-tone-100' : 'text-tone-500 hover:text-tone-300'
                     )}
                   >
                     Chat
@@ -704,7 +704,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                     onClick={openDevMode}
                     className={clsx(
                       'text-[11px] px-2.5 py-1 transition-colors',
-                      devMode ? 'bg-green-800 text-green-300' : 'text-neutral-500 hover:text-neutral-300'
+                      devMode ? 'bg-tone-green-800 text-tone-green-300' : 'text-tone-500 hover:text-tone-300'
                     )}
                   >
                     Dev
@@ -714,7 +714,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   onClick={() => { setFocused(false); setArturoFocus(null); }}
                   aria-label="Close agent panel"
                   title="Close agent panel"
-                  className="p-1.5 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 rounded-lg transition-colors"
+                  className="p-1.5 text-tone-500 hover:text-tone-200 hover:bg-tone-800 rounded-lg transition-colors"
                 >
                   <X size={16} />
                 </button>
@@ -772,7 +772,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 (Shaw, 2026-10-10). Chat mode has what it needs in the pill: Stop for Esc, and the
                 decision card for menus. */}
             {devMode && (
-            <div data-arturo-avoid data-testid="panel-actionbar" className="px-3 py-2 border-t border-neutral-800 shrink-0 bg-neutral-950">
+            <div data-arturo-avoid data-testid="panel-actionbar" className="px-3 py-2 border-t border-tone-800 shrink-0 bg-tone-950">
               <ActionBar
                 agentId={agent.id}
                 outputLines={outputLines}
@@ -791,28 +791,28 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       {/* Prompt viewer/editor modal */}
       {showPromptModal && (
         <div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4" onClick={() => setShowPromptModal(false)}>
-          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
+          <div className="bg-tone-900 border border-tone-700 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-tone-800 shrink-0">
               <div className="flex items-center gap-2">
-                <FileText size={14} className="text-neutral-400" />
-                <span className="text-sm font-semibold text-neutral-200">{promptEditing ? 'Edit' : 'View'} Prompt — {agent.name || agent.id}</span>
-                {isProtected && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">read-only</span>}
+                <FileText size={14} className="text-tone-400" />
+                <span className="text-sm font-semibold text-tone-200">{promptEditing ? 'Edit' : 'View'} Prompt — {agent.name || agent.id}</span>
+                {isProtected && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-400">read-only</span>}
               </div>
-              <button onClick={() => setShowPromptModal(false)} aria-label="Close prompt viewer" title="Close prompt viewer" className="text-neutral-500 hover:text-neutral-300"><X size={16} /></button>
+              <button onClick={() => setShowPromptModal(false)} aria-label="Close prompt viewer" title="Close prompt viewer" className="text-tone-500 hover:text-tone-300"><X size={16} /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 min-h-0">
               {promptContent === null ? (
-                <span className="text-xs text-neutral-500">Loading...</span>
+                <span className="text-xs text-tone-500">Loading...</span>
               ) : promptEditing && !isProtected ? (
-                <textarea value={promptContent} onChange={(e) => setPromptContent(e.target.value)} className="w-full h-full min-h-[300px] bg-neutral-950 text-neutral-200 text-xs font-mono p-3 rounded-lg border border-neutral-800 focus:border-neutral-600 focus:outline-none resize-none" spellCheck={false} />
+                <textarea value={promptContent} onChange={(e) => setPromptContent(e.target.value)} className="w-full h-full min-h-[300px] bg-tone-950 text-tone-200 text-xs font-mono p-3 rounded-lg border border-tone-800 focus:border-tone-600 focus:outline-none resize-none" spellCheck={false} />
               ) : (
-                <pre className="text-xs text-neutral-300 font-mono whitespace-pre-wrap leading-relaxed">{promptContent}</pre>
+                <pre className="text-xs text-tone-300 font-mono whitespace-pre-wrap leading-relaxed">{promptContent}</pre>
               )}
             </div>
             {promptEditing && !isProtected && (
-              <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-neutral-800 shrink-0">
-                <button onClick={() => setShowPromptModal(false)} className="text-xs px-3 py-1.5 rounded-lg bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors">Cancel</button>
-                <button onClick={async () => { await fetch(`/api/agents/${agent.id}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: promptContent }) }); setShowPromptModal(false); logAction('agent.savePrompt', agent.id); }} className="text-xs px-3 py-1.5 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors font-medium">Save</button>
+              <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-tone-800 shrink-0">
+                <button onClick={() => setShowPromptModal(false)} className="text-xs px-3 py-1.5 rounded-lg bg-tone-800 text-tone-400 hover:text-tone-200 transition-colors">Cancel</button>
+                <button onClick={async () => { await fetch(`/api/agents/${agent.id}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: promptContent }) }); setShowPromptModal(false); logAction('agent.savePrompt', agent.id); }} className="text-xs px-3 py-1.5 rounded-lg bg-blue-500/20 text-tone-blue-400 hover:bg-blue-500/30 transition-colors font-medium">Save</button>
               </div>
             )}
           </div>

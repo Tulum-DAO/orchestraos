@@ -24,8 +24,13 @@ export type PairCard = { device: string; device_id: string; code: string; expire
   /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */
   paired?: boolean };
 
-export interface ArturoReply { replayed?: boolean; turn_id?: string; resumed?: boolean; switch?: boolean; onboarding_conversation?: string; choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
-export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
+/** answer_screen_card: Arturo answered a card on the operator's screen for them; the page's card sends it
+ *  (lib/screenCards.ts applyScreenAnswer). `card` is the ref the turn's context gave it. */
+export interface ScreenCardAnswer { card: string; picks: string[]; words?: string }
+export interface ArturoReply { answer?: { picks?: string[]; words?: string }; answer_card?: ScreenCardAnswer; replayed?: boolean; turn_id?: string; resumed?: boolean; switch?: boolean; onboarding_conversation?: string; choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
+export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string;
+  /** The cards on screen (lib/screenCards.ts screenPayload): the focused card in full, the rest one line each. */
+  cards?: import('./screenCards').ScreenPayload }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
 export function contextLine(ctx?: ArturoContext | null): string {
@@ -60,6 +65,8 @@ export interface ArturoTextOptions {
   turnId?: string;
   /** Leaving the page abandons the request (the server's turn, if it started, still finishes and is kept). */
   signal?: AbortSignal;
+  /** The choice card this send answers. */
+  cardAnswer?: CardAnswer;
 }
 
 /** One id per operator send (DEC-1791518421640932). Every attempt of that send carries it (the stream, the
@@ -93,16 +100,36 @@ export function sendOutcomeText(r: { ok: boolean; error?: string }): string | nu
  *  contextLine() produced, after the onboarding marker, so model input is unchanged.
  *  `brain` is sent only when the operator chose one (DEC-1790669162399904 §1.5-1.6). */
 export function buildTextBody(text: string, conversationId: string, ctx?: ArturoContext | null,
-                              brain?: { provider: string; model: string }, turnId?: string): Record<string, unknown> {
+                              brain?: { provider: string; model: string }, turnId?: string, cardAnswer?: CardAnswer): Record<string, unknown> {
   const body: Record<string, unknown> = { text, conversation_id: conversationId };
   if (ctx) body.context = ctx;
   if (brain) body.brain = brain;
   if (turnId) body.turn_id = turnId;
+  if (cardAnswer) body.card_answer = cardAnswer;
   return body;
 }
 
+/** The choice card a send answers (a tap on it): the server keeps the answer on the card with the turn
+ *  (services/arturo/card_answers.py). The message itself is still the words Arturo reads. */
+export interface CardAnswer { card_id: string; picks: string[]; words: string }
+
+/** A send refused because its card can no longer take an answer (answered from another tab or device, or closed):
+ *  nothing ran. `answer` = what the card holds, when it was answered. */
+export function cardRefusal(r: { ok: boolean; error?: string; detail?: unknown; answer?: unknown }):
+  { kind: 'answered' | 'dismissed' | 'unknown'; answer?: { picks: string[]; words?: string } } | null {
+  if (r.ok) return null;
+  if (r.error === 'card_answered') {
+    const a = (r.answer ?? (r.detail as { answer?: unknown } | undefined)?.answer) as { picks?: unknown; words?: unknown } | undefined;
+    const picks = Array.isArray(a?.picks) ? a!.picks.filter((p): p is string => typeof p === 'string') : [];
+    return { kind: 'answered', answer: { picks, ...(typeof a?.words === 'string' ? { words: a.words } : {}) } };
+  }
+  if (r.error === 'card_dismissed') return { kind: 'dismissed' };
+  if (r.error === 'card_unknown') return { kind: 'unknown' };
+  return null;
+}
+
 export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null, opts: ArturoTextOptions = {}): Promise<ArturoReply> {
-  const body = JSON.stringify(buildTextBody(text, conversationId, ctx, opts.brain, opts.turnId));
+  const body = JSON.stringify(buildTextBody(text, conversationId, ctx, opts.brain, opts.turnId, opts.cardAnswer));
   // XMLHttpRequest, not fetch: fetch has no "request body delivered" event, and the Sent state
   // must be real (the server has it), not a timer.
   return new Promise<ArturoReply>((resolve) => {
@@ -114,7 +141,8 @@ export async function arturoText(text: string, conversationId: string, ctx?: Art
     xhr.onload = () => {
       let json: Partial<ArturoReply> & { error?: string; detail?: unknown } = {};
       try { json = JSON.parse(xhr.responseText || '{}'); } catch { /* bad json */ }
-      if (xhr.status < 200 || xhr.status >= 300) resolve({ ok: false, status: xhr.status, error: json.error || `HTTP ${xhr.status}`, detail: json.detail });
+      if (xhr.status < 200 || xhr.status >= 300) resolve({ ok: false, status: xhr.status, error: json.error || `HTTP ${xhr.status}`, detail: json.detail,
+        ...(json.answer ? { answer: json.answer } : {}) });
       else resolve(json as ArturoReply);
     };
     xhr.onerror = () => resolve({ ok: false, error: 'network' });

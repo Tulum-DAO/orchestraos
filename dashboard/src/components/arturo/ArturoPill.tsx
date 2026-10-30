@@ -18,11 +18,13 @@
  */
 import { stripContextLine, isBusy } from '../../lib/arturoResume';
 import { arturoTurn } from '../../lib/arturoStream';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { applyScreenAnswer, focusOf, getScreen, screenLabel, screenPayload, subscribeScreen } from '../../lib/screenCards';
 import JobTray from './JobTray';
+import { withRefs } from '../kit/RefText';
 import { useStickToBottom } from '../../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../../lib/arturoCurrent';
-import ToolCalls from '../chat/ToolCalls';
+import ToolCalls from '../kit/ToolCard';
 import { fromPart } from '../../lib/toolCalls';
 import { jobResultParts } from '../../lib/arturoJobs';
 import { applyToolCall, applyToolResult, type ToolPart, type TurnPart } from '../../lib/turnParts';
@@ -38,9 +40,8 @@ import {
 } from '../../lib/arturoThreads';
 import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
-import { ArturoCallCard } from './ArturoCallCard';
-import { groupCalls } from '../../lib/arturoCallGroups';
-import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
+import CallCard from '../kit/CallCard';
+import { groupCalls, hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
 import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
 import { useArturoBrain } from '../../stores/arturoBrain';
 import { useArturoUi } from '../../stores/arturoUi';
@@ -58,7 +59,7 @@ interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
    *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
   note?: boolean;
   /** Spoken on a call (a caption committed here, or a stored turn of mode "voice"): it goes in the call's card,
-   *  as on Arturo's page (lib/arturoCallGroups). */
+   *  as on Arturo's page (lib/threadKit/calls). */
   voice?: boolean;
   /** The call-ended line of this call id (stored threads tag it): closes the call's card. */
   callEnd?: string;
@@ -127,6 +128,10 @@ export function ArturoPill() {
   // that is what makes "what is this agent doing" answerable while you sit in its session.
   const [focus, setFocus] = useState(getArturoFocus);
   useEffect(() => subscribeArturoFocus(() => setFocus(getArturoFocus())), []);
+  // The cards on screen (lib/screenCards.ts): the context card names the focused one by its question, every turn
+  // carries them (the focused card in full, the rest one line each), and a call hears them as they change.
+  const screen = useSyncExternalStore(subscribeScreen, getScreen, getScreen);
+  const cardsLabel = screenLabel(screen);
   // Provider logos for the brain chip (static marks from config/providers.json via the probe).
   const [logos, setLogos] = useState<Record<string, { svg: string; label: string }>>({});
   useEffect(() => {
@@ -187,12 +192,15 @@ export function ArturoPill() {
   const ctx = focus
     ? { ...routeCtx, entityKind: focus.kind, entityId: focus.id }
     : routeCtx;
-  // Mid-call navigation: the call's screen context follows the page (the hello only carried the start page).
+  // Mid-call navigation: the call's screen context follows the page (the hello only carried the start page), and the
+  // cards on screen ride with it as they change (scrolling, paging a part, a popover opening).
   const callFocused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
   const { setContext: setCallContext } = call;
+  const callCards = screenPayload(screen)?.payload ?? null;
+  const callCardsKey = callCards ? JSON.stringify(callCards) : '';
   useEffect(() => {
-    if (inCall) setCallContext({ route: ctx.route, focusedEntity: callFocused });
-  }, [inCall, ctx.route, callFocused]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (inCall) setCallContext({ route: ctx.route, focusedEntity: callFocused, ...(callCards ? { cards: callCards } : {}) });
+  }, [inCall, ctx.route, callFocused, callCardsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
   // A reload that resolves AFTER the user has already sent something must not overwrite the local
@@ -258,7 +266,11 @@ export function ArturoPill() {
     // The home's send path, whole replies only: one id for this send, so a busy conversation, a hop still
     // starting or a 504 is resolved by asking the server what became of THIS send, never by sending it
     // blind a second time (DEC-1791518421640932).
-    const r = await arturoTurn(body, convId, contextForTurn(convId, ctx), {
+    // The cards on screen as this message leaves, and which card each ref stands for (an answer Arturo hands back
+    // names its card by ref).
+    const turnCtx = contextForTurn(convId, ctx);
+    const onScreen = turnCtx ? screenPayload(getScreen()) : null;
+    const r = await arturoTurn(body, convId, turnCtx && onScreen ? { ...turnCtx, cards: onScreen.payload } : turnCtx, {
       onSent: () => setState('sent'), brain: turnBrain, stream: false,
       // Same rule as the home (G15): right after `orchestra up` the service is still booting. Say so and
       // wait for /health; the send then goes again with the same id.
@@ -280,6 +292,11 @@ export function ArturoPill() {
           : isBusy(r) ? 'Still answering an earlier message in this conversation (another tab or device). Send this again in a moment.'
           : describeTurnError(r)?.message || `Could not reach ${aname}: ${r.error || 'unknown'}`), at: Date.now() });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
+    // Arturo answered a card for the operator: the card on screen sends it through its own route, as a tap would.
+    if (r.ok && r.answer_card) {
+      const err = await applyScreenAnswer(onScreen?.refs[r.answer_card.card], { picks: r.answer_card.picks ?? [], words: r.answer_card.words });
+      if (err) append({ role: 'arturo', text: err, at: Date.now() });
+    }
   }
 
   /** New thread — the one you leave is now IN the list, not lost. */
@@ -317,7 +334,8 @@ export function ArturoPill() {
       if (!window.matchMedia('(max-width: 768px)').matches) return;
       const t = e.target as Element | null;
       if (!t || modelOpen) return;
-      if (panelRef.current?.contains(t) || t.closest('[data-arturo-toggle]')) return;
+      // A card opened from a chip in the pane floats outside it: pressing it is still working in the pane.
+      if (panelRef.current?.contains(t) || t.closest('[data-arturo-toggle]') || t.closest('.kit-card-pop')) return;
       setOpen(false);
     };
     document.addEventListener('pointerdown', onDown, true);
@@ -373,7 +391,7 @@ export function ArturoPill() {
           {/* A voice call is one card, as on Arturo's page: its spoken turns and tool runs together, the live
               captions at its end while it runs. */}
           {groupCalls(turns, inCall).map((item) => item.kind === 'call' ? (
-            <ArturoCallCard key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
+            <CallCard skin="pane" key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
               liveSince={item.live ? callSince : null} liveUser={item.live ? liveUser : undefined} liveArturo={item.live ? liveArturo : undefined}
               connecting={item.live && callState === 'connecting'} />
           ) : ((t: PillTurn, i: number) => t.note ? (
@@ -383,9 +401,9 @@ export function ArturoPill() {
               {t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}
               {t.role !== 'user' && hasVoiceCallMarker(t.text)
                 ? parseVoiceSegments(t.text).map((seg, j) => seg.kind === 'voicecall'
-                  ? <ArturoCallCard key={j} callId={seg.callId} turns={[]} live={false} />
-                  : /^\s*Call ended \(vc_[A-Za-z0-9_-]+\)\.?\s*$/.test(seg.text) ? null : <div key={j} className="bubble">{seg.text}</div>)
-                : <>{t.steps && t.steps.length > 0 && <ToolCalls calls={t.steps.map(fromPart)} />}<div className="bubble">{t.text}</div></>}
+                  ? <CallCard key={j} skin="pane" callId={seg.callId} />
+                  : isCallEndedLine(seg.text) ? null : <div key={j} className="bubble">{withRefs(seg.text, 'pane')}</div>)
+                : <>{t.steps && t.steps.length > 0 && <ToolCalls calls={t.steps.map(fromPart)} skin="pane" />}<div className="bubble">{withRefs(t.text, 'pane')}</div></>}
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
               <SpawnedAgentCard ids={t.spawned} />
               {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
@@ -433,9 +451,10 @@ export function ArturoPill() {
             <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
                     onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
             {ctxOn ? (
-              <span className="arturo-context-chip" title={`Looking at ${contextCardLabel(ctx)}`} aria-label={`Looking at ${contextCardLabel(ctx)}`}>
+              <span className="arturo-context-chip" title={`Looking at ${contextCardLabel(ctx, cardsLabel)}`} aria-label={`Looking at ${contextCardLabel(ctx, cardsLabel)}`}
+                    data-context-card={focusOf(screen) ? 'card' : 'page'}>
                 <Focus size={12} />
-                <span className="cc-label"><b>{contextCardLabel(ctx)}</b></span>
+                <span className="cc-label"><b>{contextCardLabel(ctx, cardsLabel)}</b></span>
                 <button className="cc-x" onClick={toggleContextCard}
                         aria-label="Stop focusing on this page" title="Stop focusing on this page"><X size={12} /></button>
               </span>

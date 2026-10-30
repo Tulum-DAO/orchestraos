@@ -9,7 +9,7 @@ export default function Workflows() {
     return (
       <div className="p-6">
         <h1 className="text-2xl font-bold">Workflows</h1>
-        <p className="text-neutral-500 mt-2">Loading...</p>
+        <p className="text-tone-500 mt-2">Loading...</p>
       </div>
     );
   }
@@ -21,7 +21,7 @@ export default function Workflows() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Workflows</h1>
-        <p className="text-neutral-500 mt-2">Manage scheduled crons across all agents</p>
+        <p className="text-tone-500 mt-2">Manage scheduled crons across all agents</p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -34,10 +34,10 @@ export default function Workflows() {
         {agentKeys.map((agent) => {
           const crons = by_agent[agent];
           return (
-            <div key={agent} className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+            <div key={agent} className="rounded-xl border border-tone-800 bg-tone-900 p-4">
               <div className="flex items-center gap-2 mb-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-300">{agent}</h2>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-500">{crons.length}</span>
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-tone-300">{agent}</h2>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-tone-800 text-tone-500">{crons.length}</span>
               </div>
               <div className="space-y-2">
                 {crons.map((cron: any) => (

@@ -14,6 +14,7 @@ import { post } from '../../lib/api';
 import { previewText } from '../../lib/decisions';
 import { riskText } from '../../lib/decisionCard';
 import { answerFromStored, decisionParts, singleBody, type PlainOption } from '../../lib/multiPart';
+import type { RefCardState } from '../../lib/cardRefs';
 
 const SUMMARY_PREVIEW = 280;
 
@@ -81,17 +82,21 @@ export default function DecisionQuestion({ row, extra, onAnswered, onDismiss, hi
   };
   return (
     <QuestionCard key={row.id} id={id} highlighted={highlighted} title={row.agent || 'An agent'} meta={meta(row.risk)}
-      context={<Context body={row.body} extra={extra} />} parts={parts} onSubmit={submit} onDismiss={onDismiss} />
+      context={<Context body={row.body} extra={extra} />} parts={parts} onSubmit={submit} onDismiss={onDismiss}
+      report={{ id: row.id, kind: 'decision', from: row.agent, question: row.question, summary: row.body }} />
   );
 }
 
 /** An answered decision card: what was chosen (or the words), and a line saying who answered, where and when. */
-export function AnsweredDecision({ row, optionN, answerText, note, id }: {
+export function AnsweredDecision({ row, optionN, answerText, note, id, state }: {
   row: DecisionRow; optionN?: string | null; answerText?: string | null; note?: ReactNode; id?: string;
+  /** For the cards-on-screen context: answered unless said otherwise. */
+  state?: RefCardState;
 }) {
   const parts = decisionParts(row);
   return (
     <AnsweredQuestionCard id={id} title={row.agent || 'An agent'} meta={meta(row.risk)} context={<Context body={row.body} />}
-      parts={parts} answers={[answerFromStored(parts[0], optionN, answerText)]} note={note} />
+      parts={parts} answers={[answerFromStored(parts[0], optionN, answerText)]} note={note}
+      report={{ id: row.id, kind: 'decision', from: row.agent, question: row.question, summary: row.body, state }} />
   );
 }

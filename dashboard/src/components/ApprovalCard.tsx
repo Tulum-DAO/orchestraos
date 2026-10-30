@@ -13,10 +13,10 @@ function relativeTime(dateStr: string): string {
 }
 
 const RISK_COLORS: Record<string, string> = {
-  low: 'text-green-400',
-  medium: 'text-yellow-400',
-  high: 'text-orange-400',
-  critical: 'text-red-400',
+  low: 'text-tone-green-400',
+  medium: 'text-tone-yellow-400',
+  high: 'text-tone-orange-400',
+  critical: 'text-tone-red-400',
 };
 
 interface ApprovalCardProps {
@@ -27,15 +27,15 @@ interface ApprovalCardProps {
 }
 
 export function ApprovalCard({ approval, onApprove, onDeny, isResolved }: ApprovalCardProps) {
-  const categoryClass = APPROVAL_CATEGORY_COLORS[approval.category] || 'bg-neutral-700 text-neutral-300';
-  const riskClass = RISK_COLORS[approval.risk] || 'text-neutral-400';
+  const categoryClass = APPROVAL_CATEGORY_COLORS[approval.category] || 'bg-tone-700 text-tone-300';
+  const riskClass = RISK_COLORS[approval.risk] || 'text-tone-400';
 
   return (
     <div className={clsx(
       'rounded-xl border p-4 space-y-3',
       isResolved
-        ? 'border-neutral-800/50 bg-neutral-900/50'
-        : 'border-neutral-800 bg-neutral-900'
+        ? 'border-tone-800/50 bg-tone-900/50'
+        : 'border-tone-800 bg-tone-900'
     )}>
       {/* Top row: badges + agent + timestamp */}
       <div className="flex flex-wrap items-center gap-2">
@@ -50,28 +50,28 @@ export function ApprovalCard({ approval, onApprove, onDeny, isResolved }: Approv
           </span>
         )}
         {approval.agent_id && (
-          <span className="text-xs text-neutral-500">
-            from <span className="text-neutral-300">{approval.agent_id}</span>
+          <span className="text-xs text-tone-500">
+            from <span className="text-tone-300">{approval.agent_id}</span>
           </span>
         )}
-        <span className="text-xs text-neutral-600 ml-auto">
+        <span className="text-xs text-tone-600 ml-auto">
           {approval.created ? relativeTime(approval.created) : ''}
         </span>
       </div>
 
       {/* Action description */}
-      <p className="text-white font-medium text-sm">{approval.action || 'No action description'}</p>
+      <p className="text-tone-white font-medium text-sm">{approval.action || 'No action description'}</p>
 
       {/* Detail block */}
       {approval.detail && (
-        <pre className="text-xs text-neutral-400 bg-neutral-950 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+        <pre className="text-xs text-tone-400 bg-tone-950 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
           {approval.detail}
         </pre>
       )}
 
       {/* Context */}
       {approval.context && (
-        <p className="text-xs text-neutral-500">{approval.context}</p>
+        <p className="text-xs text-tone-500">{approval.context}</p>
       )}
 
       {/* Resolved badge or action buttons */}
@@ -80,13 +80,13 @@ export function ApprovalCard({ approval, onApprove, onDeny, isResolved }: Approv
           <span className={clsx(
             'text-xs px-2 py-0.5 rounded-full font-medium',
             approval.decision === 'approved'
-              ? 'bg-green-500/20 text-green-300'
-              : 'bg-red-500/20 text-red-300'
+              ? 'bg-green-500/20 text-tone-green-300'
+              : 'bg-red-500/20 text-tone-red-300'
           )}>
             {approval.decision}
           </span>
           {approval.resolved_at && (
-            <span className="text-xs text-neutral-600">{relativeTime(approval.resolved_at)}</span>
+            <span className="text-xs text-tone-600">{relativeTime(approval.resolved_at)}</span>
           )}
         </div>
       ) : (

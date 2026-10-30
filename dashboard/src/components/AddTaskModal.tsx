@@ -4,17 +4,17 @@ import { X, Zap, Loader2 } from 'lucide-react';
 import { post } from '../lib/api';
 
 const TYPES = [
-  { value: 'deliverable', label: 'Deliverable', color: 'bg-emerald-500/15 text-emerald-400' },
-  { value: 'internal', label: 'Internal', color: 'bg-blue-500/15 text-blue-400' },
-  { value: 'question', label: 'Question', color: 'bg-amber-500/15 text-amber-400' },
-  { value: 'bug', label: 'Bug', color: 'bg-red-500/15 text-red-400' },
+  { value: 'deliverable', label: 'Deliverable', color: 'bg-emerald-500/15 text-tone-emerald-400' },
+  { value: 'internal', label: 'Internal', color: 'bg-blue-500/15 text-tone-blue-400' },
+  { value: 'question', label: 'Question', color: 'bg-amber-500/15 text-tone-amber-400' },
+  { value: 'bug', label: 'Bug', color: 'bg-red-500/15 text-tone-red-400' },
 ] as const;
 
 const PRIORITIES = [
-  { value: 'critical', label: 'Critical', color: 'text-red-400' },
-  { value: 'high', label: 'High', color: 'text-amber-400' },
-  { value: 'medium', label: 'Medium', color: 'text-neutral-300' },
-  { value: 'low', label: 'Low', color: 'text-neutral-500' },
+  { value: 'critical', label: 'Critical', color: 'text-tone-red-400' },
+  { value: 'high', label: 'High', color: 'text-tone-amber-400' },
+  { value: 'medium', label: 'Medium', color: 'text-tone-300' },
+  { value: 'low', label: 'Low', color: 'text-tone-500' },
 ] as const;
 
 interface Analysis {
@@ -100,11 +100,11 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-neutral-900 border border-neutral-700 rounded-xl w-full max-w-lg mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-tone-900 border border-tone-700 rounded-xl w-full max-w-lg mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-800">
-          <h2 className="text-base font-semibold text-white">Add Task</h2>
-          <button onClick={onClose} className="text-neutral-500 hover:text-neutral-300 transition-colors">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-tone-800">
+          <h2 className="text-base font-semibold text-tone-white">Add Task</h2>
+          <button onClick={onClose} className="text-tone-500 hover:text-tone-300 transition-colors">
             <X size={18} />
           </button>
         </div>
@@ -116,18 +116,18 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder="Describe the task naturally... e.g. 'Write the release notes for v0.2 and open a PR'"
-              className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500 resize-none"
+              className="w-full bg-tone-800 border border-tone-700 rounded-lg px-3 py-2.5 text-sm text-tone-100 placeholder:text-tone-600 focus:outline-none focus:border-violet-500 resize-none"
               rows={3}
               autoFocus
             />
             {analyzing && (
-              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-violet-400">
+              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-tone-violet-400">
                 <Loader2 size={12} className="animate-spin" />
                 Analyzing...
               </div>
             )}
             {analyzed && !analyzing && (
-              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-emerald-400">
+              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-tone-emerald-400">
                 <Zap size={12} />
                 Auto-filled from description
               </div>
@@ -138,7 +138,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
           <div className="grid grid-cols-2 gap-3">
             {/* Type */}
             <div>
-              <label className="block text-[11px] text-neutral-500 mb-1 uppercase tracking-wider">Type</label>
+              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Type</label>
               <div className="flex flex-wrap gap-1.5">
                 {TYPES.map(t => (
                   <button
@@ -146,7 +146,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
                     onClick={() => setType(t.value)}
                     className={clsx(
                       'px-2.5 py-1 rounded text-[11px] font-medium transition-all',
-                      type === t.value ? t.color + ' ring-1 ring-current' : 'bg-neutral-800 text-neutral-500 hover:text-neutral-300'
+                      type === t.value ? t.color + ' ring-1 ring-current' : 'bg-tone-800 text-tone-500 hover:text-tone-300'
                     )}
                   >
                     {t.label}
@@ -157,11 +157,11 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
             {/* Priority */}
             <div>
-              <label className="block text-[11px] text-neutral-500 mb-1 uppercase tracking-wider">Priority</label>
+              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Priority</label>
               <select
                 value={priority}
                 onChange={e => setPriority(e.target.value)}
-                className="w-full bg-neutral-800 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neutral-500"
+                className="w-full bg-tone-800 border border-tone-700 text-tone-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-tone-500"
               >
                 {PRIORITIES.map(p => (
                   <option key={p.value} value={p.value}>{p.label}</option>
@@ -171,11 +171,11 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
             {/* Client */}
             <div>
-              <label className="block text-[11px] text-neutral-500 mb-1 uppercase tracking-wider">Client</label>
+              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Client</label>
               <select
                 value={client}
                 onChange={e => setClient(e.target.value)}
-                className="w-full bg-neutral-800 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neutral-500"
+                className="w-full bg-tone-800 border border-tone-700 text-tone-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-tone-500"
               >
                 <option value="">None / Internal</option>
                 {clients.map(c => (
@@ -186,38 +186,38 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
             {/* Assignee */}
             <div>
-              <label className="block text-[11px] text-neutral-500 mb-1 uppercase tracking-wider">Route to</label>
+              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Route to</label>
               <div className="flex items-center gap-2">
                 <input
                   value={assignee}
                   onChange={e => { setAssignee(e.target.value); setAssigneeName(''); }}
                   placeholder="Auto-assigned"
-                  className="flex-1 bg-neutral-800 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neutral-500"
+                  className="flex-1 bg-tone-800 border border-tone-700 text-tone-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-tone-500"
                 />
               </div>
               {assigneeName && assignee && (
-                <p className="text-[10px] text-neutral-500 mt-0.5">{assigneeName}</p>
+                <p className="text-[10px] text-tone-500 mt-0.5">{assigneeName}</p>
               )}
             </div>
 
             {/* Due date */}
             <div className="col-span-2">
-              <label className="block text-[11px] text-neutral-500 mb-1 uppercase tracking-wider">Due date (optional)</label>
+              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Due date (optional)</label>
               <input
                 type="date"
                 value={dueDate}
                 onChange={e => setDueDate(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neutral-500"
+                className="bg-tone-800 border border-tone-700 text-tone-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-tone-500"
               />
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-neutral-800">
+        <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-tone-800">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 text-sm text-neutral-400 hover:text-neutral-200 transition-colors"
+            className="px-4 py-1.5 text-sm text-tone-400 hover:text-tone-200 transition-colors"
           >
             Cancel
           </button>
@@ -228,7 +228,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
               'px-4 py-1.5 text-sm font-medium rounded-lg transition-all',
               description.trim() && !submitting
                 ? 'bg-violet-600 text-white hover:bg-violet-500'
-                : 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
+                : 'bg-tone-800 text-tone-600 cursor-not-allowed'
             )}
           >
             {submitting ? 'Creating...' : 'Create Task'}

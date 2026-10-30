@@ -144,7 +144,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
 
         {/* The reason, in words. This is the half a phone could not reach before. */}
         {reason && (
-          <p className="text-xs text-red-400/90 mb-3 flex items-center gap-2" data-testid="connect-reason">
+          <p className="text-xs text-tone-red-400/90 mb-3 flex items-center gap-2" data-testid="connect-reason">
             <span>{provider.label} is not connected: {reason}</span>
             {onRecheck && (
               <button className="underline underline-offset-2 text-foreground/60 hover:text-foreground"
@@ -156,7 +156,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
           </p>
         )}
         {!reason && (
-          <p className="text-xs text-emerald-400/90 mb-3" data-testid="connect-ready">{provider.label} is connected.</p>
+          <p className="text-xs text-tone-emerald-400/90 mb-3" data-testid="connect-ready">{provider.label} is connected.</p>
         )}
 
         {/* The toggle the operator asked for, at the top. */}
@@ -236,7 +236,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
                 {signInUrl && (
                   <div className="flex items-center gap-2" data-testid="signin-link">
                     <a href={signInUrl} target="_blank" rel="noreferrer"
-                       className="flex-1 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#d97757] text-white font-medium">
+                       className="flex-1 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#d97757] text-tone-white font-medium">
                       <ExternalLink size={13} /> Open the sign-in page
                     </a>
                     <button aria-label="Copy the sign-in link" title="Copy the link"
@@ -258,7 +258,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
                   </div>
                   </>
                 )}
-                {error && <p className="text-red-400/90">Could not open a terminal: {error}</p>}
+                {error && <p className="text-tone-red-400/90">Could not open a terminal: {error}</p>}
                 <p className="text-foreground/45">{plan.kind === 'login-shell' ? plan.detail : ''}</p>
               </div>
             );

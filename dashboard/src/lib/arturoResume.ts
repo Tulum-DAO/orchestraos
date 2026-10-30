@@ -9,9 +9,10 @@
 import { isPageOpener, type ChoiceCard } from './arturo';
 import type { ThreadTurn } from './arturoThreads';
 import type { TurnPart } from './turnParts';
-import { jobResultParts } from './arturoJobs';
+import { jobResultParts, jobToolParts, type ArturoJob } from './arturoJobs';
+import { jobResult, type FinishedResult } from './threadKit/results';
 import { splitAttachmentPreamble } from './arturoUpload';
-import { isCardEcho } from './choiceCard';
+import { isCardEcho, storedAnswerText } from './choiceCard';
 
 /** The proxy's page-context line (arturo-proxy.py _context_line) on line 1 of a stored message. The
  *  model saw it; the operator never typed it. The server strips it from thread reads too. */
@@ -22,8 +23,12 @@ export function stripContextLine(text: string): string {
 }
 
 export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[];
+  /** A finished background job (meta kind "job_result"): drawn as a result card (components/kit/ResultCard.tsx). */
+  result?: FinishedResult;
   /** The choice card the reply showed, what was sent in answer (the next message), or that it was dismissed. */
   choices?: ChoiceCard; answered?: string; dismissed?: boolean;
+  /** The answer came from the card's own record on the server, not from the message after it. */
+  answeredOnServer?: boolean;
   /** A card's own answer: drawn on the answered card, so the feed draws no bubble for it. */
   cardEcho?: boolean;
   /** Spoken on a live call (the thread stores mode "voice"): the feed groups these into the call's card. */
@@ -38,20 +43,26 @@ export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
   return turns
     .map((x) => {
       const parts = x.role === 'user' ? undefined : jobResultParts(x.meta, x.content);
+      const result = x.role === 'user' ? null : jobResult(x.meta, x.content, {
+        key: `job:${x.meta?.job_id || x.ts || ''}`, ts: x.ts,
+        steps: x.meta?.steps?.length ? jobToolParts({ id: x.meta.job_id || 'job', status: 'done', steps: x.meta.steps } as ArturoJob) : undefined,
+      });
       const sent = x.role === 'user' ? splitAttachmentPreamble(stripContextLine(x.content)) : null;
       return { role: x.role === 'user' ? 'user' as const : 'arturo' as const,
-               text: sent ? sent.text : x.content, ...(parts ? { parts } : {}),
+               text: sent ? sent.text : x.content, ...(parts ? { parts } : {}), ...(result ? { result } : {}),
                ...(sent?.images.length ? { images: sent.images } : {}),
                ...(x.mode === 'voice' ? { voice: true } : {}),
                ...(x.meta?.kind === 'call_end' && x.meta.call_id ? { callEnd: x.meta.call_id } : {}),
                ...(x.role !== 'user' && x.meta?.kind === 'card' && x.meta.choices
-                 ? { choices: { ...x.meta.choices, card_id: x.meta.card_id }, ...(x.meta.dismissed ? { dismissed: true } : {}) } : {}),
+                 ? { choices: { ...x.meta.choices, card_id: x.meta.card_id }, ...(x.meta.dismissed ? { dismissed: true } : {}),
+                     ...(x.meta.answer ? { answered: storedAnswerText(x.meta.choices.options, x.meta.answer), answeredOnServer: true } : {}) } : {}),
                ...(typeof x.ts === 'number' ? { ts: x.ts } : {}) };
     })
     .filter((x) => !(x.role === 'user' && isPageOpener(x.text)))
-    // A card is answered by the message that followed it (a tap sends the option's words, or they typed instead).
+    // A card's answer is its own record on the server; a card from before those were kept is answered by the message
+    // that followed it (a tap sends the option's words, or they typed instead).
     .map((x, i, all) => {
-      if (!x.choices || x.dismissed) return x;
+      if (!x.choices || x.dismissed || x.answeredOnServer) return x;
       const next = all.slice(i + 1).find((y) => y.role === 'user');
       return next ? { ...x, answered: next.text } : x;
     })

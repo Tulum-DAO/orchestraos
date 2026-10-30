@@ -191,7 +191,7 @@ export function CommandPalette() {
         aria-modal="true"
         data-command-palette
         aria-label="Go to"
-        className="w-full max-w-[560px] overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl"
+        className="w-full max-w-[560px] overflow-hidden rounded-xl border border-tone-700 bg-tone-900 shadow-2xl"
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             // STOP IT HERE. The Arturo pill registers its own window Escape handler while it
@@ -214,22 +214,22 @@ export function CommandPalette() {
           }
         }}
       >
-        <div className="flex items-center gap-2 border-b border-neutral-800 px-3">
-          <Search size={15} className="shrink-0 text-neutral-500" aria-hidden />
+        <div className="flex items-center gap-2 border-b border-tone-800 px-3">
+          <Search size={15} className="shrink-0 text-tone-500" aria-hidden />
           <input
             ref={inputRef}
             value={query}
             onChange={(e) => { setQuery(e.target.value); setCursor(0); }}
             placeholder="Go to an agent or a page"
             aria-label="Go to an agent or a page"
-            className="w-full bg-transparent py-3 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none"
+            className="w-full bg-transparent py-3 text-sm text-tone-200 placeholder-tone-600 focus:outline-none"
           />
-          <kbd className="shrink-0 rounded border border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-500">esc</kbd>
+          <kbd className="shrink-0 rounded border border-tone-700 px-1.5 py-0.5 text-[10px] text-tone-500">esc</kbd>
         </div>
 
         <ul className="max-h-[50vh] overflow-y-auto py-1" role="listbox" aria-label="Results">
           {results.length === 0 && (
-            <li className="px-3 py-6 text-center text-[12px] text-neutral-500">Nothing matches “{query}”.</li>
+            <li className="px-3 py-6 text-center text-[12px] text-tone-500">Nothing matches “{query}”.</li>
           )}
           {results.map((e, i) => (
             <li key={`${e.kind}:${e.id}`}>
@@ -240,14 +240,14 @@ export function CommandPalette() {
                 onMouseEnter={() => setCursor(i)}
                 onClick={() => choose(e)}
                 className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
-                  i === cursor ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-300 hover:bg-neutral-800/60'
+                  i === cursor ? 'bg-tone-800 text-tone-100' : 'text-tone-300 hover:bg-tone-800/60'
                 }`}
               >
                 <span className="min-w-0 flex-1 truncate">{e.label}</span>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-neutral-600">
+                <span className="shrink-0 text-[10px] uppercase tracking-wide text-tone-600">
                   {e.sublabel || e.kind}
                 </span>
-                {i === cursor && <CornerDownLeft size={12} className="shrink-0 text-neutral-500" aria-hidden />}
+                {i === cursor && <CornerDownLeft size={12} className="shrink-0 text-tone-500" aria-hidden />}
               </button>
             </li>
           ))}

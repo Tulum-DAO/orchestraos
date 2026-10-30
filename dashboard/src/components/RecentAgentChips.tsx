@@ -114,11 +114,11 @@ export function RecentAgentChips({ currentId }: { currentId: string }) {
             e.stopPropagation();
             requestFocus(id);
           }}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-neutral-700 bg-neutral-800/60 hover:bg-neutral-700 hover:border-neutral-500 transition-colors max-w-[160px]"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-tone-700 bg-tone-800/60 hover:bg-tone-700 hover:border-tone-500 transition-colors max-w-[160px]"
           title={`Switch to ${id}`}
         >
           <ActivityDot state={stateFor(id)} />
-          <span className="text-[11px] text-neutral-300 truncate">{id}</span>
+          <span className="text-[11px] text-tone-300 truncate">{id}</span>
         </button>
       ))}
     </div>

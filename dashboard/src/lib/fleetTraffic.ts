@@ -33,7 +33,7 @@ export const DOT_COLOR: Record<string, string> = {
   task_request: 'bg-orange-400',
   reply: 'bg-sky-400',
 };
-export const DOT_COLOR_UNKNOWN = 'bg-neutral-400';
+export const DOT_COLOR_UNKNOWN = 'bg-tone-400';
 
 export function dotColor(type: string | null | undefined): string {
   if (!type) return DOT_COLOR_UNKNOWN;

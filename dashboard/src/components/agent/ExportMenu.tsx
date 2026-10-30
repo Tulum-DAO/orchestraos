@@ -57,7 +57,7 @@ export function ExportMenu({ agentId }: { agentId: string }) {
           <button type="button" role="menuitem" onClick={download} className="w-full text-left px-3 py-2 hover:bg-muted">Download .md</button>
           <button type="button" role="menuitem" onClick={copy} className="w-full text-left px-3 py-2 hover:bg-muted">Copy as Markdown</button>
           <p className="px-3 pt-1 pb-2 text-[11px] text-muted-foreground">Last 50 turns. Secrets removed; thinking left out.</p>
-          {note && <p className="px-3 pb-2 text-[11px] text-amber-300" role="status">{note}</p>}
+          {note && <p className="px-3 pb-2 text-[11px] text-tone-amber-300" role="status">{note}</p>}
         </div>
       )}
     </div>

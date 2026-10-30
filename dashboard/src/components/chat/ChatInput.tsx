@@ -506,17 +506,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           under the operator's thumb when one appears. */}
       {busy && (
         <div className="mb-1.5 mx-2 rounded-xl border border-amber-700/50 bg-card px-2.5 py-1.5 shadow-sm">
-          <div className="text-[11px] text-amber-300">
+          <div className="text-[11px] text-tone-amber-300">
             {sendPanelHeadline(busy)}
-            {busy.state ? <span className="text-neutral-500"> ({busy.state})</span> : null}
+            {busy.state ? <span className="text-tone-500"> ({busy.state})</span> : null}
           </div>
           {busy.composer_text && (
-            <div className="text-[10px] text-neutral-500 mt-0.5 truncate">
+            <div className="text-[10px] text-tone-500 mt-0.5 truncate">
               the agent's box already holds: "{busy.composer_text}" — sending now submits it together with yours
             </div>
           )}
           {busy.stranded?.text && (
-            <div className="text-[10px] text-neutral-500 mt-0.5 truncate">
+            <div className="text-[10px] text-tone-500 mt-0.5 truncate">
               agent has an unsent draft: "{busy.stranded.text}"
             </div>
           )}
@@ -527,17 +527,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               <button
                 onClick={() => handleSend(true)}
                 disabled={sending}
-                className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
+                className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-tone-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
               >
                 {/* the gateway's force APPENDS to the box and submits; it never clears it (review of #198) */}
                 {busy.composer_text ? 'Send together with the draft' : 'Send anyway'}
               </button>
             ) : (
-              <span className="text-[10px] text-neutral-600">retry when the agent finishes its turn</span>
+              <span className="text-[10px] text-tone-600">retry when the agent finishes its turn</span>
             )}
             <button
               onClick={() => { setBusy(null); setResult(null); }}
-              className="text-[10px] px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-300"
+              className="text-[10px] px-2 py-0.5 rounded text-tone-500 hover:text-tone-300"
             >
               Dismiss
             </button>
@@ -545,7 +545,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         </div>
       )}
       {result && (
-        <span className={clsx('text-[10px] mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-red-400')}>
+        <span className={clsx('text-[10px] mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-tone-red-400')}>
           {result}
         </span>
       )}
@@ -571,7 +571,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
                   : <Paperclip size={16} className="text-muted-foreground shrink-0 mx-1" />
                 }
                 <span className="text-xs text-muted-foreground truncate max-w-[180px]">{p.file.name}</span>
-                <button type="button" onClick={() => removeFiles([p.id])} aria-label={`Remove ${p.file.name}`} className="text-muted-foreground hover:text-red-400 transition-colors">
+                <button type="button" onClick={() => removeFiles([p.id])} aria-label={`Remove ${p.file.name}`} className="text-muted-foreground hover:text-tone-red-400 transition-colors">
                   <X size={14} />
                 </button>
               </span>
@@ -582,7 +582,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               <span key={p.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-muted rounded-xl border border-border text-xs text-foreground/80">
                 <ClipboardList size={13} className="text-muted-foreground shrink-0" />
                 Pasted text · {p.lines} lines
-                <button onClick={() => removePaste(p.id)} aria-label="Remove pasted text" className="text-muted-foreground hover:text-red-400 transition-colors">
+                <button onClick={() => removePaste(p.id)} aria-label="Remove pasted text" className="text-muted-foreground hover:text-tone-red-400 transition-colors">
                   <X size={12} />
                 </button>
               </span>

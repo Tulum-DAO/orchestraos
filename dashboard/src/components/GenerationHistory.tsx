@@ -39,13 +39,13 @@ export function GenerationHistory({ agentId, total }: { agentId: string; total?:
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-neutral-400 border border-neutral-700 hover:text-neutral-200 hover:border-neutral-500"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-tone-400 border border-tone-700 hover:text-tone-200 hover:border-tone-500"
         title="Past generations of this agent"
       >
         <History size={10} /> {total} gens
       </button>
       {open && (
-        <div className="absolute left-0 top-6 z-40 w-72 max-h-72 overflow-y-auto bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl p-2">
+        <div className="absolute left-0 top-6 z-40 w-72 max-h-72 overflow-y-auto bg-tone-900 border border-tone-700 rounded-lg shadow-xl p-2">
           <GenerationList rows={rows} />
         </div>
       )}

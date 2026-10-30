@@ -45,7 +45,7 @@ async function createTask(body: any) {
 // ── Constants ───────────────────────────────────────────────────
 
 const DEFAULT_COLUMNS = [
-  { key: 'pending', label: 'To Do', dot: 'bg-neutral-500', statuses: ['pending'] },
+  { key: 'pending', label: 'To Do', dot: 'bg-tone-500', statuses: ['pending'] },
   { key: 'in_progress', label: 'Doing', dot: 'bg-blue-500', statuses: ['in_progress', 'review'] },
   { key: 'blocked', label: 'Blocked', dot: 'bg-amber-500', statuses: ['blocked'] },
   { key: 'completed', label: 'Done', dot: 'bg-green-500', statuses: ['completed'] },
@@ -65,9 +65,9 @@ const STATUS_DOT_COLOR: Record<string, string> = {
   running: 'bg-green-500',
   alive: 'bg-green-500',
   active: 'bg-green-500',
-  stopped: 'bg-neutral-500',
+  stopped: 'bg-tone-500',
   spawning: 'bg-yellow-500',
-  unknown: 'bg-neutral-600',
+  unknown: 'bg-tone-600',
 };
 
 function relativeTime(ts: string): string {
@@ -150,7 +150,7 @@ export default function Tasks() {
     return pipeline.stages.map((s: any) => ({
       key: s.key,
       label: s.label,
-      dot: s.dot_color || 'bg-neutral-500',
+      dot: s.dot_color || 'bg-tone-500',
       statuses: [s.key],
     }));
   }, [pipelineData, selectedPipeline]);
@@ -272,15 +272,15 @@ export default function Tasks() {
     createMutation.mutate({ title, type: addType });
   };
 
-  if (isLoading) return <p className="text-neutral-500 p-8">Loading...</p>;
+  if (isLoading) return <p className="text-tone-500 p-8">Loading...</p>;
 
   return (
     <div className="p-4 md:p-6 flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h1 className="text-2xl font-bold text-white">Tasks</h1>
-          <p className="text-xs text-neutral-500 mt-0.5">
+          <h1 className="text-2xl font-bold text-foreground">Tasks</h1>
+          <p className="text-xs text-tone-500 mt-0.5">
             {summary.pending || 0} pending · {summary.in_progress || 0} active · {summary.completed || 0} done
           </p>
         </div>
@@ -302,10 +302,10 @@ export default function Tasks() {
             onChange={(e) => setAddText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleAddSubmit(); if (e.key === 'Escape') setAddOpen(false); }}
             placeholder="What needs to be done?"
-            className="flex-1 min-w-[200px] bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-violet-500"
+            className="flex-1 min-w-[200px] bg-tone-800 border border-tone-700 rounded-lg px-3 py-2 text-sm text-tone-200 placeholder-tone-600 focus:outline-none focus:border-violet-500"
           />
           <select value={addType} onChange={(e) => setAddType(e.target.value)}
-            className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-2 border border-neutral-700">
+            className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-2 border border-tone-700">
             <option value="agent">Agent</option>
             <option value="human">Human</option>
             <option value="call">Call</option>
@@ -318,7 +318,7 @@ export default function Tasks() {
           >
             <Send size={16} />
           </button>
-          <button onClick={() => setAddOpen(false)} className="p-2 text-neutral-500 hover:text-neutral-300">
+          <button onClick={() => setAddOpen(false)} className="p-2 text-tone-500 hover:text-tone-300">
             <X size={16} />
           </button>
         </div>
@@ -332,14 +332,14 @@ export default function Tasks() {
           className={clsx(
             'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors',
             needsMeActive
-              ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-              : 'bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-neutral-200'
+              ? 'bg-amber-500/20 border-amber-500/50 text-tone-amber-300'
+              : 'bg-tone-800 border-tone-700 text-tone-400 hover:text-tone-200'
           )}
         >
           Needs Me
           <span className={clsx(
             'px-1.5 py-0.5 rounded-full text-[10px] font-bold',
-            needsMeCount > 0 ? 'bg-amber-500/30 text-amber-300' : 'bg-neutral-700 text-neutral-500'
+            needsMeCount > 0 ? 'bg-amber-500/30 text-tone-amber-300' : 'bg-tone-700 text-tone-500'
           )}>
             {needsMeCount}
           </span>
@@ -347,20 +347,20 @@ export default function Tasks() {
 
         {projects.length > 0 && (
           <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}
-            className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1.5 border border-neutral-700 focus:outline-none">
+            className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-1.5 border border-tone-700 focus:outline-none">
             <option value="all">All projects</option>
             {projects.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         )}
         {clients.length > 0 && (
           <select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}
-            className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1.5 border border-neutral-700 focus:outline-none">
+            className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-1.5 border border-tone-700 focus:outline-none">
             <option value="all">All clients</option>
             {clients.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
         <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}
-          className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1.5 border border-neutral-700 focus:outline-none">
+          className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-1.5 border border-tone-700 focus:outline-none">
           <option value="all">All priorities</option>
           <option value="critical">Critical</option>
           <option value="high">High</option>
@@ -368,7 +368,7 @@ export default function Tasks() {
           <option value="low">Low</option>
         </select>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-          className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1.5 border border-neutral-700 focus:outline-none">
+          className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-1.5 border border-tone-700 focus:outline-none">
           <option value="all">All types</option>
           <option value="agent">Agent</option>
           <option value="human">Human</option>
@@ -376,7 +376,7 @@ export default function Tasks() {
           <option value="external">External</option>
         </select>
         <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}
-          className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1.5 border border-neutral-700 focus:outline-none">
+          className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-1.5 border border-tone-700 focus:outline-none">
           <option value="all">All sources</option>
           <option value="user">User requests</option>
           <option value="agent">Agent-created</option>
@@ -387,7 +387,7 @@ export default function Tasks() {
         </select>
         {pipelineData?.pipelines?.length > 1 && (
           <select value={selectedPipeline} onChange={(e) => setSelectedPipeline(e.target.value)}
-            className="bg-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1.5 border border-neutral-700 focus:outline-none">
+            className="bg-tone-800 text-tone-300 text-xs rounded-lg px-2 py-1.5 border border-tone-700 focus:outline-none">
             {pipelineData.pipelines.map((p: any) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
@@ -396,14 +396,14 @@ export default function Tasks() {
       </div>
 
       {/* View toggle */}
-      <div className="flex items-center gap-1 mb-3 p-1 bg-neutral-800/60 rounded-lg w-fit border border-neutral-700/50">
+      <div className="flex items-center gap-1 mb-3 p-1 bg-tone-800/60 rounded-lg w-fit border border-tone-700/50">
         <button
           onClick={() => setViewMode('board')}
           className={clsx(
             'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
             viewMode === 'board'
-              ? 'bg-neutral-700 text-white'
-              : 'text-neutral-500 hover:text-neutral-300'
+              ? 'bg-tone-700 text-tone-white'
+              : 'text-tone-500 hover:text-tone-300'
           )}
         >
           <LayoutDashboard size={13} />
@@ -414,8 +414,8 @@ export default function Tasks() {
           className={clsx(
             'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
             viewMode === 'project'
-              ? 'bg-neutral-700 text-white'
-              : 'text-neutral-500 hover:text-neutral-300'
+              ? 'bg-tone-700 text-tone-white'
+              : 'text-tone-500 hover:text-tone-300'
           )}
         >
           <FolderOpen size={13} />
@@ -440,14 +440,14 @@ export default function Tasks() {
                 {/* Column header */}
                 <div className="flex items-center gap-2 mb-2 px-1">
                   <span className={clsx('w-2 h-2 rounded-full', col.dot)} />
-                  <span className="text-sm font-semibold text-neutral-300">{col.label}</span>
-                  <span className="text-xs bg-neutral-800 text-neutral-500 px-1.5 py-0.5 rounded-full">{tasks.length}</span>
+                  <span className="text-sm font-semibold text-tone-300">{col.label}</span>
+                  <span className="text-xs bg-tone-800 text-tone-500 px-1.5 py-0.5 rounded-full">{tasks.length}</span>
                 </div>
 
                 {/* Cards */}
                 <div className="overflow-y-auto overflow-x-hidden flex-1 space-y-2 pr-1">
                   {tasks.length === 0 && (
-                    <p className="text-neutral-700 text-xs px-2 py-4 text-center">No tasks</p>
+                    <p className="text-tone-700 text-xs px-2 py-4 text-center">No tasks</p>
                   )}
                   {tasks.map((task: any) => (
                     <TaskCard
@@ -473,7 +473,7 @@ export default function Tasks() {
       {viewMode === 'project' && (
         <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pb-4">
           {byProject.length === 0 && (
-            <p className="text-neutral-700 text-xs px-2 py-8 text-center">No tasks match the current filters</p>
+            <p className="text-tone-700 text-xs px-2 py-8 text-center">No tasks match the current filters</p>
           )}
           {byProject.map(([projectName, tasks]) => {
             const isCollapsed = collapsedProjects.has(projectName);
@@ -483,37 +483,37 @@ export default function Tasks() {
             const hasBlocked = tasks.some((t: any) => t.status === 'blocked');
 
             return (
-              <div key={projectName} className="border border-neutral-800 rounded-xl overflow-hidden">
+              <div key={projectName} className="border border-tone-800 rounded-xl overflow-hidden">
                 {/* Section header */}
                 <button
                   onClick={() => toggleProjectCollapse(projectName)}
-                  className="w-full flex items-center gap-3 px-4 py-3 bg-neutral-800/50 hover:bg-neutral-800 transition-colors text-left"
+                  className="w-full flex items-center gap-3 px-4 py-3 bg-tone-800/50 hover:bg-tone-800 transition-colors text-left"
                 >
                   {isCollapsed
-                    ? <ChevronRight size={15} className="text-neutral-500 shrink-0" />
-                    : <ChevronDown size={15} className="text-neutral-500 shrink-0" />
+                    ? <ChevronRight size={15} className="text-tone-500 shrink-0" />
+                    : <ChevronDown size={15} className="text-tone-500 shrink-0" />
                   }
-                  <FolderOpen size={14} className="text-violet-400 shrink-0" />
-                  <span className="text-sm font-semibold text-neutral-200 flex-1 truncate">{projectName}</span>
+                  <FolderOpen size={14} className="text-tone-violet-400 shrink-0" />
+                  <span className="text-sm font-semibold text-tone-200 flex-1 truncate">{projectName}</span>
                   {hasBlocked && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-medium mr-1">blocked</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-tone-amber-400 font-medium mr-1">blocked</span>
                   )}
-                  <span className="text-xs text-neutral-500 shrink-0 mr-2">{total} task{total !== 1 ? 's' : ''}</span>
+                  <span className="text-xs text-tone-500 shrink-0 mr-2">{total} task{total !== 1 ? 's' : ''}</span>
                   {/* Progress bar */}
                   <div className="hidden sm:flex items-center gap-2 shrink-0">
-                    <div className="w-20 h-1.5 bg-neutral-700 rounded-full overflow-hidden">
+                    <div className="w-20 h-1.5 bg-tone-700 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-green-500 rounded-full transition-all"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-neutral-500 w-7 text-right">{pct}%</span>
+                    <span className="text-[10px] text-tone-500 w-7 text-right">{pct}%</span>
                   </div>
                 </button>
 
                 {/* Task list */}
                 {!isCollapsed && (
-                  <div className="divide-y divide-neutral-800/60">
+                  <div className="divide-y divide-tone-800/60">
                     {tasks.map((task: any) => (
                       <ProjectTaskRow
                         key={task.id}
@@ -545,7 +545,7 @@ function AgentBadge({ assignedTo, agentStatusMap }: { assignedTo: string; agentS
   const initials = agentInitials(assignedTo);
 
   return (
-    <span className="inline-flex items-center gap-1 bg-neutral-800 border border-neutral-700 rounded px-1.5 py-0.5 text-[10px] text-neutral-400 font-medium max-w-[100px]">
+    <span className="inline-flex items-center gap-1 bg-tone-800 border border-tone-700 rounded px-1.5 py-0.5 text-[10px] text-tone-400 font-medium max-w-[100px]">
       <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', dotColor)} />
       <span className="truncate" title={assignedTo}>{initials || assignedTo}</span>
     </span>
@@ -580,8 +580,8 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
       className={clsx(
         'rounded-lg border p-3 transition-colors',
         task.status === 'blocked'
-          ? 'border-l-2 border-l-amber-500 border-t-neutral-800 border-r-neutral-800 border-b-neutral-800 bg-neutral-900'
-          : 'border-neutral-800 bg-neutral-900',
+          ? 'border-l-2 border-l-amber-500 border-t-tone-800 border-r-tone-800 border-b-tone-800 bg-tone-900'
+          : 'border-tone-800 bg-tone-900',
         task.priority === 'critical' && 'border-l-2 border-l-red-500'
       )}
       onTouchStart={handleTouchStart}
@@ -592,36 +592,36 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
         <PriorityBadge priority={task.priority} />
         <span className={clsx(
           'text-sm font-medium leading-tight flex-1',
-          task.status === 'completed' ? 'text-neutral-500 line-through' : 'text-white'
+          task.status === 'completed' ? 'text-tone-500 line-through' : 'text-tone-white'
         )}>
           {task.title}
         </span>
-        {isExpanded ? <ChevronDown size={14} className="text-neutral-600 shrink-0 mt-0.5" /> : <ChevronRight size={14} className="text-neutral-600 shrink-0 mt-0.5" />}
+        {isExpanded ? <ChevronDown size={14} className="text-tone-600 shrink-0 mt-0.5" /> : <ChevronRight size={14} className="text-tone-600 shrink-0 mt-0.5" />}
       </div>
 
       {/* Tags */}
       <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-[10px]">
         {task.type && task.type !== 'agent' && (
           <span className={clsx('px-1.5 py-0.5 rounded font-semibold uppercase tracking-wider',
-            task.type === 'human' ? 'bg-cyan-500/15 text-cyan-400' :
-            task.type === 'call' ? 'bg-pink-500/15 text-pink-400' :
-            task.type === 'external' ? 'bg-amber-500/15 text-amber-400' :
-            'bg-neutral-700 text-neutral-400'
+            task.type === 'human' ? 'bg-cyan-500/15 text-tone-cyan-400' :
+            task.type === 'call' ? 'bg-pink-500/15 text-tone-pink-400' :
+            task.type === 'external' ? 'bg-amber-500/15 text-tone-amber-400' :
+            'bg-tone-700 text-tone-400'
           )}>
             {task.type}
           </span>
         )}
         {task.project_id && (
-          <span className="bg-violet-500/15 text-violet-400 px-1.5 py-0.5 rounded font-medium">{task.project_id}</span>
+          <span className="bg-violet-500/15 text-tone-violet-400 px-1.5 py-0.5 rounded font-medium">{task.project_id}</span>
         )}
         {task.client && task.client !== task.project_id && (
-          <span className="bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5 rounded font-medium">{task.client}</span>
+          <span className="bg-emerald-500/15 text-tone-emerald-400 px-1.5 py-0.5 rounded font-medium">{task.client}</span>
         )}
       </div>
 
       {/* Footer: timestamp + agent badge */}
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-[10px] text-neutral-600">
+        <span className="text-[10px] text-tone-600">
           {relativeTime(task.created_at)} ago
         </span>
         {task.assigned_to && (
@@ -631,9 +631,9 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
 
       {/* Expanded detail */}
       {isExpanded && (
-        <div className="mt-3 pt-3 border-t border-neutral-800 space-y-3">
+        <div className="mt-3 pt-3 border-t border-tone-800 space-y-3">
           {task.description && (
-            <p className="text-xs text-neutral-400 leading-relaxed">{task.description}</p>
+            <p className="text-xs text-tone-400 leading-relaxed">{task.description}</p>
           )}
 
           {/* Inline status/priority controls */}
@@ -641,7 +641,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
             <select
               value={task.status}
               onChange={(e) => onPatch({ status: e.target.value })}
-              className="bg-neutral-800 text-neutral-300 text-xs rounded px-2 py-1 border border-neutral-700"
+              className="bg-tone-800 text-tone-300 text-xs rounded px-2 py-1 border border-tone-700"
             >
               <option value="pending">Pending</option>
               <option value="in_progress">In Progress</option>
@@ -652,7 +652,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
             <select
               value={task.priority}
               onChange={(e) => onPatch({ priority: e.target.value })}
-              className="bg-neutral-800 text-neutral-300 text-xs rounded px-2 py-1 border border-neutral-700"
+              className="bg-tone-800 text-tone-300 text-xs rounded px-2 py-1 border border-tone-700"
             >
               <option value="critical">Critical</option>
               <option value="high">High</option>
@@ -662,7 +662,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
             <select
               value={task.type || 'agent'}
               onChange={(e) => onPatch({ type: e.target.value })}
-              className="bg-neutral-800 text-neutral-300 text-xs rounded px-2 py-1 border border-neutral-700"
+              className="bg-tone-800 text-tone-300 text-xs rounded px-2 py-1 border border-tone-700"
             >
               <option value="agent">Agent</option>
               <option value="human">Human</option>
@@ -677,9 +677,9 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
               onClick={onAdvance}
               className={clsx(
                 'text-xs px-3 py-1.5 rounded-lg font-medium transition-colors w-full',
-                nextStatus === 'completed' ? 'bg-green-500/15 text-green-400 hover:bg-green-500/25' :
-                nextStatus === 'in_progress' ? 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25' :
-                'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+                nextStatus === 'completed' ? 'bg-green-500/15 text-tone-green-400 hover:bg-green-500/25' :
+                nextStatus === 'in_progress' ? 'bg-blue-500/15 text-tone-blue-400 hover:bg-blue-500/25' :
+                'bg-tone-800 text-tone-400 hover:text-tone-200'
               )}
             >
               {nextLabel[nextStatus] || nextStatus} →
@@ -687,7 +687,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
           )}
 
           {/* Metadata */}
-          <div className="text-[10px] text-neutral-600 space-y-0.5">
+          <div className="text-[10px] text-tone-600 space-y-0.5">
             {task.source && <p>Source: {task.source}</p>}
             {task.created_by && <p>Created by: {task.created_by}</p>}
             {task.routed_to && <p>Routed to: {task.routed_to}</p>}
@@ -716,7 +716,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
   };
 
   const statusDot: Record<string, string> = {
-    pending: 'bg-neutral-500',
+    pending: 'bg-tone-500',
     in_progress: 'bg-blue-500',
     review: 'bg-purple-500',
     blocked: 'bg-amber-500',
@@ -725,13 +725,13 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
 
   return (
     <div className={clsx(
-      'px-4 py-3 transition-colors hover:bg-neutral-800/30',
+      'px-4 py-3 transition-colors hover:bg-tone-800/30',
       task.status === 'blocked' && 'border-l-2 border-l-amber-500'
     )}>
       {/* Main row */}
       <div className="flex items-center gap-3 cursor-pointer" onClick={onToggle}>
         {/* Status dot */}
-        <span className={clsx('w-2 h-2 rounded-full shrink-0', statusDot[task.status] || 'bg-neutral-600')} />
+        <span className={clsx('w-2 h-2 rounded-full shrink-0', statusDot[task.status] || 'bg-tone-600')} />
 
         {/* Priority */}
         <PriorityBadge priority={task.priority} />
@@ -739,7 +739,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
         {/* Title */}
         <span className={clsx(
           'text-sm flex-1 leading-tight',
-          task.status === 'completed' ? 'text-neutral-500 line-through' : 'text-neutral-200'
+          task.status === 'completed' ? 'text-tone-500 line-through' : 'text-tone-200'
         )}>
           {task.title}
         </span>
@@ -748,10 +748,10 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
         <div className="flex items-center gap-2 shrink-0">
           {task.type && task.type !== 'agent' && (
             <span className={clsx('hidden sm:inline px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider',
-              task.type === 'human' ? 'bg-cyan-500/15 text-cyan-400' :
-              task.type === 'call' ? 'bg-pink-500/15 text-pink-400' :
-              task.type === 'external' ? 'bg-amber-500/15 text-amber-400' :
-              'bg-neutral-700 text-neutral-400'
+              task.type === 'human' ? 'bg-cyan-500/15 text-tone-cyan-400' :
+              task.type === 'call' ? 'bg-pink-500/15 text-tone-pink-400' :
+              task.type === 'external' ? 'bg-amber-500/15 text-tone-amber-400' :
+              'bg-tone-700 text-tone-400'
             )}>
               {task.type}
             </span>
@@ -759,19 +759,19 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
           {task.assigned_to && (
             <AgentBadge assignedTo={task.assigned_to} agentStatusMap={agentStatusMap} />
           )}
-          <span className="text-[10px] text-neutral-600 hidden sm:inline">{relativeTime(task.created_at)}</span>
+          <span className="text-[10px] text-tone-600 hidden sm:inline">{relativeTime(task.created_at)}</span>
           {isExpanded
-            ? <ChevronDown size={13} className="text-neutral-600" />
-            : <ChevronRight size={13} className="text-neutral-600" />
+            ? <ChevronDown size={13} className="text-tone-600" />
+            : <ChevronRight size={13} className="text-tone-600" />
           }
         </div>
       </div>
 
       {/* Expanded detail */}
       {isExpanded && (
-        <div className="mt-3 ml-5 pl-3 border-l border-neutral-700 space-y-3">
+        <div className="mt-3 ml-5 pl-3 border-l border-tone-700 space-y-3">
           {task.description && (
-            <p className="text-xs text-neutral-400 leading-relaxed">{task.description}</p>
+            <p className="text-xs text-tone-400 leading-relaxed">{task.description}</p>
           )}
 
           {/* Controls */}
@@ -779,7 +779,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
             <select
               value={task.status}
               onChange={(e) => onPatch({ status: e.target.value })}
-              className="bg-neutral-800 text-neutral-300 text-xs rounded px-2 py-1 border border-neutral-700"
+              className="bg-tone-800 text-tone-300 text-xs rounded px-2 py-1 border border-tone-700"
             >
               <option value="pending">Pending</option>
               <option value="in_progress">In Progress</option>
@@ -790,7 +790,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
             <select
               value={task.priority}
               onChange={(e) => onPatch({ priority: e.target.value })}
-              className="bg-neutral-800 text-neutral-300 text-xs rounded px-2 py-1 border border-neutral-700"
+              className="bg-tone-800 text-tone-300 text-xs rounded px-2 py-1 border border-tone-700"
             >
               <option value="critical">Critical</option>
               <option value="high">High</option>
@@ -804,16 +804,16 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
               onClick={onAdvance}
               className={clsx(
                 'text-xs px-3 py-1.5 rounded-lg font-medium transition-colors',
-                nextStatus === 'completed' ? 'bg-green-500/15 text-green-400 hover:bg-green-500/25' :
-                nextStatus === 'in_progress' ? 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25' :
-                'bg-neutral-800 text-neutral-400 hover:text-neutral-200'
+                nextStatus === 'completed' ? 'bg-green-500/15 text-tone-green-400 hover:bg-green-500/25' :
+                nextStatus === 'in_progress' ? 'bg-blue-500/15 text-tone-blue-400 hover:bg-blue-500/25' :
+                'bg-tone-800 text-tone-400 hover:text-tone-200'
               )}
             >
               {nextLabel[nextStatus] || nextStatus} →
             </button>
           )}
 
-          <div className="text-[10px] text-neutral-600 space-y-0.5">
+          <div className="text-[10px] text-tone-600 space-y-0.5">
             {task.source && <p>Source: {task.source}</p>}
             {task.created_by && <p>Created by: {task.created_by}</p>}
             {task.routed_to && <p>Routed to: {task.routed_to}</p>}

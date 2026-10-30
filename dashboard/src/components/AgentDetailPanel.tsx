@@ -78,6 +78,8 @@ function blockText(node: RenderNode): string {
     }
     case 'queued_batch':
       return node.entries.map((e) => `${e.agent}: ${e.body}`).join('\n');
+    case 'result':
+      return node.results.map((r) => `${r.title}: ${r.outcome}`).join('\n');
     default:
       return node.text;
   }
@@ -146,9 +148,9 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
-        <h3 className="text-[11px] uppercase tracking-wider text-neutral-500">Live feed</h3>
+        <h3 className="text-[11px] uppercase tracking-wider text-tone-500">Live feed</h3>
         {!live && (
-          <span className="flex items-center gap-1 text-[11px] text-amber-400">
+          <span className="flex items-center gap-1 text-[11px] text-tone-amber-400">
             <WifiOff size={11} />
             Reconnecting — showing last poll
           </span>
@@ -157,9 +159,9 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative rounded-xl border border-neutral-800 bg-neutral-950 p-2.5 max-h-64 overflow-y-auto space-y-1.5"
+        className="relative rounded-xl border border-tone-800 bg-tone-950 p-2.5 max-h-64 overflow-y-auto space-y-1.5"
       >
-        {nodes.length === 0 && <p className="text-xs text-neutral-600">No activity yet</p>}
+        {nodes.length === 0 && <p className="text-xs text-tone-600">No activity yet</p>}
         {nodes.map((node) => {
           const text = blockText(node);
           return (
@@ -169,14 +171,14 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
                   <div>
                     <span className={clsx(
                       'inline-block px-1.5 py-0.5 rounded text-[10px] font-medium',
-                      node.isError ? 'bg-red-900/40 text-red-300' : 'bg-neutral-800 text-neutral-300'
+                      node.isError ? 'bg-tone-red-900/40 text-tone-red-300' : 'bg-tone-800 text-tone-300'
                     )}>
                       {node.tool}
                     </span>
-                    <span className="text-neutral-500 ml-1.5 break-words">{toolSummary(node.tool, node.input)}</span>
+                    <span className="text-tone-500 ml-1.5 break-words">{toolSummary(node.tool, node.input)}</span>
                   </div>
                 ) : (
-                  <p className={clsx('break-words whitespace-pre-wrap', node.kind === 'thinking' ? 'text-neutral-600 italic' : 'text-neutral-300')}>
+                  <p className={clsx('break-words whitespace-pre-wrap', node.kind === 'thinking' ? 'text-tone-600 italic' : 'text-tone-300')}>
                     {text}
                   </p>
                 )}
@@ -184,7 +186,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
               {text && (
                 <button
                   onClick={() => copyBlock(node.key, text)}
-                  className="shrink-0 p-1 text-neutral-600 hover:text-neutral-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="shrink-0 p-1 text-tone-600 hover:text-tone-200 opacity-0 group-hover:opacity-100 transition-opacity"
                   aria-label="Copy"
                   title="Copy"
                 >
@@ -197,7 +199,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
         {!following && (
           <button
             onClick={jumpToLatest}
-            className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1 rounded-full text-[11px] bg-neutral-800 text-neutral-200 border border-neutral-700 hover:bg-neutral-700 shadow"
+            className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1 rounded-full text-[11px] bg-tone-800 text-tone-200 border border-tone-700 hover:bg-tone-700 shadow"
           >
             <ArrowDown size={11} />
             Jump to latest
@@ -209,11 +211,11 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
 }
 
 const SEND_STATUS_STYLE: Record<string, string> = {
-  sending: 'text-neutral-500',
-  delivered: 'text-green-400',
-  queued: 'text-amber-400',
-  held: 'text-amber-400',
-  error: 'text-red-400',
+  sending: 'text-tone-500',
+  delivered: 'text-tone-green-400',
+  queued: 'text-tone-amber-400',
+  held: 'text-tone-amber-400',
+  error: 'text-tone-red-400',
 };
 
 /** Message box for the panel — sending/delivered/held/queued vocabulary comes
@@ -241,7 +243,7 @@ function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boo
 
   return (
     <div>
-      <h3 className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1.5">Message</h3>
+      <h3 className="text-[11px] uppercase tracking-wider text-tone-500 mb-1.5">Message</h3>
       {/* Spec §5 asks for the box "disabled with a note when the agent is down". It used to
           swap the whole control out for the note, which review's DOM probe measured as an
           ABSENT input rather than a disabled one. The note alone reads as a rendering gap —
@@ -258,24 +260,24 @@ function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boo
             disabled={disabled}
             placeholder={disabled ? `${agentId} is down` : `Message ${agentId}...`}
             aria-describedby={disabled ? `msg-disabled-${agentId}` : undefined}
-            className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-tone-900 border border-tone-800 text-tone-100 placeholder:text-tone-600 focus:outline-none focus:border-tone-600 disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             onClick={submit}
             disabled={disabled || status === 'sending' || !text.trim()}
-            className="shrink-0 p-1.5 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 p-1.5 rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label="Send"
           >
             <Send size={14} />
           </button>
         </div>
         {disabled && (
-          <p id={`msg-disabled-${agentId}`} className="text-[11px] text-neutral-500">
+          <p id={`msg-disabled-${agentId}`} className="text-[11px] text-tone-500">
             Agent is down — messaging disabled.
           </p>
         )}
         {!disabled && status !== 'idle' && (
-          <p className={clsx('text-[11px]', SEND_STATUS_STYLE[status] || 'text-neutral-500')}>
+          <p className={clsx('text-[11px]', SEND_STATUS_STYLE[status] || 'text-tone-500')}>
             {status === 'sending' ? 'sending…' : (detail || status)}
           </p>
         )}
@@ -324,14 +326,14 @@ export function AgentDetailPanel({
 
   return (
     <div className={clsx(
-      'flex flex-col h-full rounded-xl border bg-neutral-900',
-      isDown ? 'border-red-900/60 opacity-80' : 'border-neutral-800'
+      'flex flex-col h-full rounded-xl border bg-tone-900',
+      isDown ? 'border-tone-red-900/60 opacity-80' : 'border-tone-800'
     )}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-tone-800 shrink-0">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-neutral-100 font-semibold break-words">{agent.id}</span>
+            <span className="text-tone-100 font-semibold break-words">{agent.id}</span>
             {agent.tier && <TierBadge tier={agent.tier} />}
             <span className={clsx('flex items-center gap-1 text-[11px] font-medium', LIVENESS_STYLE[liveness].text)}>
               <span className={clsx('w-1.5 h-1.5 rounded-full', LIVENESS_STYLE[liveness].dot)} />
@@ -339,10 +341,10 @@ export function AgentDetailPanel({
             </span>
           </div>
           {isDown && lastSeen && (
-            <p className="text-[11px] text-red-400/80 mt-0.5">last seen {lastSeen}</p>
+            <p className="text-[11px] text-tone-red-400/80 mt-0.5">last seen {lastSeen}</p>
           )}
         </div>
-        <button onClick={onClose} className="p-1.5 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 rounded-lg transition-colors shrink-0" aria-label="Close panel">
+        <button onClick={onClose} className="p-1.5 text-tone-500 hover:text-tone-200 hover:bg-tone-800 rounded-lg transition-colors shrink-0" aria-label="Close panel">
           <X size={16} />
         </button>
       </div>
@@ -352,8 +354,8 @@ export function AgentDetailPanel({
         <div className="space-y-1.5">
           {details.map(({ label, value }) => (
             <div key={label} className="flex gap-2 text-sm">
-              <span className="text-neutral-500 shrink-0 w-32">{label}</span>
-              <span className="text-neutral-300 break-words">{value || '—'}</span>
+              <span className="text-tone-500 shrink-0 w-32">{label}</span>
+              <span className="text-tone-300 break-words">{value || '—'}</span>
             </div>
           ))}
 
@@ -365,18 +367,18 @@ export function AgentDetailPanel({
           <div className="text-sm">
             <button
               onClick={togglePrompt}
-              className="flex items-center gap-2 text-left text-neutral-300 hover:text-neutral-100 transition-colors"
+              className="flex items-center gap-2 text-left text-tone-300 hover:text-tone-100 transition-colors"
             >
-              <FileText size={13} className="text-neutral-500 shrink-0" />
-              <span className="text-neutral-500 w-[7.5rem] shrink-0">Prompt file</span>
-              <span className="break-words underline decoration-neutral-700">{agent.system_prompt || 'view'}</span>
+              <FileText size={13} className="text-tone-500 shrink-0" />
+              <span className="text-tone-500 w-[7.5rem] shrink-0">Prompt file</span>
+              <span className="break-words underline decoration-tone-700">{agent.system_prompt || 'view'}</span>
             </button>
             {promptOpen && (
-              <div className="mt-2 ml-[1.4rem] rounded-lg border border-neutral-800 bg-neutral-950 p-2.5">
-                {promptLoading && <span className="text-xs text-neutral-500">Loading...</span>}
-                {promptError && <span className="text-xs text-red-400">{promptError}</span>}
+              <div className="mt-2 ml-[1.4rem] rounded-lg border border-tone-800 bg-tone-950 p-2.5">
+                {promptLoading && <span className="text-xs text-tone-500">Loading...</span>}
+                {promptError && <span className="text-xs text-tone-red-400">{promptError}</span>}
                 {!promptLoading && !promptError && promptContent !== null && (
-                  <pre className="text-xs text-neutral-300 font-mono whitespace-pre-wrap break-words leading-relaxed max-h-64 overflow-y-auto">{promptContent}</pre>
+                  <pre className="text-xs text-tone-300 font-mono whitespace-pre-wrap break-words leading-relaxed max-h-64 overflow-y-auto">{promptContent}</pre>
                 )}
               </div>
             )}
@@ -388,10 +390,10 @@ export function AgentDetailPanel({
               `connections` stays optional: with no list this degrades to the count alone
               rather than rendering an empty list that looks like "no connections". */}
           <div className="flex gap-2 text-sm items-start">
-            <Link2 size={13} className="text-neutral-500 shrink-0 mt-1" />
-            <span className="text-neutral-500 w-[7.375rem] shrink-0">Connections</span>
+            <Link2 size={13} className="text-tone-500 shrink-0 mt-1" />
+            <span className="text-tone-500 w-[7.375rem] shrink-0">Connections</span>
             <div className="min-w-0">
-              <span className="text-neutral-300">{connectionCount}</span>
+              <span className="text-tone-300">{connectionCount}</span>
               {connections && connections.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1">
                   {connections.map((peer) => (
@@ -405,8 +407,8 @@ export function AgentDetailPanel({
                       className={clsx(
                         'px-1.5 py-0.5 rounded text-[11px] focus:outline-none focus:ring-1 focus:ring-sky-500 break-words',
                         peer.onGraph
-                          ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100'
-                          : 'bg-neutral-900 text-neutral-500 border border-dashed border-neutral-700 hover:text-neutral-300',
+                          ? 'bg-tone-800 text-tone-300 hover:bg-tone-700 hover:text-tone-100'
+                          : 'bg-tone-900 text-tone-500 border border-dashed border-tone-700 hover:text-tone-300',
                       )}
                     >
                       {peer.id}{peer.onGraph ? '' : ' ·'}
@@ -431,17 +433,17 @@ export function AgentDetailPanel({
 
         {/* Recent problems */}
         <div>
-          <h3 className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1.5">Recent problems</h3>
+          <h3 className="text-[11px] uppercase tracking-wider text-tone-500 mb-1.5">Recent problems</h3>
           {!recentErrors || recentErrors.length === 0 ? (
-            <p className="text-sm text-neutral-600">No recent errors</p>
+            <p className="text-sm text-tone-600">No recent errors</p>
           ) : (
             <ul className="space-y-1.5">
               {recentErrors.map((err, i) => (
                 <li key={i} className="flex gap-2 text-sm">
-                  <AlertTriangle size={13} className="text-red-400 shrink-0 mt-0.5" />
+                  <AlertTriangle size={13} className="text-tone-red-400 shrink-0 mt-0.5" />
                   <div className="min-w-0">
-                    <p className="text-neutral-300 break-words">{err.text}</p>
-                    <p className="text-[11px] text-neutral-600">{err.at}</p>
+                    <p className="text-tone-300 break-words">{err.text}</p>
+                    <p className="text-[11px] text-tone-600">{err.at}</p>
                   </div>
                 </li>
               ))}

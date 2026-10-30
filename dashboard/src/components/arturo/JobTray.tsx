@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, LoaderCircle, X } from 'lucide-react';
-import ToolCalls from '../chat/ToolCalls';
+import ToolCalls from '../kit/ToolCard';
 import { fromPart } from '../../lib/toolCalls';
 import { cancelJob, elapsed, fetchJobs, jobToolParts, newlyEnded, trayHeader, type ArturoJob } from '../../lib/arturoJobs';
 

@@ -7,10 +7,10 @@ import { useAgents } from '../hooks/useAgents';
 function AgentStatusGrid() {
   const { data, isLoading } = useAgents();   // the shared 3 s observer, not a slower one of its own
 
-  if (isLoading) return <p className="text-neutral-600 text-sm">Loading agents...</p>;
+  if (isLoading) return <p className="text-tone-600 text-sm">Loading agents...</p>;
 
   const agents: any[] = data?.agents ?? [];
-  if (agents.length === 0) return <p className="text-neutral-600 text-sm">No agents found.</p>;
+  if (agents.length === 0) return <p className="text-tone-600 text-sm">No agents found.</p>;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -19,16 +19,16 @@ function AgentStatusGrid() {
         return (
           <div
             key={a.id}
-            className="flex items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+            className="flex items-center gap-3 rounded-lg border border-tone-800 bg-tone-900 px-3 py-2"
           >
             {/* Status dot */}
             <span
-              className={`shrink-0 w-2.5 h-2.5 rounded-full ${alive ? 'bg-green-500' : 'bg-neutral-600'}`}
+              className={`shrink-0 w-2.5 h-2.5 rounded-full ${alive ? 'bg-green-500' : 'bg-tone-600'}`}
               title={alive ? 'Running' : 'Stopped'}
             />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium truncate">{a.name || a.id}</p>
-              <p className="text-[11px] text-neutral-500 truncate">
+              <p className="text-[11px] text-tone-500 truncate">
                 {[a.tier, a.machine].filter(Boolean).join(' · ')}
                 {a.current_task ? ` · ${String(a.current_task).slice(0, 40)}` : ''}
               </p>
@@ -44,7 +44,7 @@ function AgentStatusGrid() {
 
 function ThroughputBars({ data }: { data: { date: string; label: string; count: number }[] }) {
   if (!data || data.length === 0) {
-    return <p className="text-neutral-600 text-sm">No message data yet.</p>;
+    return <p className="text-tone-600 text-sm">No message data yet.</p>;
   }
 
   const maxCount = Math.max(...data.map(d => d.count), 1);
@@ -53,14 +53,14 @@ function ThroughputBars({ data }: { data: { date: string; label: string; count: 
     <div className="flex items-end gap-3 h-36 pt-2">
       {data.map(d => (
         <div key={d.date} className="flex flex-col items-center gap-1 flex-1 min-w-0">
-          <span className="text-xs text-neutral-400 tabular-nums">{d.count > 0 ? d.count.toLocaleString() : ''}</span>
-          <div className="w-full bg-neutral-800 rounded-t flex flex-col justify-end" style={{ height: '96px' }}>
+          <span className="text-xs text-tone-400 tabular-nums">{d.count > 0 ? d.count.toLocaleString() : ''}</span>
+          <div className="w-full bg-tone-800 rounded-t flex flex-col justify-end" style={{ height: '96px' }}>
             <div
               className="bg-violet-500 rounded-t w-full transition-all duration-300"
               style={{ height: `${Math.max((d.count / maxCount) * 100, d.count > 0 ? 2 : 0)}%` }}
             />
           </div>
-          <span className="text-[10px] text-neutral-500 truncate w-full text-center">{d.label}</span>
+          <span className="text-[10px] text-tone-500 truncate w-full text-center">{d.label}</span>
         </div>
       ))}
     </div>
@@ -70,17 +70,17 @@ function ThroughputBars({ data }: { data: { date: string; label: string; count: 
 // ---- Section C: Task Funnel -----------------------------------------------
 
 const FUNNEL_STAGES = [
-  { key: 'pending',     label: 'Pending',     color: 'bg-neutral-600',  text: 'text-neutral-300' },
-  { key: 'in_progress', label: 'In Progress', color: 'bg-blue-600',     text: 'text-blue-300' },
-  { key: 'completed',   label: 'Completed',   color: 'bg-green-600',    text: 'text-green-300' },
-  { key: 'blocked',     label: 'Blocked',     color: 'bg-red-600',      text: 'text-red-300' },
+  { key: 'pending',     label: 'Pending',     color: 'bg-tone-600',  text: 'text-tone-300' },
+  { key: 'in_progress', label: 'In Progress', color: 'bg-blue-600',     text: 'text-tone-blue-300' },
+  { key: 'completed',   label: 'Completed',   color: 'bg-green-600',    text: 'text-tone-green-300' },
+  { key: 'blocked',     label: 'Blocked',     color: 'bg-red-600',      text: 'text-tone-red-300' },
 ] as const;
 
 function TaskFunnel({ funnel }: { funnel: Record<string, number> }) {
   const total = Object.values(funnel).reduce((s, n) => s + n, 0);
 
   if (total === 0) {
-    return <p className="text-neutral-600 text-sm">No tasks found.</p>;
+    return <p className="text-tone-600 text-sm">No tasks found.</p>;
   }
 
   return (
@@ -89,11 +89,11 @@ function TaskFunnel({ funnel }: { funnel: Record<string, number> }) {
         const count = funnel[stage.key] ?? 0;
         const pct = total > 0 ? Math.round((count / total) * 100) : 0;
         return (
-          <div key={stage.key} className={`rounded-xl border border-neutral-800 bg-neutral-900 p-4 flex flex-col gap-1`}>
+          <div key={stage.key} className={`rounded-xl border border-tone-800 bg-tone-900 p-4 flex flex-col gap-1`}>
             <div className={`w-3 h-3 rounded-full ${stage.color}`} />
             <p className="text-2xl font-bold tabular-nums">{count}</p>
             <p className={`text-xs font-medium ${stage.text}`}>{stage.label}</p>
-            <p className="text-[11px] text-neutral-600">{pct}% of total</p>
+            <p className="text-[11px] text-tone-600">{pct}% of total</p>
           </div>
         );
       })}
@@ -120,14 +120,14 @@ function isStale(isoStr: string | null): boolean {
 
 function ProjectHealthTable({ rows }: { rows: any[] }) {
   if (!rows || rows.length === 0) {
-    return <p className="text-neutral-600 text-sm">No active projects.</p>;
+    return <p className="text-tone-600 text-sm">No active projects.</p>;
   }
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-neutral-500 text-xs border-b border-neutral-800">
+          <tr className="text-left text-tone-500 text-xs border-b border-tone-800">
             <th className="pb-2 pr-4 font-medium">Project</th>
             <th className="pb-2 pr-4 font-medium">Agents</th>
             <th className="pb-2 pr-4 font-medium">Open Tasks</th>
@@ -140,7 +140,7 @@ function ProjectHealthTable({ rows }: { rows: any[] }) {
             return (
               <tr
                 key={p.slug}
-                className={`border-b border-neutral-800 last:border-0 ${stale ? 'bg-yellow-950/30' : ''}`}
+                className={`border-b border-tone-800 last:border-0 ${stale ? 'bg-tone-yellow-950/30' : ''}`}
               >
                 <td className="py-2 pr-4">
                   <span className="font-medium">{p.name}</span>
@@ -148,22 +148,22 @@ function ProjectHealthTable({ rows }: { rows: any[] }) {
                     <span className="ml-2 text-[10px] text-yellow-500 font-medium uppercase tracking-wide">stale</span>
                   )}
                 </td>
-                <td className="py-2 pr-4 text-neutral-400 tabular-nums">
+                <td className="py-2 pr-4 text-tone-400 tabular-nums">
                   {p.active_agents > 0 ? (
-                    <span className="text-green-400">{p.active_agents}</span>
+                    <span className="text-tone-green-400">{p.active_agents}</span>
                   ) : (
-                    <span className="text-neutral-600">0</span>
+                    <span className="text-tone-600">0</span>
                   )}
-                  <span className="text-neutral-600">/{p.agent_count}</span>
+                  <span className="text-tone-600">/{p.agent_count}</span>
                 </td>
                 <td className="py-2 pr-4 tabular-nums">
                   {p.open_tasks > 0 ? (
-                    <span className="text-blue-400">{p.open_tasks}</span>
+                    <span className="text-tone-blue-400">{p.open_tasks}</span>
                   ) : (
-                    <span className="text-neutral-600">0</span>
+                    <span className="text-tone-600">0</span>
                   )}
                 </td>
-                <td className="py-2 text-neutral-500 text-xs">{formatRelativeTime(p.last_activity)}</td>
+                <td className="py-2 text-tone-500 text-xs">{formatRelativeTime(p.last_activity)}</td>
               </tr>
             );
           })}
@@ -191,9 +191,9 @@ export default function Analytics() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold">Analytics</h1>
-        <p className="text-neutral-500 mt-1">Live fleet metrics — refreshes every 30s</p>
+        <p className="text-tone-500 mt-1">Live fleet metrics — refreshes every 30s</p>
         {error && (
-          <p className="mt-2 text-red-400 text-sm">Failed to load metrics: {(error as Error).message}</p>
+          <p className="mt-2 text-tone-red-400 text-sm">Failed to load metrics: {(error as Error).message}</p>
         )}
       </div>
 
@@ -206,10 +206,10 @@ export default function Analytics() {
       {/* Section B: Message Throughput */}
       <section>
         <h2 className="text-lg font-semibold mb-1">Message Throughput</h2>
-        <p className="text-xs text-neutral-500 mb-3">Messages routed per day (last 7 days)</p>
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 px-4 pt-4 pb-3">
+        <p className="text-xs text-tone-500 mb-3">Messages routed per day (last 7 days)</p>
+        <div className="rounded-xl border border-tone-800 bg-tone-900 px-4 pt-4 pb-3">
           {isLoading ? (
-            <p className="text-neutral-600 text-sm py-8 text-center">Loading...</p>
+            <p className="text-tone-600 text-sm py-8 text-center">Loading...</p>
           ) : (
             <ThroughputBars data={throughput} />
           )}
@@ -220,7 +220,7 @@ export default function Analytics() {
       <section>
         <h2 className="text-lg font-semibold mb-3">Task Funnel</h2>
         {isLoading ? (
-          <p className="text-neutral-600 text-sm">Loading...</p>
+          <p className="text-tone-600 text-sm">Loading...</p>
         ) : (
           <TaskFunnel funnel={funnel} />
         )}
@@ -229,9 +229,9 @@ export default function Analytics() {
       {/* Section D: Project Health */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Project Health</h2>
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+        <div className="rounded-xl border border-tone-800 bg-tone-900 p-4">
           {isLoading ? (
-            <p className="text-neutral-600 text-sm">Loading...</p>
+            <p className="text-tone-600 text-sm">Loading...</p>
           ) : (
             <ProjectHealthTable rows={projectHealth} />
           )}

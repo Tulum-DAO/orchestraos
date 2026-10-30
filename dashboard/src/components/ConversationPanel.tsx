@@ -19,11 +19,11 @@ export interface ConversationPanelProps {
 }
 
 const TYPE_BADGE: Record<string, string> = {
-  task: 'bg-yellow-500/15 text-yellow-400',
-  reply: 'bg-blue-500/15 text-blue-400',
-  task_request: 'bg-orange-500/15 text-orange-400',
+  task: 'bg-yellow-500/15 text-tone-yellow-400',
+  reply: 'bg-blue-500/15 text-tone-blue-400',
+  task_request: 'bg-orange-500/15 text-tone-orange-400',
 };
-const typeBadgeClass = (t: string | null) => (t && TYPE_BADGE[t]) || 'bg-neutral-700/40 text-neutral-400';
+const typeBadgeClass = (t: string | null) => (t && TYPE_BADGE[t]) || 'bg-tone-700/40 text-tone-400';
 
 export function ConversationPanel({
   a, b, onOpenAgent, onClose, windowHours: windowHoursProp = 24, asof = null,
@@ -62,26 +62,26 @@ export function ConversationPanel({
   const filtered = ordered.filter((m) => matchesTypeFilter(m.type, typeFilter));
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-neutral-800 bg-neutral-900">
+    <div className="flex flex-col h-full rounded-xl border border-tone-800 bg-tone-900">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-tone-800 shrink-0">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-sm font-semibold flex-wrap">
-            <button onClick={() => onOpenAgent(a)} className="text-neutral-100 hover:underline break-words">{a}</button>
-            <span className="text-neutral-600">⇄</span>
-            <button onClick={() => onOpenAgent(b)} className="text-neutral-100 hover:underline break-words">{b}</button>
+            <button onClick={() => onOpenAgent(a)} className="text-tone-100 hover:underline break-words">{a}</button>
+            <span className="text-tone-600">⇄</span>
+            <button onClick={() => onOpenAgent(b)} className="text-tone-100 hover:underline break-words">{b}</button>
           </div>
-          <p className="text-[11px] text-neutral-500 mt-0.5">
+          <p className="text-[11px] text-tone-500 mt-0.5">
             {totalInWindow} message{totalInWindow === 1 ? '' : 's'} in the last {windowHours}h{totalAllTime > totalInWindow ? ` · ${totalAllTime} total` : ''}
           </p>
         </div>
-        <button onClick={onClose} className="p-1.5 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 rounded-lg transition-colors shrink-0" aria-label="Close panel">
+        <button onClick={onClose} className="p-1.5 text-tone-500 hover:text-tone-200 hover:bg-tone-800 rounded-lg transition-colors shrink-0" aria-label="Close panel">
           <X size={16} />
         </button>
       </div>
 
       {/* Filter chips + order toggle */}
-      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-neutral-800 shrink-0 overflow-x-auto">
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-tone-800 shrink-0 overflow-x-auto">
         <div className="flex gap-1.5">
           {TYPE_FILTERS.map((f) => (
             <button
@@ -89,7 +89,7 @@ export function ConversationPanel({
               onClick={() => setTypeFilter(f)}
               className={clsx(
                 'px-2.5 py-1 text-xs rounded-md font-medium transition-colors whitespace-nowrap',
-                typeFilter === f ? 'bg-neutral-700 text-neutral-100' : 'bg-neutral-800 text-neutral-500 hover:text-neutral-300'
+                typeFilter === f ? 'bg-tone-700 text-tone-100' : 'bg-tone-800 text-tone-500 hover:text-tone-300'
               )}
             >
               {f}
@@ -98,7 +98,7 @@ export function ConversationPanel({
         </div>
         <button
           onClick={() => setNewestFirst((v) => !v)}
-          className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-300 transition-colors shrink-0"
+          className="flex items-center gap-1 text-xs text-tone-500 hover:text-tone-300 transition-colors shrink-0"
           title="Flip order"
         >
           <ArrowUpDown size={12} />
@@ -108,30 +108,30 @@ export function ConversationPanel({
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto min-h-0 p-3 space-y-2">
-        {isLoading && <p className="text-sm text-neutral-500 p-2">Loading...</p>}
-        {isError && <p className="text-sm text-red-400 p-2">Failed to load messages.</p>}
+        {isLoading && <p className="text-sm text-tone-500 p-2">Loading...</p>}
+        {isError && <p className="text-sm text-tone-red-400 p-2">Failed to load messages.</p>}
         {!isLoading && !isError && filtered.length === 0 && (
-          <p className="text-sm text-neutral-600 p-2">No messages in this conversation.</p>
+          <p className="text-sm text-tone-600 p-2">No messages in this conversation.</p>
         )}
         {!isLoading && !isError && filtered.map((m) => {
           const { preview, truncated } = truncateBody(m.body || '');
           const expanded = expandedIds.has(m.id);
           return (
-            <div key={m.id} className="rounded-lg border border-neutral-800 bg-neutral-950 p-3">
+            <div key={m.id} className="rounded-lg border border-tone-800 bg-tone-950 p-3">
               <div className="flex items-center gap-2 flex-wrap text-[11px]">
                 <span className={clsx('px-1.5 py-0.5 rounded font-medium', typeBadgeClass(m.type))}>{m.type || '—'}</span>
-                <span className="text-neutral-500">{m.created_at ? new Date(m.created_at).toLocaleString() : '—'}</span>
+                <span className="text-tone-500">{m.created_at ? new Date(m.created_at).toLocaleString() : '—'}</span>
               </div>
-              {m.subject && <p className="text-sm font-medium text-neutral-200 mt-1.5 break-words">{m.subject}</p>}
-              <p className="text-sm text-neutral-300 mt-1 whitespace-pre-wrap break-words">
+              {m.subject && <p className="text-sm font-medium text-tone-200 mt-1.5 break-words">{m.subject}</p>}
+              <p className="text-sm text-tone-300 mt-1 whitespace-pre-wrap break-words">
                 {expanded ? (m.body || '') : preview}
               </p>
               {truncated && (
-                <button onClick={() => toggleExpand(m.id)} className="text-xs text-blue-400 hover:text-blue-300 mt-1">
+                <button onClick={() => toggleExpand(m.id)} className="text-xs text-tone-blue-400 hover:text-tone-blue-300 mt-1">
                   {expanded ? 'collapse' : 'expand'}
                 </button>
               )}
-              <p className="text-[11px] text-neutral-600 mt-1.5">{m.from_agent} → {m.to_agent} · {m.status || '—'}</p>
+              <p className="text-[11px] text-tone-600 mt-1.5">{m.from_agent} → {m.to_agent} · {m.status || '—'}</p>
             </div>
           );
         })}
@@ -140,7 +140,7 @@ export function ConversationPanel({
             <button
               onClick={() => fetchNextPage()}
               disabled={isFetchingNextPage}
-              className="text-xs px-3 py-1.5 rounded-md bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors disabled:opacity-50"
+              className="text-xs px-3 py-1.5 rounded-md bg-tone-800 text-tone-400 hover:text-tone-200 transition-colors disabled:opacity-50"
             >
               {isFetchingNextPage ? 'Loading...' : 'Load older'}
             </button>

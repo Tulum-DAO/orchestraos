@@ -124,7 +124,7 @@ function AddProviderPanel({ rows, onInstalled }: { rows: ProviderRow[]; onInstal
           {busy ? 'Opening a terminal…' : 'Open a terminal here'}
         </button>
       )}
-      {error && <p className="text-red-400/90">Could not open a terminal: {error}</p>}
+      {error && <p className="text-tone-red-400/90">Could not open a terminal: {error}</p>}
       {session && (
         <>
           <div className="rounded-lg overflow-hidden border border-border h-[52vh] min-h-[300px]"

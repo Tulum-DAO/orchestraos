@@ -13,20 +13,22 @@ import { isNearBottom } from '../../lib/liveFeedScroll';
 import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
-import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
+import { groupToolRuns } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import { styleForAgentState, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 import { AgentSide } from './DecisionCard';
 import { ChatAgentContext } from './chatAgent';
-import DecisionBubble from './DecisionBubble';
 import { useQuery } from '@tanstack/react-query';
 import { BatchRecordsContext, fetchBatchRecords } from '../../lib/batchRecords';
 import { fetchDecisions, interleave, takeFocusRequest, focusTarget, FOCUS_DECISION_EVENT, type FocusRequest } from '../../lib/decisions';
 import { userRows, visiblePending, type PendingSend } from '../../lib/pendingSends';
 import { usePendingSends } from '../../stores/pendingSends';
 import { foldCardAnswers } from '../../lib/systemMessages';
-import { PendingBubble } from './TranscriptCards';
+import { markResults } from '../../lib/threadKit/results';
+import ThreadView from '../kit/ThreadView';
+import { agentRows, type LiveText } from '../../lib/threadKit/view';
+import { useChatStyle } from '../../lib/agentPrefs';
 
 const NO_PENDING: PendingSend[] = [];
 
@@ -52,6 +54,9 @@ interface Props {
   /** The agent page carries its own LiveStatusLine above the composer, so it suppresses this
    *  bar. Two renderings of one fact is how the sidebar and the page came to disagree. */
   hideStatusBar?: boolean;
+  /** Words the agent is still writing that the transcript does not hold yet (a live-text stream): drawn at the end of
+   *  the thread until the finished message arrives (components/kit/ThreadView.tsx). */
+  liveText?: LiveText | null;
 }
 
 // State vocabulary + colors live in lib/agentStatus (shared with the title dot +
@@ -69,7 +74,7 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar }: Props) {
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar, liveText }: Props) {
   const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
@@ -138,7 +143,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   useLayoutEffect(() => { if (!fixtureItems && !loading) setRows(agentId, rows); }, [agentId, rows, loading, fixtureItems, setRows]);
   // Folding consecutive tool calls (C3) means a new call can join an existing group without
   // changing the number of rendered nodes, so autoscroll keys on the UNGROUPED count below.
-  const nodes = useMemo(() => groupToolRuns(flat), [flat]);
+  // Finished work (a background job, a subagent's report) becomes a result card first, so a subagent call is not
+  // folded into a run of tool calls (lib/threadKit/results.ts).
+  const nodes = useMemo(() => groupToolRuns(markResults(flat, agentId)), [flat, agentId]);
   // The agent's approval cards, as bubbles under the messages they belong to (DecisionBubble). Polled, so a
   // card answered anywhere else shows as answered here too, and stays as history.
   const decisionsQ = useQuery({
@@ -157,7 +164,6 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     () => foldCardAnswers(nodes as { kind: string; text?: string; machine?: string }[], new Set((decisionsQ.data ?? []).map((d) => d.id))) as typeof nodes,
     [nodes, decisionsQ.data]);
   const entries = useMemo(() => interleave(shownNodes, decisionsQ.data ?? []), [shownNodes, decisionsQ.data]);
-  const lastNodeIndex = entries.reduce((last, e, i) => (e.kind === 'node' ? i : last), -1);
   // "Needs you" sends you to this agent's first open decision; the bell, to a named one. A card that
   // is no longer here (answered and gone, or never drawn in this chat) says so instead of doing nothing.
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
@@ -187,6 +193,12 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     return () => window.removeEventListener(FOCUS_DECISION_EVENT, onFocusReq);
   }, [agentId, decisionsQ.data]);
   const st = normalizeAgentState(state);
+  // The thread as the kit's thread view draws it: the feed's nodes and cards, then the sends still waiting for their rows.
+  // How you see this agent (lib/agentPrefs.ts): Bubbles, its own look, or Modern, Arturo's. A switch only re-draws the
+  // thread; the session, the draft and pending sends are untouched. The compact card (a dark box) stays Bubbles.
+  const chatStyle = useChatStyle(agentId);
+  const modern = !compact && chatStyle === 'modern';
+  const threadRows = useMemo(() => agentRows(entries, loading ? [] : pending, st, { modern }), [entries, pending, loading, st, modern]);
   // The idle backstop: a bubble no row could match (a long message arrives as a shorter banner)
   // goes once the agent is idle again. Only from a live feed: a stale "idle" proves nothing.
   const feedLive = !feed || !isDegraded(feed);
@@ -233,13 +245,18 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     };
     const ro = new ResizeObserver(() => { if (atBottom.current) toBottom(); });
     ro.observe(el);
+    // The thread's column too: what grows after it is drawn (another agent's message read in by its id, an image,
+    // a card that opens) keeps a reader at the bottom there, not just new rows.
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
     document.addEventListener('focusin', onFocus);
     return () => { ro.disconnect(); document.removeEventListener('focusin', onFocus); };
   }, []);
-  useLayoutEffect(() => {
+  // The thread view follows whenever its rows change (a layout effect there too); a switch to another seat follows here.
+  const follow = useMemo(() => ({ follow: () => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [flat.length, entries.length, pending.length, agentId]);
+  } }), []);
+  useLayoutEffect(() => { follow.follow(); }, [agentId, follow]);
 
   return (
     <BatchRecordsContext.Provider value={batchesQ.data}>
@@ -269,7 +286,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
         <ChatAgentContext.Provider value={agentId}>
         <div
-          className={compact ? undefined : "mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5"}
+          className={compact ? undefined : ["mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5", modern ? 'kit-modern' : ''].join(' ').trim()}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
         >
         {loading ? (
@@ -279,12 +296,13 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           </div>
         ) : entries.length === 0 ? (
           <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
-        ) : (
-          entries.map((e, i) => e.kind === 'decision'
-            ? <DecisionBubble key={`decision-${e.decision.id}`} decision={e.decision} onAnswered={() => void decisionsQ.refetch()} />
-            : <GroupedNodeView key={e.node.key} node={e.node} interrupted={isInterrupted({ isLast: i === lastNodeIndex, state: st })} />)
+        ) : null}
+        {/* The thread through the kit's thread view (components/kit/ThreadView.tsx), in the agent chat's own skin. */}
+        {!loading && (entries.length > 0 || pending.length > 0 || liveText) && (
+          <ThreadView rows={threadRows} skin={modern ? 'modern' : 'bubbles'} times={modern} stick={follow} liveText={liveText}
+            renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} />}
+            onDecisionAnswered={() => void decisionsQ.refetch()} />
         )}
-        {!loading && pending.map((p) => <PendingBubble key={p.id} text={p.display} kind={p.kind} />)}
         {focusNotice && (
           <div role="status" className="sticky bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-neutral-300 px-3 py-1.5 rounded-full border border-neutral-700 bg-neutral-900/95 shadow">
             {focusNotice}

@@ -15,10 +15,10 @@ import { isViewHidden } from '../lib/features';
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
 
 const STATUS_CONFIG: Record<TaskStatus, { label: string; badge: string; icon: React.ReactNode }> = {
-  pending:     { label: 'Pending',     badge: 'bg-neutral-700 text-neutral-400',   icon: <Circle size={14} className="text-neutral-500" /> },
-  in_progress: { label: 'In Progress', badge: 'bg-blue-500/20 text-blue-400',      icon: <Clock size={14} className="text-blue-400" /> },
-  completed:   { label: 'Completed',   badge: 'bg-green-500/20 text-green-400',    icon: <CheckCircle2 size={14} className="text-green-500" /> },
-  blocked:     { label: 'Blocked',     badge: 'bg-red-500/20 text-red-400',        icon: <XCircle size={14} className="text-red-400" /> },
+  pending:     { label: 'Pending',     badge: 'bg-tone-700 text-tone-400',   icon: <Circle size={14} className="text-tone-500" /> },
+  in_progress: { label: 'In Progress', badge: 'bg-blue-500/20 text-tone-blue-400',      icon: <Clock size={14} className="text-tone-blue-400" /> },
+  completed:   { label: 'Completed',   badge: 'bg-green-500/20 text-tone-green-400',    icon: <CheckCircle2 size={14} className="text-green-500" /> },
+  blocked:     { label: 'Blocked',     badge: 'bg-red-500/20 text-tone-red-400',        icon: <XCircle size={14} className="text-tone-red-400" /> },
 };
 
 const ALL_STATUSES: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked'];
@@ -65,19 +65,19 @@ function StatusBadge({ status, onChange }: { status: TaskStatus; onChange?: (s: 
         {cfg.label}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl overflow-hidden min-w-[120px]">
+        <div className="absolute right-0 top-full mt-1 z-50 bg-tone-900 border border-tone-700 rounded-lg shadow-xl overflow-hidden min-w-[120px]">
           {ALL_STATUSES.map(s => (
             <button
               key={s}
               onClick={() => { onChange(s); setOpen(false); }}
               className={clsx(
-                'w-full text-left px-3 py-2 text-xs hover:bg-neutral-800 transition-colors flex items-center gap-2',
-                s === status ? 'text-white' : 'text-neutral-400'
+                'w-full text-left px-3 py-2 text-xs hover:bg-tone-800 transition-colors flex items-center gap-2',
+                s === status ? 'text-tone-white' : 'text-tone-400'
               )}
             >
               {STATUS_CONFIG[s].icon}
               {STATUS_CONFIG[s].label}
-              {s === status && <Check size={12} className="ml-auto text-neutral-500" />}
+              {s === status && <Check size={12} className="ml-auto text-tone-500" />}
             </button>
           ))}
         </div>
@@ -145,7 +145,7 @@ function TaskRow({
 
   return (
     <div className={clsx(
-      'group px-4 py-3 flex items-center gap-3 hover:bg-neutral-800/30 transition-colors',
+      'group px-4 py-3 flex items-center gap-3 hover:bg-tone-800/30 transition-colors',
       patchMutation.isPending && 'opacity-60'
     )}>
       {/* Checkbox */}
@@ -156,7 +156,7 @@ function TaskRow({
       >
         {isDone
           ? <CheckCircle2 size={17} className="text-green-500" />
-          : <Circle size={17} className="text-neutral-600 hover:text-neutral-400 transition-colors" />
+          : <Circle size={17} className="text-tone-600 hover:text-tone-400 transition-colors" />
         }
       </button>
 
@@ -168,12 +168,12 @@ function TaskRow({
             value={editName}
             onChange={e => setEditName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit(); }}
-            className="flex-1 bg-neutral-800 border border-neutral-600 rounded px-2 py-1 text-sm text-neutral-100 focus:outline-none focus:border-neutral-400"
+            className="flex-1 bg-tone-800 border border-tone-600 rounded px-2 py-1 text-sm text-tone-100 focus:outline-none focus:border-tone-400"
           />
-          <button onClick={commitEdit} className="text-green-400 hover:text-green-300 p-1">
+          <button onClick={commitEdit} className="text-tone-green-400 hover:text-tone-green-300 p-1">
             <Check size={14} />
           </button>
-          <button onClick={cancelEdit} className="text-neutral-500 hover:text-neutral-400 p-1">
+          <button onClick={cancelEdit} className="text-tone-500 hover:text-tone-400 p-1">
             <X size={14} />
           </button>
         </div>
@@ -181,7 +181,7 @@ function TaskRow({
         <span
           className={clsx(
             'flex-1 text-sm leading-snug select-none',
-            isDone ? 'text-neutral-500 line-through' : 'text-neutral-200'
+            isDone ? 'text-tone-500 line-through' : 'text-tone-200'
           )}
         >
           {task.name}
@@ -194,14 +194,14 @@ function TaskRow({
           <StatusBadge status={status} onChange={changeStatus} />
           <button
             onClick={() => { setEditing(true); setEditName(task.name || ''); }}
-            className="p-1 text-neutral-600 hover:text-neutral-300 transition-colors"
+            className="p-1 text-tone-600 hover:text-tone-300 transition-colors"
             title="Edit task"
           >
             <Pencil size={13} />
           </button>
           <button
             onClick={() => deleteMutation.mutate()}
-            className="p-1 text-neutral-600 hover:text-red-400 transition-colors"
+            className="p-1 text-tone-600 hover:text-tone-red-400 transition-colors"
             title="Delete task"
           >
             <Trash2 size={13} />
@@ -250,21 +250,21 @@ function AddTaskForm({
   };
 
   return (
-    <div className="px-4 py-3 border-t border-neutral-800 bg-neutral-950/60 space-y-2">
+    <div className="px-4 py-3 border-t border-tone-800 bg-tone-950/60 space-y-2">
       <input
         ref={inputRef}
         value={name}
         onChange={e => setName(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') onClose(); }}
         placeholder="Task name…"
-        className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-500"
+        className="w-full bg-tone-800 border border-tone-700 rounded-lg px-3 py-2 text-sm text-tone-100 placeholder:text-tone-600 focus:outline-none focus:border-tone-500"
       />
       <input
         value={description}
         onChange={e => setDescription(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') onClose(); }}
         placeholder="Description (optional)"
-        className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-500"
+        className="w-full bg-tone-800 border border-tone-700 rounded-lg px-3 py-2 text-sm text-tone-100 placeholder:text-tone-600 focus:outline-none focus:border-tone-500"
       />
       <div className="flex items-center gap-2">
         <button
@@ -274,7 +274,7 @@ function AddTaskForm({
         >
           {createMutation.isPending ? 'Adding…' : 'Add task'}
         </button>
-        <button onClick={onClose} className="px-3 py-1.5 text-xs text-neutral-500 hover:text-neutral-300 transition-colors">
+        <button onClick={onClose} className="px-3 py-1.5 text-xs text-tone-500 hover:text-tone-300 transition-colors">
           Cancel
         </button>
       </div>
@@ -303,26 +303,26 @@ function PhaseSection({
   const phaseProgress = tasks.length > 0 ? (doneCount / tasks.length) * 100 : 0;
 
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900 overflow-hidden">
+    <div className="rounded-xl border border-tone-800 bg-tone-900 overflow-hidden">
       {/* Phase header */}
       <button
         onClick={() => setIsOpen(v => !v)}
-        className="w-full text-left p-4 hover:bg-neutral-800/30 transition-colors"
+        className="w-full text-left p-4 hover:bg-tone-800/30 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <span className="text-neutral-600">
+          <span className="text-tone-600">
             {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </span>
-          <span className="text-white font-medium">{phase.name}</span>
-          <span className="text-xs text-neutral-500 ml-auto tabular-nums">
+          <span className="text-tone-white font-medium">{phase.name}</span>
+          <span className="text-xs text-tone-500 ml-auto tabular-nums">
             {doneCount}/{tasks.length}
           </span>
-          <span className="text-xs text-neutral-600 tabular-nums w-10 text-right">
+          <span className="text-xs text-tone-600 tabular-nums w-10 text-right">
             {Math.round(phaseProgress)}%
           </span>
         </div>
         {/* Progress bar */}
-        <div className="w-full h-1.5 rounded-full bg-neutral-800 overflow-hidden mt-2.5">
+        <div className="w-full h-1.5 rounded-full bg-tone-800 overflow-hidden mt-2.5">
           <div
             className={clsx(
               'h-full rounded-full transition-all duration-500',
@@ -335,9 +335,9 @@ function PhaseSection({
 
       {/* Task list */}
       {isOpen && (
-        <div className="border-t border-neutral-800">
+        <div className="border-t border-tone-800">
           {tasks.length > 0 ? (
-            <div className="divide-y divide-neutral-800/60 relative">
+            <div className="divide-y divide-tone-800/60 relative">
               {tasks.map((task: any, taskIdx: number) => (
                 <TaskRow
                   key={taskIdx}
@@ -349,17 +349,17 @@ function PhaseSection({
               ))}
             </div>
           ) : (
-            <p className="text-xs text-neutral-600 px-4 py-3">No tasks in this phase</p>
+            <p className="text-xs text-tone-600 px-4 py-3">No tasks in this phase</p>
           )}
 
           {/* Add task form or button */}
           {adding ? (
             <AddTaskForm phaseIdx={phaseIdx} projectKey={projectKey} onClose={() => setAdding(false)} />
           ) : (
-            <div className="px-4 py-2 border-t border-neutral-800/60">
+            <div className="px-4 py-2 border-t border-tone-800/60">
               <button
                 onClick={() => setAdding(true)}
-                className="flex items-center gap-1.5 text-xs text-neutral-600 hover:text-neutral-300 transition-colors py-1"
+                className="flex items-center gap-1.5 text-xs text-tone-600 hover:text-tone-300 transition-colors py-1"
               >
                 <Plus size={13} /> Add task
               </button>
@@ -407,17 +407,17 @@ export default function RoadmapDetail() {
 
   const overallProgress = totalTasks > 0 ? (doneTasks / totalTasks) * 100 : 0;
 
-  if (isLoading) return <p className="text-neutral-500 p-8">Loading…</p>;
+  if (isLoading) return <p className="text-tone-500 p-8">Loading…</p>;
 
   if (!project) {
     return (
       <div className="p-6">
         {!isViewHidden('/projects') && (
-        <Link to="/projects" className="flex items-center gap-2 text-sm text-neutral-400 hover:text-white mb-4 transition-colors">
+        <Link to="/projects" className="flex items-center gap-2 text-sm text-tone-400 hover:text-tone-white mb-4 transition-colors">
           <ArrowLeft size={16} /> Back to Projects
         </Link>
         )}
-        <p className="text-neutral-500">Project not found: {projectSlug}</p>
+        <p className="text-tone-500">Project not found: {projectSlug}</p>
       </div>
     );
   }
@@ -426,7 +426,7 @@ export default function RoadmapDetail() {
     <div className="p-6 space-y-6">
       {/* Back link */}
       {!isViewHidden('/projects') && (
-      <Link to="/projects" className="flex items-center gap-2 text-sm text-neutral-400 hover:text-white transition-colors">
+      <Link to="/projects" className="flex items-center gap-2 text-sm text-tone-400 hover:text-tone-white transition-colors">
         <ArrowLeft size={16} /> Projects
       </Link>
       )}
@@ -435,8 +435,8 @@ export default function RoadmapDetail() {
       <div className="space-y-3">
         <div className="flex items-center gap-3 flex-wrap">
           {project.priority && <PriorityBadge priority={project.priority} />}
-          <h1 className="text-2xl font-bold text-white">{project.name}</h1>
-          <span className="text-xs text-neutral-600 font-mono bg-neutral-800 px-2 py-0.5 rounded">
+          <h1 className="text-2xl font-bold text-foreground">{project.name}</h1>
+          <span className="text-xs text-tone-600 font-mono bg-tone-800 px-2 py-0.5 rounded">
             {project.key || projectSlug}
           </span>
         </div>
@@ -444,12 +444,12 @@ export default function RoadmapDetail() {
         {/* Overall progress bar */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-neutral-400">
+            <span className="text-tone-400">
               {doneTasks}/{totalTasks} tasks complete
             </span>
-            <span className="text-neutral-500 tabular-nums">{Math.round(overallProgress)}%</span>
+            <span className="text-tone-500 tabular-nums">{Math.round(overallProgress)}%</span>
           </div>
-          <div className="w-full h-2.5 rounded-full bg-neutral-800 overflow-hidden">
+          <div className="w-full h-2.5 rounded-full bg-tone-800 overflow-hidden">
             <div
               className={clsx(
                 'h-full rounded-full transition-all duration-700',
@@ -461,11 +461,11 @@ export default function RoadmapDetail() {
         </div>
 
         {/* Stats row */}
-        <div className="flex flex-wrap items-center gap-4 text-xs text-neutral-500">
+        <div className="flex flex-wrap items-center gap-4 text-xs text-tone-500">
           <span>{phases.length} phase{phases.length !== 1 ? 's' : ''}</span>
-          <span className="text-neutral-700">·</span>
+          <span className="text-tone-700">·</span>
           <span className="flex items-center gap-1">
-            <Circle size={6} className="fill-neutral-500 text-neutral-500" />
+            <Circle size={6} className="fill-tone-500 text-tone-500" />
             {totalTasks - doneTasks} remaining
           </span>
           <span className="flex items-center gap-1">
@@ -488,7 +488,7 @@ export default function RoadmapDetail() {
         ))}
 
         {phases.length === 0 && (
-          <p className="text-neutral-600 text-center py-10 border border-dashed border-neutral-800 rounded-xl">
+          <p className="text-tone-600 text-center py-10 border border-dashed border-tone-800 rounded-xl">
             No phases defined for this project
           </p>
         )}
@@ -497,17 +497,17 @@ export default function RoadmapDetail() {
       {/* Blockers */}
       {project.blockers?.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider flex items-center gap-2">
+          <h2 className="text-xs font-semibold text-tone-500 uppercase tracking-wider flex items-center gap-2">
             <AlertTriangle size={12} className="text-red-500" />
             Blockers <span className="text-red-500">{project.blockers.length}</span>
           </h2>
           {project.blockers.map((b: any, i: number) => (
-            <div key={i} className="rounded-xl border border-red-900/40 bg-red-950/20 p-4 flex items-start gap-2">
+            <div key={i} className="rounded-xl border border-tone-red-900/40 bg-tone-red-950/20 p-4 flex items-start gap-2">
               <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
               <div>
-                <p className="text-sm text-red-300">{typeof b === 'string' ? b : b.description || b.fact}</p>
+                <p className="text-sm text-tone-red-300">{typeof b === 'string' ? b : b.description || b.fact}</p>
                 {b.approval_id && !isViewHidden('/approvals') && (
-                  <Link to="/approvals" className="text-xs text-red-400/60 hover:text-red-400 mt-1 inline-block">
+                  <Link to="/approvals" className="text-xs text-tone-red-400/60 hover:text-tone-red-400 mt-1 inline-block">
                     View related approval &rarr;
                   </Link>
                 )}

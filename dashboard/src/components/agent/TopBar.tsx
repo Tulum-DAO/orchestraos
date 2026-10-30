@@ -1,5 +1,5 @@
 import { useContext, type Ref } from 'react';
-import { Menu, Settings } from 'lucide-react';
+import { Menu, MessageSquare, Settings } from 'lucide-react';
 import { HeaderEndSlotContext } from '../../lib/headerSlot';
 import { GenChip } from '../GenChip';
 import AgentIdentityPill from '../avatar/AgentIdentityPill';
@@ -17,9 +17,11 @@ interface TopBarProps {
   onSettings?: () => void;
   settingsOpen?: boolean;
   settingsRef?: Ref<HTMLButtonElement>;
+  /** Dev only: one clear way back to the chat (the chat style goes back to its default). */
+  onBackToChat?: () => void;
 }
 
-export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOpen, settingsRef }: TopBarProps) {
+export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOpen, settingsRef, onBackToChat }: TopBarProps) {
   const registerEndSlot = useContext(HeaderEndSlotContext);
   const rec = useAgentRecord(seat?.id ?? '');
 
@@ -69,6 +71,12 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOp
             Bubbles or Dev) chosen in the agent's panel, behind the gear. */}
         {/* Export the conversation as Markdown (one icon; chat view only). */}
         {seat && mode === 'chat' && <ExportMenu agentId={seat.id} />}
+        {seat && mode === 'dev' && onBackToChat && (
+          <button type="button" onClick={onBackToChat} data-back-to-chat
+                  className="mr-1 inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[13px] font-medium text-foreground hover:bg-muted">
+            <MessageSquare size={15} aria-hidden /> Back to chat
+          </button>
+        )}
         {/* Theme, red alert and brain are gone from agent panes (Shaw, 2026-10-11: they did nothing
             here and crowded the seat name off a phone). The bell sits where the brain was. */}
         {/* The shared bell's home on this page, phone and desktop (filled by DashboardLayout). */}

@@ -24,30 +24,30 @@ export function VoiceAgentCard({ pmId, name, agentId, voice, updatedAt, isInCall
     : 'Never';
 
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 flex flex-col gap-3">
+    <div className="rounded-xl border border-tone-800 bg-tone-900 p-5 flex flex-col gap-3">
       <div className="flex items-start justify-between">
         <div>
           <h3 className="text-lg font-semibold">{label}</h3>
-          {label !== pmId && <p className="text-sm text-neutral-500 mt-0.5">{pmId}</p>}
+          {label !== pmId && <p className="text-sm text-tone-500 mt-0.5">{pmId}</p>}
         </div>
         {voice && (
-          <span className="text-[10px] uppercase tracking-wider bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full whitespace-nowrap">
+          <span className="text-[10px] uppercase tracking-wider bg-tone-800 text-tone-400 px-2 py-0.5 rounded-full whitespace-nowrap">
             {voice}
           </span>
         )}
       </div>
 
       <div className="flex items-center justify-between mt-auto pt-2">
-        <span className="text-[11px] text-neutral-600">Synced {synced}</span>
+        <span className="text-[11px] text-tone-600">Synced {synced}</span>
         <button
           onClick={onCall}
           disabled={isInCall || isPending}
           className={clsx(
             'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
             isPending
-              ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
+              ? 'bg-tone-800 text-tone-500 cursor-not-allowed'
               : isInCall
-                ? 'bg-green-900/40 text-green-400 cursor-not-allowed animate-pulse'
+                ? 'bg-tone-green-900/40 text-tone-green-400 cursor-not-allowed animate-pulse'
                 : 'bg-green-600 hover:bg-green-500 text-white'
           )}
         >

@@ -30,7 +30,7 @@ export default function DeliverNowBanner({ agentId }: { agentId?: string }) {
   const v = bannerView(data);
   if (!v) return null;
   return (
-    <div className="mx-3 mb-2 flex items-center gap-2 rounded border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-200"
+    <div className="mx-3 mb-2 flex items-center gap-2 rounded border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs text-tone-amber-200"
          role="status" data-testid="deliver-now-banner">
       <span className="flex-1 min-w-0">{v.text}</span>
       {v.canDeliver && (
@@ -39,7 +39,7 @@ export default function DeliverNowBanner({ agentId }: { agentId?: string }) {
           {press.isPending ? 'Delivering…' : 'Deliver now'}
         </button>
       )}
-      {press.isError && <span className="shrink-0 text-red-300">Could not deliver</span>}
+      {press.isError && <span className="shrink-0 text-tone-red-300">Could not deliver</span>}
     </div>
   );
 }
