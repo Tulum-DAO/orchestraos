@@ -17,7 +17,12 @@ v2 (agent-state-truth, 2026-08-09). Tiered truth, per docs/agent-state-truth-aud
                         detection, stranded-input first-seen tracking.
 
 States: working | thinking | idle | stopped | waiting_permission |
-        stranded_input | stalled | unknown
+        stranded_input | stalled | unknown | crashed (headless only: the supervisor gave up)
+
+HEADLESS SEATS (scripts/headless_switch.py, Claude only, default off) run no TUI: their pane holds
+the seat's supervisor (scripts/seat_supervisor.py). They are read from the supervisor's status and
+its event stream, never from the pane (_headless_status), and the pane readers here
+(get_tmux_output, check_claude_process) answer for them without reading the pane as a TUI.
 Additive output keys: confidence ("hook"|"screen"|"screen+hook"|"process"),
         state_age_s, stranded {text, age_s}, hook {event, tool, age_s}.
 
@@ -155,7 +160,11 @@ def get_tmux_output(session: str, lines: int = 0) -> str | None:
     scrollback for state detection: old spinner frames persist in scrollback
     after a turn finishes (2026-08-09 incident). Scrollback is only for
     content reads.
+
+    None for a headless seat: its pane shows the supervisor, which is not the agent's screen.
     """
+    if _headless_seat(session):
+        return None
     try:
         args = ['tmux', 'capture-pane', '-t', session, '-p', '-e']
         if lines > 0:
@@ -183,7 +192,15 @@ def get_pane_tty(session: str) -> str | None:
 
 
 def get_pane_id(session: str) -> str | None:
-    """tmux pane id (%N) — the join key for hook event files ($TMUX_PANE)."""
+    """tmux pane id (%N) — the join key for hook event files ($TMUX_PANE).
+
+    A headless seat's hooks run under its supervisor's CLI with the TMUX_PANE the supervisor gave
+    it (the pane's id, or a synthetic one when it runs without a pane): the supervisor says which."""
+    seat = _headless_seat(session)
+    if seat:
+        sup = _supervisor_status(seat)
+        if sup and isinstance(sup.get("pane_id"), str) and sup["pane_id"]:
+            return sup["pane_id"]
     try:
         result = subprocess.run(
             ['tmux', 'display-message', '-t', session, '-p', '#{pane_id}'],
@@ -205,6 +222,11 @@ def check_claude_process(session: str) -> dict:
     """
     empty = {'running': False, 'runtime': None, 'pid': None, 'cpu': 0.0,
              'rss_mb': 0, 'elapsed': '', 'children': 0}
+    seat = _headless_seat(session)
+    if seat:
+        # The headless CLI runs under its supervisor, off the pane's tty (its own session).
+        sup = _supervisor_status(seat)
+        return _pid_process(sup.get('pid') if sup else None) or empty
     tty = get_pane_tty(session)
     if not tty:
         return empty
@@ -1570,6 +1592,8 @@ def mark_turn_interrupted(session: str, now: float | None = None) -> bool:
     event can never mask a genuinely live turn (screen-working always wins).
     Fail-silent: returns False on any error (an interrupt must never break)."""
     import time as _t
+    if _headless_seat(session):
+        return False     # an Esc typed into a headless seat's pane interrupts nothing
     try:
         pane = get_pane_id(session)
         if not pane:
@@ -1653,10 +1677,163 @@ def _grok_status(session: str, proc: dict, now: float) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Headless seats: the supervisor and its event stream are the truth
+# ---------------------------------------------------------------------------
+
+#: The rotation budget the fleet's status line scales to (hooks/statusline.py BUDGET_FRACTION).
+HEADLESS_BUDGET_FRACTION = 0.80
+
+
+def _headless_seat(session: str):
+    """The seat id when `session` is a switched-on headless Claude seat, else None (any read
+    failure: None, so a tmux seat is never affected)."""
+    try:
+        import headless_switch
+        return headless_switch.headless_seat(session, orch_dir=ORCH_DIR)
+    except Exception:  # noqa: BLE001 — default off
+        return None
+
+
+def _supervisor_status(seat: str):
+    """The supervisor's status dict, or None when it does not answer."""
+    try:
+        import headless_switch
+        out = headless_switch.status(seat, orch_dir=ORCH_DIR)
+        return out if isinstance(out, dict) and out.get('ok', True) else None
+    except Exception:  # noqa: BLE001 — not answering = down
+        return None
+
+
+def _pid_process(pid) -> dict | None:
+    """check_claude_process's shape for one known pid (the headless CLI), from ps."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        r = subprocess.run(['ps', '-o', 'pcpu=,rss=,etime=', '-p', str(pid)],
+                           capture_output=True, text=True, timeout=5)
+        parts = (r.stdout or '').split()
+        if r.returncode != 0 or len(parts) < 3:
+            return None
+        kids = subprocess.run(['ps', '-o', 'pid=', '--ppid', str(pid)],
+                              capture_output=True, text=True, timeout=5)
+        return {'running': True, 'runtime': 'claude', 'pid': pid, 'cpu': float(parts[0]),
+                'rss_mb': round(int(parts[1]) / 1024), 'elapsed': parts[2],
+                'children': len((kids.stdout or '').split())}
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        return None
+
+
+def _headless_context(ctx) -> dict:
+    """Both named context numbers from the supervisor's usage reading, or None each."""
+    none = {'context_pct_of_window': None, 'context_pct_of_budget': None}
+    if not isinstance(ctx, dict):
+        return none
+    tokens, window = ctx.get('tokens'), ctx.get('window')
+    if type(tokens) is not int or type(window) is not int or window <= 0 or tokens <= 0:
+        return none                       # no usage yet is no reading (context_reading's 0% rule)
+    of_window = min(100, round(tokens * 100 / window))
+    return {'context_pct_of_window': of_window,
+            'context_pct_of_budget': min(100, round(tokens * 100 / (window * HEADLESS_BUDGET_FRACTION)))}
+
+
+def _headless_status(session: str, seat: str, now: float, sup=None, proc=None) -> dict:
+    """agent-status row for a headless seat, from its supervisor (and the hook event its CLI
+    writes for the seat's pane id). Same top-level shape as the pane path.
+
+      supervisor idle            -> idle
+      supervisor working         -> working; stalled when no stream event for STALL_S, no hook
+                                    event either, and no tool still running a child process
+      a held question/permission -> waiting_permission (needs you); the question in `activity`
+                                    and `held_request`. No pending_menu: the menu bridge and the
+                                    keypress replay type into the pane, which is not the agent.
+      starting/restarting/stopping, or no supervisor -> stopped
+      failed (it gave up restarting)                 -> crashed
+    """
+    sup = _supervisor_status(seat) if sup is None else sup
+    hook = _read_hook_event(session)
+    hook_age = max(0.0, now - float(hook.get('ts') or 0)) if hook else None
+    prev = _load_prev(session)
+    empty_proc = {'running': False, 'runtime': 'claude', 'pid': None, 'cpu': 0.0,
+                  'rss_mb': 0, 'elapsed': '', 'children': 0}
+    tool, elapsed, held, model, sid = '', '', None, '', None
+    ctx = {'context_pct_of_window': None, 'context_pct_of_budget': None}
+    if not sup:
+        state, activity, proc = 'stopped', 'Headless supervisor not running', empty_proc
+    else:
+        sid = sup.get('session_id')
+        model = sup.get('model') or ''
+        ctx = _headless_context(sup.get('context'))
+        if proc is None:
+            proc = _pid_process(sup.get('pid')) or empty_proc
+        sst = sup.get('state')
+        if sup.get('turn_age_s') is not None:
+            elapsed = _fmt_age(sup['turn_age_s'])
+        if sst == 'idle':
+            state, activity = 'idle', 'At prompt (headless)'
+        elif sst == 'working':
+            open_tools = sup.get('tools_open') or []
+            tool = (open_tools[-1] if open_tools else '') or sup.get('last_tool') or ''
+            state = 'working'
+            activity = f'Active turn ({tool})' if tool else 'Active turn'
+            quiet = sup.get('last_event_age_s')
+            quiet = quiet if quiet is not None else sup.get('turn_age_s')
+            hook_quiet = hook_age is None or hook_age > STALL_S
+            tool_busy = bool(open_tools) and proc.get('children', 0) > 0
+            if quiet is not None and quiet >= STALL_S and hook_quiet and not tool_busy:
+                state = 'stalled'
+                activity = f'No stream events for {_fmt_age(quiet)}'
+        elif sst == 'waiting':
+            reqs = sup.get('held_requests') or []
+            held = reqs[0] if reqs else {'kind': 'question', 'question': ''}
+            state = 'waiting_permission'
+            q = (held.get('question') or '').strip()
+            activity = f'Needs you: {q[:160]}' if q else 'Needs you: a question is waiting'
+            tool = held.get('tool') or ''
+        elif sst == 'failed':
+            state = 'crashed'
+            activity = (f"Headless process failed ({sup.get('fast_exits') or 0} quick exits); "
+                        "restart it (seat_supervisor.py restart)")
+        else:
+            state = 'stopped'
+            activity = {'restarting': 'Headless process restarting',
+                        'starting': 'Headless process starting',
+                        'stopping': 'Headless supervisor stopping'}.get(sst, f'Headless: {sst}')
+    since = prev.get('since', now) if prev.get('state') == state else now
+    _persist(session, {'state': state, 'since': since, 'screen_hash': '', 'hash_since': now})
+    out = {
+        'session': session, 'state': state, 'activity': activity,
+        'elapsed': elapsed, 'tokens': '', 'tool': tool, 'model': model, 'project': '',
+        'context_pct': '', **ctx,
+        'process': {'pid': proc.get('pid'), 'cpu': proc.get('cpu', 0.0), 'runtime': 'claude',
+                    'rss_mb': proc.get('rss_mb', 0), 'uptime': proc.get('elapsed', '')},
+        'screen': {}, 'is_noise': [], 'confidence': 'headless',
+        'state_age_s': int(now - since), 'runtime': 'claude', 'session_id': sid,
+        'headless': {
+            'seat': seat, 'supervisor': bool(sup),
+            'supervisor_pid': (sup or {}).get('supervisor_pid'),
+            'state': (sup or {}).get('state', 'down'),
+            'generation': (sup or {}).get('generation'),
+            'restarts': (sup or {}).get('restarts'),
+            'last_event_age_s': (sup or {}).get('last_event_age_s'),
+            'messages': (sup or {}).get('messages') or {},
+        },
+    }
+    if held:
+        out['held_request'] = held
+    if hook:
+        out['hook'] = {'event': hook.get('event', ''), 'tool': hook.get('tool', ''),
+                       'age_s': int(hook_age or 0)}
+    return out
+
+
 def get_agent_status(session: str) -> dict:
     """Full agent status: hooks (tier 0) + process (1) + screen (2) + persisted
     state machine (3). Same shape as v1 plus additive keys."""
     now = time.time()
+    seat = _headless_seat(session)
+    if seat:
+        return _headless_status(session, seat, now)
     proc = check_claude_process(session)
 
     if not proc['running']:
@@ -1894,8 +2071,10 @@ def list_claude_sessions() -> list[str]:
         )
         if result.returncode != 0:
             return []
+        # A headless seat is listed whatever its process state, so a stopped or failed one is
+        # reported as such rather than dropped as "no claude in the pane".
         return [s for s in result.stdout.strip().split('\n')
-                if s and check_claude_process(s)['running']]
+                if s and (_headless_seat(s) or check_claude_process(s)['running'])]
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
 

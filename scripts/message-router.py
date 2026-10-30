@@ -1443,6 +1443,81 @@ def codex_idle_release(runtime: str, visibly_idle: bool) -> bool:
     return runtime == "codex" and bool(visibly_idle)
 
 
+# --- Headless seats (scripts/headless_switch.py) --------------------------------------------------
+#: How long a headless delivery waits for the CLI's replay echo before leaving the row delivered
+#: (not acknowledged), like confirm_processing's window on the pane path.
+HEADLESS_ACK_WAIT_S = float(os.environ.get("ROUTER_HEADLESS_ACK_WAIT_S", "15"))
+
+
+def headless_seat_for(session: str, runtime: str | None = None):
+    """The seat id when `session` is a switched-on headless Claude seat, else None. Any failure
+    reads as off (the pane path, as before)."""
+    try:
+        import headless_switch
+        return headless_switch.headless_seat(session, runtime, orch_dir=ORCHESTRA_DIR)
+    except Exception as e:  # noqa: BLE001 — default off
+        log(f"headless switch unreadable for {session}: {e!r} — pane path")
+        return None
+
+
+def headless_deliver(store, msg, seat, agent, forwarded_from=None, *, deliver_now=False,
+                     hs=None, ack_wait_s=None) -> str:
+    """Deliver one row to a headless seat's supervisor. Returns:
+      'submitted'  handed over (store: delivered; acknowledged once the replay echo is seen)
+      'down'       no supervisor answers; nothing claimed
+      'not-idle'   a turn is running (Deliver now lets a running turn take it, as mid-turn
+                   stdin folds into it); nothing claimed
+      'waiting'    a question or permission is held; nothing claimed
+      'held'       claimed, then refused or cut off: the row goes back to pending
+      'failed'     the supervisor gave the message up (no echo after its allowed writes)
+      'raced'      another router claimed the row
+    The row id is the message id the supervisor dedupes on: a retry of the same row (a crash
+    between the hand-over and the store write, a deferred row) can never be written twice."""
+    if hs is None:
+        import headless_switch as hs
+    try:
+        st = hs.status(seat, orch_dir=ORCHESTRA_DIR)
+    except hs.SupervisorDown:
+        return "down"
+    state = st.get("state")
+    if state == "waiting":
+        return "waiting"
+    if state != "idle" and not (deliver_now and state == "working"):
+        return "not-idle" if state in ("working", "starting", "restarting", "stopping") else "down"
+    if not store.claim(msg["id"]):
+        return "raced"
+    text = injection_text(msg, store)
+    if forwarded_from is not None:
+        text = f"[fwd from {forwarded_from}] " + text
+        merge_forwarded_meta(store, msg["id"], forwarded_from)
+    try:
+        out = hs.send(seat, text, msg["id"], orch_dir=ORCHESTRA_DIR)
+    except hs.SupervisorDown as e:
+        store.defer(msg["id"], error=f"router: headless supervisor stopped answering ({e}); deferred")
+        log(f"HEADLESS-HELD {msg['id']} -> {agent}: supervisor stopped answering, row re-queued")
+        return "held"
+    if not out.get("ok"):
+        store.defer(msg["id"], error=f"router: headless supervisor refused ({out.get('reason')}); deferred")
+        log(f"HEADLESS-HELD {msg['id']} -> {agent}: supervisor refused ({out.get('reason')}), row re-queued")
+        return "held"
+    if out.get("state") == "failed":
+        store.fail(msg["id"], error="router: headless supervisor gave the message up (no echo)")
+        log(f"HEADLESS-FAILED {msg['id']} -> {agent}")
+        return "failed"
+    store.deliver(msg["id"])
+    seen = out.get("state")
+    if seen not in hs.DELIVERED_STATES:
+        seen = hs.wait_delivered(seat, msg["id"], orch_dir=ORCHESTRA_DIR,
+                                 timeout=HEADLESS_ACK_WAIT_S if ack_wait_s is None else ack_wait_s)
+    if seen in hs.DELIVERED_STATES:
+        store.acknowledge(msg["id"])
+        log(f"ACKNOWLEDGED {msg['id']} -> {agent} (headless: echo seen)"
+            + (" [duplicate id, written once]" if out.get("duplicate") else ""))
+    else:
+        log(f"DELIVERED {msg['id']} -> {agent} (headless: {seen or 'no answer'}, no echo yet)")
+    return "submitted"
+
+
 # Delivery model: see docs/DELIVERY.md
 def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=None,
            msg_id=None) -> str:
@@ -1450,6 +1525,11 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=No
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
     never glue or split each other's text in one pane. Adds one outcome:
       'held'    — another typer holds the pane past the wait; nothing was typed, next tick."""
+    # A headless seat's pane holds its supervisor, not a composer: nothing is ever pasted there.
+    # Its mail goes through headless_deliver; any other caller that reaches here is held.
+    if headless_seat_for(session):
+        log(f"{session}: runs headless — nothing pasted into its pane, held for the supervisor path")
+        return "held"
     remaining = ROUTER_RUN_LOCK_BUDGET_S - (time.monotonic() - _RUN_STARTED)
     wait_s = max(0.0, min(ROUTER_PANE_LOCK_WAIT_S, remaining))
     try:
@@ -2218,13 +2298,46 @@ def _fmt_down(seconds: float) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
+# --- Test seats (orchestra spawn / agent create --test) ---------------------------------------------
+#: Seats whose registry row says test: true, set once per cycle from the registry (set_test_seats).
+#: A test seat's mail is delivered as any seat's; only the alarms ABOUT it (down pages, the
+#: recovered page, hold escalations) are skipped: it is a throwaway its integrator watches.
+TEST_SEATS: set = set()
+
+
+def set_test_seats(reg_agents) -> set:
+    global TEST_SEATS
+    try:
+        TEST_SEATS = {name for name, row in (reg_agents or {}).items()
+                      if isinstance(row, dict) and row.get("test") is True}
+        TEST_SEATS |= {row.get("tmux_session") for name, row in (reg_agents or {}).items()
+                       if name in TEST_SEATS and row.get("tmux_session")}
+    except Exception:  # noqa: BLE001 — no test seats known: every seat is paged as before
+        TEST_SEATS = set()
+    return TEST_SEATS
+
+
+def load_test_seats() -> set:
+    """set_test_seats from registry.json, read the way the router's other registry reads are. An
+    unreadable file means no test seats this cycle (every seat is paged as before)."""
+    try:
+        rows = json.loads(REGISTRY.read_text()).get("agents", {})
+    except (json.JSONDecodeError, OSError, AttributeError):
+        rows = {}
+    return set_test_seats(rows)
+
+
+def is_test_seat(seat) -> bool:
+    return bool(seat) and seat in TEST_SEATS
+
+
 def clear_seat_down(down_state: dict, seat: str, now: float | None = None,
                     send_clear: bool = True) -> None:
     """The seat answered again: drop the anchor so its held rows retry normally and a LATER
     outage gets a fresh age. If the owner was told this outage STARTED, tell them ONCE that it
     ENDED: an alarm that never says it is over is the mirror failure of a silent one."""
     rec = down_state.pop(seat, None)
-    if not send_clear or not rec or not rec.get("owner_paged_at"):
+    if not send_clear or not rec or not rec.get("owner_paged_at") or is_test_seat(seat):
         return
     now = time.time() if now is None else now
     down_for = _fmt_down(now - rec.get("first_seen", now))
@@ -2252,8 +2365,14 @@ def page_seat_down(down_state: dict, seat: str, held: int, now: float,
     """PAGE that `seat` is down, to its escalation — never to itself. Carries the facts so the
     reader can act on one read. Throttled per seat, but NEVER latched off: a still-down seat
     pages again every DOWN_PAGE_REPEAT_S, because two alarms and then silence IS the defect.
-    Paging is not delivery: the caller leaves every row PENDING. Returns True if it paged."""
+    Paging is not delivery: the caller leaves every row PENDING. Returns True if it paged.
+    A TEST seat is never paged about (it is a throwaway; its integrator watches it directly)."""
     rec = down_state.setdefault(seat, {})
+    if is_test_seat(seat) or (agent and is_test_seat(agent)):
+        if not rec.get("test_quiet_logged"):
+            rec["test_quiet_logged"] = True
+            log(f"[down-page] {seat} is a test seat: not paged")
+        return False
     if now - rec.get("paged_at", 0) < DOWN_PAGE_REPEAT_S:
         return False
     rec["paged_at"] = now
@@ -2742,7 +2861,8 @@ def note_hold(hold_state, session, msg, reason, now, queue_n=None,
     # Internal durable plumbing (BG hydrate) is logged for observability above but
     # NEVER the operator-escalated or dead-lettered — the recipient reads it from the db,
     # so a not-idle inject-hold is expected, not a strand.
-    if _msg_age_s(msg, now) >= HOLD_SLA_S and not _is_internal_durable_hold(msg):
+    if _msg_age_s(msg, now) >= HOLD_SLA_S and not _is_internal_durable_hold(msg) \
+            and not is_test_seat(session):        # a test seat's holds stay in the log, unescalated
         if mrec.get("parked") or mrec.get("dead_lettered"):
             hold_state[key] = rec
             return            # escalation already terminated for this row: quiet hold
@@ -2965,6 +3085,7 @@ def main():
             _reg_agents = (load_registry() or {}).get("agents", {})
         except Exception:
             _reg_agents = {}
+        load_test_seats()
         now = time.time()
 
         # Self-cleanup pass: clear OUR OWN stuck [MSG] injections (swallowed
@@ -2977,6 +3098,8 @@ def main():
             attached, _ = sess_info.get(sess, (0, 1e9))
             if attached > 0:
                 continue
+            if headless_seat_for(sess):
+                continue          # no composer in a headless seat's pane: nothing to clean up
             # #1b: resolve the session's runtime so cleanup finds OUR stuck line
             # by the right prompt_char, by the same rule as delivery (routing_runtime:
             # a declared runtime always; undeclared rows as before). Cleanup still only
@@ -3118,6 +3241,23 @@ def main():
                 if store.claim(msg["id"]):
                     store.deliver(msg["id"])
                     log(f"SILENT (empty notification) {msg['id']} -> {agent}")
+                continue
+
+            # HEADLESS SEAT (scripts/headless_switch.py, Claude only, default off): the mail goes to
+            # the seat's supervisor, which writes it to the warm process's stdin. The pane gates
+            # below (presence, breathe window, the pane idle read, the DOWN probe, the digest) read
+            # a pane that holds no composer, so they are replaced by the supervisor's own state.
+            _hl_seat = headless_seat_for(session, routing_runtime(_svc_agent, meta))
+            if _hl_seat:
+                _hres = headless_deliver(store, msg, _hl_seat, agent, forwarded_from,
+                                         deliver_now=bool(_dn))
+                if _hres == "submitted":
+                    cooldowns[session] = now
+                    delivered_to.add(session)
+                    clear_seat_down(down_state, session)
+                elif _hres in ("down", "not-idle", "waiting", "held"):
+                    note_hold(hold_state, session, msg, f"headless-{_hres}", now,
+                              queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue
 
             # HUMAN-PRESENCE GUARD: if a tmux client is attached, the operator (or
