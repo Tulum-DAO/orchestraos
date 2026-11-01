@@ -16,7 +16,7 @@ import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
-import { listAgentCalls, mergeCallMarkers } from '../lib/agentCalls.js';
+import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff } from '../lib/agentCalls.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
@@ -1877,6 +1877,14 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
   // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string' && it.text.includes('<page-context>')
     ? { ...it, text: stripPageContext(it.text) } : it));
+  // A call handed to the agent (lib/agentCalls.ts handoffMessage): the agent read the transcript, the chat shows the
+  // call's card on this line, where the call ended.
+  items = items.map((it) => {
+    if (it?.kind !== 'text' || it.role !== 'user' || typeof it.text !== 'string' || !it.text.includes('<voice-call-transcript')) return it;
+    let shown: ReturnType<typeof showHandoff> = null;
+    try { shown = showHandoff(it.text, dataDir()); } catch { shown = null; }
+    return shown ? { ...it, text: shown.text, call_id: shown.call_id } : it;
+  });
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
   return tagAudience(enrichItems(items));
@@ -2055,7 +2063,9 @@ function withNotices(agentId: string, win: { items: any[]; has_older: boolean; c
 function withCalls(agentId: string, win: { items: any[]; has_older: boolean; cursor_ts: string | null }, limit: number,
                    before: string | null, body: { items: any[]; render_items: any[] }): { items: any[]; render_items: any[] } {
   try {
-    const calls = listAgentCalls(dataDir(), agentId);
+    // A handed-off call's card is its hand-off line (logItems): never also where it started.
+    const handed = readHandoffs(dataDir());
+    const calls = listAgentCalls(dataDir(), agentId).filter((c) => !handed[c.call_id]);
     if (!calls.length) return body;
     const firstTs = win.items.find((it) => it?.ts)?.ts ?? null;
     const whole = before === null ? win.items.length < limit : !win.has_older;

@@ -17,7 +17,8 @@ import { addCaption, type CallTurn } from '../lib/callTranscript';
 export interface CallListeners {
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
-  onCallEnded?: (marker: string) => void;
+  /** The call ended: its marker, its id and how long it lasted (seconds). */
+  onCallEnded?: (marker: string, callId: string, durationS: number) => void;
   onUnavailable?: (reason: string) => void;
 }
 
@@ -91,13 +92,14 @@ export const useCallStore = create<CallState>((set, get) => ({
         else gapTimer = setTimeout(() => { gapTimer = null; if (session === mine) get().event({ type: 'playback', playing: false }); }, PLAYBACK_GAP_MS);
       },
       onUnavailable: (reason) => l.onUnavailable?.(reason),
-      onCallEnded: (marker) => l.onCallEnded?.(marker),
+      onCallEnded: (marker, id) => l.onCallEnded?.(marker, id, (Date.now() - startedAt) / 1000),
     });
     session = mine;
     const caption = (role: 'user' | 'agent', text: string, final: boolean) =>
       set((s) => (s.call ? { call: { ...s.call, turns: addCaption(s.call.turns, role, text, final) } } : s));
     const { withArturo, ...sessionOpts } = opts;
-    set({ call: { agentId: opts.agentId, startedAt: Date.now(), phase: 'connecting', muted: false, turns: [], party: withArturo ? 'arturo' : 'agent' } });
+    const startedAt = Date.now();
+    set({ call: { agentId: opts.agentId, startedAt, phase: 'connecting', muted: false, turns: [], party: withArturo ? 'arturo' : 'agent' } });
     await mine.start(sessionOpts);
     return 'started';
   },

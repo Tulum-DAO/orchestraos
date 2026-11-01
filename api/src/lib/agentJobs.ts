@@ -31,6 +31,10 @@ export interface Job {
   started_at: string | null; ended_at?: string; result_uuid?: string;
   /** Failed jobs only: why, in a few plain words. */
   reason?: string;
+  /** The launching tool call's id (the same as `id`), and the transcript line that call is on: the uuid the thread's
+   *  tool card for it is keyed by, so the dashboard can show the job's state on that card and scroll to it. */
+  tool_use_id: string;
+  launch_uuid?: string;
 }
 
 /** An error answered this soon after the call is the CLI turning it down, not a job that ran and failed. */
@@ -130,6 +134,7 @@ export function parseJobs(lines: readonly string[], now: number = Date.now()): J
         const kind = kindOf(name, b.input);
         if (!kind || jobs.has(b.id)) continue;
         jobs.set(b.id, { id: b.id, kind, title: titleOf(kind, name, b.input), status: 'running', started_at: ts,
+          tool_use_id: b.id, ...(typeof o.uuid === 'string' && o.uuid ? { launch_uuid: o.uuid } : {}),
           ...(name === 'ScheduleWakeup' ? { wakeUntil: (ts ? Date.parse(ts) : now) + (wakeDelayS(b.input) ?? 0) * 1000 } : {}),
           ...(b.input?.run_in_background === true ? { awaitNotice: true } : {}) });
       } else if (o.type === 'user' && b.type === 'tool_result' && typeof b.tool_use_id === 'string') {

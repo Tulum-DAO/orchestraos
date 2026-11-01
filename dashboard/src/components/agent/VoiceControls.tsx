@@ -13,8 +13,8 @@ interface VoiceControlsProps {
   onPartial: (text: string) => void;
   /** Committed dictation / call speech — appended to the textarea by the integrator. */
   onFinal?: (text: string) => void;
-  /** `[voice-call: <id> <path>]` marker text to submit into the composer on call end (P1). */
-  onCallEnded?: (marker: string) => void;
+  /** The call ended (its id, for the hand-off to the agent). Nothing about a call goes into the draft. */
+  onCallEnded?: (callId: string) => void;
   /** Told whenever a call starts connecting or ends, so a caller can render for it. */
   onInCallChange?: (inCall: boolean) => void;
   /** The agent whose page this is: its call is for that agent (`agent=<id>` on the live call). */
@@ -89,8 +89,10 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
     }
     : { onClick: () => (dictating ? stopDictation() : startDictation()) };
 
+  // A call never writes into the draft: not the words you say, not its end (the draft stays as you left it). The
+  // agent hears the call itself, or is handed it at the end (Composer).
   const callListeners = {
-    onPartial, onFinal, onCallEnded,
+    onCallEnded: (_marker: string, callId: string) => onCallEnded?.(callId),
     onUnavailable: (reason: string) => { setUnavailable(reason); if (/voice isn't configured|voice bridge/i.test(reason)) onCallUnavailable?.(reason); },
   };
   // The store's own state, not the render's: a second tap in the same frame still sees the call and ends it.

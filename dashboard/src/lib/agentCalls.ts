@@ -67,3 +67,34 @@ export function focusWork(uuid: string): boolean {
   row.animate?.([{ backgroundColor: 'rgba(59,130,246,0.18)' }, { backgroundColor: 'transparent' }], { duration: 1400 });
   return true;
 }
+
+/** Hand an ended call to the agent (POST /api/agents/:id/calls/handoff): the server sends it one hidden,
+ *  framed transcript message and the agent answers in text as itself. In the thread that line becomes the call's card,
+ *  where the call ended (the start card goes), so the caller refreshes the thread after.
+ *    200 {ok, call_id, matched, state} or {already:true}  -> 'ok'
+ *    404 (no_recent_call, an agent out of scope, an older API without the route) -> 'absent': nothing more to do
+ *    502 not_delivered -> tried once more after RETRY_MS, then given up quietly
+ *    anything else (400 bad client_call_id / not_for_arturo, network) -> 'failed'
+ *  Nothing goes into the draft either way. */
+export const HANDOFF_RETRY_MS = 2000;
+export async function handOffCall(agentId: string, clientCallId: string, fetchFn: typeof fetch = fetch,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<'ok' | 'absent' | 'failed'> {
+  const once = async (): Promise<number> => {
+    try {
+      const r = await fetchFn(`/api/agents/${encodeURIComponent(agentId)}/calls/handoff`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(/^vc_client_[0-9a-f]{12}$/.test(clientCallId) ? { client_call_id: clientCallId } : {}),
+      });
+      return r.status;
+    } catch { return 0; }
+  };
+  let st = await once();
+  if (st === 502) { await wait(HANDOFF_RETRY_MS); st = await once(); }
+  return st >= 200 && st < 300 ? 'ok' : st === 404 ? 'absent' : 'failed';
+}
+
+/** Ask an agent's open chat to read its thread again (after a hand-off moved the call's card). */
+export const TRANSCRIPT_REFRESH_EVENT = 'orchestra:transcript-refresh';
+export function refreshTranscript(agentId: string): void {
+  window.dispatchEvent(new CustomEvent(TRANSCRIPT_REFRESH_EVENT, { detail: { agentId } }));
+}

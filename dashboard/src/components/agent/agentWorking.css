@@ -1,23 +1,57 @@
-/* The agent page's working row (AgentWorkingRow) and its job tray (AgentJobTray), shaped like Arturo's
-   .arturo-working pill: avatar, name, the step. Its own file: arturo.css belongs to Arturo's pages. */
-.agent-working{ display:flex; align-items:center; gap:8px; max-width:100%; width:max-content; box-sizing:border-box;
-  padding:4px 12px 4px 4px; border-radius:999px; background:var(--color-card); border:1px solid var(--color-line-soft);
-  box-shadow:0 4px 14px rgba(0,0,0,0.08); font-size:13px; line-height:1.3; }
-.agent-working-name{ font-weight:600; color:var(--color-foreground); flex:0 0 auto; }
-.agent-working-step{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.agent-working-time{ flex:0 0 auto; color:var(--color-ink-3); font-variant-numeric:tabular-nums; }
-.agent-working-mark{ flex:0 0 auto; display:inline-flex; }
+/* The agent page's working row (AgentWorkingRow): one quiet line, the agent's avatar and a short phrase. Sized from
+   --row-a (the avatar size A) and --row-text (the text size); the numbers come from lib/workingRowLook.ts. Its own
+   file: arturo.css belongs to Arturo's pages. */
+.agent-working{ position:relative; display:flex; align-items:center; gap:var(--row-gap, 17.5px); min-width:0; max-width:100%; min-height:var(--row-a, 24px);
+  padding:4px 0 6px; font-size:var(--row-text, 13px); line-height:1.3; }
+/* Its own ground (it sits above the dock, over the thread): solid in the page's colour across the column, with a
+   short fade above. It goes with the row, so nothing is left to move when the row does. */
+.agent-working::before{ content:''; position:absolute; z-index:-1; top:0; bottom:0; left:-100vw; right:-100vw; background:var(--color-background); pointer-events:none; }
+.agent-working::after{ content:''; position:absolute; z-index:-1; bottom:100%; height:12px; left:-100vw; right:-100vw;
+  background:linear-gradient(to bottom, transparent, var(--color-background)); pointer-events:none; }
+/* The avatar's box is A: its canvas is larger (the body fills A, the dots overhang it) and sits over the box, so the
+   phrase never moves while the face melts. */
+/* Where the floating Arturo button can sit over the column's right end, the phrase keeps clear of it. */
+@media (max-width: 900px){ .agent-working{ padding-right:56px; } }
+.agent-working-face{ position:relative; flex:0 0 auto; width:var(--row-a, 24px); height:var(--row-a, 24px); }
+.agent-working-phrase{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* THE SHIMMER: grey words (~47%) with a lighter band sweeping left to right, once per 0.7 s (lib/workingRowLook
+   SHIMMER_MS). Transform only: a soft-edged window (.agent-shimmer-win, 40% of the phrase) slides across while the
+   bright copy of the words inside it slides the opposite way, so the copy stays exactly over the words. Its look in
+   one place, to tune against the reference. */
+.agent-working{
+  --shimmer-ms: 700ms;
+  --shimmer-base: hsl(0 0% 47%);
+  --shimmer-peak: hsl(0 0% 12%);          /* light theme: the band deepens toward the text colour */
+}
+.dark .agent-working{ --shimmer-peak: hsl(0 0% 96%); }  /* dark theme (the reference): the band peaks near white */
+.agent-working-phrase{ position:relative; }
+.agent-working-phrase.is-shimmer{ color:var(--shimmer-base); }
+.agent-shimmer-win{ position:absolute; top:0; bottom:0; left:0; width:40%; overflow:hidden; pointer-events:none;
+  -webkit-mask-image:linear-gradient(90deg, transparent, #000 50%, transparent); mask-image:linear-gradient(90deg, transparent, #000 50%, transparent);
+  animation:agent-shimmer-win var(--shimmer-ms) linear infinite; will-change:transform; }
+.agent-shimmer-copy{ position:absolute; top:0; left:0; width:250%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--shimmer-peak); animation:agent-shimmer-copy var(--shimmer-ms) linear infinite; will-change:transform; }
+@keyframes agent-shimmer-win{ from{ transform:translateX(-100%); } to{ transform:translateX(250%); } }
+@keyframes agent-shimmer-copy{ from{ transform:translateX(40%); } to{ transform:translateX(-100%); } }
 .agent-working-resume{ flex:0 0 auto; margin-left:4px; padding:2px 10px; min-height:0; border-radius:999px;
   border:1px solid var(--color-line-strong); background:transparent; color:var(--color-foreground); font:inherit; font-size:12px; cursor:pointer; }
 @media (hover:hover){ .agent-working-resume:hover{ background:var(--color-hover); } }
+@media (prefers-reduced-motion: reduce){
+  .agent-shimmer-win{ display:none; }
+}
 
-.agent-jobs{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; padding:0; list-style:none; }
-.agent-job{ display:flex; align-items:center; gap:6px; max-width:min(100%, 320px); box-sizing:border-box; padding:3px 10px 3px 8px;
-  border-radius:999px; background:var(--color-field); border:1px solid var(--color-line-soft); font-size:12px; color:var(--color-ink-2); }
-.agent-job-title{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.agent-job-time{ flex:0 0 auto; color:var(--color-ink-3); font-variant-numeric:tabular-nums; }
-.agent-job[data-status="failed"]{ border-color:var(--color-red); }
-.agent-job-x{ flex:0 0 auto; display:grid; place-items:center; width:18px; height:18px; min-height:0; padding:0; border:0; border-radius:999px;
-  background:none; color:var(--color-ink-3); cursor:pointer; }
-.agent-job-open{ flex:0 0 auto; min-height:0; padding:0; border:0; background:none; color:var(--color-bui-accent); font:inherit; cursor:pointer; }
-@media (prefers-reduced-motion: reduce){ .agent-working .animate-spin{ animation:none; } }
+/* The slideout's History, Running: the agent's background jobs (AgentRunningJobs), in their own block. */
+.agent-running-jobs{ display:flex; flex-direction:column; gap:2px; margin:0; padding:0; list-style:none; }
+.agent-running-job{ display:flex; align-items:center; gap:8px; width:100%; min-height:0; padding:8px 4px; border:0; border-bottom:1px solid var(--hair);
+  background:none; color:var(--text); font:inherit; font-size:14px; text-align:left; }
+button.agent-running-job{ cursor:pointer; }
+@media (hover:hover){ button.agent-running-job:hover{ background:rgba(var(--ink),0.04); } }
+.agent-running-job-title{ flex:1 1 40%; min-width:4em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-running-job-kind{ flex:0 0 auto; font-size:12px; color:var(--grey); }
+.agent-running-job-time{ flex:0 0 auto; font-size:12.5px; color:var(--grey); font-variant-numeric:tabular-nums; }
+.agent-running-job-why{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:var(--err); }
+@media (max-width: 480px){ .agent-running-job-kind{ display:none; } }
+/* A failure's reason says more than its kind, and needs the room. */
+[data-status="failed"] .agent-running-job-kind{ display:none; }
+.agent-running-job-x{ flex:0 0 auto; min-height:0; padding:2px 8px; border:0; border-radius:999px; background:var(--card2); color:var(--text); font:inherit; font-size:12px; cursor:pointer; }

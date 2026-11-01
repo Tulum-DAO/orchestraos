@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nextPhase, avatarStateForCall, type CallPhase, type CallEvent } from './callPhase.ts';
 import { RollingTimeline, barLook, levelOf, SLICE_MS, SLOTS, TAPER_SLOTS, MIN_H, MAX_H } from './callWave.ts';
-import { AvatarModel, STATES, MELT, meltDots, meltBodyScale } from '../components/avatar/avatarCore.ts';
+import { AvatarModel, STATES, MELT, meltFrame } from '../components/avatar/avatarCore.ts';
 
 const run = (events: CallEvent[], from: CallPhase = 'connecting') => events.reduce((p, e) => nextPhase(p, e), from);
 
@@ -45,26 +45,26 @@ test('bars taper to dots at the left edge; silence is a dotted baseline that flo
   assert.ok(levelOf(Uint8Array.from({ length: 64 }, (_, i) => (i % 2 ? 200 : 56))) > 0.8);
 });
 
-test('thinking: the avatar melts into three pulsing dots, then reforms when it talks (every look)', () => {
+test('thinking: the body itself becomes the middle dot (the one melt), then reforms when it talks (every look)', () => {
   for (const shape of ['pebble', 'hexagon', 'star']) {
     const m = new AvatarModel({ agentId: 'sample', shape, state: 'listening' });
-    assert.equal(m.step(1 / 60, null).melt, 0);
+    assert.equal(m.step(1 / 60, null).meltT, 0);
     m.setState('thinking');
     let pose = m.step(1 / 60, null);
     for (let i = 0; i < 60; i++) pose = m.step(1 / 60, null);    // one second
-    assert.ok(pose.melt > 0.99, `${shape}: melted`);
-    assert.equal(meltDots(pose.melt, pose.phase).length, 3);
-    assert.ok(meltBodyScale(pose.melt) < 0.25, 'the body has all but gone');
+    assert.equal(pose.melt, 1, `${shape}: melted`);
+    assert.ok(pose.meltT > MELT.dur, 'the clock runs on for the wave');
+    const f = meltFrame(pose.meltT);
+    assert.equal(f.shrink, 1); assert.equal(f.eyes, 0); assert.equal(f.side, MELT.gap);
     m.setState('talking');
-    for (let i = 0; i < 30; i++) pose = m.step(1 / 60, null);   // half a second: reforms faster than it melts
-    assert.ok(pose.melt < 0.01, `${shape}: reformed`);
-    assert.equal(meltDots(pose.melt, pose.phase).length, 0);
+    for (let i = 0; i < 12; i++) pose = m.step(1 / 60, null);   // the same change, backwards, from where it is
+    assert.ok(pose.meltT > 0 && pose.meltT < MELT.dur, `${shape}: reforming`);
+    for (let i = 0; i < 30; i++) pose = m.step(1 / 60, null);
+    assert.equal(pose.meltT, 0, `${shape}: reformed`);
   }
-  assert.ok(MELT.outRate > MELT.inRate);
   assert.ok(STATES.thinking.melt && !STATES.talking.melt && !STATES.listening.melt);
-  // the dots pulse in turn
-  const [d0, d1] = [meltDots(1, 0.1), meltDots(1, 0.3)];
-  assert.notEqual(d0[0][2], d1[0][2]);
-  // reduced motion: a still frame per state, melted for thinking
-  assert.equal(new AvatarModel({ agentId: 'sample', state: 'thinking', reducedMotion: true }).step(1 / 60, null).melt, 1);
+  // reduced motion: a still frame per state, melted for thinking, the dots equal and still
+  const still = new AvatarModel({ agentId: 'sample', state: 'thinking', reducedMotion: true }).step(1 / 60, null);
+  assert.equal(still.melt, 1);
+  assert.deepEqual(meltFrame(still.meltT, true).lit, [1, 1, 1]);
 });

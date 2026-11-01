@@ -18,6 +18,7 @@ import { ARTURO_ID, useAgentRecord } from '../avatar/agentState';
 import { calleeName, callPartyId, useAgentCallsOn } from '../../lib/agentCallsOn';
 import ChatInput from '../chat/ChatInput';
 import { sendFromComposer } from '../../lib/agentSendFlow';
+import { handOffCall, refreshTranscript } from '../../lib/agentCalls';
 
 interface ComposerProps {
   agentId?: string;
@@ -120,7 +121,9 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
         {gate && gate.send === 'blocked' && (
           <p className="mx-6 mb-1 text-[11px] text-amber-500 dark:text-amber-300" role="status">{gate.reason}</p>
         )}
-        {gate && gate.send === 'enabled' && gate.queued && (
+        {/* "Will be queued…" says what happens to a typed draft, so it shows only while there is one: with an empty
+            box the working row sits right on the message box. */}
+        {gate && gate.send === 'enabled' && gate.queued && draft.trim() !== '' && (
           <p className="mx-6 mb-1 text-[11px] text-muted-foreground" role="status">
             {gate.reason}
             {delegatedWorkLabel(subagents) && (
@@ -178,7 +181,8 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
               focusedEntity={null}
               onPartial={setDraft}
               onFinal={setDraft}
-              onCallEnded={(marker) => setDraft((d) => (d ? d + '\n' : '') + marker)}
+              // At hang-up the call is handed to the agent (the hand-off route); the draft is never touched.
+              onCallEnded={(callId) => { void handOffCall(agentId, callId).then((r) => { if (r === 'ok') refreshTranscript(agentId); }); }}
             />
           }
         />

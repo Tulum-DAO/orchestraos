@@ -50,6 +50,8 @@ export interface AgentAvatarProps {
   provider?: string | null;
   followRadius?: number;
   followAlways?: boolean;
+  /** Scale the state's bob (the working row's is larger than the sidebar's). */
+  bob?: number;
   /** Standalone only (with `state`): the look to draw. Shared avatars take their look from the hub. */
   shape?: string;
   color?: string;
@@ -75,7 +77,7 @@ export interface AgentAvatarProps {
 
 export function AgentAvatar(props: AgentAvatarProps) {
   const {
-    agentId, role = 'sidebar', size = 48, selected, provider, followRadius, followAlways,
+    agentId, role = 'sidebar', size = 48, selected, provider, followRadius, followAlways, bob,
     shape: shapeProp, color: colorProp, eyeColor: eyeProp, state: stateProp, sleepAfterMs: sleepProp = 30000,
     showStatus = true, greet, calm, glanceKey, glanceAt, reducedMotion, label, onClick, className, style,
   } = props;
@@ -116,9 +118,9 @@ export function AgentAvatar(props: AgentAvatarProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- role is applied by the effect below too
   }, [model, size]);
   useEffect(() => {
-    const opts: AttachOpts = { role, selected: !!selected, provider: prov, followRadius, followAlways };
+    const opts: AttachOpts = { role, selected: !!selected, provider: prov, followRadius, followAlways, bob };
     detachRef.current?.update(opts);
-  }, [model, size, role, selected, prov, followRadius, followAlways]);
+  }, [model, size, role, selected, prov, followRadius, followAlways, bob]);
   useEffect(() => { if (model && !shared && state) model.setState(state); }, [shared, state, model]);
   useEffect(() => { if (model && calm !== undefined) model.configure({ calm }); }, [model, calm]);
   const glanceRef = useRef(glanceKey);

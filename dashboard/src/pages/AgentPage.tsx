@@ -5,7 +5,7 @@ import { TopBar } from '../components/agent/TopBar';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
 import { AgentWorkingRow } from '../components/agent/AgentWorkingRow';
-import AgentJobTray from '../components/agent/AgentJobTray';
+import { useAgentJobs, usePollAgentJobs } from '../stores/agentJobs';
 import CallBar from '../components/call/CallBar';
 import { stepFrom } from '../lib/liveStep';
 import { useAgentSteps } from '../stores/agentSteps';
@@ -53,6 +53,10 @@ export default function AgentPage() {
   const feed = useFeedHealth();
   // What it is doing now, from its open chat stream (the list's `step` until that has spoken).
   const streamStep = useAgentSteps((s) => (id ? s.byAgent[id] : undefined));
+  // Its background jobs, polled while this page is open: the thread's launching tool cards and the slideout's History
+  // (Running) read them.
+  usePollAgentJobs(agentId);
+  const runningBg = useAgentJobs(agentId).filter((j) => j.status === 'running');
   // The header shows the agent's full name ("Demo · dev"): outside the sidebar there's no project header around it.
   const seat = id ? { id, generation: seatRow?.generation, name: seatRow?.full_name } : undefined;
 
@@ -79,14 +83,17 @@ export default function AgentPage() {
   // THE FLOATING COMPOSER'S HEIGHT, measured, published as --composer-h on the chat column: the
   // transcript pads its bottom by it so the last message is never under the pill. (It used to add
   // the floating Arturo pill and publish a lift for it; Arturo now lives in the top bar.)
+  // The working row floats on top of the dock (out of its flow, so the dock never changes size when the row comes or
+  // goes); its height is added here, so the thread's bottom space takes the row's place in the same frame.
   const chatRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
+  const rowSlotRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const dock = dockRef.current;
     const col = chatRef.current;
     if (!dock || !col) return;
     const apply = () => {
-      const h = Math.ceil(dock.getBoundingClientRect().height);
+      const h = Math.ceil(dock.getBoundingClientRect().height + (rowSlotRef.current?.getBoundingClientRect().height ?? 0));
       const scroller = col.querySelector<HTMLElement>('[data-testid="transcript-scroll"]');
       // keep a reader who was at the bottom AT the bottom when the pill grows
       const pinned = !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
@@ -96,6 +103,7 @@ export default function AgentPage() {
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(dock);
+    if (rowSlotRef.current) ro.observe(rowSlotRef.current);
     return () => ro.disconnect();
   }, [mode]);
 
@@ -123,7 +131,9 @@ export default function AgentPage() {
             name: (seatRow as { display_name?: string } | undefined)?.display_name || agentId,
             provider: (seatRow as { runtime?: string; provider?: string } | undefined)?.runtime
               || (seatRow as { provider?: string } | undefined)?.provider,
-            subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
+            // What runs beside its turn: its subagents, or its running background jobs when the jobs route lists more
+            // (they include its subagents), so the History row reads "2 running" while two jobs run.
+            subagents: Math.max((seatRow as { subagents?: number } | undefined)?.subagents ?? 0, runningBg.length) || undefined,
             contextLeftPct: asChip((seatRow as { chip?: unknown } | undefined)?.chip)?.context_left_pct ?? null,
             waiting: chipNeedsYou(asChip((seatRow as { chip?: unknown } | undefined)?.chip)) || !!seatMenu,
           }} />
@@ -171,16 +181,22 @@ export default function AgentPage() {
         </div>
 
         {/* THE DOCK floats over the bottom of the transcript: the live status line, then the
-            pill. A fade under it keeps the text that scrolls behind from fighting the controls.
-            pointer-events pass through the fade to the transcript; the controls take them back. */}
+            pill, on a solid ground with a short fade above it, so the text that scrolls behind never shows through.
+            pointer-events pass through the ground to the transcript; the controls take them back. */}
         <div ref={dockRef} data-testid="composer-dock" className="absolute inset-x-0 bottom-0 z-10 pointer-events-none">
-          <div aria-hidden className="absolute inset-x-0 bottom-0 top-6 bg-gradient-to-t from-background via-background/90 to-transparent" />
+          {/* Solid in the page's own colour behind the working row, the hint line and the composer, so the thread that
+              scrolls under them is never readable through; only a short fade above its top edge. */}
+          <div aria-hidden data-dock-fade className="absolute inset-x-0 -top-3 h-3 bg-gradient-to-b from-transparent to-background" />
+          <div aria-hidden data-dock-solid className="absolute inset-0 bg-background" />
           <div className="relative pointer-events-auto">
             {/* WHO AND WHAT, directly above the composer, in the shape of Arturo's working row: the agent's
                 animated avatar, its name, and what it is doing now (lib/agentWorkingRow.ts). Every truth the old
                 status line had stays (disconnected, updating, the live step, queued, stopped with Resume ...), and
-                it reads the same state as the sidebar dot. Under it, the agent's own live background work. */}
-            <div className="w-full max-w-[860px] mx-auto px-3 pb-1.5" data-testid="agent-working">
+                it reads the same state as the sidebar dot. Background jobs are not here: they show live on their
+                launching tool cards in the thread, and in the slideout's History, under Running. */}
+            {/* On top of the dock, out of its flow: no height when there is no row, its own ground when there is. */}
+            <div ref={rowSlotRef} className="absolute inset-x-0 bottom-full" data-testid="agent-working-slot">
+            <div className="w-full max-w-[860px] mx-auto px-3" data-testid="agent-working">
               <AgentWorkingRow
                 agentId={agentId}
                 name={(seatRow as { display_name?: string } | undefined)?.display_name || seatRow?.full_name || agentId}
@@ -193,7 +209,7 @@ export default function AgentPage() {
                 tool={(seatRow as { tool?: string } | undefined)?.tool}
                 step={streamStep ?? stepFrom((seatRow as { step?: unknown } | undefined)?.step)}
               />
-              <AgentJobTray agentId={agentId} />
+            </div>
             </div>
 
             <DeliverNowBanner agentId={agentId} />

@@ -104,7 +104,7 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
                        shape={rec.shape} color={rec.color} eyeColor={rec.eyeColor} />
           <span className="text-[17px] font-semibold text-foreground">{name}</span>
           <span className="text-[13px] tabular-nums text-muted-foreground">{clock(now - call.startedAt)}</span>
-          <div className="w-full max-w-[360px] px-6 pt-1"><CallWaveform levels={levels} color={color} muted={muted} /></div>
+          <div className="w-full max-w-[360px] px-6 pt-1"><CallWaveform levels={levels} color={color} muted={muted} micOff={call.muted} /></div>
         </div>
         {devLine}
         <CallTranscript turns={call.turns} name={name} skin={turnSkin} className="min-h-0 flex-1 border-t border-border px-5" />
@@ -135,7 +135,7 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
               <span className="tabular-nums">{clock(now - call.startedAt)}</span>
               <span className="truncate" role="status" data-call-phase={call.phase}>{phaseWords}</span>
             </div>
-            <CallWaveform levels={levels} color={color} muted={muted} />
+            <CallWaveform levels={levels} color={color} muted={muted} micOff={call.muted} />
           </div>
           <button type="button" className={`${btn} text-foreground/70 hover:bg-muted hover:text-foreground`} onClick={onSettings}
                   aria-label="Call settings" title="Call settings"><Settings size={17} /></button>

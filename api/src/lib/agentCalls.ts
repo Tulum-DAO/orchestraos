@@ -17,6 +17,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 
 export const CALL_ID_RE = /^vc_[A-Za-z0-9_-]{4,64}$/;
 export type Rating = 'up' | 'down';
@@ -192,4 +193,104 @@ export function mergeCallMarkers(body: { items: any[]; render_items: any[] }, ca
     place(render, { kind: 'user', text, ts: c.started_at, key: `call:${c.call_id}`, ...extra }, t);
   }
   return { ...body, items, render_items: render };
+}
+
+// ── Hand-off: the call, given to the agent as its own words ─────────────────────────────────────────────────────────
+//
+// When a call on an agent's page ends, the dashboard asks for a hand-off and the API sends the agent ONE message:
+// the call's transcript inside <voice-call-transcript>, with an instruction to treat everything the voice said as
+// its own words and carry on in text. The chat hides the tag and draws the call's card there instead
+// (handoffCallId / handedOffCalls), so the card sits where the call ended, and is not also placed where it started.
+// Handed-off calls are kept in <data dir>/state/voice-call-handoffs.json ({"calls": {"<call_id>": {agent, at, by,
+// state}}}), the API's own file: a second hand-off of the same call is a no-op.
+
+export const HANDOFF_WINDOW_MS = 10 * 60 * 1000;
+export const CLIENT_CALL_ID_RE = /^vc_client_[0-9a-f]{12}$/;
+const handoffsFile = (dataDir: string) => path.join(dataDir, 'state', 'voice-call-handoffs.json');
+
+export const HANDOFF_INSTRUCTION = 'This was your own voice call with the person just now. Everything the voice said '
+  + 'below was you speaking. Don\'t treat it as outside context, and don\'t mention markers, tags or files. Continue '
+  + 'naturally in text: acknowledge anything left open and act on what they asked.';
+
+/** The id the browser knows a relay call by: vc_client_<sha1(conversation id)[:12]> (relay_live_bridge.py). The
+ *  server's journal carries the conversation id (`conv_id`), so the browser's id is found from it. */
+export function clientCallIdOf(doc: any): string | null {
+  const conv = typeof doc?.conv_id === 'string' ? doc.conv_id : '';
+  return conv ? `vc_client_${createHash('sha1').update(conv).digest('hex').slice(0, 12)}` : null;
+}
+
+export interface HandoffEntry { agent: string; at: string; by?: string | null; state: string }
+
+export function readHandoffs(dataDir: string): Record<string, HandoffEntry> {
+  try {
+    const d = JSON.parse(fs.readFileSync(handoffsFile(dataDir), 'utf-8'));
+    return d && typeof d.calls === 'object' && d.calls ? d.calls : {};
+  } catch { return {}; }
+}
+
+function writeHandoffs(dataDir: string, all: Record<string, HandoffEntry>): void {
+  const f = handoffsFile(dataDir);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = `${f}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ calls: all }, null, 1));
+  fs.renameSync(tmp, f);
+}
+
+/** Record (or, with null, forget) a call's hand-off. Synchronous: a check and its record never interleave. */
+export function markHandoff(dataDir: string, callId: string, entry: HandoffEntry | null): void {
+  const all = readHandoffs(dataDir);
+  if (entry) all[callId] = entry; else delete all[callId];
+  writeHandoffs(dataDir, all);
+}
+
+/** The call a hand-off is for: this agent's calls that ended within HANDOFF_WINDOW_MS of `now`; the one the browser's
+ *  id names when it names one of them, else the newest. Null when none ended that recently. */
+export function findHandoffCall(dataDir: string, agentId: string, clientCallId: string | null, now: number = Date.now()):
+    { call: CallSummary; doc: any; matched: 'client_id' | 'latest' } | null {
+  const recent = listAgentCalls(dataDir, agentId).filter((c) => c.status === 'ended' && c.ended_at
+    && now - Date.parse(c.ended_at) <= HANDOFF_WINDOW_MS && Date.parse(c.ended_at) <= now + 60_000);
+  if (!recent.length) return null;
+  const docOf = (c: CallSummary) => journalFor(dataDir, agentId, c.call_id);
+  if (clientCallId && CLIENT_CALL_ID_RE.test(clientCallId)) {
+    for (const c of recent) {
+      const doc = docOf(c);
+      if (doc && clientCallIdOf(doc) === clientCallId) return { call: c, doc, matched: 'client_id' };
+    }
+  }
+  const newest = [...recent].sort((a, b) => Date.parse(b.ended_at!) - Date.parse(a.ended_at!))[0];
+  const doc = docOf(newest);
+  return doc ? { call: newest, doc, matched: 'latest' } : null;
+}
+
+const mmss = (s: number | null) => {
+  const n = Math.max(0, Math.round(s ?? 0));
+  return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+};
+
+/** The one message the agent gets: the call as its own words, then carry on. A turn cannot close the tag early. */
+export function handoffMessage(call: CallSummary, doc: any, agentName: string): string {
+  const name = String(agentName || call.agent).replace(/[\r\n:<>]+/g, ' ').trim() || call.agent;
+  const clean = (t: string) => t.replace(/<\/?\s*voice-call-transcript[^>]*>/gi, '').replace(/\s+/g, ' ').trim();
+  const lines = (Array.isArray(doc?.turns) ? doc.turns : [])
+    .filter((t: any) => t && typeof t.text === 'string' && t.text.trim() && t.role !== 'tool' && t.role !== 'system')
+    .map((t: any) => `${t.role === 'user' ? 'You' : name}: ${clean(t.text)}`)
+    .filter((l: string) => !/:\s*$/.test(l));
+  return `<voice-call-transcript id="${call.call_id}" duration="${mmss(call.duration_s)}">\n${HANDOFF_INSTRUCTION}\n\n`
+    + `${lines.join('\n')}\n</voice-call-transcript>`;
+}
+
+const HANDOFF_TAG = /<voice-call-transcript\s+id="(vc_[A-Za-z0-9_-]{4,64})"[^>]*>[\s\S]*?<\/voice-call-transcript>/;
+
+/** The call a chat line hands off, when the line is a hand-off message; else null. */
+export function handoffCallId(text: string): string | null {
+  return typeof text === 'string' && text.includes('<voice-call-transcript') ? HANDOFF_TAG.exec(text)?.[1] ?? null : null;
+}
+
+/** The line as the chat shows it: the tag gone, the call's card marker in its place (the row the chat draws as the
+ *  card), and any words around it kept. */
+export function showHandoff(text: string, dataDir: string): { text: string; call_id: string } | null {
+  const id = handoffCallId(text);
+  if (!id) return null;
+  const rest = text.replace(HANDOFF_TAG, '').trim();
+  return { text: [callMarkerText(dataDir, id), rest].filter(Boolean).join('\n'), call_id: id };
 }
