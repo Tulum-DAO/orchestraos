@@ -16,6 +16,7 @@ import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
+import { listAgentCalls, mergeCallMarkers } from '../lib/agentCalls.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
@@ -1059,6 +1060,14 @@ function cleanArgs(args: any): Record<string, unknown> {
  * COMPLETE open+close pair is treated as plumbing. Returning '' drops the node: buildRenderItems
  * already skips empty text.
  */
+// The quiet page line the send route adds to what the agent receives (agent-send.ts pageContextLine): the agent reads
+// it, the person never sees it as part of their message.
+const PAGE_CONTEXT_TAG = /\s*<page-context>[\s\S]*?<\/page-context>/g;
+
+export function stripPageContext(text: string): string {
+  return text.includes('<page-context>') ? text.replace(PAGE_CONTEXT_TAG, '').trim() : text;
+}
+
 export function sanitizeClaudeUserText(text: string): string {
   // A long message reached the pane as a one-line chip-dodge banner; show what was typed.
   let t = expandChipDodge(String(text ?? ''));
@@ -1865,6 +1874,9 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
     // show ONCE, and the real turn is the one that wins.
     items = dedupeQueuedCommands(items);
   }
+  // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string' && it.text.includes('<page-context>')
+    ? { ...it, text: stripPageContext(it.text) } : it));
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
   return tagAudience(enrichItems(items));
@@ -1908,7 +1920,9 @@ export function readInterruptedTurns(agentId: string, root?: string): Interrupte
   try {
     const doc = JSON.parse(readFileSync(p, 'utf-8'));
     const items = doc && Array.isArray(doc.items) ? doc.items : [];
-    return items.filter((x: any) => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim());
+    // The supervisor keeps the text as delivered: without the quiet page line, as the chat shows the message.
+    return items.filter((x: any) => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim())
+      .map((x: any) => ({ ...x, text: stripPageContext(x.text) }));
   } catch {
     return [];
   }
@@ -2036,6 +2050,34 @@ function withNotices(agentId: string, win: { items: any[]; has_older: boolean; c
   }
 }
 
+/** The calls made on this agent's page, each where it started, as the chat's call card (lib/agentCalls.ts). The
+ *  same window bounds as the compaction notices. Fail-open: no journals, or a bad one, and the chat is unchanged. */
+function withCalls(agentId: string, win: { items: any[]; has_older: boolean; cursor_ts: string | null }, limit: number,
+                   before: string | null, body: { items: any[]; render_items: any[] }): { items: any[]; render_items: any[] } {
+  try {
+    const calls = listAgentCalls(dataDir(), agentId);
+    if (!calls.length) return body;
+    const firstTs = win.items.find((it) => it?.ts)?.ts ?? null;
+    const whole = before === null ? win.items.length < limit : !win.has_older;
+    return mergeCallMarkers(body, calls, dataDir(), { from: whole ? null : firstTs, to: before === null ? null : win.cursor_ts });
+  } catch {
+    return body;
+  }
+}
+
+/** This agent's chat items as the chat shows them (every generation this box can read, the newest `limit`), for the
+ *  readers that need them outside a page: a call's work anchors. Empty when nothing resolves. */
+export function chatItemsFor(agentId: string, limit = 2000): any[] {
+  try {
+    const { path, sid } = resolveTranscriptPath(agentId);
+    if (!path) return [];
+    const current = path;
+    let segs: Segment[];
+    try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
+    return chatWindow(agentId, segs, limit, null)?.items ?? [];
+  } catch { return []; }
+}
+
 // GET /api/agents/:id/transcript?limit= -> v2 envelope
 // { agent_id, session_id, grammar_version, items, render_items }
 // GET /api/agents/:id/transcript?before=<cursor>&limit= -> the page just older than the cursor (a
@@ -2082,7 +2124,8 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
       return;
     }
     const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
-    const body = finishWindow(withNotices(agentId, win, limit, before), agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs });
+    const body = withCalls(agentId, win, limit, before,
+      finishWindow(withNotices(agentId, win, limit, before), agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs }));
     const env: Record<string, unknown> = { agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, ...body };
     if (before !== null) { env.has_older = win.has_older; env.oldest_id = win.oldest_id; }
     res.json(env);

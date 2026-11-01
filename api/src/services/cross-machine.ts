@@ -5,6 +5,7 @@ import os from 'os';
 import { getTmuxSessionNames } from './tmux-monitor.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { dataDir } from '../lib/config.js';
+import { gatewayAgentMessage } from '../lib/gatewayMessage.js';
 
 const IS_VPS = !os.platform().includes('darwin');
 const ORCHESTRA = dataDir();
@@ -251,13 +252,10 @@ export function injectToRemoteAgent(agentId: string, text: string, registry: any
   const session = agent.tmux_session || agentId;
 
   if (isThisHost(machine)) {
-    return new Promise((resolve) => {
-      // Escape single quotes in the text
-      const escaped = text.replace(/'/g, "'\\''");
-      execFile('tmux', ['send-keys', '-t', session, escaped, 'Enter'], { timeout: 5000 }, (err) => {
-        resolve({ success: !err, output: err ? err.message : 'injected' });
-      });
-    });
+    // This box: through the gateway, which delivers to a headless seat's supervisor and verifies a tmux seat's
+    // submit. Another machine's seat is out of the local gateway's reach and keeps the SSH path below.
+    return gatewayAgentMessage(session, text, { actor: 'automation:cross-machine', source: 'mail' })
+      .then((r) => ({ success: r.ok, output: r.ok ? 'injected' : (r.error || String(r.body.reason || r.status)) }));
   }
 
   const machineConfig = resolveMachine(machine, agent);

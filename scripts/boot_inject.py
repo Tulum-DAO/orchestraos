@@ -139,10 +139,37 @@ def _mark_typed(session):
         pass
 
 
+def boot_inject_headless(session, text, *, allow_canonical=False, canonical_live_fn=None, tmux_fn=None,
+                         deliver=None, log_fn=None):
+    """A headless seat's pane holds its supervisor: the prompt goes through the gateway's /agent-message to the
+    supervisor's stdin instead of being pasted. Same outcomes: 'submitted' (queued for the CLI), 'stuck' (busy: a
+    turn or a held question; the caller's normal retry applies), 'failed' (refused or not reached). The live-seat
+    guard is the same as the pane path's: a deliberate notice passes allow_canonical."""
+    import gateway_deliver
+    log = log_fn or (lambda m: print(f"[boot_inject] {session}: {m}", file=sys.stderr, flush=True))
+    if not allow_canonical and (canonical_live_fn or _canonical_live)(session, tmux_fn=tmux_fn or _real_tmux):
+        log("REFUSED: canonical session of a LIVE seat (pass --allow-canonical for a deliberate notice); "
+            "nothing was sent")
+        return "failed", "refused-canonical"
+    r = (deliver or gateway_deliver.deliver)(session, text, source="mail", actor="automation:boot-inject")
+    if r["delivered"]:
+        return "submitted", "headless-gateway"
+    if r["status"] == 409:
+        log(f"headless seat busy ({r['reason']}): nothing sent")
+        return "stuck", "headless-busy"
+    log(f"headless delivery failed ({r['reason']})")
+    return "failed", "headless-unreachable" if r["status"] == 0 else "headless-refused"
+
+
 def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
     """_boot_inject_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py,
     gm msg_2291dee3). Another typer holding the pane past 8 s -> ('failed', 'pane-locked'): nothing
-    was typed, so the caller's normal retry applies."""
+    was typed, so the caller's normal retry applies. A headless seat: through the gateway (boot_inject_headless)."""
+    import gateway_deliver
+    if gateway_deliver.headless_seat(session):
+        return boot_inject_headless(session, text, allow_canonical=kw.get("allow_canonical", False),
+                                    canonical_live_fn=kw.get("canonical_live_fn"), tmux_fn=kw.get("tmux_fn"),
+                                    log_fn=kw.get("log_fn"))
     import pane_lock
     import inject_journal
     try:

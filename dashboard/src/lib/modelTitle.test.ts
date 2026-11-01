@@ -17,8 +17,8 @@ test('an agent\'s model is named as the picker names it: the name and its contex
   assert.equal(agentModelTitle(info('fable', models)), 'Fable 5.1');   // no source states its size: none shown
 });
 
-test('a short id that stands for the 1M Opus 5.5 is named as it; an unknown model keeps its id; none is null', () => {
-  assert.equal(agentModelTitle(info('opus', [{ id: 'opus', title: 'Opus 5.5' }])), 'Opus 5.5 · 1M');
+test('a short id is named as the model the CLI says it is (opus: Opus 5.5 · 200K); an unknown model keeps its id; none is null', () => {
+  assert.equal(agentModelTitle(info('opus', [{ id: 'opus', title: 'Opus 5.5' }])), 'Opus 5.5 · 200K');
   assert.equal(agentModelTitle(info('sample-model-x', [])), 'sample-model-x');
   assert.equal(agentModelTitle(info(null, [])), null);
   assert.equal(agentModelTitle(null), null);
@@ -35,7 +35,8 @@ test('Opus 5.5 at 200k is never called plain "Opus 5.5" on any surface: a seat s
 
 test('any model id is named by the picker\'s rules, with or without words to go on', () => {
   assert.equal(modelIdTitle('claude', 'claude-opus-5-5[1m]'), 'Opus 5.5 · 1M');
-  assert.equal(modelIdTitle('claude', 'opus', 'Opus 5.5'), 'Opus 5.5 · 1M', 'the short id is the 1M model');
+  assert.equal(modelIdTitle('claude', 'opus', 'Opus 5.5'), 'Opus 5.5 · 200K', 'the bare alias is the 200K model');
+  assert.equal(modelIdTitle('claude', 'claude-opus-5-5[1m]', 'Opus 5.5 (1M)'), 'Opus 5.5 · 1M', 'only the explicit [1m] id is the 1M model');
   assert.equal(modelIdTitle('claude', 'claude-opus-5-5[1m]', 'Opus 5.5 (1M)'), 'Opus 5.5 · 1M');
   assert.equal(modelIdTitle('claude', 'fable', 'Fable 5.1'), 'Fable 5.1');
   assert.equal(modelIdTitle('claude', 'claude-fable-5-1'), 'Fable 5.1');
@@ -44,7 +45,7 @@ test('any model id is named by the picker\'s rules, with or without words to go 
 });
 
 test('a saved brain choice is named as the picker names it now, whatever label was saved with it', () => {
-  assert.equal(choiceTitle({ provider: 'claude', model: 'opus', label: 'Opus 5.5' }), 'Opus 5.5 · 1M');
+  assert.equal(choiceTitle({ provider: 'claude', model: 'opus', label: 'Opus 5.5' }), 'Opus 5.5 · 200K');
   assert.equal(choiceTitle({ provider: 'claude', model: 'claude-opus-5-5', label: 'Opus 5.5' }), 'Opus 5.5 · 200K');
   assert.equal(choiceTitle({ provider: 'claude', model: 'claude-opus-5-5[1m]', label: 'Opus 5.5 · 1M' }), 'Opus 5.5 · 1M');
   assert.equal(choiceTitle({ provider: 'claude', model: 'fable', label: 'Fable 5.1' }), 'Fable 5.1');

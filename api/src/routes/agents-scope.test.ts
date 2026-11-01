@@ -15,8 +15,10 @@ import agentsRouter from './agents.js';
 import chatTranscriptRouter from './chat-transcript.js';
 import transcriptStreamRouter from './transcript-stream.js';
 import agentSendRouter from './agent-send.js';
+import agentCallsRouter from './agent-calls.js';
+import agentJobsRouter from './agent-jobs.js';
 
-const ROUTERS = { agentsRouter, chatTranscriptRouter, transcriptStreamRouter, agentSendRouter };
+const ROUTERS = { agentsRouter, chatTranscriptRouter, transcriptStreamRouter, agentSendRouter, agentCallsRouter, agentJobsRouter };
 
 test('every router mounted on /api/agents registers the scope param handler', () => {
   // Express keeps param handlers on router.params. A router missing from this list is a router

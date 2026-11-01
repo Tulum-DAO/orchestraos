@@ -7,6 +7,7 @@
  * (Arturo's page); "pane" is Arturo's floating pane, always dark, at its 14px. Tables follow the iOS app's rules in
  * every skin (kit.css).
  */
+import { BUBBLES_BODY, PARAGRAPH } from '../../lib/chatSkin';
 import { Fragment, useState, type ReactNode, type TouchEvent } from 'react';
 import Copy from './Copy';
 import { parseBlocks, parseInline, tableLayout, tableShares, type Block, type Inline } from '../../lib/threadKit/markdown';
@@ -134,7 +135,7 @@ export function MarkdownTable({ block, keyBase, skin }: { block: TableBlock; key
 }
 
 export default function Markdown({ text, skin = 'bubbles' }: { text: string; skin?: Skin }) {
-  const body = skin === 'bubbles' ? 'text-[13px] text-foreground/90' : '';
+  const body = skin === 'bubbles' ? BUBBLES_BODY : '';
   const strong = skin === 'bubbles' ? 'text-foreground' : '';
   const blocks = parseBlocks(text).map((b, bi): ReactNode => {
     const key = `b${bi}`;
@@ -161,7 +162,7 @@ export default function Markdown({ text, skin = 'bubbles' }: { text: string; ski
         return <MarkdownTable key={key} block={b} keyBase={key} skin={skin} />;
       default:
         return (
-          <p key={key} className={`leading-relaxed whitespace-pre-wrap break-words ${body}`}>
+          <p key={key} className={`${PARAGRAPH} ${body}`}>
             {renderInline(b.text, key, skin)}
           </p>
         );

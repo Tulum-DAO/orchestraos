@@ -48,6 +48,9 @@ import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: sha
 import { gatewayWsUrl, gatewayUrl } from '../lib/gateway-url.js';
 import { dataDir } from '../lib/config.js';
 import { tailscaleOperator } from '../lib/tailscale-identity.js';
+import { isSafeAgentId } from '../lib/agentPaths.js';
+import { principal } from '../lib/principal.js';
+import { canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
 const GATEWAY_WS_URL = gatewayWsUrl();  // #84 class: env, then [gateway] in orchestra.toml
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
@@ -163,6 +166,22 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       return;
     }
 
+    // The agent the call is with, when the page names one: a safe id the caller may see, by the same scope rule as
+    // every /api/agents/:id route (an out-of-scope id gets the same 404 an unknown one does). None: Arturo's own call.
+    const agent = url.searchParams.get('agent');
+    if (agent !== null) {
+      if (!isSafeAgentId(agent)) {
+        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nbad agent id');
+        socket.destroy();
+        return;
+      }
+      if (!canPrincipalSeeAgent(principal(req as any), { id: agent, tags: defaultResolveTags(agent) })) {
+        socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nagent not found');
+        socket.destroy();
+        return;
+      }
+    }
+
     const gatewayToken = readGatewayToken();
     if (!gatewayToken) {
       // W1: LOUD failure at the HTTP-upgrade layer (before any WS handshake)
@@ -183,7 +202,7 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       // logs, proxy logs, etc.). Send it as an Authorization header instead
       // — the same pattern routes/voice.ts already uses for /voice-call.
       const upstream = new WebSocket(
-        `${gatewayWsUrl}/live?voice=${encodeURIComponent(voice)}`,
+        `${gatewayWsUrl}/live?voice=${encodeURIComponent(voice)}${agent !== null ? `&agent=${encodeURIComponent(agent)}` : ''}`,
         { headers: { Authorization: `Bearer ${gatewayToken}` } },
       );
 
@@ -204,8 +223,14 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       });
 
       upstream.on('close', (code, reasonBuf) => {
-        const reason = reasonBuf?.toString() || 'gateway closed the voice session';
-        if (clientWs.readyState === WebSocket.OPEN) closeLoud(clientWs, code || 1011, reason);
+        if (clientWs.readyState !== WebSocket.OPEN) return;
+        // No close code (1005 none sent, 1006 dropped): a code the browser side may not be sent, so passing it on threw
+        // and left the page's call open. That is the call ending: say so plainly. A real code passes through.
+        if (!code || code === 1005 || code === 1006) {
+          try { clientWs.close(1000, 'call ended'); } catch { /* already gone */ }
+          return;
+        }
+        closeLoud(clientWs, code, reasonBuf?.toString() || 'gateway closed the voice session');
       });
 
       upstream.on('error', (err) => {

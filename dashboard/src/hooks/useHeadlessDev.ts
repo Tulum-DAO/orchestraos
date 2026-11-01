@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { sendKeyToAgent } from '../lib/api';
+import { holdSendsUntil } from '../lib/devSwitchHold';
 import {
   INITIAL, afterSwitch, bannerFor, chooseStop, chooseWait, isBusy, retry, step, styleChanged, viewOf,
   type DevBanner, type DevMemory, type SwitchResult,
@@ -96,7 +97,10 @@ export function useHeadlessDev(agentId: string, mode: 'chat' | 'dev', status: st
     if (action === 'leftTerminal') { leftRef.current?.(); return; }
     const on = action === 'switchOn';
     flight.current = true;
-    void postDev(agentId, on).then(async (r) => {
+    // Back to chat: a message sent meanwhile waits for this answer (the new CLI booted), so its reply is warm.
+    const asked = postDev(agentId, on);
+    if (!on) holdSendsUntil(agentId, asked);
+    void asked.then(async (r) => {
       const out = afterSwitch(next, on, r);
       if (out.headless === false) useDevInfoStore.getState().set(agentId, { headless: false, dev: false });
       else await loadDevInfo(agentId);

@@ -4,8 +4,8 @@
 The supervisor owns ONE `claude -p` stream-json process resumed on the seat's session, with the
 flags spawn gives the TUI (bypass, --model, --settings /tmp/agent-perms-<seat>.settings.json, the
 same environment) plus the three the stream needs:
-  --replay-user-messages        every message written to stdin is echoed back once the CLI takes
-                                it: the "delivered" witness;
+  --replay-user-messages        every message written to stdin is echoed back when the CLI starts
+                                its turn on it: the "delivered" (answering) witness;
   --permission-prompt-tool stdio  AskUserQuestion and whatever bypass still asks arrive as
                                 control requests on stdout, HELD here until someone answers;
   --include-partial-messages    live text deltas.
@@ -18,8 +18,11 @@ stdin write, stderr, and each message's state change.
 
 Message states (one id = one message, never written twice to one process):
   accepted   taken by the supervisor while no process was running; written when one starts
-  queued     written to stdin
-  delivered  the CLI's replay echo of it was seen
+  queued     written to stdin: handed over (the record's handed_over_at, the moment of the write)
+  delivered  answering: the CLI's replay echo of it was seen, which comes as its turn on it begins (just
+             before the model's first token, measured), not at the write. The record's answering_at is when.
+             The name stays for its readers (the router and headless_switch.DELIVERED_STATES, the gateway's
+             msg_state); the gateway's own `delivered` answer field is a different thing and unchanged.
   answered   the turn that took it ended (a result event)
   interrupted  delivered, but its turn did not finish: the process ended mid-turn (a crash, a
              kill, a stop) or an interrupt cut it. The words reached the agent; the cut turn is
@@ -135,6 +138,21 @@ MAX_REBUILDS = 2
 ROTATION_TICK_S = 2.0
 #: The stdout reader's line limit: a tool result can be one very long line.
 LINE_LIMIT = 64 * 1024 * 1024
+#: Warm start: a fresh process is driven to ready at once, without a model turn. Booted = the CLI answered a control
+#: request or its start hooks finished; the MCP servers the conversation had connected are asked for every
+#: BOOT_POLL_S until connected, for at most the rotation's settle time. Back to chat answers once booted and settled,
+#: waiting at most BOOT_CHAT_WAIT_S for it (a CLI that says nothing never holds the button longer than that).
+#: A live call with this seat (services/arturo/agent_call.py writes CALL_MARK beside the log and refreshes it while the
+#: call runs): no rotation, no CLI restart, no Dev until it ends. Older than CALL_STALE_S = the call is gone.
+CALL_MARK = "call"
+CALL_STALE_S = 90.0
+BOOT_POLL_S = 0.25
+BOOT_ASK_TIMEOUT_S = 2.0
+BOOT_CHAT_WAIT_S = 3.0
+#: The control request the SDK sends first, `initialize`, sent once at start when HEADLESS_PREWARM_INITIALIZE=1. Off by
+#: default: measured on a throwaway (21 first turns after Dev each way) it did not shorten the first turn (write -> init
+#: 0.245 s without it, 0.269 s with it; warm 0.072 s), so it is not worth a request the CLI does not need.
+BOOT_INIT_TIMEOUT_S = 5.0
 
 # Kept equal to spawn-agent.sh's INSTALLER_SESSION_ENV (orchestra_cli/settings.py is the source).
 try:
@@ -548,6 +566,10 @@ class Supervisor:
         self._switching = False             # promoting: a send waits (accepted) for whichever process is live
         self._adopt = None                  # the warm process the next start takes over instead of spawning
         self._warm = None
+        # Warm start of the live process (not the rotation's Warm): booted / settled with their _ms (since start) and
+        # _by, the MCP servers it waits for (need), their last statuses, and the pid. Reset on every start.
+        self.boot: dict = {"booted": False, "settled": False}
+        self._boot_task = None
 
     # --- log ---
     def log(self, kind: str, sync: bool = False, **fields):
@@ -637,6 +659,9 @@ class Supervisor:
                     m["text"] = r["text"]
                 m["state"] = r.get("state")
                 m["attempts"] = r.get("attempts", 0)
+                for k in ("handed_over_at", "answering_at"):
+                    if r.get(k):
+                        m[k] = r[k]
         for m in list(self.messages.values()):
             if m.get("state") == "queued":
                 m["state"] = "unknown"
@@ -729,6 +754,7 @@ class Supervisor:
         # a whole Dev round trip, which then read as a crash).
         if self._register_task is None or self._register_task.done():
             self._register_task = asyncio.ensure_future(self._ensure_registered())
+        self._start_boot(adopted is not None)
         # Words taken while no process ran, then the ones a dead process may never have read.
         for m in list(self.messages.values()):
             if m.get("state") == "accepted":
@@ -740,6 +766,81 @@ class Supervisor:
                 else:
                     self.log("sup", what="resend", id=m["id"])
                     await self._write_message(m)
+
+    # --- warm start ---
+    def _start_boot(self, adopted: bool):
+        """Every start: the process is driven to ready now, not by the next message. An adopted process (the rotation's
+        warm one) has already settled."""
+        if self._boot_task is not None and not self._boot_task.done():
+            self._boot_task.cancel()
+        pid = self.proc.pid if self.proc is not None else None
+        if adopted:
+            self.boot = {"booted": True, "settled": True, "booted_ms": 0, "settled_ms": 0, "booted_by": "adopted",
+                         "settled_by": "adopted", "need": [], "statuses": None, "pid": pid}
+            return
+        self.boot = {"booted": False, "settled": False, "booted_ms": None, "settled_ms": None, "booted_by": None,
+                     "settled_by": None, "need": [], "statuses": None, "pid": pid}
+        self._boot_task = asyncio.ensure_future(self._prewarm(self.proc))
+
+    def _boot_mark(self, key: str, by: str):
+        if self.boot.get(key):
+            return
+        ms = int((time.monotonic() - (self.started_at or time.monotonic())) * 1000)
+        self.boot.update({key: True, f"{key}_ms": ms, f"{key}_by": by})
+        self.log("sup", what=f"boot-{key}", ms=ms, by=by, pid=self.boot.get("pid"),
+                 **({"need": self.boot["need"], "statuses": self.boot["statuses"]} if key == "settled" else {}))
+
+    async def _prewarm(self, proc):
+        """No user message, no model turn: the CLI's control request mcp_status, asked at once and then every
+        BOOT_POLL_S. Its first answer means the CLI is booted (so is its start hooks' finishing, see on_event); it is
+        settled when the MCP servers this conversation had connected are connected again, or when the settle time has
+        passed (remote connectors take a while; a CLI that never says waits out the time)."""
+        from rotation_adapters.claude import mcp_statuses, settle_seconds
+        need = sorted(k for k, v in (_norm_init(self.last_init).get("mcp_servers") or {}).items()
+                      if v == "connected") if self.last_init else []
+        self.boot["need"] = need
+        # The connectors that matter get the rotation's settle time; with none, booting is all there is to wait for.
+        limit = settle_seconds(self.env_os) if need else BOOT_CHAT_WAIT_S
+        t0 = self.started_at or time.monotonic()
+        asking = True
+        if (self.env_os.get("HEADLESS_PREWARM_INITIALIZE") or "0") == "1":
+            resp = await self.control({"subtype": "initialize", "hooks": None}, timeout=BOOT_INIT_TIMEOUT_S)
+            if resp is False:
+                return
+            ms = int((time.monotonic() - t0) * 1000)
+            if isinstance(resp, dict):
+                ok = resp.get("subtype") == "success"
+                self.boot["initialize"] = {"ok": ok, "ms": ms,
+                                           **({} if ok else {"error": str(resp.get("error") or "")[:200]})}
+                self._boot_mark("booted", "initialize")
+            else:
+                self.boot["initialize"] = {"ok": False, "ms": ms, "error": "no answer"}
+            self.log("sup", what="boot-initialize", **self.boot["initialize"])
+        try:
+            while proc is self.proc and proc.returncode is None and not self.dev:
+                if asking:
+                    resp = await self.control({"subtype": "mcp_status"}, timeout=BOOT_ASK_TIMEOUT_S)
+                    if resp is False:
+                        return                                   # stdin gone: the exit path takes over
+                    if isinstance(resp, dict):
+                        self._boot_mark("booted", "status")
+                        statuses = mcp_statuses(resp) if resp.get("subtype") == "success" else None
+                        if statuses is None:
+                            asking = False                       # this CLI does not say: wait out the time
+                        else:
+                            self.boot["statuses"] = statuses
+                            if all(statuses.get(n) == "connected" for n in need):
+                                self._boot_mark("settled", "status")
+                                return
+                if self.boot.get("booted") and not need:
+                    self._boot_mark("settled", "booted")
+                    return
+                if time.monotonic() - t0 >= limit:
+                    self._boot_mark("settled", "time")
+                    return
+                await asyncio.sleep(BOOT_POLL_S)
+        except asyncio.CancelledError:
+            raise
 
     async def _write(self, obj: dict):
         """True written; None nothing written (no process); False the write broke part way,
@@ -803,7 +904,7 @@ class Supervisor:
         if wrote:
             m["gen"] = self.gen
             self._turn_begins()
-            self._msg_state(m, "queued")
+            self._msg_state(m, "queued", handed_over_at=_now_iso())
             self._set_state()
             return True
         self._msg_state(m, "unknown")
@@ -846,6 +947,8 @@ class Supervisor:
                            or (ev.get("request") or {}).get("subtype"), "wall": _now_iso()}
         if typ == "system" and ev.get("subtype") == "background_tasks_changed":
             self.bg_tasks = len(ev.get("tasks") or [])
+        if typ == "system" and ev.get("subtype") in ("hook_response", "init"):
+            self._boot_mark("booted", ev.get("subtype"))       # the start hooks ran (or the first turn began)
         if typ == "system" and ev.get("subtype") == "init" and ev.get("session_id"):
             self.model = ev.get("model") or self.model
             self._check_first_init(ev)
@@ -1019,7 +1122,7 @@ class Supervisor:
             self.log("sup", what="replay-unmatched", uuid=echo_uuid)
             return
         self.echo_matches[how] += 1
-        self._msg_state(hit, "delivered", cli_uuid=echo_uuid, echo_match=how)
+        self._msg_state(hit, "delivered", cli_uuid=echo_uuid, echo_match=how, answering_at=_now_iso())
         self._save_soon()                                  # the input is in the transcript: save it
         pk = self._packet
         if (pk is not None and pk.get("msg") == hit["id"] and pk["sid"] == self.session_id and not pk.get("faulted")
@@ -1245,8 +1348,28 @@ class Supervisor:
         self._compact_note = reason
         self.log("sup", sync=True, what="rotate-compact_dropped", reason=reason)
 
+    def on_call(self) -> bool:
+        try:
+            return time.time() - (self.home / CALL_MARK).stat().st_mtime < CALL_STALE_S
+        except OSError:
+            return False
+
     def _rotation_check(self):
         R = self.rot
+        if self.on_call() and (self._rot_task is None or self._rot_task.done()):
+            # Never during a live call: Auto-compact and a person's /compact wait until it ends (the /compact's own
+            # wait starts again then, so it is not dropped for having waited out the call).
+            if self._compact_requested:
+                self._compact_asked_at = time.monotonic()
+            if not R.get("call_deferred"):
+                R["call_deferred"] = True
+                self.log("sup", what="rotate-deferred", reason="on a call")
+            return
+        if R.get("call_deferred"):
+            R["call_deferred"] = False                     # the call just ended: the /compact's wait starts now
+            if self._compact_requested:
+                self._compact_asked_at = time.monotonic()
+            self.log("sup", what="rotate-call_ended")
         if self._compact_too_late() and (self._rot_task is None or self._rot_task.done()):
             asyncio.ensure_future(self._drop_stale_compact())
             return
@@ -1799,7 +1922,8 @@ class Supervisor:
             m = self.messages.get(str(req.get("id") or ""))
             if m is None:
                 return {"ok": False, "reason": "unknown-id"}
-            return {"ok": True, "id": m["id"], "state": m.get("state"), "attempts": m.get("attempts", 0)}
+            return {"ok": True, "id": m["id"], "state": m.get("state"), "attempts": m.get("attempts", 0),
+                    "handed_over_at": m.get("handed_over_at"), "answering_at": m.get("answering_at")}
         if cmd == "pending":
             return {"ok": True, "pending": list(self.held.values())}
         if cmd == "answer":
@@ -1853,6 +1977,22 @@ class Supervisor:
     def _dev_marker(self):
         return self.home / "dev"
 
+    @staticmethod
+    def _tui_preexec():
+        """In the TUI's child, before exec, as a shell starts a foreground job: its own process group, and the pane's
+        terminal handed to that group. Done here, not only by the parent after the start: the parent's hand-over
+        comes after exec, and a TUI that touches the terminal first (it sets raw mode at once) was stopped by
+        SIGTTOU/SIGTTIN in the background and never ran. SIGTTOU is blocked for the call (async-signal-safe; a
+        background tcsetpgrp then proceeds), and unblocked again before exec."""
+        os.setpgid(0, 0)
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTTOU})
+        try:
+            os.tcsetpgrp(0, os.getpgrp())
+        except OSError:
+            pass                                 # not a terminal: nothing to hand over
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTTOU})
+
     def _tty_handoff(self, pgid):
         """Make `pgid` the pane terminal's foreground group (SIGTTOU ignored while we do it)."""
         old = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
@@ -1870,6 +2010,8 @@ class Supervisor:
             return {"ok": True, "already": True, "tui_pid": self.tui.pid if self.tui else None}
         if self.state != "idle":
             return {"ok": False, "reason": "busy", "state": self.state}
+        if self.on_call():
+            return {"ok": False, "reason": "on a call: the terminal opens once the call ends"}
         if self._unused_prompt() is not None and not await self._has_transcript(self.session_id):
             return {"ok": False, "reason": "the chat was just compacted: send it a message first, then open the "
                                            "terminal"}
@@ -1902,11 +2044,18 @@ class Supervisor:
         try:
             self.tui = await asyncio.create_subprocess_exec(*argv, cwd=self.cwd, env=self.env,
                                                             stdin=None, stdout=None, stderr=None,
-                                                            process_group=0)
+                                                            preexec_fn=self._tui_preexec)
         except OSError as e:
             self._dev_done()
             return {"ok": False, "reason": f"the TUI did not start: {e}"}
+        delay = HR._num(self.env_os.get("HEADLESS_TEST_TTY_HANDOFF_DELAY_S"), 0.0)   # TEST ONLY: the old race
+        if delay:
+            await asyncio.sleep(delay)
         self._tty_handoff(self.tui.pid)
+        try:
+            os.killpg(self.tui.pid, signal.SIGCONT)   # a TUI stopped before the hand-over runs again
+        except (ProcessLookupError, PermissionError):
+            pass
         self.log("sup", sync=True, what="dev", tui_pid=self.tui.pid, argv=argv, stopped_ms=stopped_ms,
                  tui_started_ms=int((time.monotonic() - t0) * 1000))
         asyncio.ensure_future(self._watch_tui(self.tui, t0))
@@ -1960,10 +2109,18 @@ class Supervisor:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and self.state not in ("idle", "working", "waiting"):
             await asyncio.sleep(0.1)
+        # Warm start: answer once the new process has booted AND its connectors have settled, within BOOT_CHAT_WAIT_S,
+        # so the next words meet a CLI that has finished starting. Answered at boot alone, the first message landed
+        # while the CLI was still connecting its servers (17 of 21 sends after Dev), which cost its first turn more.
+        boot_deadline = min(deadline, time.monotonic() + BOOT_CHAT_WAIT_S)
+        while time.monotonic() < boot_deadline and not (self.boot.get("booted") and self.boot.get("settled")):
+            await asyncio.sleep(0.05)
         self.log("sup", sync=True, what="chat", exit_ms=exit_ms,
-                 headless_ms=int((time.monotonic() - t0) * 1000), state=self.state)
+                 headless_ms=int((time.monotonic() - t0) * 1000), state=self.state,
+                 booted_ms=self.boot.get("booted_ms"))
         return {"ok": True, "exit_ms": exit_ms, "headless_ms": int((time.monotonic() - t0) * 1000),
-                "state": self.state, "pid": self.proc.pid if self.proc else None}
+                "state": self.state, "pid": self.proc.pid if self.proc else None,
+                "booted": bool(self.boot.get("booted")), "settled": bool(self.boot.get("settled"))}
 
     async def control(self, request: dict, timeout: float = 15.0):
         """Send one control request to the CLI and wait for its control_response: the response
@@ -1999,6 +2156,10 @@ class Supervisor:
             self.log("sup", sync=True, what="model", model=model, how="set_model")
             return {"ok": True, "model": model, "how": "set_model"}
         why = (resp or {}).get("error") if isinstance(resp, dict) else ("no answer" if resp is None else "not written")
+        if self.on_call():
+            # No restart during a live call: the new model is kept for the next start.
+            self.log("sup", sync=True, what="model", model=model, how="next-start", why="on a call")
+            return {"ok": True, "model": model, "how": "next-start", "why": "on a call"}
         self.log("sup", sync=True, what="model", model=model, how="restart", why=str(why)[:200])
         self._restart_requested = True
         await self.stop_proc_for_restart()
@@ -2097,6 +2258,7 @@ class Supervisor:
                              "requested": self._compact_requested, **self.rot_conf,
                              "block_waiting": bool(self._packet), "background_waits": self.bg_tasks,
                              "warm_pid": self._warm.proc.pid if self._warm is not None else None},
+                "boot": dict(self.boot), "on_call": self.on_call(),
                 "messages": counts, "log": str(self.home / "events.jsonl")}
 
     async def _serve_conn(self, reader, writer):

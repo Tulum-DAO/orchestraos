@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import { loadConfig } from '../lib/config.js';
 import { chatIdFromFiles } from '../lib/telegramChatId.js';
+import { paneHoldsSupervisor, PANE_IS_SUPERVISOR } from '../lib/paneGuard.js';
 
 const router = Router();
 
@@ -19,6 +20,14 @@ function vpsExec(cmd: string, timeout = 10000): string {
     return execFileSync('ssh', [...SSH_OPTS, VPS_HOST, cmd], { encoding: 'utf-8', timeout });
   }
   return execFileSync('bash', ['-c', cmd], { encoding: 'utf-8', timeout });
+}
+
+/** The sign-in flow types into gm's TUI. When gm runs headless (and is not in Dev) its pane is the supervisor's, so
+ *  the keys would land there: refuse, and say where the TUI is. Only checked here on the box itself. */
+function refuseHeadlessGm(res: Response): boolean {
+  if (IS_MAC || !paneHoldsSupervisor('gm')) return false;
+  res.status(409).json({ error: 'headless', detail: PANE_IS_SUPERVISOR });
+  return true;
 }
 
 /** Strip ANSI codes */
@@ -137,6 +146,7 @@ router.get('/gm-state', (_req: Request, res: Response) => {
  * Send /login to the GM's tmux session.
  */
 router.post('/send-login', (_req: Request, res: Response) => {
+  if (refuseHeadlessGm(res)) return;
   try {
     vpsExec(`tmux send-keys -t gm '/login' Enter`);
     res.json({ sent: true });
@@ -161,6 +171,7 @@ router.post('/select-option', (req: Request, res: Response) => {
     res.status(400).json({ error: 'bad key' });
     return;
   }
+  if (refuseHeadlessGm(res)) return;
   try {
     vpsExec(`tmux send-keys -t gm '${key || ''}' Enter`);
     res.json({ sent: true });
@@ -181,6 +192,7 @@ router.post('/submit-code', (req: Request, res: Response) => {
     return;
   }
   const sanitized = code.trim();
+  if (refuseHeadlessGm(res)) return;
   try {
     const escaped = sanitized.replace(/'/g, "'\\''");
     vpsExec(`tmux send-keys -t gm '${escaped}' Enter`);

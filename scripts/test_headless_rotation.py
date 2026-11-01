@@ -1196,3 +1196,25 @@ def test_two_questions_with_one_wrong_answer_are_refused(rig):
     assert [r["pass"] for r in fork["check"]["results"]] == [True, False]
     assert [c for c in rig.calls() if c["call"] == "update_attempt"][-1]["reason"].startswith(
         "the check on the copy failed: it couldn't name the pending card")
+
+
+def test_no_switch_during_a_live_call_and_the_compact_waits_for_its_end(rig):
+    """A live call with the seat (its marker, services/arturo/agent_call.py) holds every rotation: a person's
+    /compact waits past its own wait time without being dropped, and switches once the call is over."""
+    rig.settings(auto_compact=False)
+    rig.start(HEADLESS_COMPACT_WAIT_S="1")
+    turn(rig, "Sample before", "m1")
+    old = rig.status()
+    mark = rig.home / "call"
+    mark.write_text(json.dumps({"cid": "c-call"}))
+    assert rig.status()["on_call"] is True
+    rig.send("/compact", "c1", source="person")
+    wait_for(lambda: "rotate-deferred" in whats(rig), what="deferred")
+    for _ in range(25):                                  # 2.5 s: past the 1 s wait, the call still live
+        os.utime(mark)
+        time.sleep(0.1)
+    assert "rotate-compact_dropped" not in whats(rig) and "rotate-notice_start" not in whats(rig)
+    assert rig.status()["pid"] == old["pid"]
+    mark.unlink()                                        # the call ended
+    wait_for(lambda: "rotate-old_closed" in whats(rig), what="the switch after the call")
+    assert rig.status()["session_id"] != old["session_id"]

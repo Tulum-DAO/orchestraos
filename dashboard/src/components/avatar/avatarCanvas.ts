@@ -10,7 +10,7 @@
  * them changes. A shared model (one per agent, from the hub) steps once per frame however many instances
  * show it, so every animated instance of an agent is on the same clock.
  */
-import {
+import { meltBodyScale, meltDots,
   shapeOutline, faceLayout, SHAPES, LAYOUT, statusDot, paint, dotFor, badgeFor, followAllowed, wanderAllowed,
   STATES, FOLLOW, PHONE_MAX,
   type AvatarModel, type Pose, type Theme, type Glyph, type DotSpec, type BadgePlace, type Pt, type Role,
@@ -165,10 +165,16 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   const cx = size / 2, cy = size * LAYOUT.cy;
   ctx.clearRect(0, 0, size, size);
 
+  // thinking: the body melts away (smaller, fading) into three pulsing dots (meltDots, shared with Swift)
+  const melt = pose.melt || 0;
+  const bodyAlpha = 1 - melt;
+
   ctx.save();
+  ctx.globalAlpha = bodyAlpha;
   // rotate about the body centre (so a spin stays in the box);
   // squash/stretch anchored at the feet so breathing doesn't float
   ctx.translate(cx + pose.dx * u, cy + pose.dy * u);
+  if (melt > 0) { const k = meltBodyScale(melt); ctx.scale(k, k); }
   ctx.rotate(pose.rot);
   ctx.translate(0, s.h * u);
   ctx.scale(pose.sx, pose.sy);
@@ -209,6 +215,16 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   ctx.restore();
 
   ctx.restore();
+
+  if (melt > 0) {
+    ctx.save();
+    ctx.fillStyle = ink.body;
+    for (const [x, y, r, a] of meltDots(melt, pose.phase)) {
+      ctx.globalAlpha = a;
+      ctx.beginPath(); ctx.arc(cx + (pose.dx + x) * u, cy + (pose.dy + y) * u, r * u, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
 
   // status dot on the bottom-right edge of the body. It follows the body's hops and shakes but not its
   // rotation or squash, so it stays readable.

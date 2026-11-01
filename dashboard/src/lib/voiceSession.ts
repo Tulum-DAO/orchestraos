@@ -151,6 +151,8 @@ export interface VoiceSessionCallbacks extends TranscriptRouterCallbacks {
   onCallEnded?: (marker: string, callId: string) => void;
   /** A tool Arturo's brain runs during the call, as it starts and as it ends (relay calls). */
   onTool?: (e: CallToolEvent) => void;
+  /** The agent's voice started (true) or stopped (false) playing: the call's talking state. */
+  onPlayback?: (playing: boolean) => void;
 }
 
 export interface CallToolEvent {
@@ -172,6 +174,16 @@ export interface VoiceSessionStartOptions {
   /** The cards on screen (lib/screenCards.ts, contract/notes/arturo-screen-context.md), sent with each context frame
    *  mid-call. Additive: a receiver that does not read it ignores it. */
   cards?: unknown;
+  /** The agent this call is for (its page's call): sent as `agent=<id>` so the server uses that agent's voice and
+   *  context. Arturo's own call sends none. */
+  agentId?: string | null;
+}
+
+/** The live call's socket URL: the voice, and the agent when the call is for one (never for Arturo's own call). */
+export function liveCallUrl(proto: string, host: string, voice: string, agentId?: string | null): string {
+  const q = new URLSearchParams({ voice });
+  if (agentId) q.set('agent', agentId);
+  return `${proto}://${host}/api/voice/live?${q}`;
 }
 
 export class VoiceSession {
@@ -197,6 +209,10 @@ export class VoiceSession {
   /** Muted: the microphone keeps capturing (so unmuting is instant) but NOTHING it hears is sent. Only the
    *  uplink stops: Arturo's voice, captions and tool events keep arriving on the same socket. */
   private muted = false;
+  /** Web Audio analysers on the microphone and on the agent's playback, for the call bar's waveform (read only:
+   *  nothing is routed through them that is not already played or captured). Null until each stream exists. */
+  micAnalyser: AnalyserNode | null = null;
+  playbackAnalyser: AnalyserNode | null = null;
 
   constructor(cb: VoiceSessionCallbacks = {}) {
     this.cb = cb;
@@ -265,7 +281,7 @@ export class VoiceSession {
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const voice = opts.voice || 'Fenrir';
-    const url = `${proto}://${window.location.host}/api/voice/live?voice=${encodeURIComponent(voice)}`;
+    const url = liveCallUrl(proto, window.location.host, voice, opts.agentId);
 
     let ws: WebSocket;
     try {
@@ -385,6 +401,14 @@ export class VoiceSession {
       }
     };
     this.sourceNode.connect(node);
+    // The call bar's microphone level: a tap on the same source, connected nowhere else.
+    // (A context without analysers, an old engine or a stand-in, simply gives the bar no level.)
+    try {
+      const micA = ctx.createAnalyser();
+      micA.fftSize = 512;
+      this.sourceNode.connect(micA);
+      this.micAnalyser = micA;
+    } catch { this.micAnalyser = null; }
     // A ScriptProcessorNode only fires onaudioprocess while connected into the
     // graph's destination path; route through a silent gain so nothing is
     // actually played back (we handle playback separately via playPcm24k).
@@ -401,6 +425,7 @@ export class VoiceSession {
     try { this.audioCtx?.close(); } catch { /* noop */ }
     this.captureNode = null;
     this.sourceNode = null;
+    this.micAnalyser = null;
     this.audioCtx = null;
     for (const track of this.mediaStream?.getTracks() ?? []) track.stop();
     this.mediaStream = null;
@@ -411,6 +436,13 @@ export class VoiceSession {
     if (!this.playbackCtx) {
       this.playbackCtx = new AudioCtxCtor({ sampleRate: 24000 });
       this.playbackTime = this.playbackCtx.currentTime;
+      // The agent's voice passes through an analyser on its way out: the call bar's playback level.
+      try {
+        const a = this.playbackCtx.createAnalyser();
+        a.fftSize = 512;
+        a.connect(this.playbackCtx.destination);
+        this.playbackAnalyser = a;
+      } catch { this.playbackAnalyser = null; }
     }
     const ctx = this.playbackCtx;
     const pcm16 = new Int16Array(buf);
@@ -420,9 +452,10 @@ export class VoiceSession {
     audioBuffer.copyToChannel(float32, 0);
     const src = ctx.createBufferSource();
     src.buffer = audioBuffer;
-    src.connect(ctx.destination);
+    src.connect(this.playbackAnalyser ?? ctx.destination);
+    if (this.playing.size === 0) this.cb.onPlayback?.(true);
     this.playing.add(src);
-    src.onended = () => { this.playing.delete(src); };
+    src.onended = () => { this.playing.delete(src); if (this.playing.size === 0) this.cb.onPlayback?.(false); };
     const startAt = Math.max(ctx.currentTime, this.playbackTime);
     src.start(startAt);
     this.playbackTime = startAt + audioBuffer.duration;
@@ -430,7 +463,9 @@ export class VoiceSession {
 
   private flushPlayback() {
     for (const src of this.playing) { try { src.stop(); } catch { /* already ended */ } }
+    const had = this.playing.size > 0;
     this.playing.clear();
+    if (had) this.cb.onPlayback?.(false);
     if (this.playbackCtx) this.playbackTime = this.playbackCtx.currentTime;
   }
 

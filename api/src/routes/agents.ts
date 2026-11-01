@@ -32,6 +32,8 @@ import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
 import { headlessSeats } from '../services/status-stream.js';
+import { headlessInDev, paneHoldsSupervisor, PANE_IS_SUPERVISOR } from '../lib/paneGuard.js';
+import { agentCallGoesToSeat, agentCallSwitch, liveEngine } from '../lib/agentCallGate.js';
 import { headlessStep, stepFromProbe } from '../services/live-step.js';
 
 function macSshTarget(): string {
@@ -600,15 +602,37 @@ router.put('/:id/prefs', (req: Request, res: Response) => {
 // turn end, so a change applies on the next turn.
 // `rotates`: whether this seat can use our rotation at all (lib/seatSettings.ts seatRotates); the slideout hides the
 // rotation rows when it can't, and a change for such a seat is refused (409).
-router.get('/:id/settings', (req: Request, res: Response) => {
+router.get('/:id/settings', async (req: Request, res: Response) => {
   if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
   // `compact_now`: whether a person's "/compact" can run for this seat (lib/seatSettings.ts seatCanCompactNow, the
   // gateway's gate, contract/compact-gate.json): the slideout offers "Compact now" only where it can work. A seat in
   // Dev is not headless to the gateway, so it is not offered there either.
   res.json({ ok: true, agent: req.params.id, rotates: seatRotates(req.params.id, getRegistry() as any),
              compact_now: seatCanCompactNow(req.params.id, getRegistry() as any, headlessSeats(), headlessInDev),
+             agent_calls: await agentCallsLabel(req.params.id), in_dev: headlessInDev(req.params.id),
              ...readSeatSettings(dataDir(), req.params.id), history: seatHistory(dataDir(), req.params.id).slice(-20) });
 });
+/** `agent_calls`: whether a call to this agent is its own call (lib/agentCallGate.ts, the voice side's
+ *  agent_call.enabled() on the relay engine, contract/agent-call-gate.json); a seat in Dev counts, and `in_dev` beside
+ *  it lets the call bar offer Back to chat. Headless as the voice side resolves it (headless_switch.headless_seat): the id's
+ *  own switch entry, else a switched-on seat whose registry row has the id as its tmux session. */
+async function agentCallsLabel(id: string): Promise<boolean> {
+  const agents = ((getRegistry() as any)?.agents || {}) as Record<string, any>;
+  const headless = headlessSeats();
+  const seat = headless.has(id) ? id
+    : Object.entries(agents).find(([s, row]) => headless.has(s) && row && row.tmux_session === id)?.[0] ?? null;
+  const facts = {
+    // The switch by the id the call names, as agent_call.enabled reads it.
+    switch_on: agentCallSwitch(dataDir(), id),
+    headless: seat !== null,
+    registry_runtime: seat && typeof agents[seat]?.runtime === 'string' ? agents[seat].runtime : null,
+    engine: 'unreachable' as const,
+  };
+  // Only a seat that passes everything else asks for the engine (a network read, cached).
+  if (!agentCallGoesToSeat({ ...facts, engine: 'relay' })) return false;
+  return agentCallGoesToSeat({ ...facts, engine: await liveEngine() });
+}
+
 router.put('/:id/settings', (req: Request, res: Response) => {
   const who = principal(req)?.username;
   if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
@@ -1067,11 +1091,6 @@ export function stopGoesToInterrupt(agentId: string, key: string,
   return /^(esc|escape)$/i.test(key.trim()) && headless.has(agentId) && !inDev(agentId);
 }
 
-function headlessInDev(agentId: string): boolean {
-  if (!isSafeAgentId(agentId)) return false;
-  try { return existsSync(join(dataDir(), 'state', 'headless', agentId, 'dev')); } catch { return false; }
-}
-
 router.post('/:id/key', async (req: Request, res: Response) => {
   const { key } = req.body;
   if (!key) { res.status(400).json({ error: 'key required' }); return; }
@@ -1085,6 +1104,12 @@ router.post('/:id/key', async (req: Request, res: Response) => {
     } catch (err: any) {
       res.status(502).json({ error: 'gateway unreachable', detail: err.message });
     }
+    return;
+  }
+  // Any other key on a headless seat outside Dev would land in its supervisor's pane (Ctrl-C there stops the
+  // supervisor). In Dev the pane is the CLI's TUI and the keys are the terminal view's own: they go through.
+  if (paneHoldsSupervisor(String(req.params.id))) {
+    res.status(409).json({ error: 'headless', detail: PANE_IS_SUPERVISOR, key, agent_id: req.params.id });
     return;
   }
 
@@ -1140,6 +1165,12 @@ router.post('/:id/inject-raw', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Agent not found' }); return;
   }
 
+  // Typing into a prompt is pane control, so it stays a keystroke; on a headless seat outside Dev it would type into
+  // the supervisor's pane, so it is refused there (text for the agent itself goes through /send).
+  if (paneHoldsSupervisor(String(req.params.id))) {
+    res.status(409).json({ error: 'headless', detail: PANE_IS_SUPERVISOR, agent_id: req.params.id });
+    return;
+  }
   try {
     // Send text without Enter — for typing into prompts
     execFileSync('tmux', ['send-keys', '-t', session, text], { timeout: 5000 });

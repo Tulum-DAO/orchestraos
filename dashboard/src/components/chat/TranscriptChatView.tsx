@@ -14,6 +14,8 @@ import { addNotice, latestNotice, withNotices, type CompactionItem } from '../..
 import { useCompactionNotices } from '../../stores/compactionNotices';
 import { stepFrom } from '../../lib/liveStep';
 import { useAgentSteps } from '../../stores/agentSteps';
+import { CallAgentContext } from './callAgentContext';
+import { useAgentRecord } from '../avatar/agentState';
 import { buildRenderList, fetchOlderTranscript, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { useNearTop, useOlderPages } from '../../lib/threadKit/useOlderPages';
 import { firstCursor, transcriptKey } from '../../lib/threadKit/paging';
@@ -59,7 +61,7 @@ interface Props {
    *  very pill for an hour while the API was down. Optional so the fixture harness, which has
    *  no feed, renders unchanged. */
   feed?: FeedVerdict;
-  /** The agent page carries its own LiveStatusLine above the composer, so it suppresses this
+  /** The agent page carries its own working row above the composer, so it suppresses this
    *  bar. Two renderings of one fact is how the sidebar and the page came to disagree. */
   hideStatusBar?: boolean;
   /** Words the agent is still writing that the transcript does not hold yet (a live-text stream): drawn at the end of
@@ -93,6 +95,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // snapshots and deltas carry the transcript's lines only, so these are laid into the items on read.
   const [notices, setNotices] = useState<{ agentId: string; byId: Record<string, CompactionItem> }>({ agentId, byId: {} });
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Whose calls this chat's call cards are (their transcript and thumbs): this agent's.
+  const agentName = useAgentRecord(agentId).name || agentId;
+  const callAgent = useMemo(() => (fixtureItems ? null : { agentId, name: agentName }), [agentId, agentName, fixtureItems]);
   const columnRef = useRef<HTMLDivElement>(null);
   // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT, and otherwise keep what they are reading exactly where it is
   // while the thread changes (lib/useStickToBottom.ts; the rows are the column's children).
@@ -245,6 +250,8 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // thread; the session, the draft and pending sends are untouched. The compact card (a dark box) stays Bubbles.
   const chatStyle = useChatStyle(agentId);
   const modern = !compact && chatStyle === 'modern';
+  // Its calls' transcripts are drawn in this chat's skin, so a call reads like the chat around it.
+  const callAgentInSkin = useMemo(() => (callAgent ? { ...callAgent, skin: modern ? 'modern' as const : 'bubbles' as const } : null), [callAgent, modern]);
   const threadRows = useMemo(() => agentRows(entries, loading ? [] : pending, st, { modern }), [entries, pending, loading, st, modern]);
   // The idle backstop: a bubble no row could match (a long message arrives as a shorter banner)
   // goes once the agent is idle again. Only from a live feed: a stale "idle" proves nothing.
@@ -288,6 +295,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
 
   return (
     <BatchRecordsContext.Provider value={batchesQ.data}>
+    <CallAgentContext.Provider value={callAgentInSkin}>
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
       <div
         ref={scrollRef}
@@ -366,7 +374,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         </ChatAgentContext.Provider>
       </div>
 
-      {/* Status bar. The AGENT PAGE now carries a LiveStatusLine above its composer, so this
+      {/* Status bar. The AGENT PAGE now carries a working row above its composer, so this
           bar is the compact/embedded surface's version of it (AgentCard). Two renderings of one
           fact is how the sidebar and the page came to disagree; they share lib/feedLiveness so
           they cannot say different things, and the page does not show both. */}
@@ -381,6 +389,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       </div>
       )}
     </div>
+    </CallAgentContext.Provider>
     </BatchRecordsContext.Provider>
   );
 }

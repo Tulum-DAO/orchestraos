@@ -384,7 +384,9 @@ function mulberry32(a: number): () => number {
 // status dot at the bottom-right of the body. Idle is a quiet neutral grey
 // (#85858D: >= 3:1 on white, #F7F7F8 and the selected row; >= 4.4:1 on the dark surfaces) with no glyph; the others carry
 // a glyph at 40 px and up. Which roles show the dot at all: see dotFor().
-export type AvatarState = 'working' | 'needs_input' | 'finished' | 'failed' | 'idle';
+// The call states (a live voice call, components/call): listening while you talk, thinking from the moment you stop
+// until the agent answers (the body melts into three pulsing dots: `melt` in the Pose), talking while it speaks.
+export type AvatarState = 'working' | 'needs_input' | 'finished' | 'failed' | 'idle' | 'listening' | 'thinking' | 'talking';
 export type Glyph = 'dots' | 'question' | 'check' | 'alert' | null;
 export type ReactionName = 'nod' | 'shake' | 'bounce' | 'spin' | 'jump' | 'wink';
 interface StateDef {
@@ -392,7 +394,27 @@ interface StateDef {
   gaze: 'work' | 'viewer' | 'free' | 'down';
   enter?: ReactionName; repeat?: ReactionName; repeatEvery?: number; pulse?: boolean;
   settleMood?: string; settleAfter?: number; sleeps?: boolean;
+  /** The body melts into three pulsing dots (thinking); it reforms as the state leaves. */
+  melt?: boolean;
 }
+
+// The melt (thinking): how fast the body melts away and how fast it reforms (per second, exponential approach), and
+// the three dots it becomes, in unit space around the body centre. Shared with the Swift port.
+export const MELT = { inRate: 7, outRate: 11, dotR: 0.16, dotGap: 0.42, pulseHz: 1.6, pulseAmp: 0.28, stagger: 0.55 };
+
+/** The thinking dots for a melt of `melt` (0..1) at time `phase`: [x, y, r, alpha] each, unit space. The body is drawn
+ *  at scale meltBodyScale(melt) and alpha 1 - melt under them. Pure. */
+export function meltDots(melt: number, phase: number): [number, number, number, number][] {
+  if (melt <= 0.001) return [];
+  const out: [number, number, number, number][] = [];
+  for (let i = 0; i < 3; i++) {
+    const p = Math.sin(2 * Math.PI * MELT.pulseHz * phase - i * MELT.stagger);
+    const r = MELT.dotR * (1 + MELT.pulseAmp * p) * (0.5 + 0.5 * melt);
+    out.push([(i - 1) * MELT.dotGap * melt, -0.08 * p * melt, r, Math.min(1, melt * 1.4)]);
+  }
+  return out;
+}
+export const meltBodyScale = (melt: number): number => 1 - 0.8 * melt;
 export const STATES: Record<AvatarState, StateDef> = {
   working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0.025, bobHz: 2.2, gaze: 'work' },
   needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0.010, bobHz: 1.0, gaze: 'viewer',
@@ -402,6 +424,9 @@ export const STATES: Record<AvatarState, StateDef> = {
   failed:      { label: 'Failed',      mood: 'worried',   dot: '#EF4444', glyph: 'alert',    blink: [3.0, 6.0], bob: 0, bobHz: 0, gaze: 'down',
                  enter: 'shake' },
   idle:        { label: 'Idle',        mood: 'neutral',   dot: '#85858D', glyph: null,       blink: [2.2, 5.0], bob: 0, bobHz: 0, gaze: 'free', sleeps: true },
+  listening:   { label: 'Listening',   mood: 'attentive', dot: '#22C55E', glyph: null,       blink: [2.5, 5.0], bob: 0.008, bobHz: 0.8, gaze: 'viewer' },
+  thinking:    { label: 'Thinking',    mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.4, 3.0], bob: 0, bobHz: 0, gaze: 'work', melt: true },
+  talking:     { label: 'Talking',     mood: 'happy',     dot: '#22C55E', glyph: null,       blink: [2.2, 4.5], bob: 0.022, bobHz: 3.2, gaze: 'viewer' },
 };
 export const STATE_KEYS = Object.keys(STATES) as AvatarState[];
 const isState = (s: unknown): s is AvatarState => typeof s === 'string' && s in STATES;
@@ -432,6 +457,8 @@ export interface Pose {
   wink?: number;
   mood: Mood; shape: string; color: string; state: AvatarState; dot: string; glyph: Glyph;
   eyeColor: EyeColor; eye: string | null; phase: number; pulse: number | null; asleep: boolean; zzz: number | null; reducedMotion: boolean;
+  /** 0..1: how far the body has melted into the thinking dots (meltDots). */
+  melt: number;
 }
 export interface Pointer { dx: number; dy: number }
 export interface ModelOpts {
@@ -472,6 +499,8 @@ export class AvatarModel {
   blinkAt: number;
   nextBlink: number;
   nextRepeat: number;
+  /** 0..1, eased toward 1 while the state melts (thinking) and back to 0 after. */
+  melt: number;
   version: number;
   // the ticker's per-frame cache for a shared model (one step per frame however many instances show it)
   __frame?: number;
@@ -508,6 +537,7 @@ export class AvatarModel {
     this.blinkAt = -1;
     this.nextBlink = this.t + this.rand() * 3;
     this.nextRepeat = Infinity;
+    this.melt = STATES[this.state].melt ? 1 : 0;
     this.version = 0; // bumps whenever a static (reduced motion) frame must redraw
   }
 
@@ -603,6 +633,11 @@ export class AvatarModel {
     // repeat cue (needs input keeps nodding)
     if (t >= this.nextRepeat && def.repeat) { this.react(def.repeat); this.nextRepeat = t + (def.repeatEvery as number); }
 
+    // melt (thinking): the body melts into the dots, and reforms quicker than it melts (it speaks at once)
+    const meltTo = def.melt ? 1 : 0;
+    this.melt += (meltTo - this.melt) * (1 - Math.exp(-dt * (meltTo > this.melt ? MELT.inRate : MELT.outRate)));
+    if (Math.abs(meltTo - this.melt) < 0.01) this.melt = meltTo;
+
     // mood blend
     const target = MOODS[this.targetMoodKey()];
     const k = 1 - Math.exp(-dt * 7);
@@ -674,6 +709,7 @@ export class AvatarModel {
   staticPose(): Pose {
     const def = STATES[this.state];
     this.mood = { ...MOODS[def.settleMood || def.mood] };
+    this.melt = def.melt ? 1 : 0;
     return this.decorate({ dx: 0, dy: 0, rot: 0, sx: 1, sy: 1, lookX: 0, lookY: 0, lid: 1 }, def);
   }
 
@@ -711,6 +747,7 @@ export class AvatarModel {
       asleep: this.asleep,
       zzz: this.asleep ? (this.t * 0.45) % 1 : null,
       reducedMotion: this.reducedMotion,
+      melt: this.reducedMotion ? (def.melt ? 1 : 0) : this.melt,
     });
   }
 }

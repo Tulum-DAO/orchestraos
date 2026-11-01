@@ -43,6 +43,8 @@ import { applyAssistantName, useAssistantName } from '../lib/assistantName';
 import { useArturoBrain } from '../stores/arturoBrain';
 import { loadSavedLooksOnce } from '../lib/avatarLooks';
 import { appearanceRows } from '../lib/theme';
+import { useCallStore } from '../stores/callStore';
+import CallPill from './call/CallPill';
 
 // The agents are the work; the pages are where you go occasionally. "More" remembers whether you
 // opened it, so anyone who lives in Tasks or Analytics keeps them visible after one click and the
@@ -237,6 +239,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
   // Arturo's badge from its actual brain, on every page (its own page also updates it as health changes).
   const brainChoice = useArturoBrain((s) => s.choice);
   const aname = useAssistantName();
+  const arturoOnCall = useCallStore((st) => st.call?.party === 'arturo');
   useEffect(() => {
     let live = true;
     arturoHealth().then((h) => {
@@ -285,7 +288,9 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
               <span className={clsx('-mx-2 -my-1.5 shrink-0', isActive ? 'la-on-selected' : 'la-on-sidebar')}>
                 <AgentAvatar agentId={ARTURO_ID} role="sidebar" size={32} selected={isActive} label={aname} />
               </span>
-              {aname}
+              <span className="min-w-0 flex-1 truncate">{aname}</span>
+              {/* a call from an agent's page that still goes through Arturo: its pill is on his row */}
+              {arturoOnCall && <CallPill />}
             </>
           )}
         </NavLink>

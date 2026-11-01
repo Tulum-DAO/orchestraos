@@ -41,7 +41,7 @@
  *
  * Every card it draws keeps reporting into the cards-on-screen context (lib/screenCards.ts) through its own renderer.
  */
-import { useLayoutEffect, type ReactNode } from 'react';
+import { Fragment, useLayoutEffect, type ReactNode } from 'react';
 import ToolCard from './ToolCard';
 import CallCard from './CallCard';
 import ResultCard from './ResultCard';
@@ -52,6 +52,8 @@ import ChoiceCard from '../chat/ChoiceCard';
 import DecisionBubble from '../chat/DecisionBubble';
 import { MessageTime, PendingBubble } from '../chat/TranscriptCards';
 import './kit-modern.css';
+import { UserWords } from './Turns';
+import { assistantTurnClass } from '../../lib/chatSkin';
 import type { GroupedNode } from '../../lib/toolGroups';
 import { sendStateLabel, type SendState } from '../../lib/arturo';
 import { hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
@@ -140,7 +142,7 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
     );
   }
   return (
-    <div className={skin === 'bubbles' ? 'turn-assistant group w-full min-w-0' : 'turn-assistant'} data-thread-key={m.key}>
+    <div className={assistantTurnClass(skin)} data-thread-key={m.key}>
       {m.pending ? <span className="thinking" aria-label="thinking" />
         : m.streaming && skin === 'bubbles' ? <Unfinished text={m.text} parts={m.parts} skin={skin} />
         : m.parts ? <Parts parts={m.parts} skin={skin} />
@@ -195,10 +197,7 @@ function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin;
             ))}
           </div>
         )}
-        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-[13px] leading-relaxed text-white whitespace-pre-wrap break-words"
-             style={{ overflowWrap: 'anywhere' }}>
-          {withRefs(m.text, skin)}
-        </div>
+        <UserWords skin="bubbles">{withRefs(m.text, skin)}</UserWords>
         {(state === 'failed' || (state && latest)) && <div className={`turn-state ${state}`}>{sendStateLabel(state)}</div>}
         {times && <MessageTime ts={m.at} align="right" />}
       </div>
@@ -212,7 +211,7 @@ function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin;
         </div>
       )}
       {/* A long path or address breaks inside the bubble rather than pushing the page sideways on a phone. */}
-      <div className="bubble-user" style={{ overflowWrap: 'anywhere' }}>{withRefs(m.text, skin)}</div>
+      <UserWords skin="modern">{withRefs(m.text, skin)}</UserWords>
       {(state === 'failed' || (state && latest)) && <div className={`turn-state ${state}`}>{sendStateLabel(state)}</div>}
       {times && <MessageTime ts={m.at} align="right" />}
     </div>
@@ -266,11 +265,23 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         }
         if (r.kind === 'node') {
           if (skin === 'modern' && r.message) {
-            return r.message.role === 'user'
-              ? <UserMessage key={r.key} m={r.message} skin={skin} latest={false} times={times} />
-              : <Reply key={r.key} m={r.message} skin={skin} times={times} />;
+            return (
+              <Fragment key={r.key}>
+                <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
+                {r.message.role === 'user'
+                  ? <UserMessage m={r.message} skin={skin} latest={false} times={times} />
+                  : <Reply m={r.message} skin={skin} times={times} />}
+              </Fragment>
+            );
           }
-          return renderNode ? <NodeSlot key={r.key}>{renderNode(r.node, r.interrupted)}</NodeSlot> : null;
+          // A zero-size mark before the row names it by its key (a call's work chip finds the row it started at; never the
+          // scroll anchor, and it takes no space).
+          return renderNode ? (
+            <Fragment key={r.key}>
+              <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
+              <NodeSlot>{renderNode(r.node, r.interrupted)}</NodeSlot>
+            </Fragment>
+          ) : null;
         }
         // Never the scroll anchor: a card is placed by its time, so one filed before the oldest message loaded moves down
         // into place when an older page brings that moment in; what the reader is looking at is held by the text.

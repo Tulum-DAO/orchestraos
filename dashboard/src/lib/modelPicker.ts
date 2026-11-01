@@ -7,8 +7,8 @@
  *   - Every picker lists the same entries in the same order: every provider's models (the probe's list, plus an
  *     agent's own when it has one), grouped by provider, newest first. An entry that can't be used here is shown
  *     dimmed with why ("Not allowed for this agent", "Not installed", "Not signed in"), never hidden.
- *   - "Opus 5.5" is claude-opus-5-5[1m]: the short `opus` id the probe lists is that model; Opus 5.5 at 200k context
- *     never appears (standing rules, CANONICAL and HIDDEN below).
+ *   - Honest labels: the bare `opus` is the CLI's alias for Opus 5.5 at 200K and reads "Opus 5.5 · 200K"; only the
+ *     explicit claude-opus-5-5[1m] reads "Opus 5.5 · 1M" (ALIASES below names the source).
  *   - A size shows only when a source states it (nameAndTag); nothing is assumed.
  *   - One model, one row: a short id and its full id under the same name ("Fable 5.1" as `fable` and as
  *     claude-fable-5-1) are one row, the full id kept and the short one remembered as an alias, so a seat already
@@ -47,13 +47,17 @@ export interface GreyProvider { providerId: string; label: string; reason: strin
 
 export interface PickerValue { providerId: string; modelId: string }
 
-/** Short ids that stand for another model. */
-const CANONICAL: Record<string, Record<string, string>> = {
-  claude: { opus: 'claude-opus-5-5[1m]' },
-};
-/** Models never offered (a standing rule, not a permission: an entry an agent may not use is dimmed instead). */
-const HIDDEN: Record<string, Set<string>> = {
-  claude: new Set(['claude-opus-5-5', 'claude-opus-5-5[200k]']),
+/** Short ids that stand for another model's id. None: a short id is the model the CLI says it is (ALIASES). */
+const CANONICAL: Record<string, Record<string, string>> = {};
+/** Models never offered. None: an entry that can't be used here is dimmed with its reason instead. */
+const HIDDEN: Record<string, Set<string>> = {};
+
+/** What a CLI alias IS, when its list says it without a size. SOURCE: Claude's CLI model list (its `initialize`
+ *  answer, which the API's probe reads) gives `opus` as displayName "Opus 5.5" with resolvedModel claude-opus-5-5; the
+ *  static catalog in config/providers.json states claude-opus-5-5's context_window as 200000. So the bare `opus` is
+ *  Opus 5.5 at 200K. The 1M model is only the explicit claude-opus-5-5[1m]. */
+export const ALIASES: Record<string, Record<string, { name: string; tag: string }>> = {
+  claude: { opus: { name: 'Opus 5.5', tag: '200K' }, 'claude-opus-5-5': { name: 'Opus 5.5', tag: '200K' } },
 };
 
 /** The id a pick of this model sends: the short id's full model when it stands for one. */
@@ -139,7 +143,10 @@ export function pickerModelsFor(providerId: string, providerLabel: string, sourc
     const id = asNamed ? s.id : canonicalId(providerId, s.id);
     // THE SIZE RULE, for every entry of every picker: only what a source states (nameAndTag: the label "(1M)", a 1M id
     // `…[1m]`, the gateway's "200K context", the probe's context window). No source, no size.
-    const { name, tag } = nameAndTag(id, s.label, s.subtitle, s.capabilities?.context_window ?? null);
+    const stated = nameAndTag(id, s.label, s.subtitle, s.capabilities?.context_window ?? null);
+    const alias = ALIASES[providerId]?.[id];
+    const name = stated.name;
+    const tag = stated.tag ?? alias?.tag;
     const same = out.find((m) => m.id === id || (m.name === name && m.tag === tag));
     if (same) {
       // One row per model: keep the full id, remember the others.
