@@ -6,6 +6,7 @@
  *  - ToolGroupCard    (two or more consecutive calls folded to one line per turn)
  * Assistant prose is the thread kit's Message (components/kit/Message.tsx).
  */
+import { BUBBLES_USER } from '../../lib/chatSkin';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { ChevronRight, ChevronDown, FileText } from 'lucide-react';
@@ -180,7 +181,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
         </div>
       )}
       {(words || !attachments.length) && (
-        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-[13px] leading-relaxed text-white whitespace-pre-wrap break-words">
+        <div className={BUBBLES_USER}>
           {withRefs(words)}
         </div>
       )}
@@ -403,14 +404,14 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
       if (sys) return <SystemMessageCard msg={sys} raw={node.text} />;
       // [voice-call:] markers ride USER rows (the proxy injects call summaries as
       // composer input). Split them out first; prose segments keep the paste-aware
-      // user path. Render voice cards left-aligned (call artifact, not a bubble).
+      // user path. A call is the one shared call card, centred in the thread (not a bubble).
       if (hasVoiceCallMarker(node.text)) {
         const segs = parseVoiceSegments(node.text);
         return (
           <div className="flex flex-col items-stretch gap-1">
             {segs.map((s, i) =>
               s.kind === 'voicecall' ? (
-                <div key={i} className="flex justify-start"><CallCard skin="bubbles" callId={s.callId} /></div>
+                <div key={i} className="flex flex-col"><CallCard skin="bubbles" callId={s.callId} /></div>
               ) : hasPasteMarkers(s.text) ? (
                 <MessageGroup key={i} text={s.text} sender="user" />
               ) : (

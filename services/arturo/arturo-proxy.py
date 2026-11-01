@@ -638,6 +638,11 @@ def _finalize_journal_file(path):
     if _origin not in ("funnel", "relay"):
         log.info(f"finalized {call_id} -> ended ({n_turns} turns); NO inject (origin={_origin}, not genuine the operator)")
         return True
+    if d.get("agent"):
+        # A call answered by the agent's own session: its turns are already in that session (typed path), and the
+        # call is listed in the agent's own chat. Nothing to tell gm.
+        log.info(f"finalized {call_id} -> ended ({n_turns} turns); NO inject (the call was with {d['agent']})")
+        return True
     gm_summary, full_transcript = _gm_call_note(turns, summary)
     _call_key = d.get("conv_id") or call_id
     def _inject():
@@ -802,6 +807,11 @@ def finalize_from_client(client_call_id="", conv_id=""):
         client.setdefault("ended_at", client.get("ended_at") or time.time())
         if server_id:
             client["merged_server"] = server_id
+            if server_d.get("agent") and not client.get("agent"):
+                # The call was with an agent (its own session answered): the merged record says so too, and gm gets
+                # nothing (the turns are already in that agent's session).
+                client["agent"] = server_d["agent"]
+                client["gm_inject_suppressed"] = True
         # DELIB-BUG-1: gm_injected stays FALSE until an inject SUCCEEDS. It is set True only by
         # _attempt_gm_inject on a 200 from gm. Preserve any existing retry counters on re-notify.
         client.setdefault("gm_injected", False)
@@ -882,7 +892,7 @@ def _attempt_gm_inject(cpath):
             except Exception:
                 return False
             if (d.get("gm_injected") or d.get("gm_inject_gaveup")
-                    or d.get("gm_inject_suppressed") or d.get("source") != "client"):
+                    or d.get("gm_inject_suppressed") or d.get("source") != "client" or d.get("agent")):
                 return False
             call_id = d.get("call_id", "")
             summary = d.get("summary") or ""
@@ -4325,6 +4335,20 @@ def _execute_tool_raw(name, args, user_turns=None):
         # which is the actual cure for the AGY duplicate.
         import time as _t
 
+        # A headless seat on this host (scripts/headless_switch.py): its pane holds the seat's supervisor, so a
+        # paste there would type into the wrong process. Its words go through the gateway's /agent-message (the
+        # supervisor's stdin), held for the turn's end when it is mid-turn.
+        from scripts import gateway_deliver as _gd
+        if _gd.headless_seat(session):
+            _r = _gd.deliver(session, message, source="mail", accepts_held=True, actor="automation:arturo-inject")
+            if _r["delivered"]:
+                return f"Message injected into '{session}' on vps (verified landed)."
+            if _r["held"]:
+                return (f"'{session}' is mid-turn: the message is queued and reaches it when this turn ends. "
+                        f"Tell the operator it's queued, not delivered yet.")
+            return (f"Failed to deliver to '{session}' ({_r['reason'] or 'the gateway refused it'}). "
+                    f"Tell the operator it did not go through.")
+
         def _paste(mach):
             return _run_on_machine(
                 _pane_inject.paste_command(session, message, mac=True),
@@ -6851,17 +6875,23 @@ if _STREAM_RELAY is not None:
         # item(1): stamp the call's surface from the phone's X-Surface header (forwarded by the
         # gateway). Missing (watch) -> normalized to 'watch' inside feed_audio; set once at creation.
         surface_device = request.headers.get("X-Surface")
+        # The agent the call is with (the gateway's /live?agent=): its own voice, stamped once at the first chunk.
+        # None for Arturo's own calls (the server voice). A malformed id is refused, never guessed at.
+        _agent = (request.headers.get("X-Arturo-Agent") or "").strip() or None
+        if _agent is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", _agent):
+            return jsonify({"ok": False, "error": "bad agent id"}), 400
         # G1': only the call's own caller may speak into it (recorded at its first chunk).
         _caller = _stamped_principal(request)
         _ok_caller, _claimed = _bind_call(cid, _caller, claim=True)
         if not _ok_caller:
             return jsonify({"ok": False, "error": "not this call's caller"}), 403
-        r = _STREAM_RELAY.feed_audio(cid, pcm, surface_device=surface_device)
+        r = _STREAM_RELAY.feed_audio(cid, pcm, surface_device=surface_device, agent=_agent)
         if _claimed and not r.get("ok"):
             _unclaim_call(cid)
         _thread = request.headers.get("X-Arturo-Thread")
         if (r.get("ok") and _thread and _CALL_THREADS is not None and _CALL_THREADS.thread(cid) is None
-                and _thread_refusal(_thread, _caller) is None):
+                and not _STREAM_RELAY.agent_mode(cid) and _thread_refusal(_thread, _caller) is None):
+            # (A call answered by the agent's own session lives in that agent's chat, not in an Arturo thread.)
             # The browser's call names the Arturo thread it was started from: its lines are archived there.
             _CALL_THREADS.bind(cid, _thread, principal=_thread_key(_caller))
         if not r.get("ok"):
@@ -8294,6 +8324,7 @@ def health():
         # stream relay (services/arturo/relay_live_bridge.py) when that is the chosen, available vendor.
         "live": _live_engine() is not None,
         "live_engine": _live_engine(),
+        "live_reason": _live_state()[1],         # why there is no live engine, in plain words (None when there is)
         # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
         "stt": _local_stt.state(),
         "tools": [t["function"]["name"] for t in TOOLS],
@@ -8303,17 +8334,20 @@ def health():
     })
 
 
-def _live_engine():
-    """Which engine answers the browser's Live voice mode: "gemini", "relay" (GPT-Live), or None."""
-    if "GEMINI_API_KEY" in VOICE_VENDORS_PRESENT:
-        return "gemini"
-    if _STREAM_RELAY is None:
-        return None
-    from services.arturo import voice_vendor as _vv
+def _live_state():
+    """(engine, reason) for the Live voice mode, from the server-wide voice provider only (live_engine.choose):
+    "relay" (GPT-Live) for openai, None with a plain reason otherwise. A Gemini key alone never picks Gemini."""
+    from services.arturo import live_engine as _le, voice_vendor as _vv
     try:
-        return "relay" if _vv.get_vendor() == "openai" and not _vv.unavailable_reason("openai") else None
+        return _le.choose(_vv.get_vendor(), _STREAM_RELAY is not None, _vv.unavailable_reason,
+                          gemini_key="GEMINI_API_KEY" in VOICE_VENDORS_PRESENT)
     except Exception:  # noqa: BLE001 — health never fails on a vendor read
-        return None
+        return None, "The voice provider couldn't be read, so live calls aren't available right now"
+
+
+def _live_engine():
+    """Which engine answers the browser's Live voice mode: "relay" (GPT-Live), "gemini" (never today), or None."""
+    return _live_state()[0]
 
 
 _PLAIN_CONV_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -8470,18 +8504,38 @@ def _openai_delegate(cid, messages):
 
 def _openai_journal(cid, role, text, **meta):
     """GPT-Live turns that never reach the CLM (answered without delegating; an interrupted answer) go into
-    the same call journal, flagged."""
+    the same call journal, flagged. A call answered by an agent's own session (agent=<id>) also journals its turns
+    here, and its call file says whose call it is: "agent" (the API lists it in that agent's chat)."""
+    agent = meta.pop("agent", None)
     call_id = _find_live_by_conv_id(cid)
     if not call_id:
         call_id = _resolve_or_create([{"role": "assistant", "content": "(GPT-Live call)"},
                                       {"role": "user", "content": text or "(GPT-Live)"}],
                                      page="voice", origin="relay", conv_id=cid)
+    if agent and call_id:
+        _stamp_call_agent(call_id, agent)
     _journal_append(call_id, role, text=text, **meta)
+
+
+def _stamp_call_agent(call_id, agent):
+    """The call file's top-level "agent" (once): the call was with that agent, not Arturo's own."""
+    from services.arturo.call_journal import _atomic_write
+    try:
+        with _JOURNALS_LOCK:
+            p = VOICE_CALLS_DIR / f"{call_id}.json"
+            d = json.loads(p.read_text())
+            if d.get("agent") != agent:
+                d["agent"] = agent
+                _atomic_write(p, d)
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never the call
+        log.warning(f"call {call_id}: agent not stamped ({e!r})")
 
 
 def _wire_openai(relay):
     """Give a relay manager the proxy's CLM delegation and call journal (late-bound, so tests can patch)."""
     relay.openai_delegate = lambda cid, messages: _openai_delegate(cid, messages)
+    from services.arturo import agent_call as _agent_call
+    relay.agent_calls = _agent_call
     relay.journal_hook = lambda cid, role, text, **meta: _openai_journal(cid, role, text, **meta)
     relay.scrub = lambda text: _VAULT.scrub(text)
 

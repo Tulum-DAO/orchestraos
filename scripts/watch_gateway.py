@@ -5198,7 +5198,9 @@ async def handle_agent_message(request):
     refusal = _protected_refusal(request, session)
     if refusal is not None:
         return _json(refusal, status=403)
-    if session not in _tmux_session_names():
+    # A headless seat is known by its switch, not by tmux: its words go to the supervisor's socket, so the tmux
+    # session list (a subprocess, ~5 ms) is only asked for a pane seat.
+    if not _headless_seat_for(session) and session not in _tmux_session_names():
         return _json({"ok": False, "error": "no such session"}, status=404)
 
     accepts = data.get("accepts")
@@ -5302,7 +5304,9 @@ async def handle_agent_dev(request):
         return _json({"ok": False, "error": "not a headless seat"}, status=404)
     loop = asyncio.get_event_loop()
     if not data["on"] and headless_switch.in_dev(seat, orch_dir=ORCH_DIR) and not data.get("force"):
-        st = await loop.run_in_executor(None, _agent_status().get_agent_status, session)
+        # Busy = what the TUI shows and what its hooks said (a turn, a menu or permission, a typed draft), never
+        # the process-activity deriver: a TUI that has just started reads busy there while it idles at its prompt.
+        st = await loop.run_in_executor(None, lambda: _agent_status().get_agent_status(session, deriver=False))
         if (st or {}).get("state") in DEV_EXIT_BLOCKING_STATES:
             return _json({"ok": False, "busy": True, "state": _STATE_MAP.get(st.get("state"), st.get("state")),
                           "error": "the agent is busy in the terminal: let it finish (or send force)"},
@@ -9203,17 +9207,31 @@ def _live_token_from_request(request) -> str:
     return token
 
 
+LIVE_NOT_NOW = "Live calls aren't available right now"
+LIVE_NOT_YET = "Live calls aren't available with this voice provider yet"
+_LIVE_REASON = {"reason": None}       # why the last _live_engine() answered None, in plain words
+_AGENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
 async def _live_engine():
-    """Arturo's /health live_engine ("gemini" | "relay" | None). Unreachable or older Arturo -> "gemini",
-    which is what /live always ran before."""
+    """Arturo's /health live_engine: "relay" (GPT-Live) | "gemini" | None. Arturo decides from the server-wide
+    voice provider alone; the gateway never picks an engine itself. Unreachable Arturo -> None (refused with
+    a plain reason), never Gemini on its own."""
     import aiohttp
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
             async with s.get(_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/health") as r:
-                return (await r.json(content_type=None)).get("live_engine", "gemini")
+                h = await r.json(content_type=None)
     except Exception as e:  # noqa: BLE001
-        log.warning(f"/live: arturo health unreachable, using gemini: {e!r}")
-        return "gemini"
+        log.warning(f"/live: arturo health unreachable, refusing: {e!r}")
+        _LIVE_REASON["reason"] = LIVE_NOT_NOW
+        return None
+    engine = h.get("live_engine") if isinstance(h, dict) else None
+    if engine in ("relay", "gemini"):
+        _LIVE_REASON["reason"] = None
+        return engine
+    _LIVE_REASON["reason"] = (h.get("live_reason") if isinstance(h, dict) else None) or LIVE_NOT_YET
+    return None
 
 
 async def handle_gemini_live(request):
@@ -9227,18 +9245,29 @@ async def handle_gemini_live(request):
         return web.Response(status=401, text="unauthorized")
 
     voice = request.query.get("voice", "Fenrir")
+    # ?agent=<id>: the agent the call is with (agreed with the API's voice-live route). Its own voice is used;
+    # absent -> Arturo's own call, the server voice. A malformed id is refused before the upgrade.
+    agent = (request.query.get("agent") or "").strip() or None
+    if agent is not None and not _AGENT_ID.fullmatch(agent):
+        return web.Response(status=400, text="bad agent id")
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
     try:
-        if await _live_engine() == "relay":
+        engine = await _live_engine()
+        if engine is None:
+            await ws.send_json({"event": "error", "reason": _LIVE_REASON.get("reason") or LIVE_NOT_YET})
+            await ws.close()
+            return ws
+        if engine == "relay":
             # No Gemini key, GPT-Live chosen: the same browser contract over the watch's stream relay.
             from services.arturo.relay_live_bridge import RelayLiveSession
             from scripts import arturo_stamp
             secret = arturo_stamp.ensure(_data_dir())
             headers = {"X-Arturo-Principal": "fleet", arturo_stamp.HEADER: secret} if secret else {}
             await RelayLiveSession(ws, ARTURO_PTT_STREAM_BASE, headers, voice=voice,
-                                   on_surface=_record_web_call_surface).run()
+                                   on_surface=_record_web_call_surface,
+                                   **({"agent": agent} if agent else {})).run()
             return ws
         live_session_cls = GeminiLiveSession
         if live_session_cls is None:

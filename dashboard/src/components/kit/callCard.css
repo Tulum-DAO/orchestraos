@@ -1,0 +1,33 @@
+/* The one call card's additions (components/kit/CallCard.tsx). Its look is Arturo's .call-card / .call-head rules
+   (arturo.css); this file adds what every agent's card shares with his, in its own file. */
+
+/* A long call scrolls inside a fixed height (Arturo's too); the header stays put above it. */
+.call-card .call-body{ max-height:min(420px, 55vh); overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+
+/* Centred at the same width in any column, block or flex. */
+.call-card{ margin-inline:auto; }
+
+/* An agent's call: each turn as its chat draws it (components/kit/Turns, in the chat's skin); Modern labels each
+   turn You / the agent's name over it, Bubbles shows no names. */
+.call-said-row{ display:flex; flex-direction:column; min-width:0; }
+.call-who{ font-size:11.5px; font-weight:600; color:var(--grey); padding:0 6px; }
+/* Where the agent's work started on the call; opens that spot of the thread. */
+.call-work-chip{ align-self:flex-start; display:inline-flex; align-items:center; gap:6px; min-height:0; padding:3px 11px; border-radius:999px;
+  border:1px solid var(--hair); background:var(--card); color:var(--grey); font:inherit; font-size:12.5px; cursor:pointer; }
+@media (hover:hover){ .call-work-chip:hover{ color:var(--text); } }
+
+/* The Bubbles chat has no Arturo colour set around it: the card carries the same one (the Modern chat's values,
+   components/kit/kit-modern.css), light and dark, so it is one card in one set of colours everywhere. */
+.call-scope{
+  --canvas:#fff; --panel:#f7f7f7; --card:#f2f2f2; --card2:#e9e9e9; --bubble:#efefef;
+  --text:#111; --text2:#1c1b1a; --ink:0,0,0;
+  --hair:rgba(0,0,0,0.08); --grey:rgba(0,0,0,0.6); --grey2:rgba(0,0,0,0.55); --shadow:rgba(0,0,0,0.08);
+  --call-surface:var(--panel); --call-bubble:#fff; --call-bubble-line:var(--hair);
+  color:var(--text);
+}
+.dark .call-scope{
+  --canvas:#000; --panel:#141414; --card:#1c1c1c; --card2:#232323; --bubble:#262626;
+  --text:#fff; --text2:#f1efec; --ink:255,255,255;
+  --hair:rgba(255,255,255,0.08); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38); --shadow:rgba(0,0,0,0.4);
+  --call-bubble:#1c1c1c; --call-bubble-line:transparent;
+}

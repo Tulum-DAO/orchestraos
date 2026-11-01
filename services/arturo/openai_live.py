@@ -44,6 +44,21 @@ INSTRUCTIONS = (
     "answer them instead.")
 
 
+AGENT_INSTRUCTIONS = (
+    "You are {name}, one of the operator's agents, on a voice call with them. You are only {name}'s VOICE: {name}'s "
+    "own session, with its own context and tools, does the work and answers. DELEGATE everything they ask, every "
+    "time, including small talk about their work. Never answer for {name}, never say you did, checked or found "
+    "anything yourself. While the session works, stay silent: never fill the wait with your own words (the backend "
+    "says a short acknowledgement itself when it takes a while). When the backend's words come, say them faithfully, "
+    "in order, as they come. You start the conversation: say one short casual greeting as {name} (under 6 words), "
+    "unless they speak first.")
+
+
+def agent_instructions(agent, name=None):
+    """The call's instructions when the agent's own session answers (services/arturo/agent_call.py): its own name."""
+    return AGENT_INSTRUCTIONS.format(name=(name or str(agent or "")).strip() or "the agent")
+
+
 def api_key():
     from services.arturo import voice_vendor
     return (voice_vendor._secret(KEY) or "").strip()
@@ -65,12 +80,27 @@ def encode_uplink(pcm):
     return json.dumps({"type": "session.input_audio.append", "audio": base64.b64encode(pcm).decode()})
 
 
+def speaking_as(voice, vendor="openai"):
+    """One plain line for the live session: which voice, on which provider. Names only (VENDOR_COPY titles);
+    never a key. Empty when there is no voice to name."""
+    from services.arturo import voice_vendor as _vv
+    name = str(voice or "").strip()
+    if not name:
+        return ""
+    title = (_vv.VENDOR_COPY.get(vendor) or {}).get("title") or vendor
+    return f"You're speaking as {name[:1].upper() + name[1:]}, on {title}."
+
+
 def session_start(instructions=None, voice="marin"):
     """The voice is FIXED for the session (OpenAI voice-websockets guide), so a pick applies on the next call.
-    The instructions carry the assistant's current name (read at session start, not at import)."""
+    The instructions carry the assistant's current name (read at session start, not at import), then one line
+    saying which voice and provider this call is on."""
     if instructions is None:
         from services.arturo import assistant_name
         instructions = assistant_name.named(INSTRUCTIONS)
+        line = speaking_as(voice)
+        if line:
+            instructions = f"{instructions.rstrip()}\n\n{line}"
     return {"type": "session.start", "session": {
         "model": MODEL, "instructions": instructions,
         "audio": {"format": {"type": "audio/pcm", "rate": 16000}, "output": {"voice": voice}},
@@ -280,12 +310,33 @@ class AsyncWsSocket:
         self._q.put(self._CLOSED)
 
 
-def openai_socket_factory(conversation_id, **_):
-    """The relay's socket factory for vendor 'openai': connect, then send session.start as the first frame."""
+def call_voice(agent=None):
+    """The voice for this call: the agent's own pick, else the install's, else the default. Arturo's own calls
+    (no agent) get the install's voice, as before. A malformed agent id falls back to the install's voice."""
+    from services.arturo import voice_choice as _voice_choice
+    v = None
+    if agent:
+        try:
+            v = _voice_choice.get_voice("openai", agent)
+        except ValueError:
+            v = None
+    return v or _voice_choice.get_voice("openai") or _voice_choice.OPENAI_DEFAULT
+
+
+def openai_socket_factory(conversation_id, agent=None, agent_mode=False, **_):
+    """The relay's socket factory for vendor 'openai': connect, then send session.start as the first frame.
+    `agent` is the agent the call is with (its own voice); None for Arturo's own calls. `agent_mode`: its own
+    session answers, so the call speaks as that agent (its name), not as Arturo."""
     key = api_key()
     if not key:
         raise RuntimeError("openai: no API key (set OPENAI_API_KEY in <data dir>/.env.secrets or the env)")
     s = AsyncWsSocket(URL, {"Authorization": "Bearer " + key})
-    from services.arturo import voice_choice as _voice_choice
-    s.send(json.dumps(session_start(voice=_voice_choice.get_voice("openai") or _voice_choice.OPENAI_DEFAULT)))
+    voice = call_voice(agent)
+    instructions = None
+    if agent_mode and agent:
+        from services.arturo import agent_call
+        instructions = agent_instructions(agent, agent_call.display_name(agent))
+        line = speaking_as(voice)
+        instructions = f"{instructions}\n\n{line}" if line else instructions
+    s.send(json.dumps(session_start(instructions=instructions, voice=voice)))
     return s

@@ -442,6 +442,17 @@ def repair_wait_then_retry(seat: str, session: str, ev: dict) -> tuple[bool, str
     return repair_bare_enter(seat, session, ev)
 
 
+def _headless(session: str) -> bool:
+    try:
+        import gateway_deliver
+        return bool(gateway_deliver.headless_seat(session))
+    except Exception:  # noqa: BLE001 — unreadable switch: a tmux seat, as every other reader treats it
+        return False
+
+
+#: The repairs that type keys into the pane (respawn starts a dead pane's process and is headless-aware).
+KEY_REPAIRS = frozenset({"switch_provider", "accept_dialog", "bare_enter", "wait_then_retry"})
+
 REPAIRS = {
     "respawn_resume": repair_respawn,
     "switch_provider": repair_switch_provider,
@@ -542,6 +553,11 @@ def handle(seat: str, session: str, r: dict, ev: dict, *, dry: bool) -> None:
         fn = REPAIRS.get(d["fix"])
         if not fn:
             RA.record_attempt(rid, action=d["fix"] or "none", ok=False, detail="no executor for this fix")
+            return
+        if d["fix"] in KEY_REPAIRS and _headless(session):
+            # A headless seat's pane holds its supervisor, not a TUI: keys typed there reach the wrong process.
+            # Not a failed repair (it would count toward escalation): the card stays with the operator.
+            log(f"{rid} {seat}: runs headless, no TUI to key into; {d['fix']} not run")
             return
         # Under the ONE cross-process pane lock every typer shares (pane_lock.py, gm msg_ede7b24a): a
         # repair's keys must not glue into a gateway/router burst. A busy pane is NOT a failed repair

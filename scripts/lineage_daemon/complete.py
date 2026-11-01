@@ -76,6 +76,29 @@ WATCH_STATUSES = frozenset({AWAITING_PROGRESS, RETIRED_AWAITING_EFFECT})
 TERMINAL_STATUSES = frozenset({COMPLETED, RESIDUAL_RETIRED, ESCALATED, RETIRED_ESCALATED})
 
 
+def resume_pane_echo(canary, tgt, *, run=None, headless_fn=None):
+    """The resume's best-effort wake line in the canary's pane, after its durable resume row.
+    EXACT target ('='). This is a WRITE: a bare `-t <canary>:0` resolves by PREFIX, so mid-swap
+    -- bare canonical name absent, `<canary>-g<N>` alive -- it TYPES THE RESUME INTO THE GREEN'S
+    PANE, i.e. into a session nobody chose. Strictly worse than a wrong read. Exact-only, so an
+    absent target sends nothing rather than typing somewhere else.
+    A headless seat's pane holds its supervisor: nothing is typed there; the resume row reaches its
+    CLI through the router's supervisor path. Returns True when the line was typed."""
+    import subprocess
+    if headless_fn is None:
+        def headless_fn(seat):
+            try:
+                from scripts import gateway_deliver
+                return gateway_deliver.headless_seat(seat)
+            except Exception:  # noqa: BLE001 -- unreadable: a tmux seat, as before
+                return None
+    if headless_fn(canary):
+        return False
+    pane_target = f"={canary}:0"
+    cmd = f"echo '[LINEAGE RESUME] Resuming task: {tgt}'\n"
+    (run or subprocess.run)(["tmux", "send-keys", "-t", pane_target, cmd], capture_output=True)
+    return True
+
 def completion_ready(canary, successor, hold_row, *, now,
                      live_sid_fn, l_start_time_fn, readback_mtime_fn,
                      provenance_sid_fn, clock_skew_s=2.0) -> bool:
@@ -903,15 +926,7 @@ def build_completion_provider(*, orchestra_dir=None, sessions_meta=None,
                     body=body, source="fleet-beat")
 
             try:
-                import subprocess
-                # EXACT target ('='). This is a WRITE: a bare `-t <canary>:0` resolves by
-                # PREFIX, so mid-swap -- bare canonical name absent, `<canary>-g<N>` alive --
-                # it TYPES THE RESUME INTO THE GREEN'S PANE, i.e. into a session nobody
-                # chose. Strictly worse than a wrong read. Exact-only, so an absent target
-                # sends nothing rather than typing somewhere else.
-                pane_target = f"={canary}:0"
-                cmd = f"echo '[LINEAGE RESUME] Resuming task: {tgt}'\n"
-                subprocess.run(["tmux", "send-keys", "-t", pane_target, cmd], capture_output=True)
+                resume_pane_echo(canary, tgt)
             except Exception:
                 pass
         except Exception:  # noqa: BLE001 -- resume is best-effort

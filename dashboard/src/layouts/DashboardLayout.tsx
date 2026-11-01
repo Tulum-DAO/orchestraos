@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import CallChip from '../components/call/CallChip';
+import SwitchCallDialog from '../components/call/SwitchCallDialog';
 import { createPortal } from 'react-dom';
 import { CommandPalette } from '../components/CommandPalette';
 import { Outlet, useLocation } from 'react-router-dom';
@@ -219,6 +221,9 @@ export function DashboardLayout() {
           </div>
         </div>
         <CoachingToast />
+        {/* A live call follows you: its chip on every page but the called agent's own (that page has the call bar). */}
+        <CallChip onAgentPage={onAgentWithId?.params.id ?? null} />
+        <SwitchCallDialog />
         <HeaderEndSlotContext.Provider value={setPageBellSlot}>
         {isChatRoute ? (
           <div className="flex-1 min-h-0 flex flex-col" data-layout-chat>

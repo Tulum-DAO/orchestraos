@@ -100,3 +100,22 @@ export function voiceRowValue(vendor: VoiceVendor | null, current: CurrentVoice 
   const title = current?.title || (current?.voice_id ? current.voice_id[0].toUpperCase() + current.voice_id.slice(1) : null);
   return title ? `${GPT_LIVE} · ${title}` : GPT_LIVE;
 }
+
+/** The voice provider is set for the whole server, not per agent: the Edit page shows it greyed and not tappable,
+ *  with this note. */
+export const PROVIDER_SCOPE_NOTE = 'Set for the whole server';
+
+/** The provider part of the voice: "GPT-Live", "Not set up", or '' while loading. Not a choice anyone makes per agent. */
+export function voiceProviderValue(vendor: VoiceVendor | null, liveFromHealth: boolean | null): string {
+  const available = vendor ? vendor.available : liveFromHealth;
+  if (available === null) return '';
+  return available ? GPT_LIVE : 'Not set up';
+}
+
+/** The voice part, the one an agent picks for itself: "Marin"; '' when there is none to show (no provider, or not
+ *  readable yet). */
+export function voiceNameValue(vendor: VoiceVendor | null, current: CurrentVoice | null, liveFromHealth: boolean | null): string {
+  const available = vendor ? vendor.available : liveFromHealth;
+  if (!available) return '';
+  return current?.title || (current?.voice_id ? current.voice_id[0].toUpperCase() + current.voice_id.slice(1) : '');
+}

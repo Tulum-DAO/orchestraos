@@ -4,7 +4,7 @@
  * with the picker (lib/modelPicker.ts): a short id that stands for a fuller model is that model, and the context
  * size comes from the gateway's subtitle.
  */
-import { canonicalId, findCurrent, isHidden, modelTitle, nameAndTag, pickerModelsFor } from './modelPicker.ts';
+import { ALIASES, canonicalId, findCurrent, isHidden, modelTitle, nameAndTag, pickerModelsFor } from './modelPicker.ts';
 import type { AgentModelInfo } from './agentModel.ts';
 
 /** Words for a model id when there is no list to look it up in: "claude-opus-5-5[1m]" → "Opus 5.5". */
@@ -16,13 +16,15 @@ function wordsFor(id: string): string {
 }
 
 /**
- * Any surface's name for a model, by the picker's rules: a short id is the model it stands for ("opus" is Opus 5.5
- * at 1M), the context size is a tag ("Opus 5.5 · 1M"), and words already known (a saved label, the gateway's
- * title) are reused. The model the picker never offers (Opus 5.5 at 200k) is never called plain "Opus 5.5": an
- * agent still running it says so ("Opus 5.5 · 200K").
+ * Any surface's name for a model, by the picker's rules: a short id is the model it names ("opus" is Opus 5.5 at
+ * 200K, the CLI's alias), the context size is a tag ("Opus 5.5 · 1M" only for the explicit [1m] id), and words already
+ * known (a saved label, the gateway's title) are reused.
  */
 export function modelIdTitle(providerId: string, id: string, words?: string | null, subtitle?: string): string {
   const canonical = canonicalId(providerId, id);
+  // A CLI alias whose meaning is known (lib/modelPicker.ts ALIASES): "opus" is Opus 5.5 at 200K.
+  const alias = ALIASES[providerId]?.[canonical];
+  if (alias) return modelTitle(alias);
   // words saved in this very form ("Opus 5.5 · 1M") read like the gateway's ("Opus 5.5 (1M)")
   const said = (words ?? '').trim().replace(/\s+·\s+(\d+(?:\.\d+)?\s*[KkMm])$/, ' ($1)');
   const { name, tag } = nameAndTag(canonical, said || wordsFor(canonical), subtitle);

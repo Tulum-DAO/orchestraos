@@ -22,6 +22,8 @@ import awayRouter from './routes/away.js';
 import usageRouter from './routes/usage.js';
 import arturoRouter from './routes/arturo.js';
 import agentsNewRouter, { loginShellSessionExists } from './routes/agents-new.js';
+import agentCallsRouter from './routes/agent-calls.js';
+import agentJobsRouter from './routes/agent-jobs.js';
 import { startLoginShellSweeper } from './lib/loginShells.js';
 import approvalsRouter from './routes/approvals.js';
 import analyticsRouter from './routes/analytics.js';
@@ -184,6 +186,8 @@ app.get('/api/capabilities', (_req, res) => { res.json(capabilities()); });
 // /new and /login-shell must mount BEFORE the agents router, whose '/:id/spawn'
 // would otherwise swallow them as an agent id.
 app.use('/api/agents', agentsNewRouter);
+app.use('/api/agents', agentCallsRouter);   // a call made on an agent's page: its record and thumbs
+app.use('/api/agents', agentJobsRouter);    // the agent's own background work, for its job tray
 app.use('/api/agents', agentsRouter);
 app.use('/api/agents', chatTranscriptRouter); // /:id/transcript (falls through from agentsRouter)
 app.use('/api/agents', agentMessagesRouter); // /:id/messages/:msgId (the body behind a "Message from" line)

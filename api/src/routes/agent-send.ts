@@ -97,6 +97,24 @@ export interface SendBody {
   /** The human override for a composer-hold 409 ("Overwrite draft & send"). Passed to the gateway,
    *  whose force skips ONLY the composer gates, never the active-turn gate. */
   force?: boolean;
+  /** The page the person is on as they send (pageContextLine). It reaches the agent with this turn, never as
+   *  their words: the transcript reader strips it from the user's bubble. */
+  page_context?: { path?: unknown; title?: unknown };
+}
+
+// The quiet page line: one tag at the end of the text the agent receives. One line, so a pane delivery is not turned
+// into a multi-line paste by it; the transcript reader (chat-transcript.ts stripPageContext) removes the whole tag.
+/** The tag for a page, or '' when there is none. Path and title are the browser's: kept short, on one line, and
+ *  without angle brackets, so they can neither close the tag nor read as markup. */
+export function pageContextLine(ctx: SendBody['page_context']): string {
+  if (!ctx || typeof ctx !== 'object') return '';
+  const clean = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/[<>\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  const path = clean(ctx.path, 200);
+  const title = clean(ctx.title, 120);
+  if (!path && !title) return '';
+  const where = title && path ? `${title} (${path})` : title || path;
+  return `<page-context>The person is looking at this page in the dashboard as they send this: ${where}. `
+    + `Use it only if they ask about the page; do not mention it otherwise.</page-context>`;
 }
 
 export interface GatewayInjectResult {
@@ -311,11 +329,17 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   }
   const session = deps.resolveSession(agentId);
   const messageText = buildMessageText(text, body.attachments);
+  // What the agent receives: the person's words, then the quiet page line. Everything shown or stored for later
+  // (sent_text, the durable fallback) is the words alone: a page that was open then is not the page later.
+  // Never on a slash command: the CLI and the gateway read a command as the whole message (a person's /compact is
+  // matched exactly), so a trailing tag would turn it into words.
+  const context = messageText.startsWith('/') ? '' : pageContextLine(body.page_context);
+  const deliveredText = context ? `${messageText} ${context}` : messageText;
 
   // force: the route's own contract (header: "a client can re-POST with force:true") was never
   // honoured. It was dropped here, so "Overwrite draft & send" got the same 409 forever (review of #198).
   // Only an explicit boolean true counts.
-  const gw = await deps.gatewayInject(session, messageText, body.force === true);
+  const gw = await deps.gatewayInject(session, deliveredText, body.force === true);
 
   const shape = (state: SendState, extra: Record<string, unknown> = {}) =>
     capable ? { state, ...extra } : { ok: state === 'delivered' || state === 'queued' || state === 'held', ...extra };
@@ -365,7 +389,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     };
     res.status(409).json({
       ...legacy,
-      payload: { text, attachments: body.attachments, client_caps: body.client_caps },
+      payload: { text, attachments: body.attachments, client_caps: body.client_caps,
+                 ...(body.page_context ? { page_context: body.page_context } : {}) },
     });
     return;
   }

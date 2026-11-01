@@ -173,7 +173,7 @@ def _default_socket_factory(conversation_id):
     return _el_sock(ws)
 
 
-def hume_socket_factory(conversation_id, resumed_chat_group_id=None):
+def hume_socket_factory(conversation_id, resumed_chat_group_id=None, agent=None):
     """Real Hume EVI socket (spec §4.2). verbose_transcription=true is what makes Hume emit
     interim user_message frames (our native-partials replacement for the Scribe fork).
     HUME_CONFIG_VERSION comes from .env.secrets — pinned, never hardcoded."""
@@ -208,7 +208,13 @@ def hume_socket_factory(conversation_id, resumed_chat_group_id=None):
     # session_settings.voice_id per connect — no config re-pin, no restart per pick.
     # Absent pref => the pinned config's default voice governs.
     from services.arturo import voice_choice as _voice_choice
-    _vid = _voice_choice.get_voice("hume")
+    _vid = None
+    if agent:
+        try:
+            _vid = _voice_choice.get_voice("hume", agent)  # the agent's own voice, else the install's
+        except ValueError:
+            _vid = None
+    _vid = _vid or _voice_choice.get_voice("hume")         # Arturo's own calls: the install's voice, as before
     if _vid:
         settings["voice_id"] = _vid
     ws.send(json.dumps(settings))
@@ -241,6 +247,7 @@ OPENAI_SPEAK_GAP_S = 1.2       # the caller quiet this long before Arturo volunt
 OPENAI_SPEAK_WAIT_S = 20.0     # how long a volunteered line waits for a pause before it is said anyway
 OPENAI_CALL_CAP_S = openai_live.CALL_CAP_S          # per-call cap (gm: 20 min); the daily cap is voice_usage
 OPENAI_CALL_WARN_S = openai_live.CALL_WARN_S
+AGENT_CALL_TOUCH_S = 10.0      # an agent call's live marker is refreshed this often (agent_call.CALL_MARK_TOUCH_S)
 OPENAI_SPAN_TAIL_S = 0.8        # seconds of non-speech AUDIO (not wall clock) that close an Arturo speech span
 SUPERSEDE_VENDORS = ("hume", "openai")              # vendors whose CLM requests feed SUPERSEDE / ASYNC-HOLD
 _ACK_RE = re.compile(r"\b(i'?m on it|on it|done|sent|i'?ve (sent|started|messaged|checked|done))\b", re.I)
@@ -287,10 +294,23 @@ def _default_scribe(pcm):
 class _Holder:
     """One live conversation: EL socket + reader thread + reconnect + partials fork."""
 
-    def __init__(self, conversation_id, manager, vendor="elevenlabs"):
+    def __init__(self, conversation_id, manager, vendor="elevenlabs", agent=None):
         self.cid = conversation_id
         self.m = manager
         self.vendor = vendor
+        self.agent = agent            # the agent the call is with (its own voice); None: Arturo's own call
+        # The agent's OWN session takes this call's turns (services/arturo/agent_call.py): GPT-Live, an agent, its
+        # switch on and the seat streaming. Decided once, at the call's first chunk; off: the call runs as before.
+        self.agent_mode = False
+        ac = getattr(manager, "agent_calls", None)
+        if agent and vendor == "openai" and ac is not None:
+            try:
+                self.agent_mode = bool(ac.enabled(agent))
+            except Exception as e:  # noqa: BLE001 — an unreadable switch: the call runs as before
+                log.warning(f"relay {conversation_id}: agent-call switch unreadable for {agent}: {e!r}")
+        self._call_touched = 0.0
+        if self.agent_mode:
+            ac.mark_call(agent, conversation_id)   # its supervisor neither rotates nor restarts while it is live
         self.sock = None
         self.gate = ptt_stream.UplinkGate()
         self.turn_pcm = ptt_stream.TurnPcmBuffer()
@@ -393,10 +413,11 @@ class _Holder:
                     and (not from_reconnect or self._frameless_fail)):
                 return False
         try:
+            who = {"agent": self.agent} if self.agent else {}     # Arturo's own calls: as before
             if self.vendor == "hume":
-                s = self.m.factories["hume"](self.cid, resumed_chat_group_id=self.chat_group_id)
+                s = self.m.factories["hume"](self.cid, resumed_chat_group_id=self.chat_group_id, **who)
             elif self.vendor == "openai":
-                s = self.m.factories["openai"](self.cid)
+                s = self.m.factories["openai"](self.cid, **who, **({"agent_mode": True} if self.agent_mode else {}))
             else:
                 s = self.m.socket_factory(self.cid)
         except Exception as e:
@@ -707,7 +728,24 @@ class _Holder:
                 ev["echo"] = True
             self.m.buffer.put(self.cid, ev)
 
+    def touch_call(self):
+        """While the call runs, its marker stays fresh (the supervisor treats one older than 90 s as gone)."""
+        if not self.agent_mode:
+            return
+        now = time.time()
+        if now - self._call_touched >= AGENT_CALL_TOUCH_S:
+            self._call_touched = now
+            try:
+                self.m.agent_calls.touch_call(self.agent)
+            except Exception:  # noqa: BLE001
+                pass
+
     def close(self):
+        if self.agent_mode:
+            try:
+                self.m.agent_calls.clear_call(self.agent, self.cid)
+            except Exception:  # noqa: BLE001
+                pass
         self._cancel_timers()
         # speaking teardown: NO speaking:false on close (finalize owns end-of-call; the
         # client treats end/410 as implicitly not-speaking) — but bump the gen so a
@@ -1514,8 +1552,75 @@ class _Holder:
                                              "text": f"(You cut in before I finished) {ans['answer']}"})
             self._oa_journal("arturo", ans["answer"], delegated=True, interrupted=True)
 
+    def _oa_agent_turn(self, sock, did, q):
+        """Worker, for a call in agent mode: the words go into the agent's own session (the typed path) and its reply
+        is spoken as it streams, sentence by sentence on this delegation; a long turn's rest out of band."""
+        ac = self.m.agent_calls
+        seat = self.agent
+        self.touch_call()
+        if ac.in_dev(seat):
+            # Dev: never forced out. The caller hears why, and the call bar offers Back to chat; the next turn after it
+            # goes to the agent's own session.
+            self.m.buffer.put(self.cid, {"type": "agent_in_dev", "agent": seat})
+            for f in openai_live.commentary_frames(did, ac.DEV_LINE):
+                try:
+                    sock.send(f)
+                except Exception:  # noqa: BLE001
+                    return
+            self._oa_journal("user", q, agent=seat)
+            self._oa_journal("assistant", ac.DEV_LINE, agent=seat)
+            try:
+                ac.record_turn({"seat": seat, "ack": None, "outcome": "in_dev"}, self.cid)
+            except Exception:  # noqa: BLE001
+                pass
+            log.info(f"relay {self.cid}: AGENT-TURN {seat} in Dev: asked to go back to chat")
+            return
+
+        def say(text):
+            text = self.m.scrub(text)
+            try:
+                for f in openai_live.commentary_frames(did, text):
+                    sock.send(f)
+            except Exception as e:  # noqa: BLE001 — the socket died; its own recovery runs elsewhere
+                log.warning(f"relay {self.cid}: agent-call commentary send failed: {e!r}")
+                return
+            with self._lock:
+                self._oa_hist.append({"role": "assistant", "content": text})
+
+        def say_later(text):
+            self.oa_speak(text, echo=True)
+        if not getattr(self, "_agent_warm_said", False):
+            self._agent_warm_said = True           # once per call, at its first turn
+            try:
+                line = ac.warm_line(seat)
+            except Exception:  # noqa: BLE001
+                line = None
+            if line:
+                say(line)
+        try:
+            rec = ac.run_turn(seat, q, deliver=ac.deliver, tail=ac.EventTail(ac.events_path(seat)), say=say,
+                              say_out_of_band=say_later, page=getattr(self, "page_context", None),
+                              ack_after=ac.ack_after_s(seat), ended=lambda: self._closed)
+        except Exception as e:  # noqa: BLE001 — a failure is said, never silence
+            log.error(f"relay {self.cid}: agent turn failed: {e!r}")
+            say("Something went wrong passing that to my session.")
+            return
+        try:
+            ac.record_turn(rec, self.cid)
+        except Exception:  # noqa: BLE001
+            pass
+        self._oa_journal("user", q, agent=seat)
+        if rec.get("spoken"):
+            self._oa_journal("assistant", rec["spoken"], agent=seat)
+        self._oa_answer = {"id": did, "q": q, "answer": rec.get("spoken") or "", "sent_at": time.time()}
+        log.info(f"relay {self.cid}: AGENT-TURN {seat} ack={rec.get('ack')} first_speech_s={rec.get('first_speech_s')} "
+                 f"tool={rec.get('tool_started')} turn_s={rec.get('turn_s')} outcome={rec.get('outcome')}")
+
     def _oa_delegate(self, sock, did, q, msgs):
-        """Worker: our CLM answers the delegated turn; the reply goes back as commentary on the same id."""
+        """Worker: our CLM answers the delegated turn; the reply goes back as commentary on the same id. On a call in
+        agent mode the agent's own session answers instead (_oa_agent_turn)."""
+        if self.agent_mode:
+            return self._oa_agent_turn(sock, did, q)
         ans = ""
         fn = getattr(self.m, "openai_delegate", None)
         try:
@@ -1538,6 +1643,8 @@ class _Holder:
 
     def _oa_journal(self, role, text, **meta):
         hook = getattr(self.m, "journal_hook", None)
+        if self.agent_mode:
+            meta.setdefault("agent", self.agent)   # every line of the call says whose call it is
         if hook:
             try:
                 hook(self.cid, role, text, **meta)
@@ -1668,6 +1775,7 @@ class RelayManager:
         self.factories.setdefault("hume", hume_socket_factory)
         self.factories.setdefault("openai", openai_live.openai_socket_factory)
         self.openai_delegate = None   # (cid, messages) -> reply text: the proxy wires its own CLM endpoint
+        self.agent_calls = None       # services/arturo/agent_call (the proxy wires it): calls answered by the agent
         self.journal_hook = None      # (cid, role, text, **meta): the proxy wires its call journal
         # B1 hermeticity pin: a test-injected EL socket_factory with NO vendor plumbing must
         # never read the live vendor file (or touch the network) — pin it to elevenlabs so the
@@ -1811,7 +1919,7 @@ class RelayManager:
             return ts is not None and now - ts < self.tombstone_ttl_s
 
     # -- api --
-    def feed_audio(self, conversation_id, pcm, surface_device=None):
+    def feed_audio(self, conversation_id, pcm, surface_device=None, agent=None):
         # An ENDED conversation must never be resurrected by a late uplink callback (build-206
         # kept POSTing ~43s past End). Reject the tombstoned id outright -> route 410 (hard stop)
         # rather than re-claiming the slot and re-creating a holder that sole_live() then trips on.
@@ -1847,12 +1955,13 @@ class RelayManager:
         with self._lock:
             h = self._holders.get(conversation_id)
             if h is None:
-                h = self._holders[conversation_id] = _Holder(conversation_id, self, vendor)
+                h = self._holders[conversation_id] = _Holder(conversation_id, self, vendor, agent=agent)
                 _dev = normalize_surface(surface_device)
                 self._surface[conversation_id] = _dev      # stamped ONCE at creation (first chunk's X-Surface)
                 log.info(f"surface: cid={conversation_id[:8]} device={_dev} x_surface={surface_device or '-'}")
                 self._conv_started[conversation_id] = time.time()
             self._last_contact[conversation_id] = time.time()
+        h.touch_call()
         h.feed(pcm)
         return {"ok": True}
 
@@ -1975,6 +2084,12 @@ class RelayManager:
         except Exception as e:
             log.error(f"relay finalize error ({conversation_id}): {e}")
         return True
+
+    def agent_mode(self, conversation_id) -> bool:
+        """The call's turns go to the agent's own session (decided at its first chunk)."""
+        with self._lock:
+            h = self._holders.get(conversation_id)
+        return bool(h is not None and h.agent_mode)
 
     def is_ended(self, conversation_id):
         """Tombstoned-within-TTL check for the routes (the events route 410s an ended cid)."""

@@ -156,7 +156,7 @@ def D(G, monkeypatch, tmp_path):
     G._dev = {"on": False}
     monkeypatch.setattr(HS, "in_dev", lambda seat, orch_dir=None: G._dev["on"])
     G._screen = {"state": "idle"}
-    monkeypatch.setattr(G, "_agent_status", lambda: types.SimpleNamespace(get_agent_status=lambda s: G._screen))
+    monkeypatch.setattr(G, "_agent_status", lambda: types.SimpleNamespace(get_agent_status=lambda s, **k: G._screen))
     return G
 
 

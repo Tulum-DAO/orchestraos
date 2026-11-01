@@ -4,7 +4,9 @@ import { useParams } from 'react-router-dom';
 import { TopBar } from '../components/agent/TopBar';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
-import { LiveStatusLine } from '../components/chat/LiveStatusLine';
+import { AgentWorkingRow } from '../components/agent/AgentWorkingRow';
+import AgentJobTray from '../components/agent/AgentJobTray';
+import CallBar from '../components/call/CallBar';
 import { stepFrom } from '../lib/liveStep';
 import { useAgentSteps } from '../stores/agentSteps';
 import { useFeedHealth } from '../hooks/useFeedHealth';
@@ -132,6 +134,10 @@ export default function AgentPage() {
         <>
           {/* Dev: the seat's own tmux pane, the same terminal the Agents page's panel opens. Dev mode keeps the
               browser's own keyboard behaviour (data-keyboard-native: DashboardLayout leaves it alone). */}
+          {/* A call with this agent while it is in Dev: the bar stays, with Back to chat (never done for you). */}
+          <div className="relative shrink-0 h-0 z-20">
+            <CallBar agentId={agentId} name={seatRow?.full_name || agentId} onSettings={() => setPanelOpen(true)} onBackToChat={backToChat} />
+          </div>
           <div data-keyboard-native className="flex-1 min-h-0 bg-black overflow-hidden">
             <WebTerminal
               key={agentId}
@@ -155,6 +161,9 @@ export default function AgentPage() {
       ) : (
         <div ref={chatRef} className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
         <HeadlessDevBanner dev={dev} />
+        {/* A live call with this agent: its bar floats at the top of the chat, and the thread scrolls under it. */}
+        <CallBar agentId={agentId} name={seatRow?.full_name || agentId} onSettings={() => setPanelOpen(true)}
+                 onBackToChat={chosenMode === 'dev' ? backToChat : undefined} />
         {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two.
             The transcript fills the column and scrolls UNDER the floating composer below. */}
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
@@ -167,19 +176,25 @@ export default function AgentPage() {
         <div ref={dockRef} data-testid="composer-dock" className="absolute inset-x-0 bottom-0 z-10 pointer-events-none">
           <div aria-hidden className="absolute inset-x-0 bottom-0 top-6 bg-gradient-to-t from-background via-background/90 to-transparent" />
           <div className="relative pointer-events-auto">
-            {/* THE LIVE STATUS LINE, directly above the composer (Shaw's top charge: nothing on
-                the page said what the agent was doing right now, so the sidebar and the page could
-                contradict each other). Same row, same staleness verdict as the rail dot. */}
-            {/* The Resume branch in LiveStatusLine had NO caller anywhere, so a stopped agent was
-                told it would not see the message and offered nothing to do about it. */}
-            <LiveStatusLine
-              onResume={resume}
-              state={seatStatus}
-              feed={feed}
-              stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
-              tool={(seatRow as { tool?: string } | undefined)?.tool}
-              step={streamStep ?? stepFrom((seatRow as { step?: unknown } | undefined)?.step)}
-            />
+            {/* WHO AND WHAT, directly above the composer, in the shape of Arturo's working row: the agent's
+                animated avatar, its name, and what it is doing now (lib/agentWorkingRow.ts). Every truth the old
+                status line had stays (disconnected, updating, the live step, queued, stopped with Resume ...), and
+                it reads the same state as the sidebar dot. Under it, the agent's own live background work. */}
+            <div className="w-full max-w-[860px] mx-auto px-3 pb-1.5" data-testid="agent-working">
+              <AgentWorkingRow
+                agentId={agentId}
+                name={(seatRow as { display_name?: string } | undefined)?.display_name || seatRow?.full_name || agentId}
+                onResume={resume}
+                status={seatStatus}
+                chip={asChip((seatRow as { chip?: unknown } | undefined)?.chip)}
+                pendingMenu={!!(seatRow as { has_pending_menu?: boolean } | undefined)?.has_pending_menu}
+                feed={feed}
+                stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
+                tool={(seatRow as { tool?: string } | undefined)?.tool}
+                step={streamStep ?? stepFrom((seatRow as { step?: unknown } | undefined)?.step)}
+              />
+              <AgentJobTray agentId={agentId} />
+            </div>
 
             <DeliverNowBanner agentId={agentId} />
             <div data-arturo-avoid>

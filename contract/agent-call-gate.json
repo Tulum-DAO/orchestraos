@@ -1,0 +1,16 @@
+{
+  "_doc": "Whether a call to an agent is the agent's own call (the dashboard's Call <agent> label, GET /api/agents/:id/settings agent_calls). Both sides run every case: the API (api/src/lib/agentCallGate.ts) and the voice side (services/arturo/agent_call.py enabled(seat), on the relay engine; scripts/test_agent_call_gate.py). True only when all hold: switch_on (<data dir>/state/agent-calls.json seats.<id>.on is exactly true); headless (switched on in headless-seats.json with runtime claude, and the registry row's runtime, if it has one, is claude); engine is relay (GPT-Live: Arturo's /health live_engine; the Gemini engine never reaches the agent's session). Dev does not change it: in Dev the call stays the agent's, and each turn asks the person to tap Back to chat (settings in_dev says so).",
+  "cases": [
+    {"name": "on, headless, not in Dev, GPT-Live", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": "claude", "dev": false, "engine": "relay", "expected": true},
+    {"name": "a registry row with no runtime reads as claude", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": null, "dev": false, "engine": "relay", "expected": true},
+    {"name": "the switch is off", "seat": "qa-demo", "switch_on": false, "headless": true, "registry_runtime": "claude", "dev": false, "engine": "relay", "expected": false},
+    {"name": "the switch says on as a string", "seat": "qa-demo", "switch_on": "true", "headless": true, "registry_runtime": "claude", "dev": false, "engine": "relay", "expected": false},
+    {"name": "not headless (a tmux seat has no reply stream)", "seat": "dev-demo", "switch_on": true, "headless": false, "registry_runtime": "claude", "dev": false, "engine": "relay", "expected": false},
+    {"name": "headless in the switch but the registry says another runtime", "seat": "dev-demo", "switch_on": true, "headless": true, "registry_runtime": "codex", "dev": false, "engine": "relay", "expected": false},
+    {"name": "in Dev: still the agent's call (each turn asks for Back to chat)", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": "claude", "dev": true, "engine": "relay", "expected": true},
+    {"name": "the Gemini engine", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": "claude", "dev": false, "engine": "gemini", "expected": false},
+    {"name": "no voice engine", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": "claude", "dev": false, "engine": null, "expected": false},
+    {"name": "Arturo not answering (the gateway then runs Gemini)", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": "claude", "dev": false, "engine": "unreachable", "expected": false},
+    {"name": "in Dev on the Gemini engine", "seat": "qa-demo", "switch_on": true, "headless": true, "registry_runtime": "claude", "dev": true, "engine": "gemini", "expected": false}
+  ]
+}

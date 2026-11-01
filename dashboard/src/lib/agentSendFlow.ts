@@ -9,6 +9,7 @@
  * confirm". "Not sent" is said only when the server definitively refused.
  */
 import { withTimeout, SendTimeout } from './composerSend';
+import { waitForChatCli } from './devSwitchHold';
 import {
   sendToAgent, isDelivered, isQueued, isHeld, isComposerHold, isUnknown, describeSendState, COULDNT_CONFIRM,
   type SendAttachment, type AgentSendResult,
@@ -74,6 +75,9 @@ export async function sendFromComposer(
     // Nothing was sent yet: the upload is before the send.
     return { ok: false, note: "Couldn't upload the file — nothing was sent. Your message and file are still here." };
   }
+
+  // Just back from Dev: wait (at most 3 s) for the switch's answer, so the message reaches the booted CLI.
+  await waitForChatCli(agentId);
 
   let result: AgentSendResult;
   try {

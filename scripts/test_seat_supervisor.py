@@ -45,6 +45,12 @@ if "-p" not in args:
     # The TUI (Dev): it runs until "/exit" is typed into its pane (the fake tmux writes the keys to a
     # file) or the test asks it to leave on its own.
     import time as _t
+    if os.environ.get("FAKE_TUI_TTY") == "1":
+        # A real TUI sets raw mode at once: in a background process group that is SIGTTOU, and it stops here.
+        import termios
+        termios.tcsetattr(0, termios.TCSANOW, termios.tcgetattr(0))
+        with open(os.path.join(state, "tui-fg-%d.json" % os.getpid()), "w") as fh:
+            json.dump({"fg": os.tcgetpgrp(0) == os.getpgrp(), "pgrp": os.getpgrp()}, fh)
     keys = os.path.join(state, "tmux-keys")
     while True:
         if os.path.exists(os.path.join(state, "tui-exit")):
@@ -53,6 +59,21 @@ if "-p" not in args:
             sys.exit(0)
         _t.sleep(0.05)
 out({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:resume"})
+# The CLI's own start (node, settings, start hooks, MCP servers) before it reads stdin: FAKE_BOOT_S long.
+import time as _boot_t
+_boot_t.sleep(float(os.environ.get("FAKE_BOOT_S") or 0))
+if os.environ.get("FAKE_NO_HOOK") != "1":
+    out({"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:resume"})
+started = _boot_t.monotonic()
+def mcp_now():
+    # FAKE_MCP="name:seconds,...": each server connects that many seconds after the boot.
+    spec = os.environ.get("FAKE_MCP") or ""
+    f = os.path.join(state, "mcp-spec")           # a test may change it between processes
+    if os.path.exists(f):
+        spec = open(f).read().strip()
+    up = _boot_t.monotonic() - started
+    return [{"name": n, "status": "connected" if up >= float(t) else "pending"}
+            for n, t in (x.split(":") for x in spec.split(",") if x)]
 pending = {}
 hanging = []
 ECHO_OURS = os.environ.get("FAKE_ECHO_UUID") == "1"
@@ -60,7 +81,8 @@ cur = {"uuid": None}
 def echo_uuid():
     return (cur["uuid"] if ECHO_OURS and cur["uuid"] else str(uuid.uuid4()))
 def turn(text, extra="", echo=True):
-    out({"type": "system", "subtype": "init", "session_id": sid, "cwd": os.getcwd()})
+    out({"type": "system", "subtype": "init", "session_id": sid, "cwd": os.getcwd(),
+         **({"mcp_servers": mcp_now()} if os.environ.get("FAKE_MCP") else {})})
     if echo:
         out({"type": "user", "message": {"role": "user", "content": text}, "session_id": sid,
              "uuid": echo_uuid(), "isReplay": True})
@@ -86,6 +108,24 @@ for line in sys.stdin:
         else:
             out({"type": "control_response", "response": {"subtype": "error", "request_id": o["request_id"],
                  "error": "Unsupported control request subtype: set_model"}})
+        continue
+    if o.get("type") == "control_request" and o["request"].get("subtype") == "initialize":
+        if os.environ.get("FAKE_INITIALIZE") == "silent":
+            continue
+        if os.environ.get("FAKE_INITIALIZE") == "error":
+            out({"type": "control_response", "response": {"subtype": "error", "request_id": o["request_id"],
+                 "error": "Unsupported control request subtype: initialize"}})
+            continue
+        with open(os.path.join(state, "initialized-%d" % os.getpid()), "w") as fh:
+            fh.write("1")
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": o["request_id"],
+             "response": {"commands": [], "models": []}}})
+        continue
+    if o.get("type") == "control_request" and o["request"].get("subtype") == "mcp_status":
+        if os.environ.get("FAKE_MCP_STATUS") == "silent":
+            continue
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": o["request_id"],
+             "response": {"mcpServers": mcp_now()}}})
         continue
     if o.get("type") == "control_request" and o["request"].get("subtype") == "interrupt":
         out({"type": "control_response", "response": {"subtype": "success", "request_id": o["request_id"]}})
@@ -225,7 +265,8 @@ def test_message_goes_queued_delivered_answered_on_one_warm_process(rig):
     recs = log_records(rig)
     states = [x["state"] for x in recs if x["kind"] == "msg" and x["id"] == "m1"]
     assert states == ["accepted", "queued", "delivered", "answered"]
-    assert any(x["kind"] == "in" and x["obj"]["message"]["content"] == "Sample one" for x in recs)
+    assert any(x["kind"] == "in" and x["obj"].get("type") == "user" and x["obj"]["message"]["content"] == "Sample one"
+               for x in recs)
     assert any(x["kind"] == "out" and x["ev"].get("type") == "result" for x in recs)
     assert all("wall" in x and "t" in x for x in recs)
 
@@ -766,3 +807,34 @@ def test_dev_needs_a_terminal(rig):
     out = HS.request("qa-demo", {"cmd": "dev"}, orch_dir=rig.orch)
     assert out["ok"] is False and "pane" in out["reason"]
     assert HS.request("qa-demo", {"cmd": "chat"}, orch_dir=rig.orch) == {"ok": True, "already": True}
+
+
+def _proc_state(pid):
+    try:
+        for line in open(f"/proc/{pid}/status"):
+            if line.startswith("State:"):
+                return line.split()[1]
+    except OSError:
+        return None
+
+
+@pytest.mark.parametrize("handoff_delay", ["0", "0.6"])
+def test_a_dev_start_leaves_the_tui_as_the_terminals_foreground_group(tty_rig, handoff_delay):
+    """On a real pty: the TUI owns the terminal from its first instruction, so touching it at once never stops it,
+    even when the supervisor's own hand-over comes late (0.6 s: a TUI started in the background then stopped)."""
+    r = tty_rig
+    r.env.update({"FAKE_TUI_TTY": "1", "HEADLESS_TEST_TTY_HANDOFF_DELAY_S": handoff_delay})
+    r.start_tty()
+    wait_for(lambda: (_status(r.orch) or {}).get("state") == "idle", what="idle")
+    for _ in range(3):
+        out = HS.request("qa-demo", {"cmd": "dev"}, orch_dir=r.orch, timeout=20)
+        assert out["ok"], out
+        pid = out["tui_pid"]
+        rec = wait_for(lambda: (r.state / f"tui-fg-{pid}.json").exists() and
+                       json.loads((r.state / f"tui-fg-{pid}.json").read_text()), timeout=5,
+                       what="the TUI touched its terminal and carried on")
+        assert rec["fg"] is True and rec["pgrp"] == pid                 # its own group, the terminal's foreground
+        assert _proc_state(pid) not in ("T", "t")
+        back = HS.request("qa-demo", {"cmd": "chat"}, orch_dir=r.orch, timeout=40)
+        assert back["ok"], back
+        (r.state / "tmux-keys").unlink()                                   # the next TUI must not see this /exit

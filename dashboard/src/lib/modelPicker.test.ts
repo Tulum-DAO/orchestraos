@@ -29,25 +29,34 @@ const AGENT = [
   { ...pm('claude-opus-5[1m]', 'Opus 5 (1M)'), subtitle: '1M context' },
 ];
 
-test('model rules: Opus 5.5 is the 1M model, the 200k one never shows, Fable 5.1 is listed once', () => {
-  assert.equal(canonicalId('claude', 'opus'), 'claude-opus-5-5[1m]');
-  assert.equal(canonicalId('codex', 'opus'), 'opus', 'only for its own provider');
-  assert.equal(isHidden('claude', 'claude-opus-5-5'), true);
-  assert.equal(isHidden('claude', 'opus'), false);
+test('honest labels: the bare `opus` is Opus 5.5 at 200K (the CLI alias); only the explicit [1m] id is the 1M model', () => {
+  assert.equal(canonicalId('claude', 'opus'), 'opus', 'a short id is the model the CLI says it is');
+  assert.equal(isHidden('claude', 'claude-opus-5-5'), false, 'nothing hidden');
   const probe = buildPickerModels(buildProviderRows(PROVIDERS));
   const opus = probe.filter((m) => m.name === 'Opus 5.5');
-  assert.equal(opus.length, 1, 'one Opus 5.5');
-  assert.equal(opus[0].id, 'claude-opus-5-5[1m]');
-  assert.equal(modelTitle(opus[0]), 'Opus 5.5 · 1M');
-  assert.ok(!probe.some((m) => m.id === 'claude-opus-5-5' || m.aliases.includes('claude-opus-5-5')), 'the 200k model under no id');
+  assert.equal(opus.length, 1, 'opus and claude-opus-5-5 are one model');
+  assert.equal(modelTitle(opus[0]), 'Opus 5.5 · 200K');
+  assert.deepEqual([opus[0].id, opus[0].aliases], ['claude-opus-5-5', ['opus']]);
   assert.equal(probe.filter((m) => m.name === 'Fable 5.1').length, 1);
   const fable = probe.find((m) => m.name === 'Fable 5.1')!;
   assert.equal(fable.id, 'claude-fable-5-1', 'the full id is kept');
   assert.deepEqual(fable.aliases, ['fable']);
-  // the agent's own list: the same, and Opus 5 at 200K and at 1M are two models
+  // the agent's own list: Opus 5 at 200K and at 1M are two models; the explicit [1m] Opus 5.5 is the 1M one
   const own = pickerModelsFor('claude', 'Claude', AGENT);
-  // A size only where a source states it: none is assumed (Fable 5.1 and Haiku 5.5 have none stated).
   assert.deepEqual(own.map(modelTitle), ['Fable 5.1', 'Haiku 5.5', 'Opus 5 · 200K', 'Opus 5.5 · 1M', 'Opus 5 · 1M']);
+});
+
+test('no agent\'s current pick changes: every seat runs the explicit claude-opus-5-5[1m], still "Opus 5.5 · 1M"', () => {
+  // The five seats (seat-a, seat-b, seat-c, seat-d, seat-e) all report
+  // claude-opus-5-5[1m]; their pickers and chips name it as before, and the bare alias is a different entry.
+  const gateway = [pm('opus', 'Opus 5.5'), { ...pm('claude-opus-5-5[1m]', 'Opus 5.5 (1M)'), subtitle: '1M context' }];
+  const models = buildPickerModels(buildProviderRows(PROVIDERS), { providerId: 'claude', models: gateway });
+  const cur = findCurrent(models, { providerId: 'claude', modelId: 'claude-opus-5-5[1m]' });
+  assert.equal(cur && modelTitle(cur), 'Opus 5.5 · 1M');
+  assert.equal(cur?.unavailable, undefined);
+  const bare = models.find((m) => m.id === 'claude-opus-5-5' || m.aliases.includes('opus'));
+  assert.equal(bare && modelTitle(bare), 'Opus 5.5 · 200K');
+  assert.notEqual(bare?.key, cur?.key);
 });
 
 test('names and context tags come from the label, the id, the subtitle or the context window', () => {
@@ -81,7 +90,7 @@ test('every picker lists every entry; what can\'t be used here is dimmed with wh
 
 test('the current model: its id, an alias, or a short id standing for it', () => {
   const models = buildPickerModels(buildProviderRows(PROVIDERS));
-  assert.equal(findCurrent(models, { providerId: 'claude', modelId: 'claude-opus-5-5[1m]' })?.name, 'Opus 5.5');
+  assert.equal(findCurrent(models, { providerId: 'claude', modelId: 'claude-opus-5-5[1m]' }), null, 'the probe lists no 1M Opus 5.5 here');
   assert.equal(findCurrent(models, { providerId: 'claude', modelId: 'opus' })?.name, 'Opus 5.5');
   assert.equal(findCurrent(models, { providerId: 'claude', modelId: 'fable' })?.id, 'claude-fable-5-1');
   assert.equal(findCurrent(models, { providerId: 'gemini', modelId: 'claude-fable-5-1' }), null, 'the provider must match too');
@@ -179,7 +188,7 @@ test('an agent\'s own list keeps the gateway\'s context size, so 200K and 1M mod
     { id: 'sample-off', title: 'Sample', available: false },
   ] };
   const rows = pickerModelsFor('claude', 'Claude', switchableModels(info));
-  assert.deepEqual(rows.map(modelTitle), ['Opus 5 · 200K', 'Opus 5 · 1M'], 'the 200k Opus 5.5 never shows; an unavailable one is left out');
+  assert.deepEqual(rows.map(modelTitle), ['Opus 5 · 200K', 'Opus 5 · 1M', 'Opus 5.5 · 200K'], 'the 200K Opus 5.5 is named as it is; an unavailable one is left out');
 });
 
 test('one order in every picker: by provider, newest first (larger family first at a version, 200K before 1M)', () => {
@@ -191,10 +200,10 @@ test('one order in every picker: by provider, newest first (larger family first 
   ];
   const rows = buildProviderRows(PROVIDERS);
   const fromAgent = buildPickerModels(rows, { providerId: 'claude', models: gateway }).map(modelTitle);
-  assert.deepEqual(fromAgent.slice(0, 8), ['Opus 5.5 · 1M', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1', 'Opus 5 · 200K', 'Opus 5 · 1M',
+  assert.deepEqual(fromAgent.slice(0, 9), ['Opus 5.5 · 200K', 'Opus 5.5 · 1M', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1', 'Opus 5 · 200K', 'Opus 5 · 1M',
     'Opus 4.7', 'Sonnet 4.6']);
   const fromProbe = buildPickerModels(rows).map(modelTitle);
-  assert.equal(fromProbe[0], 'Opus 5.5 · 1M');
+  assert.equal(fromProbe[0], 'Opus 5.5 · 200K');
   assert.ok(newestFirst({ name: 'GPT-6 Astra' }, { name: 'GPT-5.6 Luna' }) < 0, 'other providers by version too');
 });
 

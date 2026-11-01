@@ -1827,9 +1827,14 @@ def _headless_status(session: str, seat: str, now: float, sup=None, proc=None) -
     return out
 
 
-def get_agent_status(session: str) -> dict:
+def get_agent_status(session: str, deriver: bool = True) -> dict:
     """Full agent status: hooks (tier 0) + process (1) + screen (2) + persisted
-    state machine (3). Same shape as v1 plus additive keys."""
+    state machine (3). Same shape as v1 plus additive keys.
+
+    deriver=False skips the telemetry deriver (process CPU/IO and pane bytes) and reads the screen and the
+    hooks only: what the person can see and what the CLI said. Back to chat asks this way: a TUI that has
+    just started reads busy on the deriver for its first ~20 s (it loads the resumed session and starts its
+    servers: disk IO over the computing threshold, fresh pane bytes) while it sits at an idle prompt."""
     now = time.time()
     seat = _headless_seat(session)
     if seat:
@@ -1864,7 +1869,7 @@ def get_agent_status(session: str) -> dict:
     # deriver is fresh (leg a). A stale/absent snapshot falls through unchanged
     # (leg e rollback). Sits AFTER the proc 'stopped' short-circuit so kernel
     # truth still wins for a dead proc (secondary #2).
-    dv = _deriver_lookup(session, now)
+    dv = _deriver_lookup(session, now) if deriver else None
     if dv is not None:
         mapped, dstate, age_s = dv
         # BUNDLE PRECONDITION: the deriver owns STATUS, but the menu-bridge,

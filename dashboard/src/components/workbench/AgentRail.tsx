@@ -10,6 +10,8 @@
  * the three sections and 299 are offline/parked/retired. So the three sections are the default
  * view and everything else sits behind one collapsed row — a 320-row rail is not navigation.
  */
+import { useCallStore } from '../../stores/callStore';
+import CallPill from '../call/CallPill';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { MoreHorizontal, ChevronRight, ChevronDown } from 'lucide-react';
@@ -43,6 +45,8 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
   const [error, setError] = useState<string | null>(null);
   const press = useMemo(() => longPress(() => setMenu(true)), []);   // one per row: it remembers a long-press across renders
   const state = chipStateFor(agent.status, !!agent.has_pending_menu, feed);
+  // The pill sits on whoever answers: this agent's row only when the call reached it (else Arturo's, in the Sidebar).
+  const onCall = useCallStore((s) => s.call?.agentId === agent.id && s.call.party === 'agent');
   const chip = agent.chip;
   const provKey = (chip?.provider || agent.provider)?.toLowerCase();
   // The gateway's chip names the provider by its logo on every row (names are ours, the mark says
@@ -95,6 +99,8 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
         />
       )}
       <span className="truncate flex-1 min-w-0">{label}</span>
+      {/* on a call with this agent: a green "···· 0:10" pill */}
+      {onCall && <CallPill />}
       {kind && (
         <span className="shrink-0 text-[10px] text-neutral-600 dark:text-neutral-500" data-testid="rail-kind"
               title={kind === 'Service' ? 'A service: it takes no messages' : 'Run elsewhere: not checked from here'}>

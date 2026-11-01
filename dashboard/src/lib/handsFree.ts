@@ -89,6 +89,13 @@ export class HandsFreeCall {
     if (this.inCall) this.s.startDictation();
   }
 
+  /** End the call if one is up (another call is taking its place). */
+  end(): void {
+    if (!this.inCall) return;
+    this.s.stop();
+    this.s.stopDictation();
+  }
+
   /** The page (route + focused entity) changed during the call. No call, nothing to send. */
   setContext(opts: VoiceSessionStartOptions): void {
     if (this.inCall) this.session?.sendContext?.(opts);

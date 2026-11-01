@@ -12,6 +12,9 @@ sends Enter SEPARATELY, re-captures, and exits non-zero if the line did not subm
 Refuses (exit 2) when a client is attached to the session (a human may be mid-read/mid-type)
 unless --force, and when the composer already holds typed text that is not ours.
 Prefer msg_store for anything durable; this is only the wake.
+
+A headless seat's pane holds its supervisor, not a composer: its nudge goes through the gateway's
+/agent-message (the supervisor's stdin), never into the pane. Same exit codes.
 """
 from __future__ import annotations
 
@@ -48,15 +51,33 @@ RC_NOT_SENT = 3     # another sender held the pane: nothing typed
 def nudge(session: str, text: str, *, force: bool = False, settle: float = 0.6) -> int:
     """_nudge_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py, gm
     msg_2291dee3). Another typer holding the pane past 5 s -> RC_NOT_SENT (nothing typed; the
-    caller nudges again next cycle)."""
+    caller nudges again next cycle). A headless seat: through the gateway (nudge_headless)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import gateway_deliver
+    if gateway_deliver.headless_seat(session):
+        return nudge_headless(session, text, force=force)
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import pane_lock
         with pane_lock.pane_lock(session, wait_s=5.0):
             return _nudge_unlocked(session, text, force=force, settle=settle)
     except pane_lock.PaneBusy:
         print(f"nudge_pane: another sender holds {session}'s pane lock; NOT SENT", file=sys.stderr)
         return RC_NOT_SENT
+
+
+def nudge_headless(session: str, text: str, *, force: bool = False, deliver=None) -> int:
+    """The gateway's /agent-message for a headless seat: 0 queued for its CLI, 2 refused (busy, a held question),
+    RC_NOT_SENT when the gateway could not be reached. Nothing is typed into the pane."""
+    import gateway_deliver
+    r = (deliver or gateway_deliver.deliver)(session, text, source="mail", force=force, actor="automation:nudge-pane")
+    if r["delivered"]:
+        print(f"nudge_pane: queued for {session}'s CLI (headless): {text[:70]!r}")
+        return 0
+    if r["status"] == 0:
+        print(f"nudge_pane: gateway not reachable for {session} ({r['reason']}); NOT SENT", file=sys.stderr)
+        return RC_NOT_SENT
+    print(f"nudge_pane: {session} refused the nudge ({r['reason']}); NOT SENT", file=sys.stderr)
+    return 2
 
 
 def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: float = 0.6) -> int:

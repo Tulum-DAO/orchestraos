@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, LoaderCircle, X } from 'lucide-react';
 import ToolCalls from '../kit/ToolCard';
+import { OPEN_JOBS_EVENT } from '../kit/CallCard';
 import { fromPart } from '../../lib/toolCalls';
 import { cancelJob, elapsed, fetchJobs, jobToolParts, newlyEnded, trayHeader, type ArturoJob } from '../../lib/arturoJobs';
 
@@ -25,6 +26,13 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
 }) {
   const [jobs, setJobs] = useState<ArturoJob[]>([]);
   const [open, setOpen] = useState(false);
+  const trayRef = useRef<HTMLDivElement>(null);
+  // A job chip in a call's transcript opens this drawer and brings it into view.
+  useEffect(() => {
+    const onOpen = () => { setOpen(true); trayRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
+    window.addEventListener(OPEN_JOBS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_JOBS_EVENT, onOpen);
+  }, []);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
   const prev = useRef<ArturoJob[]>([]);
@@ -65,7 +73,7 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
   if (shown.length === 0) return null;
 
   return (
-    <div className="arturo-jobtray w-full rounded-control border border-line bg-field px-2.5 py-1.5 mb-1.5"
+    <div ref={trayRef} className="arturo-jobtray w-full rounded-control border border-line bg-field px-2.5 py-1.5 mb-1.5"
          data-testid="job-tray">
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
               className="flex w-full items-center gap-1.5 text-left text-[12.5px] text-ink-2">

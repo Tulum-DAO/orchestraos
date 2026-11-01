@@ -122,11 +122,13 @@ class RelayLiveSession:
     """One browser call on the relay. `base` is :5071's /ptt/stream; `headers` carry the gateway's own
     principal stamp (the caller is the fleet bearer, as on the Gemini path)."""
 
-    def __init__(self, ws, base, headers, voice="", http=None, on_surface=None):
+    def __init__(self, ws, base, headers, voice="", http=None, on_surface=None, agent=None):
         self.ws = ws
         self.base = base.rstrip("/")
         self.cid = str(uuid.uuid4())
         self.headers = {**headers, "X-Conversation-Id": self.cid, "X-Surface": "web"}
+        if agent:   # the agent the call is with: Arturo answers in that agent's own voice (None: the server voice)
+            self.headers["X-Arturo-Agent"] = str(agent)
         self.voice = voice
         self.http = http
         self.up = Upsampler()

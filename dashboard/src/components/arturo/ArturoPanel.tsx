@@ -25,7 +25,7 @@ import { Check, ChevronLeft, ChevronRight, Pencil, X } from 'lucide-react';
 import { arturoHealth, ARTURO_DISABLED_TEXT, handsFreeReady, isArturoDisabled, type ArturoHealth } from '../../lib/arturo';
 import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
          type PanelPage, type DrawerSection } from '../../lib/arturoPanel';
-import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceRowValue, canChangeVoice, ADMIN_ONLY_NOTE, GPT_LIVE,
+import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceProviderValue, voiceNameValue, PROVIDER_SCOPE_NOTE, canChangeVoice, ADMIN_ONLY_NOTE, GPT_LIVE,
          type VoiceVendor, type VoiceRow, type CurrentVoice } from '../../lib/arturoVoice';
 import { styleOptions, styleLabel, chooseStyle, loadPrefs, useChatStyle, useAgentPrefsStore } from '../../lib/agentPrefs';
 import { HeadlessDevNote } from './HeadlessDevNote';
@@ -313,7 +313,8 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           : page === 'edit' ? (
             <EditPage agentId={agentId} name={aname} draft={editDraft} onDraft={setEditDraft} error={editError} canName={canEditName}
                       onDone={() => void editDone()} onAvatar={() => push('avatar')}
-                      voice={voiceRowValue(vendor, voice, health ? handsFreeReady(health) : null) + (!isArturo && voice?.scope === 'install' ? ' (default)' : '')}
+                      provider={voiceProviderValue(vendor, health ? handsFreeReady(health) : null)}
+                      voice={(() => { const n = voiceNameValue(vendor, voice, health ? handsFreeReady(health) : null); return n && !isArturo && voice?.scope === 'install' ? `${n} (default)` : n; })()}
                       onVoice={() => push('voice')} />
           )
           : page === 'avatar' ? <LookPicker agentId={agentId} heroSize={160} canSave={canSaveLook} />
@@ -452,9 +453,11 @@ function InlineName({ name: aname, save }: { name: string; save: SaveName }) {
 
 /** Phone: the Edit screen (like a chat app's): the avatar with a pencil badge, the Name field, then Appearance with
  *  the Avatar row that opens the look picker. Done in the bar saves the name; the back arrow leaves it. */
-function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, voice, onVoice }: {
+function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, provider, voice, onVoice }: {
   agentId: string; name: string;
   draft: string; onDraft: (v: string) => void; error: string | null; canName: boolean; onDone: () => void; onAvatar: () => void;
+  /** The voice provider ("GPT-Live"): set for the whole server, so shown greyed and not tappable. */
+  provider: string;
   voice: string; onVoice: () => void;
 }) {
   const rec = useAgentRecord(agentId);
@@ -474,6 +477,16 @@ function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone
       <h3 className="arturo-panel-section">Appearance</h3>
       <div className="arturo-panel-list">
         <Row id="avatar" label="Avatar" value={`${shapeName(rec.shape)} · ${colorName(rec.color)}`} onOpen={onAvatar} />
+        {/* The provider is the server's, not this agent's: greyed, not tappable, and it says so. The voice is this
+            agent's own, tappable as ever. */}
+        <div className="arturo-panel-field is-disabled" data-voice-provider aria-disabled>
+          <span>Provider</span>
+          {/* Two short lines, never cut off: the provider, and that it is the server's. */}
+          <span className="arturo-panel-rowvalue" style={{ whiteSpace: 'normal', textAlign: 'right', padding: '6px 0' }}>
+            <span style={{ display: 'block' }}>{provider}</span>
+            {provider && provider !== 'Not set up' ? <span style={{ display: 'block', fontSize: 12 }}>{PROVIDER_SCOPE_NOTE}</span> : null}
+          </span>
+        </div>
         <Row id="voice" label="Voice" value={voice} onOpen={onVoice} />
       </div>
     </div>
@@ -559,9 +572,9 @@ function VoicePage({ health, onPicked, agentId }: {
     <>
       <h3 className="arturo-panel-section">Provider</h3>
       <div className="arturo-panel-list arturo-panel-list-tight">
-        <div className={`arturo-panel-field${available === false ? ' is-disabled' : ''}`}>
+        <div className="arturo-panel-field is-disabled" data-voice-provider aria-disabled>
           <span>{GPT_LIVE} (OpenAI)</span>
-          {available ? <Check size={18} className="arturo-panel-check" aria-label="Selected" /> : null}
+          <span className="arturo-panel-rowvalue">{PROVIDER_SCOPE_NOTE}</span>
         </div>
       </div>
       {available === false && <p className="arturo-panel-note">Add an OpenAI key to use {GPT_LIVE}.</p>}
