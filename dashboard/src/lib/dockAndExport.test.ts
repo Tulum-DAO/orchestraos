@@ -10,9 +10,10 @@ test('the dock row and its job chips sit at the left; the top bar\'s seat pill i
   const css = src('components/agent/agentWorking.css');
   assert.doesNotMatch(css, /margin-inline:auto/);
   assert.doesNotMatch(css, /justify-content:center/);
-  // the phone's floating Arturo button lifts above the row and the tray when they reach its corner
-  assert.match(src('components/agent/AgentWorkingRow.tsx'), /className="agent-working"[^>]*data-arturo-avoid/);
-  assert.match(src('components/agent/AgentJobTray.tsx'), /className="agent-jobs"[^>]*data-arturo-avoid/);
+  // the row is not a bar the floating Arturo button lifts over (it would drop when the row goes: a shift); it keeps
+  // clear of the button's corner on narrow screens instead
+  assert.doesNotMatch(src('components/agent/AgentWorkingRow.tsx'), /data-arturo-avoid/);
+  assert.match(src('components/agent/agentWorking.css'), /@media \(max-width: 900px\)\{ \.agent-working\{ padding-right:56px; \} \}/);
   // three columns, equal ends that never shrink below their content, the pill truncating in the middle
   const top = src('components/agent/TopBar.tsx');
   assert.match(top, /grid grid-cols-\[minmax\(max-content,1fr\)_minmax\(0,auto\)_minmax\(max-content,1fr\)\]/);

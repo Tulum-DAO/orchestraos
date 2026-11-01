@@ -10,7 +10,7 @@
  * them changes. A shared model (one per agent, from the hub) steps once per frame however many instances
  * show it, so every animated instance of an agent is on the same clock.
  */
-import { meltBodyScale, meltDots,
+import { meltFrame, meltOutline, outlineMeanRadius, MELT,
   shapeOutline, faceLayout, SHAPES, LAYOUT, statusDot, paint, dotFor, badgeFor, followAllowed, wanderAllowed,
   STATES, FOLLOW, PHONE_MAX,
   type AvatarModel, type Pose, type Theme, type Glyph, type DotSpec, type BadgePlace, type Pt, type Role,
@@ -123,6 +123,7 @@ function drawBadge(ctx: CanvasRenderingContext2D, provider: string, x: number, y
   ctx.drawImage(img, x0, y0, w, h);
 }
 
+
 // One eye: a solid disc cut by a top and a bottom lid (lid model from bbot, MIT).
 // sg is -1 for the left eye, +1 for the right; +tilt drops the inner edge.
 function drawEye(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, lidT: number, lidB: number, tilt: number, sg: number, lineW: number) {
@@ -165,26 +166,39 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   const cx = size / 2, cy = size * LAYOUT.cy;
   ctx.clearRect(0, 0, size, size);
 
-  // thinking: the body melts away (smaller, fading) into three pulsing dots (meltDots, shared with Swift)
-  const melt = pose.melt || 0;
-  const bodyAlpha = 1 - melt;
+  // thinking / typing: the body itself becomes the middle dot, the side dots slide out from under it, then the
+  // dots' brightness wave (meltFrame: one melt, shared with Swift)
+  const mf = (pose.meltT || 0) > 0 ? meltFrame(pose.meltT, pose.reducedMotion) : null;
+  const R0 = mf ? outlineMeanRadius(pose.shape) : 1;
+  const sc = mf ? 1 + (MELT.dotR / R0 - 1) * mf.shrink : 1;
+  const calmK = mf ? 1 - mf.round : 1;           // breathing and tilt settle as it rounds
+  if (mf && mf.side > 0.001) {
+    // the side dots first, so while they are small steps out they sit under the body
+    ctx.save();
+    ctx.fillStyle = ink.body;
+    for (const [i, sg] of [[0, -1], [2, 1]] as const) {
+      ctx.globalAlpha = mf.lit[i];
+      ctx.beginPath(); ctx.arc(cx + (pose.dx + sg * mf.side) * u, cy + (pose.dy + mf.drop) * u, MELT.dotR * u, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
 
   ctx.save();
-  ctx.globalAlpha = bodyAlpha;
+  ctx.globalAlpha = mf ? mf.lit[1] : 1;
   // rotate about the body centre (so a spin stays in the box);
   // squash/stretch anchored at the feet so breathing doesn't float
-  ctx.translate(cx + pose.dx * u, cy + pose.dy * u);
-  if (melt > 0) { const k = meltBodyScale(melt); ctx.scale(k, k); }
-  ctx.rotate(pose.rot);
+  ctx.translate(cx + pose.dx * u, cy + (pose.dy + (mf ? mf.drop : 0)) * u);
+  if (mf) ctx.scale(sc, sc);
+  ctx.rotate(pose.rot * calmK);
   ctx.translate(0, s.h * u);
-  ctx.scale(pose.sx, pose.sy);
+  ctx.scale(1 + (pose.sx - 1) * calmK, 1 + (pose.sy - 1) * calmK);
   ctx.translate(0, -s.h * u);
 
   ctx.fillStyle = ink.body;
   ctx.strokeStyle = ink.body;
 
-  // antenna, same flat colour as the body
-  if (s.antenna) {
+  // antenna, same flat colour as the body (it goes as the body rounds)
+  if (s.antenna && (!mf || mf.round < 1)) {
     const top = -s.h * u * 0.98, sway = Math.sin(pose.dx * 20 + pose.lookX) * 0.12 * u;
     ctx.lineWidth = Math.max(1.2, u * 0.08);
     ctx.lineCap = 'round';
@@ -192,8 +206,8 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
     ctx.beginPath(); ctx.arc(sway + u * 0.08, top - u * 0.36, u * 0.1, 0, Math.PI * 2); ctx.fill();
   }
 
-  // flat body
-  bodyPath(ctx, shapeOutline(pose.shape), u);
+  // flat body (rounding into a circle while it melts)
+  bodyPath(ctx, mf ? meltOutline(pose.shape, mf.round) : shapeOutline(pose.shape), u);
   ctx.fill();
 
   // face: two solid eyes, nothing else (placement from faceLayout, shared with Swift)
@@ -211,20 +225,23 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   // a wink closes the second eye only, on top of any blink
   const kw = Math.max(k, Math.max(0, Math.min(1, pose.wink || 0)));
   const wT = m.lidT + (0.5 - m.lidT) * kw, wB = m.lidB + (0.5 - m.lidB) * kw;
-  f.eyes.forEach(([x, y, r], i) => drawEye(ctx, x * u, y * u, r * u, i ? wT : lidT, i ? wB : lidB, m.tilt, i ? 1 : -1, lineW));
-  ctx.restore();
-
-  ctx.restore();
-
-  if (melt > 0) {
-    ctx.save();
-    ctx.fillStyle = ink.body;
-    for (const [x, y, r, a] of meltDots(melt, pose.phase)) {
-      ctx.globalAlpha = a;
-      ctx.beginPath(); ctx.arc(cx + (pose.dx + x) * u, cy + (pose.dy + y) * u, r * u, 0, Math.PI * 2); ctx.fill();
+  if (!mf) f.eyes.forEach(([x, y, r], i) => drawEye(ctx, x * u, y * u, r * u, i ? wT : lidT, i ? wB : lidB, m.tilt, i ? 1 : -1, lineW));
+  else if (mf.eyes > 0.01) {
+    // the eyes slide together into one narrow slit, then go
+    const [l, r] = f.eyes, mx = (l[0] + r[0]) / 2, my = (l[1] + r[1]) / 2;
+    ctx.globalAlpha *= mf.eyes;
+    if (mf.slit < 1) {
+      // the lids open as they go (the reference's eyes are open pills), so the merged eye reads as one upright slit
+      const open = 1 - Math.min(1, mf.slit * 2);
+      f.eyes.forEach(([x, y, er], i) => drawEye(ctx, (x + (mx - x) * mf.slit) * u, (y + (my - y) * mf.slit) * u, er * u * (1 - 0.35 * mf.slit), lidT * open, lidB * open, m.tilt * (1 - mf.slit), i ? 1 : -1, lineW));
+    } else {
+      const er = l[2] * u;
+      ctx.beginPath(); ctx.ellipse(mx * u, my * u, er * 0.32, er * 0.95, 0, 0, Math.PI * 2); ctx.fill();
     }
-    ctx.restore();
   }
+  ctx.restore();
+
+  ctx.restore();
 
   // status dot on the bottom-right edge of the body. It follows the body's hops and shakes but not its
   // rotation or squash, so it stays readable.
@@ -268,6 +285,8 @@ export interface AttachOpts {
   /** Follow a mouse from any distance and keep looking at it while it rests (not only within the radius and
    *  for a few seconds after it moves). Touch keeps the usual rules, so a face never stares at an old tap. */
   followAlways?: boolean;
+  /** Scale the state's bob for this instance (the working row's bob is larger than the sidebar's). */
+  bob?: number;
 }
 interface Shown { dot: DotSpec | { color: string } | null; badge: BadgePlace | null; following: boolean; look: { x: number; y: number }; t: number; blinkAt: number }
 interface Entry {
@@ -359,6 +378,7 @@ function frame(now: number) {
       pose.lookX = e.look.x; pose.lookY = e.look.y;
       e.following = follow;
     }
+    if (o.bob && pose.bobY) pose.dy += (o.bob - 1) * pose.bobY;
     const dot = o.legacyDot ? undefined : dotFor({ role: o.role, state: model.state, size: e.size, phone });
     const shownDot = dot === undefined ? (pose.dot ? { color: pose.dot } : null) : dot;
     const badge = badgeFor({ role: o.role, shape: pose.shape, size: e.size, provider: o.provider, hover: e.hover, dot: shownDot });
@@ -373,7 +393,8 @@ function frame(now: number) {
 
 /** Draw `model` on `canvas` every frame (or once, when still). Returns detach(), with detach.update(opts). */
 export function attach(canvas: HTMLCanvasElement, model: AvatarModel, size: number, opts: AttachOpts = {}): (() => void) & { update: (patch: AttachOpts) => void } {
-  const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+  // at the screen's own pixel density (to 3x), so a small or large avatar stays crisp
+  const dpr = Math.min(3, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
   canvas.width = Math.round(size * dpr);
   canvas.height = Math.round(size * dpr);
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;

@@ -16,6 +16,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { LoaderCircle } from 'lucide-react';
 import DecisionBubble from '../chat/DecisionBubble';
+import { AgentRunningJobs } from '../agent/AgentRunningJobs';
 import { AnsweredQuestionCard } from '../chat/MultiPartCard';
 import { fetchDecisions, focusDecision } from '../../lib/decisions';
 import { fetchBatchRecords } from '../../lib/batchRecords';
@@ -89,7 +90,7 @@ export function DrawerHistory({ agentId, isArturo, name, subagents, onClose }: {
     <CardSurface.Provider value="history">
     <div className="dh" data-drawer-history-section>
       <h3 className="arturo-panel-section">Running</h3>
-      {isArturo ? <ArturoRunning /> : <AgentRunning subagents={subagents} name={name} />}
+      {isArturo ? <ArturoRunning /> : <AgentRunningJobs agentId={agentId} onClose={onClose} fallback={<AgentRunning subagents={subagents} name={name} />} />}
 
       {decisionsQ.isLoading ? <p className="arturo-panel-empty">Loading…</p>
         : decisionsQ.isError && !decisionsQ.data ? <p className="arturo-panel-empty" data-drawer-history>Couldn't read {name}'s cards.</p>

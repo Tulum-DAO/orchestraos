@@ -95,25 +95,18 @@ function ReplyWords({ text, skin }: { text: string; skin: Skin }) {
   );
 }
 
-/** Words still being written, in Bubbles: the complete paragraphs only, then the working indicator while the next
- *  one is written. Null when nothing is complete yet and nothing waits (an empty reply). */
+/** Words still being written, in Bubbles (an agent's chat): the complete paragraphs only. While the next one is
+ *  written nothing is drawn here: the agent's working row above the composer says "Typing…" (AgentWorkingRow). */
 function Unfinished({ text, parts, skin }: { text: string; parts?: MessagePart[]; skin: Skin }) {
   const c = parts?.length ? completeParts(parts) : null;
   const t = c ? null : completeText(text);
-  const pending = c ? c.pending : t!.pending;
-  return (
-    <>
-      {c ? (c.parts.length > 0 && <Parts parts={c.parts} skin={skin} />) : t!.text && <MessageText text={t!.text} skin={skin} />}
-      {/* The agent chat's own working indicator (its pulsing dot and line), not Arturo's page dot, whose colour exists
-          only on his page. */}
-      {pending && (
-        <div className="flex items-center gap-2 px-1 py-1" role="status" aria-label="writing" data-paragraph-pending>
-          <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-          <span className="text-[11px] text-tone-500 italic">writing…</span>
-        </div>
-      )}
-    </>
-  );
+  return <>{c ? (c.parts.length > 0 && <Parts parts={c.parts} skin={skin} />) : t!.text && <MessageText text={t!.text} skin={skin} />}</>;
+}
+
+/** Whether Unfinished draws anything (a complete paragraph or part): if not, the live row is left out entirely, so
+ *  nothing in the thread moves until there are words to show. */
+function hasFinished(text: string, parts?: MessagePart[]): boolean {
+  return parts?.length ? completeParts(parts).parts.length > 0 : !!completeText(text).text;
 }
 
 /** A reply's text and tool runs, in the order they happened. Indices are stable: parts only ever grow at the end. */
@@ -297,7 +290,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         }
         return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} />;
       })}
-      {live && (
+      {live && (skin !== 'bubbles' || hasFinished(live.text, live.parts)) && (
         <div className={skin === 'bubbles' ? 'flex justify-start' : skin === 'pane' ? 'row arturo' : 'turn-assistant'} data-live-text>
           <div className={skin === 'bubbles' ? 'turn-assistant w-full min-w-0' : undefined}>
             {skin === 'bubbles' ? <Unfinished text={live.text} parts={live.parts} skin={skin} />

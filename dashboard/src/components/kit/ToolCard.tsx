@@ -17,7 +17,9 @@
  * Rows adapted from beautifului.dev's ToolChips (MIT, © Shane Levine — see NOTICE), as Arturo's card was. Colours are
  * the --bui-* tokens (index.css), set for light and dark, so the card reads the same on either page.
  */
-import { useState, type ReactNode } from 'react';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
+import { LiveJobsContext } from './liveJobsContext';
+import { failedLabel, jobElapsed, type AgentJob } from '../../lib/agentJobs';
 import {
   Bookmark, Bot, Check, ChevronDown, FileText, Globe, Image as ImageIcon, ListChecks, ListTree, LoaderCircle,
   Map as MapIcon, MessageSquare, Pencil, Search, Terminal, Wrench, X,
@@ -44,6 +46,46 @@ function StatusMark({ status }: { status: ToolCallView['status'] }) {
   return <Check size={13} className="shrink-0 text-green" aria-label="done" />;
 }
 
+/** A background job this call launched (an agent's thread, lib/agentJobs.ts): running with its clock, then done, or
+ *  failed with how it ended. Replaces the call's own mark, which only says the launch returned. */
+function JobLive({ job }: { job: AgentJob }) {
+  const [now, setNow] = useState(() => Date.now());
+  const running = job.status === 'running';
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+  if (running) {
+    return (
+      <span className="flex shrink-0 items-center gap-1.5" data-job-live="running">
+        <span className="text-[11.5px] tabular-nums text-ink-3">{jobElapsed(job, now)}</span>
+        <LoaderCircle size={13} className="animate-spin text-orange-500" aria-label="running in the background" />
+      </span>
+    );
+  }
+  if (job.status === 'failed') {
+    return (
+      <span className="flex min-w-0 shrink items-center gap-1.5" data-job-live="failed">
+        <span className="truncate text-[11.5px] text-red">{failedLabel(job)}</span>
+        <X size={13} className="shrink-0 text-red" aria-label="failed" />
+      </span>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1.5" data-job-live="done">
+      <span className="text-[11.5px] tabular-nums text-ink-3">{jobElapsed(job, now)}</span>
+      <Check size={13} className="text-green" aria-label="done" />
+    </span>
+  );
+}
+
+/** The job a call launched, when this is an agent's thread and the server named the call. */
+function useJobOf(call: ToolCallView): AgentJob | undefined {
+  const jobs = useContext(LiveJobsContext);
+  return call.toolUseId ? jobs?.get(call.toolUseId) : undefined;
+}
+
 /** A file the call touched: its short path; a click copies the whole path. */
 function PathChip({ path }: { path: string }) {
   const [copied, setCopied] = useState(false);
@@ -63,6 +105,7 @@ function PathChip({ path }: { path: string }) {
 
 function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
   const [open, setOpen] = useState(false);
+  const job = useJobOf(call);
   const canOpen = hasDetail(call);
   const d = canOpen ? callDetail(call) : null;
   return (
@@ -87,7 +130,7 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
               {withRefs(call.chip, skin, 'chip', true)}
             </span>
           ) : <span className="flex-1" />}
-        <StatusMark status={call.status} />
+        {job ? <JobLive job={job} /> : <StatusMark status={call.status} />}
       </button>
       {d && (
         <div className="grid transition-[grid-template-rows,opacity] duration-300"
@@ -139,6 +182,11 @@ export default function ToolCard({ calls, entries, interrupted = false, density 
 }) {
   // Folded by default (the header is the turn's tool story); 'verbose' starts it open.
   const [open, setOpen] = useState(density === 'verbose');
+  // Background work this run launched, said on the folded header too (each row shows its own).
+  const jobs = useContext(LiveJobsContext);
+  const launched = jobs ? calls.flatMap((c) => (c.toolUseId && jobs.get(c.toolUseId) ? [jobs.get(c.toolUseId)!] : [])) : [];
+  const bgRunning = launched.filter((j) => j.status === 'running').length;
+  const bgFailed = launched.filter((j) => j.status === 'failed').length;
   if (!calls.length) return null;
   const card = `w-full max-w-[min(92%,34rem)] rounded-lg border border-line px-2.5 py-1${className ? ` ${className}` : ''}`;
   if (calls.length === 1) {
@@ -155,6 +203,8 @@ export default function ToolCard({ calls, entries, interrupted = false, density 
         <span className="min-w-0 flex-1 break-words">
           <span className={`font-medium tabular-nums ${s.tone === 'running' ? 'text-orange-500' : s.tone === 'stopped' ? 'text-amber-500' : 'text-ink'}`}>{s.lead}</span>
           {s.headline && <span className="text-ink-2"> — {s.headline}</span>}
+          {bgRunning > 0 && <span className="text-orange-500" data-job-live-head="running"> · {bgRunning} running in the background</span>}
+          {bgFailed > 0 && <span className="text-red" data-job-live-head="failed"> · {bgFailed} failed in the background</span>}
         </span>
       </button>
       <div className="grid transition-[grid-template-rows,opacity] duration-300"

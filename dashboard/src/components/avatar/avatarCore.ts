@@ -385,7 +385,7 @@ function mulberry32(a: number): () => number {
 // (#85858D: >= 3:1 on white, #F7F7F8 and the selected row; >= 4.4:1 on the dark surfaces) with no glyph; the others carry
 // a glyph at 40 px and up. Which roles show the dot at all: see dotFor().
 // The call states (a live voice call, components/call): listening while you talk, thinking from the moment you stop
-// until the agent answers (the body melts into three pulsing dots: `melt` in the Pose), talking while it speaks.
+// until the agent answers (the body becomes three dots with a brightness wave: `meltT` in the Pose, meltFrame), talking while it speaks.
 export type AvatarState = 'working' | 'needs_input' | 'finished' | 'failed' | 'idle' | 'listening' | 'thinking' | 'talking';
 export type Glyph = 'dots' | 'question' | 'check' | 'alert' | null;
 export type ReactionName = 'nod' | 'shake' | 'bounce' | 'spin' | 'jump' | 'wink';
@@ -394,27 +394,80 @@ interface StateDef {
   gaze: 'work' | 'viewer' | 'free' | 'down';
   enter?: ReactionName; repeat?: ReactionName; repeatEvery?: number; pulse?: boolean;
   settleMood?: string; settleAfter?: number; sleeps?: boolean;
-  /** The body melts into three pulsing dots (thinking); it reforms as the state leaves. */
+  /** The body melts into three dots (thinking; meltFrame); it reforms as the state leaves. */
   melt?: boolean;
 }
 
-// The melt (thinking): how fast the body melts away and how fast it reforms (per second, exponential approach), and
-// the three dots it becomes, in unit space around the body centre. Shared with the Swift port.
-export const MELT = { inRate: 7, outRate: 11, dotR: 0.16, dotGap: 0.42, pulseHz: 1.6, pulseAmp: 0.28, stagger: 0.55 };
+// The melt (thinking, and an agent's "Typing…" row): ONE continuous change of the body itself, matched to the
+// reference design frame by frame at 60 fps. Over MELT.dur seconds the body rounds into a circle (by
+// MELT.round), shrinks along the measured curve MELT.size into the middle dot and settles MELT.drop lower; the eyes
+// slide together into one slit (MELT.slit) and are gone by MELT.eyesGone; the two side dots slide out from under the
+// body (MELT.sideFrom..sideTo). Then three equal dots with a brightness wave left -> centre -> right: the lit dot full,
+// the others at MELT.dim, the peak moving on every MELT.step seconds, sine-eased. Leaving runs the same change
+// backwards. Unit space (1.0 ~ the body's half height; the reference square's half width is 0.86), so it scales
+// with the avatar. Shared with the Swift port.
+export const MELT = {
+  dur: 0.5,
+  /** Seconds the melt is already in when the state arrives (negative: a pause first). The state reaches the avatar
+   *  a frame after "Typing…" shows, so it starts one frame in, and the face's first change lands with the reference's. */
+  lag: -0.017,
+  round: 0.067,
+  /** The body as a circle's diameter, unit space, at seconds into the melt: the reference's measured shrink
+   *  (frames 07-40 at 60 fps; the melt starts on the frame "Typing…" appears). */
+  size: [[0, 1.72], [0.033, 1.58], [0.067, 1.55], [0.117, 1.26], [0.167, 1.01], [0.217, 0.84], [0.267, 0.77], [0.317, 0.69], [0.417, 0.56], [0.5, 0.48]] as [number, number][],
+  slit: 0.067, eyesGone: 0.1,
+  sideFrom: 0.017, sideTo: 0.1,
+  dotR: 0.24, gap: 0.79, drop: 0.17,
+  step: 0.383, dim: 0.53, centrePeak: 0.333,
+};
 
-/** The thinking dots for a melt of `melt` (0..1) at time `phase`: [x, y, r, alpha] each, unit space. The body is drawn
- *  at scale meltBodyScale(melt) and alpha 1 - melt under them. Pure. */
-export function meltDots(melt: number, phase: number): [number, number, number, number][] {
-  if (melt <= 0.001) return [];
-  const out: [number, number, number, number][] = [];
-  for (let i = 0; i < 3; i++) {
-    const p = Math.sin(2 * Math.PI * MELT.pulseHz * phase - i * MELT.stagger);
-    const r = MELT.dotR * (1 + MELT.pulseAmp * p) * (0.5 + 0.5 * melt);
-    out.push([(i - 1) * MELT.dotGap * melt, -0.08 * p * melt, r, Math.min(1, melt * 1.4)]);
-  }
-  return out;
+const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+const smooth = (k: number) => { const c = k < 0 ? 0 : k > 1 ? 1 : k; return c * c * (3 - 2 * c); };
+
+/** One frame of the melt at `t` seconds into it (0 = the face; past MELT.dur the dots keep their wave). Pure.
+ *  shrink: 0..1 along the measured size curve (1 = the middle dot); round: 0..1 square to circle; drop: unit space;
+ *  slit: 0..1 the eyes merged; eyes: eye opacity; side: each side dot's distance out (unit space; under the body
+ *  while small); lit: the three dots' brightness, left, centre, right (the centre is the body). */
+export interface MeltFrame { shrink: number; round: number; drop: number; slit: number; eyes: number; side: number; lit: [number, number, number] }
+export function meltFrame(t: number, reduced = false): MeltFrame {
+  if (reduced) return { shrink: 1, round: 1, drop: MELT.drop, slit: 1, eyes: 0, side: MELT.gap, lit: [1, 1, 1] };
+  const tt = Math.max(0, t);
+  const sz = MELT.size;
+  let d = sz[sz.length - 1][1];
+  for (let i = 1; i < sz.length; i++) if (tt <= sz[i][0]) { const [t0, d0] = sz[i - 1], [t1, d1] = sz[i]; d = lerp(d0, d1, (tt - t0) / (t1 - t0)); break; }
+  const shrink = (sz[0][1] - d) / (sz[0][1] - sz[sz.length - 1][1]);
+  const k = Math.min(1, tt / MELT.dur);
+  const out = smooth((tt - MELT.sideFrom) / (MELT.sideTo - MELT.sideFrom));
+  // the wave: each dot's peak MELT.step apart (left, centre, right), one pass every 3 steps
+  const period = 3 * MELT.step;
+  const glow = (peak: number) => {
+    let dd = ((tt - peak) % period + period) % period; if (dd > period / 2) dd -= period;
+    const w = Math.abs(dd) < MELT.step ? 0.5 + 0.5 * Math.cos(Math.PI * dd / MELT.step) : 0;
+    return MELT.dim + (1 - MELT.dim) * w;
+  };
+  // the body stays lit while it is still becoming the middle dot (until its peak), then joins the wave
+  const centre = tt < MELT.centrePeak ? 1 : glow(MELT.centrePeak);
+  return {
+    shrink, round: smooth(tt / MELT.round), drop: MELT.drop * smooth(k),
+    slit: smooth(tt / MELT.slit), eyes: 1 - smooth((tt - MELT.slit) / (MELT.eyesGone - MELT.slit)),
+    side: MELT.gap * out, lit: [glow(MELT.centrePeak - MELT.step), centre, glow(MELT.centrePeak + MELT.step)],
+  };
 }
-export const meltBodyScale = (melt: number): number => 1 - 0.8 * melt;
+/** The shape's outline's mean distance from the body centre (unit space): the circle it rounds into. Cached. */
+const meanR = new Map<string, number>();
+export function outlineMeanRadius(key: string): number {
+  let r = meanR.get(key);
+  if (r === undefined) { const pts = shapeOutline(key); r = pts.reduce((a, p) => a + Math.hypot(p[0], p[1]), 0) / pts.length; meanR.set(key, r); }
+  return r;
+}
+/** The body's outline while it melts: each point slides toward that circle at its own angle, by `round` (0 the
+ *  shape, 1 the circle). The renderer then scales it by 1 + (MELT.dotR / outlineMeanRadius - 1) * shrink. */
+export function meltOutline(key: string, round: number): Pt[] {
+  const pts = shapeOutline(key);
+  if (round <= 0) return pts;
+  const R = outlineMeanRadius(key);
+  return pts.map(([x, y]) => { const d = Math.hypot(x, y) || 1; return [x + (x / d * R - x) * round, y + (y / d * R - y) * round] as Pt; });
+}
 export const STATES: Record<AvatarState, StateDef> = {
   working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0.025, bobHz: 2.2, gaze: 'work' },
   needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0.010, bobHz: 1.0, gaze: 'viewer',
@@ -457,8 +510,12 @@ export interface Pose {
   wink?: number;
   mood: Mood; shape: string; color: string; state: AvatarState; dot: string; glyph: Glyph;
   eyeColor: EyeColor; eye: string | null; phase: number; pulse: number | null; asleep: boolean; zzz: number | null; reducedMotion: boolean;
-  /** 0..1: how far the body has melted into the thinking dots (meltDots). */
+  /** 0..1: how far the body has melted into the middle dot (meltT / MELT.dur, capped). */
   melt: number;
+  /** Seconds into the melt (meltFrame): it runs on while melted (the dots' wave), and back down as it reforms. */
+  meltT: number;
+  /** The bob's own share of dy (unit space), so a renderer can scale it (the working row's larger bob). */
+  bobY: number;
 }
 export interface Pointer { dx: number; dy: number }
 export interface ModelOpts {
@@ -499,8 +556,8 @@ export class AvatarModel {
   blinkAt: number;
   nextBlink: number;
   nextRepeat: number;
-  /** 0..1, eased toward 1 while the state melts (thinking) and back to 0 after. */
-  melt: number;
+  /** Seconds into the melt: up while the state melts (thinking), back down to 0 as it reforms. */
+  meltT: number;
   version: number;
   // the ticker's per-frame cache for a shared model (one step per frame however many instances show it)
   __frame?: number;
@@ -537,7 +594,7 @@ export class AvatarModel {
     this.blinkAt = -1;
     this.nextBlink = this.t + this.rand() * 3;
     this.nextRepeat = Infinity;
-    this.melt = STATES[this.state].melt ? 1 : 0;
+    this.meltT = STATES[this.state].melt ? MELT.dur : 0;
     this.version = 0; // bumps whenever a static (reduced motion) frame must redraw
   }
 
@@ -565,6 +622,8 @@ export class AvatarModel {
     this.version++;
     const def = STATES[next];
     this.nextRepeat = def.repeat ? this.t + (def.repeatEvery as number) : Infinity;
+    // a melt starts MELT.lag after the state changes (one frame in: see MELT.lag)
+    if (def.melt && this.meltT <= 0) this.meltT = -MELT.lag;
     if (this.asleep) { this.wake(); return; }
     if (def.enter) this.react(def.enter);
   }
@@ -633,10 +692,10 @@ export class AvatarModel {
     // repeat cue (needs input keeps nodding)
     if (t >= this.nextRepeat && def.repeat) { this.react(def.repeat); this.nextRepeat = t + (def.repeatEvery as number); }
 
-    // melt (thinking): the body melts into the dots, and reforms quicker than it melts (it speaks at once)
-    const meltTo = def.melt ? 1 : 0;
-    this.melt += (meltTo - this.melt) * (1 - Math.exp(-dt * (meltTo > this.melt ? MELT.inRate : MELT.outRate)));
-    if (Math.abs(meltTo - this.melt) < 0.01) this.melt = meltTo;
+    // melt (thinking): the body becomes the middle dot over MELT.dur and runs on (the dots' wave); leaving, the
+    // same change runs backwards from where it is
+    if (def.melt) this.meltT += dt;
+    else if (this.meltT !== 0) this.meltT = Math.max(0, Math.min(this.meltT, MELT.dur) - dt);
 
     // mood blend
     const target = MOODS[this.targetMoodKey()];
@@ -684,7 +743,9 @@ export class AvatarModel {
       sx: 1 - breathAmp * 0.45 * br, sy: 1 + breathAmp * br,
       lookX: this.look.x, lookY: this.look.y, lid,
     };
-    if (def.bob && !this.asleep && !this.calm) pose.dy += def.bob * Math.sin(2 * Math.PI * def.bobHz * t + this.phase);
+    // the bob settles as the body melts (the dots do not bob)
+    const bobY = def.bob && !this.asleep && !this.calm ? def.bob * Math.sin(2 * Math.PI * def.bobHz * t + this.phase) * (1 - Math.max(0, Math.min(1, this.meltT / MELT.dur))) : 0;
+    pose.dy += bobY;
 
     let wink = 0;
     if (this.reaction) {
@@ -702,6 +763,7 @@ export class AvatarModel {
 
     const out = this.decorate(pose, def);
     out.wink = wink;
+    out.bobY = bobY;
     return out;
   }
 
@@ -709,7 +771,7 @@ export class AvatarModel {
   staticPose(): Pose {
     const def = STATES[this.state];
     this.mood = { ...MOODS[def.settleMood || def.mood] };
-    this.melt = def.melt ? 1 : 0;
+    this.meltT = def.melt ? MELT.dur : 0;
     return this.decorate({ dx: 0, dy: 0, rot: 0, sx: 1, sy: 1, lookX: 0, lookY: 0, lid: 1 }, def);
   }
 
@@ -747,7 +809,9 @@ export class AvatarModel {
       asleep: this.asleep,
       zzz: this.asleep ? (this.t * 0.45) % 1 : null,
       reducedMotion: this.reducedMotion,
-      melt: this.reducedMotion ? (def.melt ? 1 : 0) : this.melt,
+      melt: this.reducedMotion ? (def.melt ? 1 : 0) : Math.max(0, Math.min(1, this.meltT / MELT.dur)),
+      meltT: this.reducedMotion ? (def.melt ? MELT.dur : 0) : Math.max(0, this.meltT),
+      bobY: 0,
     });
   }
 }

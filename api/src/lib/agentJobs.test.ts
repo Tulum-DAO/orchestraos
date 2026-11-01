@@ -64,7 +64,7 @@ const byId = (jobs: ReturnType<typeof parseJobs>) => Object.fromEntries(jobs.map
 test('background commands: running until their notification, which is where the result card goes', () => {
   const j = byId(parseJobs(LOG, Date.parse(at('01:00'))));
   assert.deepEqual(j.bg1, { id: 'bg1', kind: 'command', title: 'Build the sample', status: 'done',
-    started_at: at('00:01.000'), ended_at: at('00:10.000'), result_uuid: 'n1' });
+    started_at: at('00:01.000'), ended_at: at('00:10.000'), result_uuid: 'n1', tool_use_id: 'bg1', launch_uuid: 'a1' });
   assert.deepEqual([j.bg2.status, j.bg2.result_uuid, j.bg2.title], ['failed', 'n2', 'npm test']);
   assert.deepEqual([j.bg3.status, j.bg3.ended_at, j.bg3.result_uuid], ['running', undefined, undefined]);
 });
@@ -141,7 +141,7 @@ test('GET /api/agents/:id/jobs: headless and tmux seats from the transcript, non
     assert.equal(headless.jobs.find((j: any) => j.id === 'bg3').status, 'failed', 'ended with the CLI');
     const tmux = await get('sample-seat');
     assert.equal(tmux.jobs.find((j: any) => j.id === 'bg3').status, 'running', 'a tmux seat: the transcript alone');
-    assert.deepEqual(Object.keys(tmux.jobs[0]).sort(), ['id', 'kind', 'started_at', 'status', 'title']);
+    assert.deepEqual(Object.keys(tmux.jobs[0]).sort(), ['id', 'kind', 'launch_uuid', 'started_at', 'status', 'title', 'tool_use_id']);
     assert.deepEqual(await get('pm-demo'), { ok: true, agent: 'pm-demo', jobs: [], source: 'not_claude' });
     assert.deepEqual(await get('qa-demo'), { ok: true, agent: 'qa-demo', jobs: [], source: 'no_transcript' });
     assert.equal((await fetch(`${base}/bad%20id/jobs`)).status, 400);
@@ -208,4 +208,20 @@ test('finished jobs only within the last hour; running jobs always', () => {
   assert.ok(!later.some((j) => j.status !== 'running'), 'an old failure (and every old finished job) is gone');
   const running = jobs.filter((j) => j.status === 'running').map((j) => j.id).sort();
   assert.deepEqual(later.map((j) => j.id).sort(), running, 'every running job stays, however old');
+});
+
+test('every job names its launching tool call, and the thread has that call on that row', async () => {
+  const { normalizeTranscript } = await import('../routes/chat-transcript.js');
+  const env = normalizeTranscript(LOG, 'dev-demo', 'sample-session', 500, false, true);
+  const jobs = parseJobs(LOG, Date.parse(at('01:00')));
+  assert.ok(jobs.length >= 10);
+  for (const j of jobs) {
+    assert.equal(j.tool_use_id, j.id);
+    assert.ok(j.launch_uuid, `${j.id} has a launch row`);
+    const item = env.items.find((i: any) => i.kind === 'tool_use' && i.id === j.tool_use_id);
+    assert.ok(item, `${j.id}: its tool call is in the items`);
+    assert.equal(item.uuid, j.launch_uuid, `${j.id}: on that row`);
+    assert.ok(env.render_items.some((n: any) => n.kind === 'tool' && String(n.key).startsWith(`${j.launch_uuid}:`)),
+      `${j.id}: the tool card is keyed by that row`);
+  }
 });

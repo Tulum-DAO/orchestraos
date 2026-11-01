@@ -37,6 +37,12 @@ import { usePendingSends } from '../../stores/pendingSends';
 import { foldCardAnswers } from '../../lib/systemMessages';
 import { markResults } from '../../lib/threadKit/results';
 import ThreadView from '../kit/ThreadView';
+import { TRANSCRIPT_REFRESH_EVENT } from '../../lib/agentCalls';
+import { useAgentTyping } from '../../stores/agentTyping';
+import { REPLY_RISE_A, WORKING_ROW_AVATAR } from '../../lib/workingRowLook';
+import { LiveJobsContext } from '../kit/liveJobsContext';
+import { useAgentJobs } from '../../stores/agentJobs';
+import { jobsByToolUse } from '../../lib/agentJobs';
 import { agentRows, type LiveText } from '../../lib/threadKit/view';
 import { useChatStyle } from '../../lib/agentPrefs';
 
@@ -108,6 +114,14 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     if (fixtureItems) { setItems(fixtureItems); setLoading(false); }
   }, [fixtureItems]);
 
+  // A hand-off moved a call's card (lib/agentCalls refreshTranscript): read the thread again (a fresh snapshot).
+  const [refreshKey, setRefreshKey] = useState(0);
+  useEffect(() => {
+    const on = (e: Event) => { if ((e as CustomEvent<{ agentId?: string }>).detail?.agentId === agentId) setRefreshKey((k) => k + 1); };
+    window.addEventListener(TRANSCRIPT_REFRESH_EVENT, on);
+    return () => window.removeEventListener(TRANSCRIPT_REFRESH_EVENT, on);
+  }, [agentId]);
+
   // live mode: SSE stream (F1) with the interval poll as the fallback lane.
   // One immediate poll fetch always runs first so the chat renders instantly
   // even if the stream endpoint is unavailable (deploy skew, proxy, old API) —
@@ -159,7 +173,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       disposeStream();
       if (pollIv) clearInterval(pollIv);
     };
-  }, [agentId, fixtureItems]);
+  }, [agentId, fixtureItems, refreshKey]);
 
   // Scrolling up reads the chat's history a page at a time (lib/threadKit/useOlderPages.ts): the live window above,
   // kept current by the stream or the poll, with older pages added above it. A page is read from the route's own
@@ -183,6 +197,13 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     () => (fixtureItems || liveEv?.agentId !== agentId ? null : liveTextOf(liveEv.ev, items)),
     [liveEv, items, fixtureItems, agentId]);
   const liveText = liveTextProp !== undefined ? liveTextProp : streamedLive;
+  // The agent is writing its reply: its working row says "Typing…" and its face melts into the dots.
+  const typingNow = !fixtureItems && !!liveText;
+  useEffect(() => {
+    if (fixtureItems) return;
+    useAgentTyping.getState().set(agentId, typingNow);
+  }, [agentId, typingNow, fixtureItems]);
+  useEffect(() => () => { useAgentTyping.getState().set(agentId, false); }, [agentId]);
   // Just-sent bubbles (lib/pendingSends): drawn until their own row arrives. Derived in render as
   // well as retired in the store, so the frame that brings the row never also draws the bubble.
   const rows = useMemo(() => userRows(items), [items]);
@@ -251,8 +272,28 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const chatStyle = useChatStyle(agentId);
   const modern = !compact && chatStyle === 'modern';
   // Its calls' transcripts are drawn in this chat's skin, so a call reads like the chat around it.
+  // Its background jobs (polled by the agent page): the launching tool card shows each one's live status.
+  const agentJobs = useAgentJobs(fixtureItems ? undefined : agentId);
+  const liveJobs = useMemo(() => jobsByToolUse(agentJobs), [agentJobs]);
   const callAgentInSkin = useMemo(() => (callAgent ? { ...callAgent, skin: modern ? 'modern' as const : 'bubbles' as const } : null), [callAgent, modern]);
   const threadRows = useMemo(() => agentRows(entries, loading ? [] : pending, st, { modern }), [entries, pending, loading, st, modern]);
+  // THE HAND-OFF: when the reply lands after "Typing…", it enters where the row was: up from 0.39 of the row's avatar
+  // size and from 35% to full in 165 ms, ease-out (transform and opacity only; nothing else moves).
+  const lastKey = threadRows.length ? threadRows[threadRows.length - 1].key : null;
+  const typedAt = useRef(0);
+  // when typing started or stopped (it stops in the very render the reply lands in); before the hand-off below
+  useLayoutEffect(() => { typedAt.current = Date.now(); }, [typingNow]);
+  const prevLast = useRef(lastKey);
+  useLayoutEffect(() => {
+    const before = prevLast.current;
+    prevLast.current = lastKey;
+    if (!lastKey || lastKey === before || Date.now() - typedAt.current > 2000) return;
+    const mark = columnRef.current?.querySelector(`[data-row-key="${CSS.escape(lastKey)}"]`);
+    const el = mark?.nextElementSibling as HTMLElement | null;
+    if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    el.animate([{ transform: `translateY(${REPLY_RISE_A * WORKING_ROW_AVATAR}px)`, opacity: 0.35 }, { transform: 'none', opacity: 1 }],
+      { duration: 165, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+  }, [lastKey]);
   // The idle backstop: a bubble no row could match (a long message arrives as a shorter banner)
   // goes once the agent is idle again. Only from a live feed: a stale "idle" proves nothing.
   const feedLive = !feed || !isDegraded(feed);
@@ -296,6 +337,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   return (
     <BatchRecordsContext.Provider value={batchesQ.data}>
     <CallAgentContext.Provider value={callAgentInSkin}>
+    <LiveJobsContext.Provider value={liveJobs}>
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
       <div
         ref={scrollRef}
@@ -389,6 +431,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       </div>
       )}
     </div>
+    </LiveJobsContext.Provider>
     </CallAgentContext.Provider>
     </BatchRecordsContext.Provider>
   );

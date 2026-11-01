@@ -15,6 +15,8 @@ import { summarizeTurn, formatDuration, type WorkItem } from './toolGroups';
 
 export interface ToolCallView {
   id: string;
+  /** The tool call's own id (tool_use id), when the source has it: a background job it launched is matched by it. */
+  toolUseId?: string;
   name: string;
   status: ToolStatus;
   /** The arguments as one line of words. */
@@ -41,6 +43,7 @@ export function fromBlock(b: ToolBlock): ToolCallView {
   const todos = todoItems(b);
   return {
     id: b.key,
+    ...(b.id ? { toolUseId: b.id } : {}),
     name: b.tool,
     status: b.isError ? 'failed' : b.result === undefined ? 'running' : 'ok',
     chip: todos.length ? todoChip(todos) : toolSummary(b.tool, b.input),

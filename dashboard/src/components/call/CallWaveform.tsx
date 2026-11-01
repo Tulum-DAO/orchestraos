@@ -13,8 +13,12 @@ import type { CallLevels } from '../../stores/callStore';
 
 export interface WaveStats { frames: number; maxMs: number; over16: number; worstGapMs: number; gapsOver17: number }
 
-export default function CallWaveform({ levels, color, muted }: { levels: CallLevels; color: string; muted: string }) {
+/** `micOff`: you are muted. Nothing of yours goes to the model, so your layer is flat (the dotted baseline only): the
+ *  microphone's level is not read. The agent's layer keeps following its voice. */
+export default function CallWaveform({ levels, color, muted, micOff = false }: { levels: CallLevels; color: string; muted: string; micOff?: boolean }) {
   const userRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const micOffRef = useRef(micOff);
+  useEffect(() => { micOffRef.current = micOff; }, [micOff]);
   const agentRefs = useRef<(HTMLSpanElement | null)[]>([]);
 
   useEffect(() => {
@@ -34,7 +38,8 @@ export default function CallWaveform({ levels, color, muted }: { levels: CallLev
     const frame = (now: number) => {
       const t0 = performance.now();
       let mic: number, play: number;
-      [mic, micBuf] = read(levels.mic(), micBuf);
+      if (micOffRef.current) mic = 0;
+      else [mic, micBuf] = read(levels.mic(), micBuf);
       [play, playBuf] = read(levels.playback(), playBuf);
       tl.push(now, mic, play);
       for (let i = 0; i < SLOTS; i++) {
