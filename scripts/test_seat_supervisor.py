@@ -111,6 +111,13 @@ for line in sys.stdin:
              "uuid": str(uuid.uuid4()), "isReplay": True})
         sys.stdout.flush()
         os._exit(1)
+    if "TASK-NOTE" in text:
+        # The CLI's own input (a background task finished) echoed first, while ours is still queued.
+        out({"type": "user", "message": {"role": "user", "content": "<task-notification>done</task-notification>"},
+             "session_id": sid, "uuid": str(uuid.uuid4()), "isReplay": True,
+             "origin": {"kind": "task-notification", "producer": "session-task"}})
+        turn(text)
+        continue
     if "HANG" in text:
         out({"type": "system", "subtype": "init", "session_id": sid, "model": "sample-model"})
         out({"type": "user", "message": {"role": "user", "content": text}, "session_id": sid,
@@ -478,6 +485,17 @@ def test_a_cli_that_echoes_its_own_uuid_falls_back_to_text(rig):
     rec = [x for x in log_records(rig) if x["kind"] == "msg" and x["id"] == "t1" and x["state"] == "delivered"][0]
     assert rec["echo_match"] == "text"
     assert HS.status("qa-demo", orch_dir=rig.orch)["echo_matches"]["text"] == 1
+
+
+def test_the_clis_own_echo_never_takes_the_place_of_our_queued_message(rig):
+    rig.start()
+    HS.send("qa-demo", "Sample TASK-NOTE", "n1", orch_dir=rig.orch)
+    wait_for(lambda: msg_state(rig, "n1") == "answered", what="answered")
+    recs = log_records(rig)
+    rec = [x for x in recs if x["kind"] == "msg" and x["id"] == "n1" and x["state"] == "delivered"][0]
+    assert rec["echo_match"] == "text", "delivered by its own echo, not by order on the notification"
+    assert [x["origin"] for x in recs if x.get("what") == "replay-cli"] == ["task-notification"]
+    assert not [x for x in recs if x.get("what") == "replay-unmatched"]
 
 
 def test_a_resend_carries_the_same_uuid(rig):

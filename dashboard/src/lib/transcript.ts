@@ -69,8 +69,16 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
   const nodes: RenderNode[] = [];
   let firstUserSeen = false;
   let i = 0;
+  // A row's key is its item's own (its uuid, and which of that log line's items it is), never its place in the list:
+  // older pages added above, or the live window's top moving down, must not rename (and so redraw) every row.
+  const seen = new Map<string, number>();
   for (const it of items) {
-    const key = 'uuid' in it && it.uuid ? `${it.uuid}:${i}` : `n${i}`;
+    let key: string;
+    if ('uuid' in it && it.uuid) {
+      const n = seen.get(it.uuid) ?? 0;
+      seen.set(it.uuid, n + 1);
+      key = `${it.uuid}:${n}`;
+    } else key = `n${i}`;
     i++;
     if (it.kind === 'tool_result') continue; // consumed via pairing
     if (it.kind === 'text') {
@@ -223,4 +231,14 @@ export async function fetchTranscript(agentId: string, limit = 120): Promise<Tra
   const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/transcript?limit=${limit}`);
   if (!res.ok) throw new Error(`transcript ${agentId}: ${res.status}`);
   return res.json();
+}
+
+/** The page of the chat just older than `before` (a page's own `oldest_id`, or an item's uuid): its items, whether
+ *  there is more before it, and the cursor for the next. An unknown cursor answers an empty page, no more. */
+export async function fetchOlderTranscript(agentId: string, before: string, limit = 100):
+    Promise<{ items: ChatItem[]; hasOlder: boolean; next: string | null }> {
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/transcript?before=${encodeURIComponent(before)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`transcript ${agentId}: ${res.status}`);
+  const body = await res.json() as TranscriptResponse & { has_older?: boolean; oldest_id?: string | null };
+  return { items: body.items || [], hasOlder: !!body.has_older && !body.error, next: body.oldest_id ?? null };
 }

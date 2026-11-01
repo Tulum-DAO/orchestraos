@@ -76,8 +76,11 @@ export function groupCalls<T extends CallTurn>(turns: T[], live: boolean): FeedI
   const items: FeedItem<T>[] = [];
   let run: { t: T; i: number }[] = [];
   const close = (callId: string | null, endTs: number | undefined, isLive: boolean) => {
-    const first = run[0];
-    items.push({ kind: 'call', key: callId ?? `call-${first ? first.i : 'live'}`, callId, turns: run.map((r) => r.t),
+    // A call with no id is named by its last turn (by its first while live, as it grows at the end): an older page
+    // that brings more of the call adds to its top, and must not make it another card.
+    const named = isLive ? run[0] : run[run.length - 1];
+    const nameOf = named ? ((named.t as { id?: number | string }).id ?? named.i) : 'live';
+    items.push({ kind: 'call', key: callId ?? `call-${nameOf}`, callId, turns: run.map((r) => r.t),
                  live: isLive, startTs: run.find((r) => typeof r.t.ts === 'number')?.t.ts, endTs });
     run = [];
   };

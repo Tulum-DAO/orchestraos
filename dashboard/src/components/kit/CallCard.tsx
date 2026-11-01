@@ -27,7 +27,8 @@ import { fetchVoiceCall } from '../../lib/api';
 import { callCounts, fmtCallDuration, fmtClock, isStaleLive, recordLines, transcriptText, type CallLine, type CallRecord } from '../../lib/threadKit/calls';
 import { assistantName } from '../../lib/assistantName';
 
-export interface CallBubble { role: 'user' | 'arturo'; text: string; parts?: TurnPart[] }
+/** `key`: the turn's own name in the thread (stable as older turns of the call load above it). */
+export interface CallBubble { role: 'user' | 'arturo'; text: string; parts?: TurnPart[]; key?: string }
 
 // One read per call per page load, however often the feed re-renders. A miss is not remembered: a call that has just
 // ended may not be saved yet.
@@ -185,14 +186,16 @@ function ArturoSkin({ callId, turns = [], live = false, startTs, endTs, liveSinc
           <X size={16} />
         </button>
       </div>
-      <div className="call-body">
+      {/* Its lines are anchor rows of their own (lib/useStickToBottom.ts): a reader inside a long call stays on the line
+          they are reading while older turns of it load above. */}
+      <div className="call-body" data-anchor-rows>
         {turns.length ? turns.map((t, i) => t.role === 'user'
-          ? <div key={i} className={bubble('user')}>{withRefs(t.text, skin)}</div>
+          ? <div key={t.key ?? i} className={bubble('user')}>{withRefs(t.text, skin)}</div>
           : hasToolParts(t.parts)
             ? groupParts(t.parts!).map((g, gi) => g.kind === 'tools'
-                ? <div key={`${i}-${gi}`} className="call-tools"><ToolCard calls={g.tools.map(fromPart)} skin={skin} /></div>
-                : g.text.trim() ? <div key={`${i}-${gi}`} className={bubble('arturo')}>{withRefs(g.text, skin)}</div> : null)
-            : t.text.trim() ? <div key={i} className={bubble('arturo')}>{withRefs(t.text, skin)}</div> : null)
+                ? <div key={`${t.key ?? i}-${gi}`} className="call-tools"><ToolCard calls={g.tools.map(fromPart)} skin={skin} /></div>
+                : g.text.trim() ? <div key={`${t.key ?? i}-${gi}`} className={bubble('arturo')}>{withRefs(g.text, skin)}</div> : null)
+            : t.text.trim() ? <div key={t.key ?? i} className={bubble('arturo')}>{withRefs(t.text, skin)}</div> : null)
           : <Lines lines={fromRecord} skin={skin} bubble={bubble} />}
         {liveUser && <div className="call-bubble user is-partial">{liveUser}…</div>}
         {liveArturo && <div className="call-bubble arturo is-partial">{liveArturo}…</div>}

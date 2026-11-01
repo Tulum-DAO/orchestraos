@@ -31,7 +31,8 @@ export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: str
   card_id?: string; choices?: import('./arturo').ChoiceCard; dismissed?: boolean;
   /** The card's answer as the server keeps it (the turn that answered it said so): picks and words, and when. */
   answer?: { picks?: string[]; words?: string; at?: number } }
-export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta }
+/** `seq`: the turn's number in its thread, present when the thread was read a page at a time (loadThreadPage). */
+export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta; seq?: number }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
 export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 export interface ContextCard { kind: 'page-context'; label: string; context: ArturoContext }
@@ -54,6 +55,32 @@ export async function loadThread(id: string): Promise<LoadedThread | null> {
     if (!res.ok) return null;
     const json = await res.json();
     return threadFromJson(json.thread);
+  } catch { return null; }
+}
+
+/** How many turns a page of a long thread holds (the newest on opening it, then each older page as the reader
+ *  scrolls up). */
+export const THREAD_PAGE_TURNS = 100;
+
+/** A thread a page at a time: the newest turns (no `before`), or those just older than the turn numbered `before`.
+ *  `hasOlder`/`next` page further up. A server that does not page (it answers the whole thread, with no has_older)
+ *  is the whole thread with nothing older; a page that is not older than its cursor (a hop that dropped `before`)
+ *  is refused, so the same turns are never drawn twice. null when the thread is gone or unreachable. */
+export async function loadThreadPage(id: string, before?: number, limit = THREAD_PAGE_TURNS):
+    Promise<{ thread: LoadedThread | null; hasOlder: boolean; next: number | null } | null> {
+  try {
+    const q = new URLSearchParams({ limit: String(limit), ...(before !== undefined ? { before: String(before) } : {}) });
+    const res = await fetch(`/api/arturo/threads/${encodeURIComponent(id)}?${q}`);
+    if (!res.ok) return null;
+    const json = await res.json() as { thread?: ThreadJson | null; has_older?: boolean; oldest_seq?: number | null; error?: string };
+    const thread = threadFromJson(json.thread);
+    if (before !== undefined) {
+      if (typeof json.has_older !== 'boolean' || json.error) return null;
+      if (thread?.turns.some((t) => typeof t.seq !== 'number' || t.seq >= before)) return null;
+    }
+    const pages = typeof json.has_older === 'boolean';
+    return { thread, hasOlder: pages && json.has_older === true && typeof json.oldest_seq === 'number',
+             next: pages && typeof json.oldest_seq === 'number' ? json.oldest_seq : null };
   } catch { return null; }
 }
 

@@ -14,6 +14,9 @@
  *    on the page closes it);
  *  - Back to chat shows "Starting…" while the headless process comes back; a terminal still in use says
  *    "The terminal is in use." with [Try again];
+ *  - leaving the TUI from inside the terminal (its own /exit, Ctrl-C twice, or Back to chat on another page) while
+ *    this page shows it is Back to chat too: the page saves its chat style and shows the chat, the same as the
+ *    button, and never switches the terminal on again by itself;
  *  - anything else that goes wrong says what, with [Try again].
  * Nothing here forces a switch over a busy seat: [Stop and switch now] stops the turn first, then switches.
  */
@@ -38,10 +41,13 @@ export interface DevMemory {
   origin: 'open' | 'choose';
   /** [Switch when it finishes] was pressed. */
   waitChosen: boolean;
+  /** The seat's terminal was seen open while Dev was wanted: its closing now means it was left from inside. */
+  sawDev?: boolean;
   error?: string;
 }
 
-export type DevAction = 'none' | 'switchOn' | 'switchOff';
+/** leftTerminal: the terminal closed with nothing here asking; the page does what its Back to chat does. */
+export type DevAction = 'none' | 'switchOn' | 'switchOff' | 'leftTerminal';
 
 export const INITIAL: DevMemory = { phase: 'none', origin: 'open', waitChosen: false };
 
@@ -62,7 +68,12 @@ export function viewOf(inp: DevInputs): 'dev' | 'chat' {
 /** One evaluation: the next memory and what to send now. Called whenever an input changes. */
 export function step(inp: DevInputs, mem: DevMemory): { mem: DevMemory; action: DevAction } {
   if (!inp.headless || IN_FLIGHT.has(mem.phase)) return { mem: inp.headless ? mem : { ...mem, phase: 'none' }, action: 'none' };
-  if (inp.wantDev === inp.actualDev) return { mem: { ...mem, phase: 'none', error: undefined }, action: 'none' };
+  if (inp.wantDev === inp.actualDev) {
+    return { mem: { ...mem, phase: 'none', error: undefined, sawDev: inp.wantDev }, action: 'none' };
+  }
+  if (inp.wantDev && mem.sawDev && mem.phase !== 'stopping') {
+    return { mem: { ...mem, phase: 'none', error: undefined, sawDev: false }, action: 'leftTerminal' };
+  }
   if (inp.wantDev) {
     if (mem.phase === 'error') return { mem, action: 'none' };
     if (mem.phase === 'stopping') {

@@ -11,7 +11,8 @@
  * thread, jumps back to the bottom (`toBottom`); jumping to a card somewhere up the thread first stops following
  * (`hold`).
  *
- * `rows`: the element whose children are the thread's rows, when it is not the scroller itself.
+ * `rows`: the element whose children are the thread's rows, when it is not the scroller itself. A row holding its own
+ * list of rows (marked data-anchor-rows) is anchored by the line showing inside it.
  */
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import { FOLLOW_TOLERANCE_PX, anchorShift, isFollowing, pickAnchor, type ScrollMetrics } from './threadKit/anchor';
@@ -25,21 +26,37 @@ export function useStickToBottom(ref: RefObject<HTMLElement | null>, opts: { row
   const atBottom = useRef(true);
   const anchor = useRef<{ el: Element; index: number; offset: number } | null>(null);
   const rowsRef = opts.rows;
+  const ownTop = useRef<number | null>(null);   // where this hook's own last scroll left the scroller
 
   /** Note the reader's anchor: the first row still showing, and its offset below the scroller's top edge. */
   const capture = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    const rows = Array.from((rowsRef?.current ?? el).children);
+    // A row marked data-anchor-skip (the older-pages sentinel above the first row) is never the anchor: it stays at
+    // the top while pages land under it.
+    const rows = Array.from((rowsRef?.current ?? el).children).filter((r) => !r.hasAttribute('data-anchor-skip'));
     const top = el.getBoundingClientRect().top;
     const i = pickAnchor(rows.map((r) => r.getBoundingClientRect()), top);
-    anchor.current = i >= 0 ? { el: rows[i], index: i, offset: rows[i].getBoundingClientRect().top - top } : null;
+    if (i < 0) { anchor.current = null; return; }
+    // A row that is itself a list of rows (a call's card, marked data-anchor-rows) can grow at its top while the
+    // reader is inside it (an older page brings more of the call): the line showing inside it is the anchor then.
+    const inner = rows[i].querySelector('[data-anchor-rows]');
+    const parts = inner ? Array.from(inner.children).filter((r) => !r.hasAttribute('data-anchor-skip')) : [];
+    const j = parts.length ? pickAnchor(parts.map((r) => r.getBoundingClientRect()), top) : -1;
+    const at = j >= 0 ? parts[j] : rows[i];
+    anchor.current = { el: at, index: i, offset: at.getBoundingClientRect().top - top };
   }, [ref, rowsRef]);
 
   /** Put on the feed element: `<div ref={ref} onScroll={onScroll}>`. */
   const onScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
+    // The scroll this hook made itself (holding the anchor) arrives as an event after the fact, by when the rows may
+    // have changed again (more of an older page laid out): noting the anchor then would note it where that change
+    // left it, before it is held back. The anchor is already noted for that scroll.
+    const own = ownTop.current;
+    ownTop.current = null;
+    if (own !== null && Math.abs(el.scrollTop - own) < 1) return;
     atBottom.current = isAtBottom(el);
     if (!atBottom.current) capture();
   }, [ref, capture]);
@@ -53,11 +70,17 @@ export function useStickToBottom(ref: RefObject<HTMLElement | null>, opts: { row
     const a = anchor.current;
     if (!a) { capture(); return; }
     // A thread re-read in full draws its rows anew: the row now in the anchor's place stands in for it.
-    const row = a.el.isConnected ? a.el : (rowsRef?.current ?? el).children[a.index];
+    const row = a.el.isConnected ? a.el
+      : Array.from((rowsRef?.current ?? el).children).filter((r) => !r.hasAttribute('data-anchor-skip'))[a.index];
     if (!row) { capture(); return; }
     const shift = anchorShift(a.offset, row.getBoundingClientRect().top - el.getBoundingClientRect().top);
-    if (shift) el.scrollTop += shift;
-    capture();
+    if (shift) { el.scrollTop += shift; ownTop.current = el.scrollTop; }
+    // The same row still there: held to the offset the reader left it at (noting it afresh after each correction
+    // would carry each one's sub-pixel rounding into the next, a pixel or two over a page of changes).
+    if (row === a.el) {
+      const i = Array.from((rowsRef?.current ?? el).children).filter((r) => !r.hasAttribute('data-anchor-skip')).findIndex((r) => r.contains(row));
+      anchor.current = { ...a, index: i };
+    } else capture();
   }, [ref, rowsRef, capture]);
 
   /** The reader acted (sent, opened, switched): back to the bottom, and following again. */

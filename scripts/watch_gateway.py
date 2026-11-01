@@ -6848,6 +6848,10 @@ async def handle_arturo_threads(request):
     cid = request.match_info.get("conversation_id") or ""
     path = f"/threads/{quote(cid, safe='')}" if cid else "/threads"
     params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn", "jobs")}
+    # Older pages of a thread: `before` is a turn position, a whole number; anything else is not passed on.
+    before = request.query.get("before")
+    if isinstance(before, str) and re.fullmatch(r"[0-9]+", before):
+        params["before"] = before
     try:
         async with aiohttp.ClientSession() as s:
             # Who is reading: a turn's result goes only to the principal that sent it (DEC-1791518421640932).

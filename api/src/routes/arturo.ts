@@ -4,7 +4,7 @@
  * POST /api/arturo/text        {text, conversation_id?, brain?, context?} -> gateway /arturo/text -> :5071/text
  * GET  /api/arturo/health                               -> gateway /arturo/health
  * GET  /api/arturo/threads     [?limit=&offset=]        -> gateway /arturo/threads      (G20)
- * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20)
+ * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20; ?before=&limit= pages it)
  * POST /api/arturo/threads/:id/cards/:cardId/dismiss    -> gateway (close a choice card, unanswered)
  * POST /api/arturo/transcribe  multipart {audio}       -> gateway /arturo/transcribe -> :5071/transcribe (item C)
  * GET  /api/arturo/ptt/vendor                           -> gateway /arturo/ptt/vendor  (which voice providers are set up)
@@ -369,8 +369,15 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // ?turn=<id>: one send's fate (running | done | lost | unknown), the read-back after a dropped turn.
     const turn = req.query.turn;
     // ?jobs=1: the job tray's poll (this thread's running and just-finished background jobs).
+    // ?before=<seq>&limit=<n>: a long thread a page at a time (the turns older than seq `before`, or with `limit`
+    // alone the newest n), each with its seq, plus has_older and oldest_seq. Whole numbers only.
+    const page = new URLSearchParams();
+    for (const key of ['before', 'limit']) {
+      const v = req.query[key];
+      if (typeof v === 'string' && /^\d{1,12}$/.test(v)) page.set(key, v);
+    }
     const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}`
-      : req.query.jobs ? '?jobs=1' : '';
+      : req.query.jobs ? '?jobs=1' : page.toString() ? `?${page}` : '';
     await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000);
   });
 

@@ -1,5 +1,5 @@
 /**
- * The stitched chat (ios-watch-dev msg_41c00a45, Shaw-approved): after a rotation, GET /transcript
+ * The stitched chat: after a rotation, GET /transcript
  * shows the previous generation's tail, ONE divider item, then the current generation, with
  * `limit` across both. The previous generation is the one of the same root retired at the very
  * moment the current head was promoted (a swap stamps both at once), never "the next lower number".

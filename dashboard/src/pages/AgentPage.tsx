@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { agentRowsFrom } from '../lib/api';
 import { useParams } from 'react-router-dom';
 import { TopBar } from '../components/agent/TopBar';
@@ -58,7 +58,12 @@ export default function AgentPage() {
   const canStop = canStopTurn({ state: seatStatus, pendingMenu: seatMenu });
   // A headless seat's Dev switches its terminal on and off: the terminal shows once it is open (a tmux seat's view
   // is the chosen style, unchanged).
-  const dev = useHeadlessDev(agentId, chosenMode, seatStatus, seat?.name || agentId);
+  // Back to chat: the button, or the terminal left from inside it while it is shown (the same result either way).
+  const backToChat = useCallback(() => {
+    void chooseStyle(agentId, defaultStyle(agentId));
+    logAction('agent.back-to-chat', agentId);
+  }, [agentId]);
+  const dev = useHeadlessDev(agentId, chosenMode, seatStatus, seat?.name || agentId, backToChat);
   const mode = dev.view;
   const stopTurn = () => {
     logAction('agent.stop', agentId);
@@ -100,7 +105,7 @@ export default function AgentPage() {
         onMenuOpen={() => window.dispatchEvent(new Event(OPEN_SIDEBAR_EVENT))}
         seat={seat}
         mode={chosenMode}
-        onBackToChat={() => { void chooseStyle(agentId, defaultStyle(agentId)); logAction('agent.back-to-chat', agentId); }}
+        onBackToChat={backToChat}
         onSettings={() => { setPanelOpen((o) => !o); logAction('agent.panel', agentId); }}
         settingsOpen={panelOpen}
         settingsRef={gearRef}

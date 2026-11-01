@@ -835,6 +835,23 @@ def cmd_rotate(ns) -> int:
     row = reg["agents"].get(seat)
     if not row:
         print(f"seat '{seat}' is not in {st.data_dir / 'registry.json'} — `orchestra spawn {seat}` first", file=sys.stderr); return 2
+    # Every refusal BEFORE anything is written: the rotation's own early checks (a headless seat, a runtime it does
+    # not support, no authoritative generation), asked without changing anything, so a refused rotate leaves no
+    # baton, no prompt and no state behind.
+    env = S.child_env(st)
+    env["AGENT_RUNTIME"] = ns.runtime or row.get("runtime", "claude")
+    pre = [sys.executable, str(st.repo_root / "scripts" / "rotate_agent.py"), seat, "--preflight"]
+    if ns.runtime:
+        pre += ["--runtime", ns.runtime]
+    pr = subprocess.run(pre, env=env, cwd=str(st.repo_root), capture_output=True, text=True)
+    if pr.returncode != 0:
+        try:
+            why = json.loads((pr.stdout or "").strip().splitlines()[-1]).get("refused")
+        except (ValueError, IndexError, AttributeError):
+            why = None
+        print(f"rotate refused: {why or (pr.stderr or pr.stdout or 'the rotation check failed').strip()[-400:]}",
+              file=sys.stderr)
+        return 2
     handoff = st.data_dir / "docs" / f"HANDOFF_{seat}-next.md"
     if ns.synthesize:
         handoff = _synthesize_handoff(st, seat, row)
@@ -849,8 +866,6 @@ def cmd_rotate(ns) -> int:
               f"Ask the seat to bank one (its prompt knows the format), or run `orchestra rotate {seat} --synthesize` "
               f"for a minimal baton (the successor then proves only that it can read its own seat).", file=sys.stderr)
         return 2
-    env = S.child_env(st)
-    env["AGENT_RUNTIME"] = ns.runtime or row.get("runtime", "claude")
     argv = [sys.executable, str(st.repo_root / "scripts" / "rotate_agent.py"), seat, "--force"]
     if ns.dry_run:
         argv.append("--dry-run")

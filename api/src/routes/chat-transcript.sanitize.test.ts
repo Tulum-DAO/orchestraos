@@ -51,3 +51,13 @@ test('a model switch is not shown as something the operator said', () => {
   // a sentence that merely mentions /model is kept
   assert.equal(sanitizeClaudeUserText('why did /model fail?'), 'why did /model fail?');
 });
+
+test('leaving the TUI (/exit, /quit) never shows as a message; other commands still do', () => {
+  const cmd = (name: string, args = '') =>
+    `<command-name>${name}</command-name>\n<command-message>${name.slice(1)}</command-message>\n<command-args>${args}</command-args>`;
+  assert.equal(sanitizeClaudeUserText(cmd('/exit')), '');
+  assert.equal(sanitizeClaudeUserText(cmd('/quit')), '');
+  assert.equal(sanitizeClaudeUserText('<local-command-stdout>Goodbye!</local-command-stdout>'), '', 'nor its reply');
+  assert.equal(sanitizeClaudeUserText(cmd('/compact', 'keep the plan')), '/compact keep the plan');
+  assert.equal(sanitizeClaudeUserText('please /exit when you are done'), 'please /exit when you are done', 'words that mention it are kept');
+});

@@ -19,6 +19,10 @@
  * lands at the end goes out as a delta; one that lands before the tail goes out as a snapshot,
  * because a delta only appends and every later item's offset moved.
  *
+ * A tailer whose seat has no transcript AND no tmux window for GONE_TICKS beats in a row (an agent with no pane,
+ * a retired seat whose page is still open) stops: tick() says 'gone' once and every later tick is a no-op, so an
+ * open page no longer asks tmux about a window that is not coming back. A new subscriber starts it again.
+ *
  * The live-STATE lane (working/idle/waiting/stranded v2 detector) is NOT here
  * by design — state stays its own lane per the locked congruence guardrail.
  *
@@ -33,6 +37,8 @@ import {
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
+/** Beats in a row with no transcript and no tmux window before a tailer stops (about 30 s at the route's 1 s beat). */
+export const GONE_TICKS = 30;
 
 export interface TailEvent {
   type: 'snapshot' | 'delta';
@@ -81,11 +87,16 @@ export class TranscriptTailer {
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
   private interrupted: Interrupted;
   private interruptedSig = '';
+  private windowGone: () => boolean;
+  private goneBeats = 0;
+  private stopped = false;
 
-  constructor(opts: { agentId: string; resolve: Resolver; limit?: number; interrupted?: Interrupted }) {
+  constructor(opts: { agentId: string; resolve: Resolver; limit?: number; interrupted?: Interrupted;
+    windowGone?: () => boolean }) {
     this.agentId = opts.agentId;
     this.resolve = opts.resolve;
     this.limit = opts.limit ?? 150;
+    this.windowGone = opts.windowGone ?? (() => false);
     this.interrupted = opts.interrupted ?? {
       read: () => readInterruptedTurns(opts.agentId),
       sig: () => interruptedTurnsSig(opts.agentId),
@@ -94,6 +105,12 @@ export class TranscriptTailer {
 
   get subscriberCount(): number {
     return this.subs.size;
+  }
+
+  /** Whether the items read so far hold this uuid (live text: its finished line has landed). */
+  hasItemUuid(uuid: string): boolean {
+    for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i]?.uuid === uuid) return true;
+    return false;
   }
 
   /** Re-resolve + re-read the transcript. Returns what changed. */
@@ -224,10 +241,27 @@ export class TranscriptTailer {
     return () => { this.subs.delete(cb); };
   }
 
-  /** One poll-tail beat: re-read, broadcast delta / reset-snapshot as needed. */
-  tick(): void {
-    if (this.subs.size === 0) return;
+  get isStopped(): boolean {
+    return this.stopped;
+  }
+
+  /** A new subscriber to a stopped tailer: tick again (its seat may be back). */
+  restart(): void {
+    this.stopped = false;
+    this.goneBeats = 0;
+  }
+
+  /** One poll-tail beat: re-read, broadcast delta / reset-snapshot as needed. 'gone' once, when it stops. */
+  tick(): 'gone' | void {
+    if (this.subs.size === 0 || this.stopped) return;
     const { rotated, grewFrom, restated } = this.refresh();
+    let gone = false;
+    try { gone = this.path === null && this.windowGone(); } catch { gone = false; }
+    this.goneBeats = gone ? this.goneBeats + 1 : 0;
+    if (this.goneBeats >= GONE_TICKS) {
+      this.stopped = true;
+      return 'gone';
+    }
     if (rotated || restated) {
       // reset only for a new session or a shrunk log; a late usage update is a plain snapshot.
       const ev = this.snapshot(rotated);
