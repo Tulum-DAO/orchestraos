@@ -2,7 +2,7 @@
  * choiceCard.ts — a card whose answer goes back to the agent as words in the chat (Arturo's ask_choices and his
  * onboarding steps), drawn as the one question card (components/chat/ChoiceCard.tsx). Pure, so it is tested here.
  */
-import { choiceAnswerFromText, onePart, type MenuPart } from './multiPart';
+import { choiceAnswerFromText, onePart, type MenuPart } from './multiPart.ts';
 
 /** What is sent: the picked option(s), with the operator's own words after them, or the words alone. */
 export function choiceAnswerText(options: string[], picked: string[], words: string): string {

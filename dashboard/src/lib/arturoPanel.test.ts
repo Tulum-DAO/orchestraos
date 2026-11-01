@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { panelStatus, pathTo, factsValue, activityValue, DRAWER_SECTIONS, liveStatus, computerValue, openingSection, contextUsedLabel } from './arturoPanel.ts';
+import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, computerValue, openingSection, contextUsedLabel } from './arturoPanel.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 
 const LIVE = { ok: true, live: true, live_engine: 'relay' as const };
@@ -33,8 +33,8 @@ test('Memory row: the fact count', () => {
 test('Activity row: running jobs, or Idle', () => {
   const job = (status: ArturoJob['status']) => ({ id: status, status }) as ArturoJob;
   assert.equal(activityValue([job('running'), job('running'), job('done')]), '2 running');
-  assert.equal(activityValue([job('done'), job('failed')]), 'Idle');
-  assert.equal(activityValue([]), 'Idle');
+  assert.equal(activityValue([job('done'), job('failed')]), 'Nothing running');
+  assert.equal(activityValue([]), 'Nothing running');
   assert.equal(activityValue(null), '');
 });
 
@@ -67,4 +67,11 @@ test('the live status line in the header', () => {
   assert.equal(computerValue('working'), 'Working');
   assert.equal(computerValue('idle'), 'Idle');
   assert.equal(computerValue('needs_input'), 'Waiting');
+});
+
+test('the History row is never blank for an agent: no subagent count reads as nothing running', () => {
+  assert.equal(subagentsValue(undefined), 'Nothing running');
+  assert.equal(subagentsValue(null), 'Nothing running');
+  assert.equal(subagentsValue(0), 'Nothing running');
+  assert.equal(subagentsValue(2), '2 running');
 });

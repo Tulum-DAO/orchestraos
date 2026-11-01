@@ -4,7 +4,10 @@
  * and every agent's page draw their thread through it.
  *
  * Skins: Arturo's page draws "modern" (his own) or "bubbles" (the agent chat's look); an agent's page "bubbles" (its
- * own) or "modern" (Arturo's look: the variables come from kit-modern.css on the page's column). In Bubbles, a call
+ * own) or "modern" (Arturo's look: the variables come from kit-modern.css on the page's column); his floating pane
+ * "pane" (its small dark rows: the operator's bubble right, his tinted bubble left, Markdown inside, the page's own
+ * status notes as quiet lines; a choice card or a result card inside it is drawn in the dark theme, since the pane
+ * is dark in either). In Bubbles, a call
  * keeps Arturo's call card, the only one that holds a call's turns as they happen. In Modern, an agent's plain
  * messages are drawn here, each with its time (`times`); everything else keeps the chat's own primitive.
  *
@@ -80,7 +83,7 @@ function ReplyWords({ text, skin }: { text: string; skin: Skin }) {
     <div className={skin === 'modern' ? 'txt' : undefined}>
       {parseVoiceSegments(text).map((seg, i) => seg.kind === 'voicecall'
         ? <CallCard key={i} skin={skin} callId={seg.callId} />
-        : isCallEndedLine(seg.text) ? null : <div key={i}><Markdown text={seg.text} skin={skin} /></div>)}
+        : isCallEndedLine(seg.text) ? null : <div key={i} className={skin === 'pane' ? 'bubble' : undefined}><Markdown text={seg.text} skin={skin} /></div>)}
     </div>
   );
 }
@@ -97,6 +100,19 @@ function Parts({ parts, skin }: { parts: MessagePart[]; skin: Skin }) {
 }
 
 function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean }) {
+  if (skin === 'pane') {
+    return (
+      <div className="row arturo group" data-thread-key={m.key}>
+        {m.pending ? <div className="bubble thinking">Thinking…</div>
+          : m.parts ? <Parts parts={m.parts} skin={skin} />
+          : <ReplyWords text={m.text} skin={skin} />}
+        {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="meta">ran {m.toolNames.join(', ')}</div>}
+        {!m.pending && !m.streaming && m.copyText && <MessageActions copyText={m.copyText} skin={skin} />}
+        {extras?.(m)}
+        {m.choices && choice && <div className="dark w-full"><Choice m={m} choice={choice} /></div>}
+      </div>
+    );
+  }
   return (
     <div className={skin === 'bubbles' ? 'turn-assistant group w-full min-w-0' : 'turn-assistant'} data-thread-key={m.key}>
       {m.pending ? <span className="thinking" aria-label="thinking" />
@@ -107,19 +123,38 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
         <MessageActions copyText={m.copyText} skin={skin} meta={times ? <MessageTime ts={m.at} /> : undefined} />
       )}
       {extras?.(m)}
-      {m.choices && choice && (
-        <ChoiceCard note={m.choices.note} options={m.choices.options} multi={m.choices.multi} exclusive={m.choices.exclusive}
-          answered={m.answered} dismissed={m.dismissed} cardId={m.choices.card_id} asker={choice.asker}
-          onAnswer={(text, a) => choice.onAnswer(m, text, a)}
-          onDismiss={choice.onDismiss && m.choices.card_id ? () => choice.onDismiss!(m) : undefined} />
-      )}
+      {m.choices && choice && <Choice m={m} choice={choice} />}
     </div>
+  );
+}
+
+/** A reply's choice card, answered from the server's record and sent through the page's own send. */
+function Choice({ m, choice }: { m: ThreadMessage; choice: ThreadViewChoice }) {
+  const c = m.choices!;
+  return (
+    <ChoiceCard note={c.note} options={c.options} multi={c.multi} exclusive={c.exclusive}
+      answered={m.answered} dismissed={m.dismissed} cardId={c.card_id} asker={choice.asker}
+      onAnswer={(text, a) => choice.onAnswer(m, text, a)}
+      onDismiss={choice.onDismiss && c.card_id ? () => choice.onDismiss!(m) : undefined} />
   );
 }
 
 function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin; latest: boolean; times?: boolean }) {
   const images = (m.attachments ?? []).filter((a) => a.kind === 'image' && a.url);
   const state = m.sendState as SendState | undefined;
+  if (skin === 'pane') {
+    return (
+      <div className="row user" data-thread-key={m.key}>
+        {images.length > 0 && (
+          <div className="msg-images">
+            {images.map((a) => <a key={a.url!} href={a.url!} target="_blank" rel="noreferrer"><img src={a.url!} alt="attached image" loading="lazy" /></a>)}
+          </div>
+        )}
+        <div className="bubble" style={{ overflowWrap: 'anywhere' }}>{withRefs(m.text, skin)}</div>
+        {(state === 'failed' || (state && latest)) && <div className={`turn-state ${state}`}>{sendStateLabel(state)}</div>}
+      </div>
+    );
+  }
   if (skin === 'bubbles') {
     // The agent chat's bubble (TranscriptCards UserBubble), with the send state under it.
     return (
@@ -157,7 +192,7 @@ function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin;
   );
 }
 
-export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, call, choice, extras, liveText, stick, renderNode, onDecisionAnswered, times }: {
+export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, call, choice, extras, liveText, stick, renderNode, onDecisionAnswered, times, noteText }: {
   rows: ThreadRow[];
   skin?: Skin;
   /** Who did the finished work, when a result does not say. */
@@ -178,6 +213,8 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
   onDecisionAnswered?: () => void;
   /** Under each message, when it was written (an agent's page: the one question it has to answer). */
   times?: boolean;
+  /** How the page words one of its status notes (the pane: "I can't do that yet — …"). */
+  noteText?: (message: ThreadMessage) => string;
 }) {
   const live = showLive(rows, liveText) ? liveText! : null;
   useLayoutEffect(() => { stick?.follow(); }, [rows, live?.text, live?.parts?.length, call?.liveUser, call?.liveArturo]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -195,7 +232,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         }
         if (r.kind === 'result') {
           return (
-            <div key={r.key} className="turn-assistant" data-turn-result>
+            <div key={r.key} className={skin === 'pane' ? 'row arturo dark' : 'turn-assistant'} data-turn-result>
               <ResultCard results={r.results.map((x) => ({ ...x, by: x.by ?? by }))} skin={skin === 'modern' ? 'modern' : 'bubbles'} />
             </div>
           );
@@ -211,6 +248,9 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         if (r.kind === 'decision') return <DecisionBubble key={r.key} decision={r.decision} onAnswered={() => onDecisionAnswered?.()} />;
         if (r.kind === 'pending') return <PendingBubble key={r.key} text={r.text} kind={r.pending} />;
         if (r.kind !== 'message') return null;
+        if (r.note) {
+          return <div key={r.key} className="row note"><div className="meta">{noteText ? noteText(r) : r.text}</div></div>;
+        }
         if (r.role === 'user') {
           if (r.cardEcho && r.sendState !== 'failed') return null;
           return <UserMessage key={r.key} m={r} skin={skin} latest={r.key === lastUserKey} times={times} />;
@@ -218,7 +258,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} />;
       })}
       {live && (
-        <div className={skin === 'bubbles' ? 'flex justify-start' : 'turn-assistant'} data-live-text>
+        <div className={skin === 'bubbles' ? 'flex justify-start' : skin === 'pane' ? 'row arturo' : 'turn-assistant'} data-live-text>
           <div className={skin === 'bubbles' ? 'w-full min-w-0' : undefined}>
             {live.parts?.length ? <Parts parts={live.parts} skin={skin} /> : <MessageText text={live.text} skin={skin} />}
           </div>

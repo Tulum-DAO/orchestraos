@@ -239,7 +239,7 @@ function ChatCallCard({ callId }: { callId: string | null }) {
         {counts && dur && (
           <span className="text-[11px] text-muted-foreground">· {dur} · {counts.talk} turns · {counts.tool} tool runs</span>
         )}
-        {live && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400">live</span>}
+        {live && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-tone-green-400">live</span>}
         {stale && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">stale</span>}
         <span className="text-[10px] text-muted-foreground ml-auto">{open ? '▾' : '▸'}</span>
       </button>

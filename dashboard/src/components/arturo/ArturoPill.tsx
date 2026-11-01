@@ -16,36 +16,34 @@
  *     therefore a visible card at the top of the thread with an ×; deleting it is how you
  *     tell Arturo to stop focusing on this page, and it can be put back.
  */
-import { stripContextLine, isBusy } from '../../lib/arturoResume';
+import { hydrateTurns, isBusy } from '../../lib/arturoResume';
 import { arturoTurn } from '../../lib/arturoStream';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { applyScreenAnswer, focusOf, getScreen, screenLabel, screenPayload, subscribeScreen } from '../../lib/screenCards';
 import JobTray from './JobTray';
-import { withRefs } from '../kit/RefText';
 import { useStickToBottom } from '../../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../../lib/arturoCurrent';
-import ToolCalls from '../kit/ToolCard';
-import { fromPart } from '../../lib/toolCalls';
-import { jobResultParts } from '../../lib/arturoJobs';
-import { applyToolCall, applyToolResult, type ToolPart, type TurnPart } from '../../lib/turnParts';
+import ThreadView from '../kit/ThreadView';
+import { arturoRows, lastUserKey } from '../../lib/threadKit/view';
+import { cardAnswer, isCardEcho, storedAnswerText } from '../../lib/choiceCard';
+import { applyTextDelta, applyToolCall, applyToolResult, hasToolParts, type TurnPart } from '../../lib/turnParts';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { Mic, MicOff, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
 import { useDictation } from './useDictation.ts';
-import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentImages, splitAttachmentPreamble, type Attachment } from '../../lib/arturoUpload';
+import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentImages, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type SendState } from '../../lib/arturo';
+import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, cardRefusal, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type CardAnswer, type ChoiceCard, type SendState } from '../../lib/arturo';
 import {
-  listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
+  listThreads, loadThread, dismissCard, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
 } from '../../lib/arturoThreads';
 import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
-import CallCard from '../kit/CallCard';
-import { groupCalls, hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
-import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
+import ModelPicker from '../kit/ModelPicker';
 import { useArturoBrain } from '../../stores/arturoBrain';
 import { useArturoUi } from '../../stores/arturoUi';
 import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
+import { choiceTitle } from '../../lib/modelTitle';
 import { brainProviderId, type HealthBrain } from '../../lib/brainLogo';
 import { arturoComposerText, arturoShownText } from '../../lib/arturoComposer';
 import { useAssistantName } from '../../lib/assistantName';
@@ -53,8 +51,12 @@ import { useAssistantName } from '../../lib/assistantName';
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
   /** Images the operator attached to this message (upload URLs). */
   images?: string[];
-  /** A finished background job's steps: the tray's card, now part of the conversation. */
-  steps?: ToolPart[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
+  spawned?: string[]; at: number; live?: boolean; state?: SendState;
+  /** A reply still coming (the thinking line), or being written (streamed). */
+  pending?: boolean; streaming?: boolean;
+  /** A card the reply showed (ask_choices), what answered it (the server's record), or that it was closed; a tap's
+   *  own message draws no bubble (the card shows it). */
+  choices?: ChoiceCard; answered?: string; dismissed?: boolean; cardEcho?: boolean;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
    *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
   note?: boolean;
@@ -148,7 +150,7 @@ export function ArturoPill() {
   }, []);
   const brainProvider = brainProviderId(brainChoice, (health?.brain ?? null) as HealthBrain | null);
   const brainLogo = brainProvider ? logos[brainProvider] : undefined;
-  const brainName = brainChoice ? brainChoice.label : brainLogo ? `${brainLogo.label} (default)` : 'the default brain';
+  const brainName = brainChoice ? choiceTitle(brainChoice) : brainLogo ? `${brainLogo.label} (default)` : 'the default brain';
 
   // ── Live voice mode, IN THIS PANE ──────────────────────────────────
   // The shared call (hooks/useHandsFreeCall → lib/handsFree → lib/voiceSession → /api/voice/live →
@@ -213,23 +215,18 @@ export function ArturoPill() {
     // A thread the server knows answers on the brain it last used. A fresh thread (null) leaves
     // the current choice alone: resume runs on every open, and must not undo a pick just made.
     if (t) chooseBrain(brainFromThread(t, {}));
-    setTurns((t?.turns || []).map((x) => {
-      const job = x.role !== 'user' ? jobResultParts(x.meta, x.content) : undefined;
-      const sent = x.role === 'user' ? splitAttachmentPreamble(stripContextLine(x.content)) : null;
-      return { role: x.role === 'user' ? 'user' : 'arturo', text: sent ? sent.text : x.content,
-               at: (x.ts || 0) * 1000, ...(sent?.images.length ? { images: sent.images } : {}),
-               ...(job ? { steps: job.filter((p): p is ToolPart => p.kind === 'tool') } : {}),
-               ...(x.mode === 'voice' ? { voice: true } : {}),
-               ...(x.meta?.kind === 'call_end' && x.meta.call_id ? { callEnd: x.meta.call_id } : {}),
-               ...(typeof x.ts === 'number' ? { ts: x.ts } : {}) };
-    }));
+    // The stored thread read the way Arturo's page reads it (lib/arturoResume hydrateTurns): context lines and
+    // attachment markers off, a finished job as its steps and its text, a choice card with the server's answer. A
+    // job's result stays a reply here (its steps, then its words), the pane's small layout, not a result card.
+    setTurns(hydrateTurns(t?.turns || []).map((x) => ({ ...x, result: undefined, at: (x.ts || 0) * 1000 })));
   }, [chooseBrain]);
 
   useEffect(() => { setCtxOn(!isContextDismissed(convId)); }, [convId]);
   useEffect(() => { if (open) { void resume(convId); void listThreads().then(setThreads); setTimeout(() => ta.current?.focus(), 30); } }, [open, convId, resume]);
   // New turns and live captions push the feed up only while you're at the bottom; scrolled up, it stays put.
   const stick = useStickToBottom(scroller);
-  useEffect(() => { stick.follow(); }, [turns, busy, liveUser, liveArturo]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The thread view follows whenever what it draws grows (turns, a streamed reply, a live call's captions).
+  const rows = useMemo(() => arturoRows(turns, inCall, aname), [turns, inCall, aname]);
   useEffect(() => { if (open) stick.toBottom(); }, [open, convId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
@@ -237,7 +234,6 @@ export function ArturoPill() {
   // lines at once). Runs on typing AND on dictation / send, which set the draft without a change event.
   const growTa = () => { const el = ta.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; };
   useEffect(() => { growTa(); }, [draft]);
-  const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
   appendRef.current = append;
   // One note per distinct reason in a row: a refused call can report twice (socket + server).
   noteRef.current = (reason: string) => setTurns((prev) => {
@@ -246,32 +242,53 @@ export function ArturoPill() {
     return [...prev, { role: 'arturo', text: reason, at: Date.now(), note: true }];
   });
 
-  async function send() {
-    const text = arturoComposerText(draft, attachments.length);
+  /** Send the composer's text, or `picked`: the words of a card option tapped in the pane, with the card it answers
+   *  (`answer`, kept on that card on the server with this turn; a message typed in the box answers no card there). */
+  async function send(picked?: string, answer?: CardAnswer) {
+    const text = picked === undefined ? arturoComposerText(draft, attachments.length) : picked.trim();
     if (!text || busy) return;
-    if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
-    clearDictNote();
-    setDraft(''); setBusy(true);
+    if (picked === undefined) {
+      if (dictating) stopDictation();    // the sent text is final; don't re-append into the empty box
+      clearDictNote();
+      setDraft('');
+    }
+    setBusy(true);
     resumeGen.current++;                 // any in-flight thread reload is now stale
     const at = Date.now();
-    append({ role: 'user', text: arturoShownText(draft), at, state: 'sending', images: attachmentImages(attachments) });
+    // A card is answered once: by a tap, or by whatever was typed instead (the server keeps a tap's answer).
+    const openCard = [...turns].reverse().find((x) => x.choices && !x.answered && !x.dismissed)?.choices;
+    setTurns((prev) => prev.map((x) => (x.choices && !x.answered && !x.dismissed ? { ...x, answered: text } : x)));
+    append({ role: 'user', text: picked === undefined ? arturoShownText(draft) : text, at, state: 'sending',
+             images: picked === undefined ? attachmentImages(attachments) : [],
+             ...(picked !== undefined && openCard && isCardEcho(openCard, text) ? { cardEcho: true } : {}) });
+    // His reply, streamed into this row as it is written (the thinking line until the first words or tool).
+    const replyAt = at + 1;
+    append({ role: 'arturo', text: '', at: replyAt, pending: true });
     requestAnimationFrame(() => stick.toBottom());      // you sent it: back to the bottom
     const setState = (state: SendState) => setTurns((prev) => prev.map((t) => t.at === at && t.role === 'user' ? { ...t, state } : t));
+    const patchReply = (extra: Partial<PillTurn>) => setTurns((prev) => prev.map((t) => t.at === replyAt && t.role === 'arturo' ? { ...t, ...extra } : t));
+    let streamed = '';
+    let parts: TurnPart[] = [];
     // The path rides in front of the message (same grammar as the home composer).
     const pre = attachmentPreamble(attachments);
     setAttachments([]);
     // The card is the switch: present → this turn carries the page context; deleted → it does not.
     const body = pre ? `${pre}\n\n${text}` : text;
     const turnBrain = toWireBrain(brainChoice);
-    // The home's send path, whole replies only: one id for this send, so a busy conversation, a hop still
-    // starting or a 504 is resolved by asking the server what became of THIS send, never by sending it
-    // blind a second time (DEC-1791518421640932).
+    // The home's send path, streamed: one id for this send, so a busy conversation, a hop still starting, a dropped
+    // stream or a 504 is resolved by asking the server what became of THIS send, never by sending it blind a second
+    // time (DEC-1791518421640932).
     // The cards on screen as this message leaves, and which card each ref stands for (an answer Arturo hands back
     // names its card by ref).
     const turnCtx = contextForTurn(convId, ctx);
     const onScreen = turnCtx ? screenPayload(getScreen()) : null;
     const r = await arturoTurn(body, convId, turnCtx && onScreen ? { ...turnCtx, cards: onScreen.payload } : turnCtx, {
-      onSent: () => setState('sent'), brain: turnBrain, stream: false,
+      onSent: () => setState('sent'), brain: turnBrain, ...(answer ? { cardAnswer: answer } : {}),
+      onDelta: (t: string) => { streamed += t; parts = applyTextDelta(parts, t); patchReply({ pending: false, streaming: true, text: streamed, parts }); },
+      onToolCall: (c) => { parts = applyToolCall(parts, c); patchReply({ pending: false, streaming: true, parts }); },
+      onToolResult: (res) => { parts = applyToolResult(parts, res); patchReply({ parts }); },
+      // The whole-reply path is taking over: it answers from the top, so what this attempt showed goes.
+      onReset: () => { if (!streamed && !parts.length) return; streamed = ''; parts = []; patchReply({ pending: true, streaming: false, text: '', parts: undefined }); },
       // Same rule as the home (G15): right after `orchestra up` the service is still booting. Say so and
       // wait for /health; the send then goes again with the same id.
       onStarting: async () => {
@@ -285,12 +302,29 @@ export function ArturoPill() {
     setJobKick((k) => k + 1);        // a job this turn started shows in the tray at once
     setBusy(false);
     setState(r.ok ? 'acked' : 'failed');
-    append(r.ok
-      ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned, at: Date.now() }
-      : { role: 'arturo', text: sendOutcomeText(r) ?? (isStarting(r)
+    // The card could no longer take this answer (answered elsewhere, or closed): nothing ran; the card shows what it
+    // holds and the reply says so.
+    const closed = answer ? cardRefusal(r) : null;
+    if (closed) {
+      setTurns((prev) => prev.map((x) => (x.choices?.card_id !== answer!.card_id ? x
+        : closed.kind === 'answered' ? { ...x, answered: storedAnswerText(x.choices.options, closed.answer) }
+          : closed.kind === 'dismissed' ? { ...x, answered: undefined, dismissed: true } : { ...x, answered: undefined })
+        ).map((x) => (x.at === at && x.role === 'user' ? { ...x, cardEcho: false } : x)));
+      patchReply({ pending: false, streaming: false, parts: undefined, text: closed.kind === 'answered'
+        ? 'That card was already answered, so I did not send this. Its answer is on the card.'
+        : closed.kind === 'dismissed' ? 'That card was closed, so I did not send this.'
+          : 'That card is no longer in this conversation, so I did not send this.' });
+      return;
+    }
+    patchReply(r.ok
+      ? { pending: false, streaming: false, text: r.reply_text || streamed || '(no reply)', tools: r.tools_called, spawned: r.spawned,
+          ...(r.choices ? { choices: r.choices } : {}),
+          // Kept only when tools ran: a reply of words alone is drawn as it always was.
+          parts: hasToolParts(parts) ? parts : undefined }
+      : { pending: false, streaming: false, parts: undefined, text: sendOutcomeText(r) ?? (isStarting(r)
           ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
           : isBusy(r) ? 'Still answering an earlier message in this conversation (another tab or device). Send this again in a moment.'
-          : describeTurnError(r)?.message || `Could not reach ${aname}: ${r.error || 'unknown'}`), at: Date.now() });
+          : describeTurnError(r)?.message || `Could not reach ${aname}: ${r.error || 'unknown'}`) });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
     // Arturo answered a card for the operator: the card on screen sends it through its own route, as a tap would.
     if (r.ok && r.answer_card) {
@@ -388,28 +422,21 @@ export function ArturoPill() {
               (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
           {/* Hidden (not removed) once typing starts, so the pane keeps its size. */}
           {turns.length === 0 && !busy && <p className="empty" style={draft ? { visibility: 'hidden' } : undefined}>Ask about what you are looking at, or anything else.</p>}
-          {/* A voice call is one card, as on Arturo's page: its spoken turns and tool runs together, the live
-              captions at its end while it runs. */}
-          {groupCalls(turns, inCall).map((item) => item.kind === 'call' ? (
-            <CallCard skin="pane" key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
-              liveSince={item.live ? callSince : null} liveUser={item.live ? liveUser : undefined} liveArturo={item.live ? liveArturo : undefined}
-              connecting={item.live && callState === 'connecting'} />
-          ) : ((t: PillTurn, i: number) => t.note ? (
-            <div key={i} className="row note"><div className="meta">{t.text === STARTING_TEXT ? t.text : `I can't do that yet — ${t.text}.`}</div></div>
-          ) : (
-            <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
-              {t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}
-              {t.role !== 'user' && hasVoiceCallMarker(t.text)
-                ? parseVoiceSegments(t.text).map((seg, j) => seg.kind === 'voicecall'
-                  ? <CallCard key={j} skin="pane" callId={seg.callId} />
-                  : isCallEndedLine(seg.text) ? null : <div key={j} className="bubble">{withRefs(seg.text, 'pane')}</div>)
-                : <>{t.steps && t.steps.length > 0 && <ToolCalls calls={t.steps.map(fromPart)} skin="pane" />}<div className="bubble">{withRefs(t.text, 'pane')}</div></>}
-              {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
-              <SpawnedAgentCard ids={t.spawned} />
-              {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
-            </div>
-          ))(item.turn, item.index))}
-          {busy && <div className="row arturo"><div className="bubble thinking">Thinking…</div></div>}
+          {/* His thread through the kit's thread view (components/kit/ThreadView.tsx) in the pane's own skin: his
+              replies (Markdown, tool runs in order, streamed as written), a voice call as one card with its live
+              captions, his choice cards, the pane's status notes. */}
+          <ThreadView rows={rows} skin="pane" by={aname} lastUserKey={lastUserKey(turns)} stick={stick}
+            call={{ liveSince: callSince, liveUser, liveArturo, connecting: callState === 'connecting' }}
+            noteText={(m) => (m.text === STARTING_TEXT ? m.text : `I can't do that yet — ${m.text}.`)}
+            choice={{
+              onAnswer: (m, text, a) => { const c = m.choices!; void send(text, c.card_id ? cardAnswer(c.card_id, c.options, a.picked, a.words) : undefined); },
+              onDismiss: async (m) => {
+                const err = await dismissCard(convId, m.choices!.card_id!);
+                if (!err) { const k = m.key; setTurns((prev) => prev.map((x, i) => (`t${i}` === k ? { ...x, dismissed: true } : x))); }
+                return err;
+              },
+            }}
+            extras={(m) => <SpawnedAgentCard ids={m.spawned} />} />
         </div>
 
         <JobTray threadId={convId} kick={jobKick} onEnded={() => { void resume(convId); }} />
@@ -499,13 +526,11 @@ export function ArturoPill() {
           </div>
         </div>
       </div>
-      <ModelSelectorSheet
-        open={open && modelOpen}
-        onClose={() => setModelOpen(false)}
-        selection={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
-        onPick={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
-        onPickDefault={() => chooseBrain(null)}
-      />
+      {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}). */}
+      <ModelPicker trigger={false} open={open && modelOpen} onOpenChange={setModelOpen}
+        value={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
+        onValueChange={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
+        onPickDefault={() => chooseBrain(null)} />
     </>
   );
 }

@@ -6,7 +6,8 @@ import { Bell, ShieldCheck, ClipboardList, X } from 'lucide-react';
 import { getGmAuthState } from '../lib/api';
 import AuthFlow from './AuthFlow';
 import { isViewHidden } from '../lib/features';
-import { focusDecision, waitingByAgent, resolveBellJump, fetchDecisions, approvalsFocusPath, type PendingCard } from '../lib/decisions';
+import { waitingByAgent } from '../lib/decisions';
+import { openWaitingCard, openNotice, pendingQuestionnaires as pendingQuestionnaires_ } from '../lib/openWaiting';
 
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -85,41 +86,23 @@ export default function NotificationBell() {
     staleTime: 5_000,
   });
   const perAgent = waitingByAgent(pendingList?.items ?? []);
-  // A row opens the agent's OLDEST waiting card where it lives (lib/decisions bellTarget): its chat when
-  // the chat draws it, else the Approvals page focused on it (a card from before the agent's current
-  // generation, or an on-screen menu mirror). Nothing left to show: a notice, not a dead click.
+  // A row opens the agent's OLDEST waiting card where it lives (lib/openWaiting.ts, shared with Overview's Needs
+  // You): its chat when the chat draws it, else the Approvals page focused on it. Nothing left to show: a notice,
+  // not a dead click.
   const [bellNotice, setBellNotice] = useState<string | null>(null);
   const [jumping, setJumping] = useState<string | null>(null);
   const openAgentAt = async (agent: string) => {
     setJumping(agent);
     setBellNotice(null);
-    try {
-      const target = await resolveBellJump(
-        agent,
-        async () => (await fetchJson<{ items: PendingCard[] }>('/approvals/unified?status=pending')).items ?? [],
-        async (a) => (await fetchDecisions(a)).filter((d) => d.state === 'pending').map((d) => d.id),
-      );
-      if (!target) {
-        setBellNotice(`Nothing from ${agent} is waiting any more — it was answered elsewhere.`);
-        void queryClient.invalidateQueries({ queryKey: ['unified-approvals-pending'] });
-        return;
-      }
-      if (target.where === 'chat') {
-        focusDecision(agent, target.id);
-        navigate(`/agent/${encodeURIComponent(agent)}`);
-      } else {
-        navigate(approvalsFocusPath(target.id));
-      }
-      setDropdownOpen(false);
-    } catch {
-      setBellNotice("Couldn't load that card just now — try again.");
-    } finally {
-      setJumping(null);
-    }
+    const r = await openWaitingCard(agent, { navigate });
+    setJumping(null);
+    setBellNotice(openNotice(agent, r));
+    if (r.opened) setDropdownOpen(false);
+    else if (r.reason === 'gone') void queryClient.invalidateQueries({ queryKey: ['unified-approvals-pending'] });
   };
 
   const pendingApprovals = approvalStats?.by_status?.pending || 0;
-  const pendingQuestionnaires = qData?.pending || (qData?.questionnaires ?? []).filter((q: any) => q.status === 'pending').length || 0;
+  const pendingQuestionnaires = pendingQuestionnaires_(qData);
   const totalPending = pendingApprovals + pendingQuestionnaires + (needsAuth ? 1 : 0);
 
   // Close dropdown on click outside

@@ -22,10 +22,11 @@ import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, PhoneOff } from 'luc
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
 import { ArturoPanel } from '../components/arturo/ArturoPanel';
-import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
+import ModelPicker from '../components/kit/ModelPicker';
 import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { describeTurnError, toWireBrain } from '../lib/arturoBrain';
+import { choiceTitle } from '../lib/modelTitle';
 import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, isArturoDisabled, waitForArturo, STARTING_TEXT, ARTURO_DISABLED_TEXT, sendOutcomeText, firstStep, onboardingTurn, onboardingDone,
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER,
@@ -229,6 +230,9 @@ export default function ArturoHome() {
       if (h.onboarded || ls(LS_ONBOARDED) === '1') {
         const t = convId.current ? await loadThread(convId.current) : null;
         if (alive && t) setTurns(hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })));
+        // This thread is the one on screen: a job ending in it re-reads it in place, never as "another thread
+        // opened", which jumped a reader who had scrolled up to the bottom.
+        if (alive && t) lastShown.current = convId.current;
       }
       if (h.ok || !isStarting(h)) { setHealth(h); return; }
       setStarting(true);
@@ -280,6 +284,7 @@ export default function ArturoHome() {
     const conv = onboardingConversation(onbConv.current, convId.current);
     if (conv !== convId.current) { convId.current = conv; setCurrentThread(conv); arturoPrewarm(conv, toWireBrain(brainChoice)); }
     const t = await loadThread(conv);
+    lastShown.current = conv;                          // on screen now (see reloadThread)
     const stored = t ? hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })) : [];
     // A message the operator sent while the history loaded stays, after it (it waits for this opener).
     setTurns((prev) => [...stored, ...prev.filter((x) => x.role === 'user' && x.state)]);
@@ -513,7 +518,7 @@ export default function ArturoHome() {
   const brain = health?.brain;
   const arturoDisabled = isArturoDisabled(health);
   // The chip shows the CHOSEN brain when there is one; otherwise what the install defaults to.
-  const model = arturoDisabled ? 'turned off' : starting ? 'starting…' : brainChoice ? brainChoice.label : brainLabel(brain);
+  const model = arturoDisabled ? 'turned off' : starting ? 'starting…' : brainChoice ? choiceTitle(brainChoice) : brainLabel(brain);
   const eff = brainChoice ? 'CLI' : brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
   // Arturo's avatar works while a turn is in flight here or a call is live (agentState.ts adds its steps).
   useEffect(() => { setArturoActivity({ busy, inCall: call.inCall }); }, [busy, call.inCall]);
@@ -708,13 +713,11 @@ export default function ArturoHome() {
 
       <LookPickerPopover agentId={ARTURO_ID} open={pickerOpen} onClose={() => setPickerOpen(false)} canSave={canSaveLook} />
       <ArturoPanel open={panelOpen} onClose={() => setPanelOpen(false)} returnFocusTo={gearRef} brain={eff ? `${model} ${eff}` : model} />
-      <ModelSelectorSheet
-        open={modelOpen}
-        onClose={() => setModelOpen(false)}
-        selection={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
-        onPick={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
-        onPickDefault={() => chooseBrain(null)}
-      />
+      {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}). */}
+      <ModelPicker trigger={false} open={modelOpen} onOpenChange={setModelOpen}
+        value={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
+        onValueChange={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
+        onPickDefault={() => chooseBrain(null)} />
     </div>
   );
 }

@@ -67,6 +67,8 @@ export interface ThreadMessage {
   dismissed?: boolean;
   /** A card's own answer: the answered card shows it, so it draws no bubble of its own. */
   cardEcho?: boolean;
+  /** A short status line from the page itself (the pane's "still starting", a voice note), not a message. */
+  note?: boolean;
 }
 
 export interface ThreadThinking { kind: 'thinking'; key: string; text: string; at?: string }
@@ -157,7 +159,7 @@ export function threadFromTranscript(items: ChatItem[], agentId?: string): Threa
 /** A turn of Arturo's, stored (hydrateTurns) or live on the page (the same fields plus its send state). */
 export type ArturoTurnLike = HydratedTurn & {
   id?: number | string; pending?: boolean; streaming?: boolean; state?: string;
-  tools?: string[]; spawned?: string[];
+  tools?: string[]; spawned?: string[]; note?: boolean;
 };
 
 function messageParts(parts?: TurnPart[]): MessagePart[] | undefined {
@@ -184,6 +186,7 @@ export function arturoMessage(t: ArturoTurnLike, key: string): ThreadMessage {
     ...(t.spawned?.length ? { spawned: t.spawned } : {}),
     ...(t.choices ? { choices: t.choices } : {}), ...(t.answered !== undefined ? { answered: t.answered } : {}),
     ...(t.dismissed ? { dismissed: true } : {}), ...(t.cardEcho ? { cardEcho: true } : {}),
+    ...(t.note ? { note: true } : {}),
   };
 }
 

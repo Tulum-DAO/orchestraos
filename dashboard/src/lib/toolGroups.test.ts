@@ -287,7 +287,7 @@ test('Antigravity edit, read and search names map, with TargetFile/AbsolutePath 
   assert.equal(summarizeTurn([ok('grep_search'), ok('find_by_name')]).headline, 'searched 2 times');
   // view_file's CATEGORY, not just its path: the `edits` assertion above cannot see it,
   // because the two real edits produce 'edited 2 files' on their own.
-  assert.equal(summarizeTurn([ok('view_file'), ok('view_file')]).headline, 'made 2 reads');
+  assert.equal(summarizeTurn([ok('view_file'), ok('view_file')]).headline, '2 reads');
   // search_web appeared in no assertion at all.
   assert.equal(summarizeTurn([ok('search_web'), ok('search_web')]).headline, 'searched 2 times');
 });
@@ -336,7 +336,7 @@ test('THE DEFECT: unnamed edit calls are counted as CALLS, never invented as fil
   // M6: the singular boundary needs exactly ONE ok call in the category, because two calls
   // render "made 2 edits" and would make this branch unreachable.
   assert.equal(summarizeTurn([patch()]).headline, 'made 1 edit');
-  assert.equal(summarizeTurn([{ tool: 'read_many_files', status: 'ok' }]).headline, 'made 1 read');
+  assert.equal(summarizeTurn([{ tool: 'read_many_files', status: 'ok' }]).headline, '1 read');
 });
 
 test('M2 a MIXED category reports CALLS for the whole category, never a file count', () => {
@@ -353,7 +353,7 @@ test('M3 the read clause obeys the same rule (its own call site, pinned separate
   // so a stray Bash would make a broken read clause pass.
   assert.equal(summarizeTurn([named('Read', 'a'), named('Read', 'a')]).headline, 'read 1 file');
   assert.equal(summarizeTurn([{ tool: 'read_many_files', status: 'ok' },
-                              { tool: 'read_many_files', status: 'ok' }]).headline, 'made 2 reads');
+                              { tool: 'read_many_files', status: 'ok' }]).headline, '2 reads');
 });
 
 test('M4 the clause-gate: an all-unnamed edit turn must NOT fall through to the read clause', () => {
@@ -382,7 +382,7 @@ test('INVARIANT: the headline never claims more files than it can know (4 parts)
   // command or a failure row to the table below would make these go red against a CORRECT
   // implementation — extend the table and the anchors together, or not at all.
   const KNOWN_EDIT = [/^edited (\d+) files?$/, /^made (\d+) edits?$/];
-  const KNOWN_READ = [/^read (\d+) files?$/, /^made (\d+) reads?$/];
+  const KNOWN_READ = [/^read (\d+) files?$/, /^(\d+) reads?$/];
   const rows: WorkItem[][] = [];
   const paths = [undefined, 'a.ts', 'b.ts'];
   for (const p1 of paths) for (const p2 of paths) for (const p3 of paths) {
@@ -419,7 +419,7 @@ test('INVARIANT: the headline never claims more files than it can know (4 parts)
     }
   }
   // (iv), second half: every shape must have been exercised, so none of the above is vacuous.
-  assert.deepEqual([...shapesSeen].sort(), ['edited N file', 'made N edit', 'made N read', 'read N file']);
+  assert.deepEqual([...shapesSeen].sort(), ['N read', 'edited N file', 'made N edit', 'read N file']);
 });
 
 test('the Arturo adapter is a SUBSET of the transcript adapter, with path free to arrive', () => {

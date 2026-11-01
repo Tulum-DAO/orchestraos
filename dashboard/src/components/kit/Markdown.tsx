@@ -22,6 +22,8 @@ const CODE_COLLAPSE_LINES = 14;
 const keepTouch = (e: TouchEvent) => e.stopPropagation();
 const touchProps = { onTouchStart: keepTouch, onTouchMove: keepTouch, onTouchEnd: keepTouch };
 
+/** A fenced block: a dark box in either theme (as code reads in an editor, and as Arturo's page draws it), so its
+ *  chrome keeps the dark palette on purpose. */
 function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const lines = code.replace(/\n$/, '').split('\n');
   const long = lines.length > CODE_COLLAPSE_LINES;
@@ -70,7 +72,7 @@ function renderInline(text: string, keyBase: string, skin: Skin): ReactNode[] {
         // Modern: the page's own `code` style (Arturo's .txt code), so his replies keep their look.
         return skin === 'modern' ? <code key={key}>{p.text}</code>
           : skin === 'pane' ? <code key={key} className="px-1 py-0.5 rounded bg-white/10 text-[0.92em] font-mono">{p.text}</code>
-            : <code key={key} className="px-1 py-0.5 rounded bg-neutral-800 text-[0.92em] font-mono text-amber-200">{p.text}</code>;
+            : <code key={key} className="px-1 py-0.5 rounded bg-tone-800 text-[0.92em] font-mono text-tone-amber-200">{p.text}</code>;
       case 'bold':
         return <strong key={key} className="font-semibold">{withRefs(p.text, skin, key)}</strong>;
       case 'italic':

@@ -376,9 +376,13 @@ function PhaseSection({
 export default function RoadmapDetail() {
   const { projectSlug } = useParams<{ projectSlug: string }>();
 
-  const { data: roadmaps, isLoading } = useQuery({
+  // No roadmaps file is the normal state of an install that never wrote one (the route answers 404): one read,
+  // no retries, and the page says there is no roadmap rather than flickering between Loading and Not found.
+  const { data: roadmaps, isLoading, error } = useQuery({
     queryKey: ['roadmaps'],
     queryFn: fetchRoadmaps,
+    retry: false,
+    refetchInterval: false,
   });
 
   // Find the project
@@ -417,7 +421,8 @@ export default function RoadmapDetail() {
           <ArrowLeft size={16} /> Back to Projects
         </Link>
         )}
-        <p className="text-tone-500">Project not found: {projectSlug}</p>
+        <p className="text-tone-500" data-roadmap-empty>{error && !/: 404$/.test(String((error as Error).message)) ? "Couldn't load the roadmap just now."
+          : error || !allProjects.length ? 'No roadmap for this project yet.' : `Project not found: ${projectSlug}`}</p>
       </div>
     );
   }

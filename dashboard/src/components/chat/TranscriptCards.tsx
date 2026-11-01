@@ -40,7 +40,7 @@ import { type ToolDensity } from '../../lib/toolCardDetail';
  */
 function Caret({ open }: { open: boolean }) {
   const Icon = open ? ChevronDown : ChevronRight;
-  return <Icon size={14} aria-hidden className="shrink-0 text-neutral-500" />;
+  return <Icon size={14} aria-hidden className="shrink-0 text-tone-500" />;
 }
 
 // A large paste embedded in a message → collapsible "Pasted text #n" card,
@@ -48,18 +48,18 @@ function Caret({ open }: { open: boolean }) {
 export function PastedCard({ n, lines, content }: { n: number; lines: number; content: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-lg border border-neutral-700 bg-neutral-900/60 overflow-hidden max-w-[85%]">
+    <div className="rounded-lg border border-tone-700 bg-tone-900/60 overflow-hidden max-w-[85%]">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/50"
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-tone-800/50"
       >
-        <span className="text-[11px] text-neutral-400">📋</span>
-        <span className="text-[11px] font-medium text-neutral-300">Pasted text #{n}</span>
-        <span className="text-[10px] text-neutral-500">· {lines} lines</span>
+        <span className="text-[11px] text-tone-400">📋</span>
+        <span className="text-[11px] font-medium text-tone-300">Pasted text #{n}</span>
+        <span className="text-[10px] text-tone-500">· {lines} lines</span>
         <span className="ml-auto"><Caret open={open} /></span>
       </button>
       {open && (
-        <pre className="px-3 py-1.5 border-t border-neutral-800 bg-neutral-950 overflow-auto max-h-72 text-[11px] font-mono text-neutral-400 whitespace-pre-wrap break-words">
+        <pre className="px-3 py-1.5 border-t border-tone-800 bg-tone-950 overflow-auto max-h-72 text-[11px] font-mono text-tone-400 whitespace-pre-wrap break-words">
           {content}
         </pre>
       )}
@@ -74,7 +74,7 @@ export function PastedCard({ n, lines, content }: { n: number; lines: number; co
 function MessageGroup({ text, sender }: { text: string; sender: 'user' | 'assistant' }) {
   const segs = parseMessageSegments(text);
   const isUser = sender === 'user';
-  const rail = isUser ? 'bg-blue-500/25' : 'bg-neutral-700/60';
+  const rail = isUser ? 'bg-blue-500/25' : 'bg-tone-700/60';
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`flex ${isUser ? 'flex-row-reverse' : 'flex-row'} gap-1.5 max-w-[92%]`}>
@@ -137,7 +137,7 @@ export function MessageTime({ ts, align = 'left' }: { ts?: string; align?: 'left
   const label = ageS < 60 ? 'just now' : hhmm;
   return (
     <span
-      className={`block mt-0.5 text-[10px] text-neutral-600 ${align === 'right' ? 'text-right' : 'text-left'}`}
+      className={`block mt-0.5 text-[10px] text-tone-600 ${align === 'right' ? 'text-right' : 'text-left'}`}
       title={d.toLocaleString()}
     >
       {label}
@@ -152,7 +152,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
       <div className="flex justify-center my-1">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="text-[10px] text-neutral-500 hover:text-neutral-300 px-2 py-0.5 rounded-full border border-neutral-800 bg-neutral-900/40"
+          className="text-[10px] text-tone-500 hover:text-tone-300 px-2 py-0.5 rounded-full border border-tone-800 bg-tone-900/40"
         >
           {open ? 'Hide' : 'Show'} session prompt ({Math.round(text.length / 100) / 10}k chars)
         </button>
@@ -184,7 +184,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
         </div>
       )}
       {queued && (
-        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
+        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
           queued
         </span>
       )}
@@ -206,29 +206,29 @@ export function SystemMessageCard({ msg, raw }: { msg: SystemMessage; raw: strin
       : msg.kind === 'relay' ? (msg.urgent ? 'amber' : 'grey')
         : msg.kind === 'task' || msg.kind === 'system' ? 'grey' : 'blue';
   const border = { red: 'border-red-500/50', green: 'border-green-500/50', amber: 'border-amber-500/60',
-    grey: 'border-neutral-700', blue: 'border-blue-500/50' }[tone];
-  const accent = { red: 'text-red-300', green: 'text-green-300', amber: 'text-amber-300',
-    grey: 'text-neutral-400', blue: 'text-blue-300' }[tone];
+    grey: 'border-tone-700', blue: 'border-blue-500/50' }[tone];
+  const accent = { red: 'text-tone-red-300', green: 'text-tone-green-300', amber: 'text-tone-amber-300',
+    grey: 'text-tone-400', blue: 'text-tone-blue-300' }[tone];
   const glyph = msg.kind === 'relay' ? '⇄' : msg.kind === 'task' ? (msg.outcome === 'failed' ? '!' : '✓')
     : msg.kind === 'questionnaire' ? '≡' : tone === 'red' ? '✕' : '✓';
   return (
     <div className="flex justify-start" data-testid="system-message" data-machine={msg.kind} data-tone={tone}>
-      <div className={clsx('max-w-[85%] min-w-0 rounded-xl border bg-neutral-950/80 px-2.5 py-1.5', border)}>
+      <div className={clsx('max-w-[85%] min-w-0 rounded-xl border bg-tone-950/80 px-2.5 py-1.5', border)}>
         <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 text-left">
           <span className={clsx('text-[11px] w-3.5 text-center shrink-0', accent)} aria-hidden>{glyph}</span>
-          <span className="text-[11px] font-semibold text-neutral-200 truncate">{scrubIds(msg.headline)}</span>
-          {msg.urgent && <span className="text-[10px] text-amber-300">· {msg.detail}</span>}
+          <span className="text-[11px] font-semibold text-tone-200 truncate">{scrubIds(msg.headline)}</span>
+          {msg.urgent && <span className="text-[10px] text-tone-amber-300">· {msg.detail}</span>}
           <span className="ml-auto pl-2"><Caret open={open} /></span>
         </button>
         {open ? (
-          <div className="mt-1 max-h-80 overflow-y-auto text-[11px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words select-text">{withRefs(raw)}</div>
+          <div className="mt-1 max-h-80 overflow-y-auto text-[11px] leading-relaxed text-tone-400 whitespace-pre-wrap break-words select-text">{withRefs(raw)}</div>
         ) : (
           <div className="mt-0.5 pl-5 space-y-0.5 select-text">
-            {msg.subject && <div className="text-[12px] text-neutral-200 break-words">{withRefs(msg.subject)}</div>}
+            {msg.subject && <div className="text-[12px] text-tone-200 break-words">{withRefs(msg.subject)}</div>}
             {msg.detail && !msg.urgent && msg.kind !== 'task' && msg.kind !== 'approval' && (
               <div className={clsx('text-[12px] font-medium break-words', accent)}>→ {withRefs(msg.detail)}</div>
             )}
-            {msg.note && <div className="text-[11px] text-neutral-500 break-words">{withRefs(msg.note)}</div>}
+            {msg.note && <div className="text-[11px] text-tone-500 break-words">{withRefs(msg.note)}</div>}
           </div>
         )}
       </div>
@@ -248,7 +248,7 @@ export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'qu
         {withRefs(text)}
       </div>
       {kind !== 'sent' && (
-        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
+        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
           {kind === 'queuedInTurn' ? 'queued' : kind === 'held' ? 'held for its next turn' : 'saved to its inbox'}
         </span>
       )}
@@ -262,19 +262,19 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
   const [open, setOpen] = useState(false);
   return (
     <div className="flex justify-start">
-      <div className="w-full rounded-lg border border-neutral-800 bg-neutral-900/40 overflow-hidden">
+      <div className="w-full rounded-lg border border-tone-800 bg-tone-900/40 overflow-hidden">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
+          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-tone-800/40"
         >
-          <span className="text-[11px] w-4 text-center text-neutral-400">⇊</span>
-          <span className="text-[11px] font-semibold text-neutral-300">
+          <span className="text-[11px] w-4 text-center text-tone-400">⇊</span>
+          <span className="text-[11px] font-semibold text-tone-300">
             {count} queued message{count === 1 ? '' : 's'} processed
           </span>
           <span className="ml-auto"><Caret open={open} /></span>
         </button>
         {open && (
-          <div className="border-t border-neutral-800 divide-y divide-neutral-800/60">
+          <div className="border-t border-tone-800 divide-y divide-tone-800/60">
             {entries.map((e, i) => {
               // Another agent's message reads the same here as in the chat: the "Message from" line and its body.
               const relay = parseSystemMessage(e.body, (e.machine as MachineKind | undefined) ?? null);
@@ -282,10 +282,10 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
               return (
               <div key={i} className="px-3 py-1.5">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[11px] font-semibold text-neutral-300">{e.agent || 'unknown'}</span>
-                  <span className="text-[10px] text-neutral-500">{relativeAgo(e.sent_ts)}</span>
+                  <span className="text-[11px] font-semibold text-tone-300">{e.agent || 'unknown'}</span>
+                  <span className="text-[10px] text-tone-500">{relativeAgo(e.sent_ts)}</span>
                 </div>
-                <div className="mt-0.5 text-[12px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words">
+                <div className="mt-0.5 text-[12px] leading-relaxed text-tone-400 whitespace-pre-wrap break-words">
                   {withRefs(e.body)}
                 </div>
               </div>
@@ -300,7 +300,7 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
 
 export function SystemPromptBody({ text }: { text: string }) {
   return (
-    <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-neutral-800 bg-neutral-950 p-2 text-[11px] font-mono text-neutral-400 whitespace-pre-wrap">
+    <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-tone-800 bg-tone-950 p-2 text-[11px] font-mono text-tone-400 whitespace-pre-wrap">
       {text}
     </pre>
   );
@@ -314,13 +314,13 @@ export function ThinkingCard({ text }: { text: string }) {
       <div className="w-full">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300 italic"
+          className="flex items-center gap-1.5 text-[11px] text-tone-500 hover:text-tone-300 italic"
         >
           <Caret open={open} />
           <span>💭 {open ? 'Thinking' : scrubIds(firstLine) + '…'}</span>
         </button>
         {open && (
-          <div className="mt-1 pl-4 border-l-2 border-neutral-800 text-[12px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words">
+          <div className="mt-1 pl-4 border-l-2 border-tone-800 text-[12px] leading-relaxed text-tone-400 whitespace-pre-wrap break-words">
             {withRefs(text)}
           </div>
         )}
@@ -448,7 +448,7 @@ function UserSystem({ text }: { text: string }) {
       <div className="flex justify-center">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="text-[10px] text-neutral-500 hover:text-neutral-300 px-2 py-0.5 rounded-full border border-neutral-800 bg-neutral-900/40"
+          className="text-[10px] text-tone-500 hover:text-tone-300 px-2 py-0.5 rounded-full border border-tone-800 bg-tone-900/40"
         >
           {open ? 'Hide' : 'Show'} session prompt ({Math.round(text.length / 100) / 10}k chars)
         </button>

@@ -1,6 +1,6 @@
 /**
- * modelSelectorFilter.ts — pure filter/greying logic for the B2
- * ModelSelectorSheet, split out of the component so it is unit-testable
+ * modelSelectorFilter.ts — pure filter/greying logic for the model picker (components/kit/ModelPicker.tsx; it
+ * began with the retired model sheet), split out of the component so it is unit-testable
  * without a DOM/React harness (dashboard has no test runner wired; this file
  * has zero React/DOM imports so it runs directly under `tsx --test`).
  *

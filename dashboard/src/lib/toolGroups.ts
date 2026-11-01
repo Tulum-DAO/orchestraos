@@ -90,7 +90,8 @@ function countWork(items: WorkItem[]): { files: number; unnamed: number; calls: 
 function workClause(items: WorkItem[], fileVerb: string, callNoun: string): string | undefined {
   const { files, unnamed, calls } = countWork(items);
   if (calls === 0) return undefined;
-  if (unnamed > 0) return `made ${plural(calls, callNoun, callNoun + 's')}`;
+  // "made 2 edits" reads naturally; "made 1 read" does not, so reads are counted bare ("1 read", "2 reads").
+  if (unnamed > 0) return `${callNoun === 'read' ? '' : 'made '}${plural(calls, callNoun, callNoun + 's')}`;
   return `${fileVerb} ${plural(files, 'file', 'files')}`;
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
 import { useTasks } from '../hooks/useTasks';
 import { useSystem } from '../hooks/useSystem';
@@ -13,11 +14,14 @@ import { LiveFeed } from '../components/LiveFeed';
 import { FleetRecoveryModal } from '../components/FleetRecoveryModal';
 import NewAgentModal from '../components/NewAgentModal';
 import { useQueryClient } from '@tanstack/react-query';
-import { showNewAgent } from '../lib/features';
+import { showNewAgent, isViewHidden } from '../lib/features';
+import { needsYouView } from '../lib/needsYou';
+import { openWaitingCard, openNotice } from '../lib/openWaiting';
 
 const TIER_ORDER: Record<string, number> = { T0: 0, T1: 1, T2: 2, T3: 3 };
 
 export default function Overview() {
+  const navigate = useNavigate();
   const { data: agentsData, isLoading: agentsLoading } = useAgents();
   const { data: tasksData, isLoading: tasksLoading } = useTasks();
   const { data: systemData } = useSystem();
@@ -33,30 +37,6 @@ export default function Overview() {
     queryKey: ['context'],
     queryFn: fetchContext,
   });
-  // /api/context/needs-attention does not exist server-side (404 on every
-  // load, 2026-08-19). The render below is gated on items.length > 0, so the
-  // failure used to be INVISIBLE: a dead feed and "nothing needs you" looked
-  // identical to the operator. Now the error is surfaced (see the Needs You block) —
-  // an error he can see beats a blank he cannot distinguish from calm.
-  // Deliberately not "fixed" by adding the endpoint: what needs the operator is
-  // already answered by three disagreeing stores, and inventing a fourth
-  // server-side answer would deepen that, not resolve it. Missing endpoint
-  // reported to gm for the pipeline owners.
-  const {
-    data: attentionData,
-    isError: attentionFailed,
-  } = useQuery({
-    queryKey: ['needs-attention'],
-    queryFn: async () => {
-      const r = await fetch('/api/context/needs-attention');
-      if (!r.ok) throw new Error(`needs-attention ${r.status}`);
-      return r.json();
-    },
-    retry: false,
-    refetchInterval: 30_000,
-  });
-  const attentionItems: any[] =
-    (Array.isArray(attentionData) ? attentionData : attentionData?.items) || [];
   // SAME FEED AS THE INBOX PAGE (2026-08-19). The Approvals card was a literal
   // `value={0}` with sub "Queue clear" — wired to nothing, so it read "queue
   // clear" no matter how many decisions were actually waiting on the operator. It now
@@ -66,11 +46,35 @@ export default function Overview() {
   // (this unified feed, the HTML-questionnaire index, and the native tasks.db
   // rows behind the watch). Picking a winner is a pipeline decision; matching
   // /inbox is the part this surface owns.
-  const { data: unifiedApprovals } = useQuery({
+  const { data: unifiedApprovals, isError: unifiedFailed } = useQuery({
     queryKey: ['approvals-unified'],
-    queryFn: () => fetch('/api/approvals/unified').then((r) => r.json()),
+    queryFn: async () => {
+      const r = await fetch('/api/approvals/unified');
+      if (!r.ok) throw new Error(`approvals ${r.status}`);
+      return r.json();
+    },
     refetchInterval: 10_000,
   });
+  // Needs You reads this same feed, grouped per agent by the bell's own rule (lib/needsYou.ts), so the panel, the
+  // Approvals card and the bell agree. There is no separate attention endpoint.
+  const { data: questionnaireData } = useQuery({
+    queryKey: ['questionnaires'],
+    queryFn: async () => {
+      const r = await fetch('/api/questionnaires');
+      if (!r.ok) throw new Error(`questionnaires ${r.status}`);
+      return r.json();
+    },
+    refetchInterval: 10_000,
+  });
+  const needsYou = needsYouView(unifiedApprovals, unifiedFailed, questionnaireData);
+  // A row opens the agent's oldest waiting card where it is drawn, as the bell's rows do (lib/openWaiting.ts).
+  const [needsNotice, setNeedsNotice] = useState<string | null>(null);
+  const openAgent = async (agent: string) => {
+    setNeedsNotice(null);
+    const r = await openWaitingCard(agent, { navigate });
+    setNeedsNotice(openNotice(agent, r));
+    if (!r.opened) void queryClient.invalidateQueries({ queryKey: ['approvals-unified'] });
+  };
   const approvalsPending = (unifiedApprovals?.items || []).filter(
     (i: any) => i?.status === 'pending',
   ).length;
@@ -236,53 +240,38 @@ export default function Overview() {
         onCreated={() => { queryClient.invalidateQueries({ queryKey: ['agents'] }); }}
       />}
 
-      {/* Needs You — a dead feed must not render as calm */}
-      {attentionFailed && (
-        <div className="mb-6">
-          <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider mb-3">Needs You</h2>
+      {/* Needs You: who is waiting on the operator. A failed read must not render as calm. */}
+      <div className="mb-6" data-needs-you={needsYou.state}>
+        <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider mb-3">Needs You</h2>
+        {needsYou.state === 'error' && (
           <div className="p-3 rounded-lg bg-tone-800/50 border-l-2 border-red-500">
-            <div className="text-sm text-tone-red-300">Attention feed unavailable</div>
-            <div className="text-xs text-tone-400 mt-1">
-              <code>/api/context/needs-attention</code> is not responding — this panel is
-              NOT saying nothing needs you. Check the Inbox and Approvals pages directly.
-            </div>
+            <div className="text-sm text-tone-red-300">Couldn't read what is waiting for you</div>
+            <div className="text-xs text-tone-400 mt-1">This is NOT saying nothing needs you. Check the Inbox and Approvals pages directly.</div>
           </div>
-        </div>
-      )}
-      {!attentionFailed && attentionItems.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-sm font-semibold text-tone-400 uppercase tracking-wider mb-3">Needs You</h2>
+        )}
+        {needsYou.state === 'loading' && <p className="text-sm text-tone-500">Checking…</p>}
+        {needsYou.state === 'empty' && <p className="text-sm text-tone-500">Nothing is waiting for you.</p>}
+        {needsYou.state === 'rows' && (
           <div className="space-y-2">
-            {attentionItems.map((item: any, i: number) => (
-              <div
-                key={i}
-                className={`p-3 rounded-lg bg-tone-800/50 border-l-2 ${
-                  item.type === 'messages'
-                    ? 'border-blue-500'
-                    : item.type === 'stale'
-                      ? 'border-amber-500'
-                      : 'border-purple-500'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                      item.type === 'messages'
-                        ? 'bg-blue-500/20 text-tone-blue-400'
-                        : item.type === 'stale'
-                          ? 'bg-amber-500/20 text-tone-amber-400'
-                          : 'bg-purple-500/20 text-tone-purple-400'
-                    }`}
-                  >
-                    {item.type}
-                  </span>
-                  <span className="text-sm text-tone-200">{item.label}</span>
-                </div>
-              </div>
-            ))}
+            {needsYou.rows.map((r) => (r.kind === 'agent' ? (
+              <button key={r.key} type="button" data-needs-you-row={r.key}
+                      onClick={() => void openAgent(r.agent)}
+                      className="w-full text-left p-3 rounded-lg bg-tone-800/50 hover:bg-tone-800 border-l-2 border-purple-500 flex items-center gap-2">
+                <span className="text-sm font-medium text-tone-200">{r.agent}</span>
+                <span className="text-sm text-tone-400">· {r.label}</span>
+              </button>
+            ) : (
+              <button key={r.key} type="button" data-needs-you-row={r.key}
+                      onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); }}
+                      className="w-full text-left p-3 rounded-lg bg-tone-800/50 hover:bg-tone-800 border-l-2 border-amber-500 flex items-center gap-2">
+                <span className="text-sm font-medium text-tone-200">Questionnaires</span>
+                <span className="text-sm text-tone-400">· {r.label}</span>
+              </button>
+            )))}
           </div>
-        </div>
-      )}
+        )}
+        {needsNotice && <p role="status" className="mt-2 text-xs text-tone-500">{needsNotice}</p>}
+      </div>
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

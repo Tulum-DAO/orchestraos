@@ -31,16 +31,18 @@ export function factsValue(count: number | null): string {
   return count === 1 ? '1 fact' : `${count} facts`;
 }
 
-/** An agent's Activity row: its subagents still running (background tasks and subagents are its jobs). */
+/** The History row's value for an agent: its subagents still running (background tasks and subagents are its jobs).
+ *  The agent record leaves the count out when there are none, so no count reads as none, the same as the History
+ *  page's Running list does; the row is never left blank beside Arturo's. */
 export function subagentsValue(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '';
-  return n ? `${n} running` : 'Idle';
+  return n ? `${n} running` : 'Nothing running';
 }
 
+/** The History row's value for Arturo: his jobs still running (blank only while they load). */
 export function activityValue(jobs: ArturoJob[] | null): string {
   if (jobs === null) return '';
   const running = jobs.filter((j) => j.status === 'running').length;
-  return running ? `${running} running` : 'Idle';
+  return running ? `${running} running` : 'Nothing running';
 }
 
 /** The drawer's sections: what is running, waiting and happened (History), what it made (Library), how it is set up
