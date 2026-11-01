@@ -49,6 +49,8 @@ const DEFAULT_RESPONSE_CACHE_PATH = resolvePath(__dirname, '../../../state/runti
 // providers.json static ids). Offering a model in the picker and then refusing it is
 // the bug this closes, so a PROBED catalog is published where validation can see it.
 const DEFAULT_LIVE_CATALOG_PATH = resolvePath(__dirname, '../../../state/model-catalog-live.json');
+/** The seat-only models (contract/seat-models.json), the same list scripts/agent_model.py offers a seat. */
+export const SEAT_MODELS_PATH = resolvePath(__dirname, '../../../contract/seat-models.json');
 
 export interface ModelCapabilities {
   text: boolean;
@@ -106,6 +108,10 @@ export interface ModelInfo {
   capabilities: ModelCapabilities;
   /** Fields we have NOT confirmed for this model — never silently assumed. */
   capabilities_unverified?: string[];
+  /** Set only on a model an agent seat may use and Arturo may not (contract/seat-models.json), with the reason a
+   *  picker shows when it dims it. Absent on every other row. */
+  seat_only?: true;
+  seat_only_reason?: string;
 }
 
 export interface ProviderResult {
@@ -332,6 +338,54 @@ export function defaultPublishLiveCatalog(
   }
 }
 
+export interface SeatModels { reason: string; models: Record<string, { id: string; label: string }[]> }
+
+/** contract/seat-models.json, or null when it is missing or malformed: then no seat-only rows are listed. */
+export function readSeatModels(path: string = SEAT_MODELS_PATH): SeatModels | null {
+  try {
+    const doc = JSON.parse(readFileSync(path, 'utf-8'));
+    if (typeof doc?.seat_only_reason !== 'string' || !doc.models || typeof doc.models !== 'object') return null;
+    const models: SeatModels['models'] = {};
+    for (const [rt, rows] of Object.entries(doc.models as Record<string, unknown>)) {
+      if (!Array.isArray(rows)) continue;
+      models[rt] = rows.filter((r): r is { id: string; label: string } =>
+        !!r && typeof r.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,99}$/.test(r.id) && typeof r.label === 'string');
+    }
+    return { reason: doc.seat_only_reason, models };
+  } catch { return null; }
+}
+
+/** The catalog's rows with the seat-only ones added, each right after the model it is the 1M version of (its id
+ *  without the "[1m]" suffix), with that model's capabilities. Only `models` changes: `valid_ids` is what the proxy
+ *  and Arturo accept, and a seat-only id must stay out of it. */
+export function withSeatModels(models: ModelInfo[], runtime: string, seat: SeatModels | null): ModelInfo[] {
+  const extra = seat?.models[runtime] || [];
+  if (!extra.length || !models.length) return models;   // no catalog: nothing to be the 1M version of
+  const out = [...models];
+  for (const m of extra) {
+    if (out.some((r) => r.id === m.id)) continue;
+    const baseId = m.id.replace(/\[1m\]$/i, '');
+    const at = out.findIndex((r) => r.id === baseId);
+    const base = at >= 0 ? out[at] : undefined;
+    const row: ModelInfo = {
+      id: m.id,
+      label: m.label,
+      capabilities: base ? { ...base.capabilities, context_window: 1_000_000 }
+        : { text: true, image: false, audio: false, video: false, context_window: 1_000_000 },
+      ...(base?.capabilities_unverified ? { capabilities_unverified: base.capabilities_unverified }
+        : base ? {} : { capabilities_unverified: ['image', 'audio', 'video'] }),
+      seat_only: true,
+      seat_only_reason: seat!.reason,
+    };
+    if (at >= 0) {
+      let k = at + 1;
+      while (k < out.length && out[k].seat_only && out[k].id.replace(/\[1m\]$/i, '') === baseId) k++;
+      out.splice(k, 0, row);
+    } else out.push(row);
+  }
+  return out;
+}
+
 export interface ProbeDeps {
   loadProviders: () => ProviderConfig[];
   isInstalled: (provider: ProviderConfig) => boolean;
@@ -339,6 +393,8 @@ export interface ProbeDeps {
   loadModelCatalog: (provider: ProviderConfig, auth?: AuthResult) => CatalogResult;
   publishLiveCatalog: (providers: ProviderResult[]) => void;
   now: () => number;
+  /** The seat-only models to list, marked (contract/seat-models.json). Absent: none. */
+  seatModels?: () => SeatModels | null;
 }
 
 export function makeDefaultDeps(providersPath?: string): ProbeDeps {
@@ -349,6 +405,7 @@ export function makeDefaultDeps(providersPath?: string): ProbeDeps {
     loadModelCatalog: defaultLoadModelCatalog,
     publishLiveCatalog: (providers) => defaultPublishLiveCatalog(providers),
     now: () => Date.now(),
+    seatModels: () => readSeatModels(),
   };
 }
 
@@ -361,6 +418,7 @@ export function makeDefaultDeps(providersPath?: string): ProbeDeps {
 export function probeAll(deps: ProbeDeps, opts: { withModels?: boolean } = {}): RuntimesAvailableResponse {
   const withModels = opts.withModels !== false;
   const providers = deps.loadProviders();
+  const seat = withModels && deps.seatModels ? deps.seatModels() : null;
   const results: ProviderResult[] = providers.map((provider) => {
     const installed = deps.isInstalled(provider);
     // Not installed => authed is meaningless; report it LOUD as false rather
@@ -379,7 +437,7 @@ export function probeAll(deps: ProbeDeps, opts: { withModels?: boolean } = {}): 
       installed,
       authed: auth.authed,
       auth_reason: auth.auth_reason,
-      models: catalog.models,
+      models: withSeatModels(catalog.models, provider.id, seat),
       model_catalog_source: catalog.source,
       model_catalog_valid_ids: catalog.valid_ids,
       ...(catalog.default_model ? { model_catalog_default: catalog.default_model } : {}),

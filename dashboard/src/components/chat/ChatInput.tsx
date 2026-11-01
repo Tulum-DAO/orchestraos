@@ -4,7 +4,9 @@
  */
 import { useState, useRef, useLayoutEffect, useEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { ArrowUp, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal } from 'lucide-react';
+import { Plus, Paperclip, X, ClipboardList, MoreHorizontal } from 'lucide-react';
+import RoundAction from '../kit/RoundAction';
+import { roundView } from '../../lib/roundAction';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
@@ -76,6 +78,9 @@ interface Props {
   menuItems?: (close: () => void) => ReactNode;
   /** Interrupt the agent's turn (the same Esc key the Dev-mode ActionBar sends). Absent = no Stop. */
   onStop?: () => Promise<unknown> | void;
+  /** This composer's call, for the round button (lib/roundAction.ts): empty box → Call, End during a call; no call
+   *  possible → a disabled Send with the reason. Absent = no call here (the empty button is a disabled Send). */
+  call?: { inCall: boolean; available: boolean; reason?: string; agentName: string; onToggle: () => void };
 }
 
 async function uploadImage(file: File): Promise<string> {
@@ -87,7 +92,7 @@ async function uploadImage(file: File): Promise<string> {
   return data.path;
 }
 
-export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop, menuItems }: Props) {
+export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop, menuItems, call }: Props) {
   // Text, held pastes and attached files live in the agent's draft (stores/composerDrafts.ts), so they survive
   // this box being unmounted: switching the page to Dev, or to another agent and back.
   const { draft: stored, setText: setInternalText, setFiles: setPendingFiles, setPastes } = useComposerDraft(agentId);
@@ -413,11 +418,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     }
   };
 
-  const canSend = (text.trim() || hasFiles) && !sending && !disabled;
   // The round button is STOP only while the seat is mid-turn with no menu open (the caller's
   // canStop, see composerGate.canStopTurn) AND there is nothing to send: text typed mid-turn is
-  // still a send, because the CLI queues it.
-  const showStop = !!onStop && !!canStop && !text.trim() && !hasFiles && !sending;
+  // still a send, because the CLI queues it (lib/roundAction.ts).
 
   // Stop presses Esc in the seat's pane. A ref, not state, guards it: two clicks in one frame
   // both read the same `stopping` state, and Esc pressed twice can land on whatever the first
@@ -668,36 +671,20 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             )}
           </div>}
           {trailing}
-          {showStop ? (
-            <button
-              type="button"
-              onClick={() => void handleStop()}
-              disabled={stopping}
-              aria-label={stopping ? 'Stopping' : 'Stop the agent'}
-              title={stopping ? 'Stopping…' : 'Stop — interrupt the agent’s turn (Esc)'}
-              className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-60')}
-            >
-              {/* a plain box, not the outlined Square glyph: dead centre by construction */}
-              {stopping ? <Loader2 size={16} className="animate-spin" /> : <span aria-hidden className="block h-3.5 w-3.5 rounded-[3px] bg-current" />}
-            </button>
-          ) : (
-            /* "Send" is what a person does. "Inject" is plumbing. */
-            <button
-              type="button"
-              onClick={() => handleSend()}
-              disabled={!canSend}
-              aria-label="Send"
-              title="Send (Enter)"
-              className={clsx(
-                roundBtn,
-                !canSend
-                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                  : 'bg-foreground text-background hover:opacity-90'
-              )}
-            >
-              {sending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={18} strokeWidth={2.5} />}
-            </button>
-          )}
+          {/* THE ROUND BUTTON (lib/roundAction.ts): Send with something to send, Stop mid-turn, Call when empty (End during
+              a call), a disabled Send with the reason when no call is possible. One button; its icons crossfade. */}
+          <RoundAction
+            view={roundView({ hasContent: !!(text.trim() || hasFiles), sending, blocked: !!disabled, canStop: !!onStop && !!canStop,
+                              call: call ? { inCall: call.inCall, available: call.available, reason: call.reason } : undefined },
+                            { agent: call?.agentName ?? 'the agent' })}
+            busy={sending || stopping}
+            onAction={(mode) => {
+              if (mode === 'send') handleSend();
+              else if (mode === 'stop') void handleStop();
+              else if (mode === 'call' || mode === 'end') call?.onToggle();
+            }}
+            className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:opacity-40')}
+          />
         </div>
       </div>
     </div>

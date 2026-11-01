@@ -1,0 +1,10 @@
+{
+  "_doc": "Models an agent seat may switch to that are not in config/providers.json, per runtime. They are seat-only: providers.json is also Arturo's brain catalog, whose model ids cannot carry the [1m] suffix (services/arturo/brain.py). Read by scripts/agent_model.py (SEAT_MODELS, GET /api/agents/:id/model) and by the API's GET /api/runtimes/available, which lists them marked seat_only with seat_only_reason so Arturo's picker can dim them. One list, so the two cannot drift.",
+  "seat_only_reason": "Only for agents; Arturo can't use the 1M versions",
+  "models": {
+    "claude": [
+      {"id": "claude-opus-5-5[1m]", "label": "Opus 5.5 (1M)"},
+      {"id": "claude-opus-5[1m]", "label": "Opus 5 (1M)"}
+    ]
+  }
+}

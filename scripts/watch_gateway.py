@@ -2773,10 +2773,38 @@ def _is_test_seat(session) -> bool:
     return False
 
 
+COMPACT_GATE = Path(__file__).resolve().parent.parent / "contract" / "compact-gate.json"
+_compact_gate_cache = {"mtime": None, "doc": None}
+
+
+def _compact_gate():
+    """contract/compact-gate.json ({"needs_headless", "needs_test_seat", "cases"}), re-read when it changes; None
+    when it cannot be read (and then nothing is allowed)."""
+    try:
+        m = COMPACT_GATE.stat().st_mtime
+    except OSError:
+        return None
+    if _compact_gate_cache["mtime"] != m:
+        try:
+            doc = json.loads(COMPACT_GATE.read_text())
+            doc = doc if isinstance(doc, dict) else None
+        except (OSError, ValueError):
+            doc = None
+        _compact_gate_cache.update(mtime=m, doc=doc)
+    return _compact_gate_cache["doc"]
+
+
 def _compact_allowed(session, hl_seat=None) -> bool:
-    """Whether a person's /compact may run for this seat: only a TEST seat that runs headless, until the operator
-    turns compacting on for real seats (then this is the one line to change)."""
-    return bool(hl_seat) and _is_test_seat(session)
+    """Whether a person's /compact may run for this seat, by the rule in contract/compact-gate.json (today: only a
+    TEST seat that runs headless; a seat in Dev reads as not headless). An unreadable rule refuses."""
+    gate = _compact_gate()
+    if gate is None:
+        return False
+    if gate.get("needs_headless", True) and not hl_seat:
+        return False
+    if gate.get("needs_test_seat", True) and not _is_test_seat(session):
+        return False
+    return True
 
 
 def _headless_seat_for(session):

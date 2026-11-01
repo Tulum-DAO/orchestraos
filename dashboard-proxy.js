@@ -6,6 +6,7 @@ const { execFileSync } = require("child_process");
 const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { wsOriginDecision } = require("./dashboard-ws-origin");
+const { listedLoginShell } = require("./dashboard-login-shells");
 let pty = null;
 try { pty = require("node-pty"); } catch (e) { console.warn("dashboard-proxy: node-pty not installed — web terminal disabled (npm install node-pty to enable)"); }
 
@@ -153,8 +154,10 @@ function registeredTerminalSession(session) {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(session || "")) return false;
   try {
     const reg = JSON.parse(fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "registry.json"), "utf8"));
-    return Object.values(reg.agents || {}).some((a) => a && (a.tmux_session === session || a.name === session));
-  } catch { return false; }
+    if (Object.values(reg.agents || {}).some((a) => a && (a.tmux_session === session || a.name === session))) return true;
+  } catch { /* no registry: only a listed login shell can pass */ }
+  // A login shell the API started for Connect has no registry row; the API lists it while it lives (dashboard-login-shells.js).
+  return listedLoginShell(session, process.env.ORCHESTRA_DIR);
 }
 // noServer + our own dispatch: with `server`, ws answers EVERY other upgrade path with 400, which killed the
 // /api/voice/live upgrade the listener above had already started forwarding ("voice bridge connection error").

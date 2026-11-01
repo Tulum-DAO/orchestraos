@@ -761,7 +761,6 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                       focusedEntity={agent.id}
                       onPartial={setPanelDraft}
                       onFinal={setPanelDraft}
-                      showCallButton={false}
                     />
                   }
                   // Stop = the Esc key Dev mode's key row sends; never while a menu is open (#334).

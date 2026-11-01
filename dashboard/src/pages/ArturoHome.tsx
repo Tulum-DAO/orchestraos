@@ -726,7 +726,7 @@ export default function ArturoHome() {
       <LookPickerPopover agentId={ARTURO_ID} open={pickerOpen} onClose={() => setPickerOpen(false)} canSave={canSaveLook} />
       <ArturoPanel open={panelOpen} onClose={() => setPanelOpen(false)} returnFocusTo={gearRef} brain={eff ? `${model} ${eff}` : model} />
       {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}). */}
-      <ModelPicker trigger={false} open={modelOpen} onOpenChange={setModelOpen}
+      <ModelPicker chooser="arturo" trigger={false} open={modelOpen} onOpenChange={setModelOpen}
         value={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
         onValueChange={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
         onPickDefault={() => chooseBrain(null)} />

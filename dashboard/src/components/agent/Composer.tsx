@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Cpu, PhoneCall } from 'lucide-react';
+import { Cpu } from 'lucide-react';
 import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
 import { useAssistantName } from '../../lib/assistantName';
@@ -11,6 +11,8 @@ import ModelPicker from '../kit/ModelPicker';
 import { agentModelTitle } from '../../lib/modelTitle';
 import { useComposerDraft } from '../../stores/composerDrafts';
 import { VoiceControls, type VoiceControlsHandle } from './VoiceControls';
+import { callSupport } from '../../lib/callSupport';
+import { useVoiceReady } from '../../hooks/useVoiceReady';
 import ChatInput from '../chat/ChatInput';
 import { sendFromComposer } from '../../lib/agentSendFlow';
 
@@ -72,6 +74,11 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   };
   const voiceRef = useRef<VoiceControlsHandle>(null);
   const [inCall, setInCall] = useState(false);
+  // Why a call can't be had here, when it can't: this browser, the server's readiness check (no voice key; asked on
+  // open and on focus, lib/voiceReady.ts), or a call that could not start.
+  const [callFailed, setCallFailed] = useState<string | null>(null);
+  const ready = useVoiceReady();
+  const callBlocked = callSupport().reason ?? (ready && !ready.ok ? ready.reason ?? null : null) ?? callFailed;
   // B2 video-upload capability gate: N/A — ChatInput's current attach
   // affordance has no video mime/extension support to gate yet, so
   // `capabilities?.video === true` has nothing to gate against for now.
@@ -125,6 +132,9 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           onSend={handleSend}
           canStop={canStop}
           onStop={onStop}
+          // The round button's call (lib/roundAction.ts): what the phone button started, from the empty box.
+          call={{ inCall, available: !callBlocked, reason: callBlocked ?? undefined, agentName: aname,
+                  onToggle: () => { void voiceRef.current?.toggleCall(); } }}
           // Below 480px the model chip and the call button live here, so the text gets the row.
           menuItems={(close) => (
             <>
@@ -134,15 +144,6 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
                 <Cpu size={15} className="shrink-0 text-muted-foreground" />
                 <span className="truncate">Model <span className="text-muted-foreground">· {modelTitle ?? 'choose'}</span></span>
               </button>
-              {/* Start only, and only with no call live: a live call's End button is inline. */}
-              {draft.trim() === '' && !inCall && (
-                <button type="button" role="menuitem"
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
-                  onClick={() => { close(); void voiceRef.current?.startCall(); }}>
-                  <PhoneCall size={15} className="shrink-0 text-muted-foreground" />
-                  <span>Call {aname}</span>
-                </button>
-              )}
             </>
           )}
           leading={
@@ -157,14 +158,13 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           trailing={
             <VoiceControls
               ref={voiceRef}
-              idleCallClassName="max-[480px]:hidden"
               onInCallChange={setInCall}
+              onCallUnavailable={setCallFailed}
               route={location.pathname}
               focusedEntity={null}
               onPartial={setDraft}
               onFinal={setDraft}
               onCallEnded={(marker) => setDraft((d) => (d ? d + '\n' : '') + marker)}
-              showCallButton={draft.trim() === ''}
             />
           }
         />

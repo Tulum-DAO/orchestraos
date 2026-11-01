@@ -24,8 +24,8 @@ import { installCommand, installNote, cliFor } from '../../lib/providerConnect';
 import { providerTileAction, showAddProvider } from '../../lib/features';
 import { buildProviderRows, type ProviderAvailability, type ProviderCapabilities, type ProviderModel, type ProviderRow } from '../../lib/modelSelectorFilter';
 import {
-  buildPickerModels, greyProviders, greyFor, groupModels, flatten, findCurrent, isCurrent, modelTitle, moveActive,
-  readRecent, pushRecent, writeRecent, letterMark, type PickerModel, type PickerValue,
+  buildPickerModels, groupModels, flatten, findCurrent, isCurrent, modelTitle, moveActive,
+  letterMark, type PickerModel, type PickerValue,
 } from '../../lib/modelPicker';
 
 export interface ModelPick { providerId: string; modelId: string; modelLabel: string; capabilities: ProviderCapabilities }
@@ -38,6 +38,9 @@ export interface ModelPickerProps {
   agentModels?: { providerId: string; models: (ProviderModel & { subtitle?: string })[] } | null;
   /** Offer "Use the default brain" first (Arturo). */
   onPickDefault?: () => void;
+  /** Whose model this chooses: an agent's (every model it may use, 1M versions included) or Arturo's brain (models
+   *  only agents can use are listed dimmed). Default: an agent's. */
+  chooser?: 'agent' | 'arturo';
   /** 'popover' (a chip that opens it) or 'inline' (always open, in place). */
   variant?: 'popover' | 'inline';
   /** Controlled open state (a menu item can open it); uncontrolled when left out. */
@@ -55,7 +58,6 @@ interface RuntimesAvailableResponse { providers: ProviderAvailability[] }
 const DEFAULT_KEY = '__default__';
 // Above the Arturo pane (z 76), as the old sheet was; the connect modal sits above this (z 85).
 const Z = 80;
-const recentStore = () => { try { return window.localStorage; } catch { return null; } };
 
 /** The page's theme as drawn (the `dark` class on <html>), followed live. */
 function useDarkMode(): boolean {
@@ -161,7 +163,7 @@ function AddProviderPanel({ rows, onInstalled }: { rows: ProviderRow[]; onInstal
 }
 
 export default function ModelPicker({
-  value, onValueChange, agentModels, onPickDefault, variant = 'popover', open: openProp, onOpenChange, trigger = true, label, triggerClassName,
+  value, onValueChange, agentModels, onPickDefault, chooser = 'agent', variant = 'popover', open: openProp, onOpenChange, trigger = true, label, triggerClassName,
 }: ModelPickerProps) {
   const inline = variant === 'inline';
   const [openState, setOpenState] = useState(false);
@@ -176,7 +178,6 @@ export default function ModelPicker({
   const [active, setActive] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [connectRow, setConnectRow] = useState<ProviderRow | null>(null);
-  const [recent, setRecent] = useState<string[]>(() => readRecent(recentStore()));
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -199,16 +200,17 @@ export default function ModelPicker({
   // Asked again every time it opens: no stale list across a sign-in.
   useEffect(() => {
     if (!open) return;
-    setQuery(''); setAdding(false); setRecent(readRecent(recentStore()));
+    setQuery(''); setAdding(false);
     void probe();
   }, [open, probe]);
 
-  const models = useMemo(() => buildPickerModels(rows, agentModels), [rows, agentModels]);
+  const models = useMemo(() => buildPickerModels(rows, agentModels, { forArturo: chooser === 'arturo' }), [rows, agentModels, chooser]);
   const current = findCurrent(models, value);
-  const groups = useMemo(() => groupModels(models, { query, recent }), [models, query, recent]);
-  const grey = useMemo(() => greyFor(greyProviders(rows), query), [rows, query]);
+  // One order in every picker: by provider, newest first (lib/modelPicker.ts newestFirst); no Recent group above it.
+  const groups = useMemo(() => groupModels(models, { query }), [models, query]);
   const showDefault = !!onPickDefault && !query.trim();
-  const keys = useMemo(() => [...(showDefault ? [DEFAULT_KEY] : []), ...flatten(groups).map((m) => m.key)], [groups, showDefault]);
+  // The arrows move through what can be picked; a dimmed entry is shown, not chosen.
+  const keys = useMemo(() => [...(showDefault ? [DEFAULT_KEY] : []), ...flatten(groups).filter((m) => !m.unavailable).map((m) => m.key)], [groups, showDefault]);
 
   // The row the arrows start from: the model in use, else the first.
   useEffect(() => {
@@ -239,6 +241,12 @@ export default function ModelPicker({
     setTimeout(() => triggerRef.current?.focus(), 0);
   }, [inline, setOpen]);
 
+  /** Connect: the picker closes first, then the Connect sheet opens as the top layer (never under the picker). */
+  const connect = useCallback((row: ProviderRow) => {
+    if (!inline) setOpen(false);
+    setConnectRow(row);
+  }, [inline, setOpen]);
+
   // A click outside the popover closes it (the phone sheet has its own backdrop).
   useEffect(() => {
     if (!open || inline || narrow || connectRow) return;
@@ -264,8 +272,6 @@ export default function ModelPicker({
   }, [active, listId]);
 
   const pick = (m: PickerModel) => {
-    const next = pushRecent(recent, m.key);
-    setRecent(next); writeRecent(recentStore(), next);
     onValueChange({ providerId: m.providerId, modelId: m.id, modelLabel: modelTitle(m), capabilities: m.capabilities });
     close();
   };
@@ -314,14 +320,38 @@ export default function ModelPicker({
           {!value && <Check size={15} className="shrink-0 text-tone-white" aria-hidden />}
         </div>
       )}
-      {groups.map((g) => (
+      {groups.map((g) => {
+        // A provider that can't be used yet: its heading says why and offers Connect; its models are listed dimmed.
+        const row = rows.find((r) => r.provider.id === g.id);
+        const off = row && !row.selectable ? row : null;
+        return (
         <div key={g.id} role="group" aria-label={g.label} data-model-group={g.id}>
           <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[11px] font-medium text-tone-500 uppercase tracking-wide">
-            {g.id !== 'recent' && <ProviderMark providerId={g.id} label={g.label} dark={dark} size={12} />}
-            {g.label}
+            {g.id !== 'recent' && <ProviderMark providerId={g.id} label={g.label} dark={dark} size={12} dim={!!off} />}
+            <span className="flex-1 min-w-0 truncate">{g.label}{off && <span className="normal-case tracking-normal font-normal"> · {off.greyReason}</span>}</span>
+            {off && providerTileAction(false) === 'connect' && (
+              <button type="button" onClick={() => connect(off)} data-model-connect={g.id}
+                      className="shrink-0 normal-case tracking-normal px-2 py-0.5 rounded-md border border-tone-700 text-[12px] font-normal text-tone-300 hover:bg-tone-800 hover:text-tone-white">
+                Connect
+              </button>
+            )}
           </div>
           {g.models.map((m) => {
             const on = isCurrent(m, value);
+            if (m.unavailable) {
+              return (
+                <div key={m.key} role="option" aria-selected={on} aria-disabled data-model-option={m.key} data-model-unavailable
+                     title={m.unavailable} className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm rounded-lg text-tone-500 cursor-default">
+                  <ProviderMark providerId={m.providerId} label={m.providerLabel} dark={dark} size={16} dim />
+                  {/* The name first, whole; the reason under it (a long reason never squeezes the name away). */}
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate">{m.name}{m.tag && <span className="text-[11px] tabular-nums"> · {m.tag}</span>}</span>
+                    {!off && <span className="block text-[11px] leading-snug">{m.unavailable}</span>}
+                  </span>
+                  <span className="w-4 shrink-0">{on && <Check size={15} className="text-tone-400" aria-label="In use" />}</span>
+                </div>
+              );
+            }
             return (
               <div key={m.key} id={`${listId}-${m.key}`} role="option" aria-selected={on} data-model-option={m.key}
                    className={`${optionClass(m.key)} cursor-pointer`} onMouseEnter={() => setActive(m.key)} onClick={() => pick(m)}>
@@ -334,29 +364,9 @@ export default function ModelPicker({
             );
           })}
         </div>
-      ))}
+        );
+      })}
       {!firstLoad && !error && !anyModel && query.trim() && <p className="px-3 py-6 text-center text-sm text-tone-500" data-model-picker-empty>No matching models.</p>}
-      {grey.length > 0 && (
-        <div role="group" aria-label="Not available" className="mt-1 pt-1 border-t border-tone-800">
-          <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-tone-500 uppercase tracking-wide">Not available</div>
-          {grey.map((g) => {
-            const row = rows.find((r) => r.provider.id === g.providerId);
-            const canConnect = providerTileAction(false) === 'connect';
-            return (
-              <div key={g.providerId} className="flex items-center gap-2.5 px-3 py-2 text-sm text-tone-500" data-model-grey={g.providerId}>
-                <ProviderMark providerId={g.providerId} label={g.label} dark={dark} size={16} dim />
-                <span className="flex-1 min-w-0 truncate">{g.label} <span className="text-[11px]">· {g.reason}</span></span>
-                {canConnect && row && (
-                  <button type="button" onClick={() => setConnectRow(row)}
-                          className="shrink-0 px-2 py-0.5 rounded-md border border-tone-700 text-[12px] text-tone-300 hover:bg-tone-800 hover:text-tone-white">
-                    Connect
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
       {showAddProvider() && !query.trim() && (
         <button type="button" onClick={() => setAdding(true)} data-model-picker-add-provider
                 className="flex items-center gap-2.5 px-3 py-2 text-sm text-tone-400 hover:text-tone-200 hover:bg-tone-800 rounded-lg text-left">
@@ -412,13 +422,16 @@ export default function ModelPicker({
           {narrow && <div className="fixed inset-0 bg-black/40" style={{ zIndex: Z }} onClick={close} aria-hidden />}
           {panel}
         </>, document.body)}
-      <ProviderConnectModal
-        provider={connectRow ? { id: connectRow.provider.id, label: connectRow.provider.label, installed: connectRow.provider.installed,
-                                 authed: connectRow.provider.authed, auth_reason: connectRow.provider.auth_reason ?? connectRow.greyReason } : null}
-        onBack={() => { setConnectRow(null); void probe(true); }}
-        onClose={() => { setConnectRow(null); close(); }}
-        onRecheck={() => probe(true)}
-      />
+      {/* The Connect sheet is the top layer, in the page's body: the picker has closed under it (connect), so nothing
+          sits over the sheet and its dimmed backdrop covers everything else. Back reopens the picker. */}
+      {connectRow && createPortal(
+        <ProviderConnectModal
+          provider={{ id: connectRow.provider.id, label: connectRow.provider.label, installed: connectRow.provider.installed,
+                      authed: connectRow.provider.authed, auth_reason: connectRow.provider.auth_reason ?? connectRow.greyReason }}
+          onBack={inline ? () => { setConnectRow(null); void probe(true); } : () => { setConnectRow(null); setOpen(true); }}
+          onClose={() => setConnectRow(null)}
+          onRecheck={() => probe(true)}
+        />, document.body)}
     </>
   );
 }

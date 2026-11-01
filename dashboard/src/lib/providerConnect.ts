@@ -20,6 +20,7 @@
  * on long-press — so on a phone the reason was effectively unreachable outside the
  * "Add a provider" panel. reasonText() puts it in the modal, on the surface, in words.
  */
+import { statusLabel } from './modelSelectorFilter.ts';
 export interface ProviderLike {
   id: string;
   label: string;
@@ -228,8 +229,23 @@ export function connectPlan(p: ProviderLike, mode: ModeId): ConnectPlan {
 export function reasonText(p: ProviderLike): string {
   const usable = p.installed && p.authed === true;
   if (usable) return '';
-  if (p.auth_reason) return p.auth_reason;
-  if (!p.installed) return 'not-installed';
-  if (p.authed === 'unverified') return 'could not verify — the sign-in check did not run';
-  return 'signed out';
+  return statusLabel(p);
+}
+
+export type StepState = 'done' | 'todo' | 'unknown';
+
+/** The Connect sheet's top, in plain words: the two steps a provider needs ("Install Codex", "Sign in") with where
+ *  each stands, and its status ('Connected', 'Not installed', 'Not signed in', …). The command and the technical notes
+ *  are the sheet's details, behind "Show details". */
+export function connectOverview(p: ProviderLike): { steps: { label: string; state: StepState }[]; status: string; connected: boolean } {
+  const connected = p.installed && p.authed === true;
+  const signIn: StepState = !p.installed ? 'todo' : p.authed === true ? 'done' : p.authed === 'unverified' ? 'unknown' : 'todo';
+  return {
+    steps: [
+      { label: `Install ${p.label}`, state: p.installed ? 'done' : 'todo' },
+      { label: 'Sign in', state: signIn },
+    ],
+    status: connected ? 'Connected' : statusLabel(p),
+    connected,
+  };
 }

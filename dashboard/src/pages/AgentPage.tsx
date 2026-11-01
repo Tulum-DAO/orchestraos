@@ -19,7 +19,7 @@ import { logAction } from '../lib/user-actions';
 import { OPEN_SIDEBAR_EVENT } from '../lib/headerSlot';
 import DeliverNowBanner from '../components/agent/DeliverNowBanner';
 import { ArturoPanel } from '../components/arturo/ArturoPanel';
-import { useChatStyle, loadPrefs, chooseStyle, defaultStyle } from '../lib/agentPrefs';
+import { useChatStyle, loadPrefs, chooseStyle, styleBeforeDev } from '../lib/agentPrefs';
 import { asChip, chipNeedsYou } from '../lib/agentChip';
 import { useHeadlessDev } from '../hooks/useHeadlessDev';
 import HeadlessDevBanner from '../components/agent/HeadlessDevBanner';
@@ -64,7 +64,7 @@ export default function AgentPage() {
   // is the chosen style, unchanged).
   // Back to chat: the button, or the terminal left from inside it while it is shown (the same result either way).
   const backToChat = useCallback(() => {
-    void chooseStyle(agentId, defaultStyle(agentId));
+    void chooseStyle(agentId, styleBeforeDev(agentId));
     logAction('agent.back-to-chat', agentId);
   }, [agentId]);
   const dev = useHeadlessDev(agentId, chosenMode, seatStatus, seat?.name || agentId, backToChat);

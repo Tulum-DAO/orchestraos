@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   canonicalId, isHidden, nameAndTag, modelTitle, pickerModelsFor, buildPickerModels, greyProviders, isCurrent, findCurrent,
-  matches, groupModels, flatten, moveActive, greyFor, readRecent, pushRecent, writeRecent, letterMark, RECENT_KEY,
+  matches, groupModels, flatten, moveActive, greyFor, readRecent, pushRecent, writeRecent, letterMark, RECENT_KEY, newestFirst, NOT_ALLOWED,
 } from './modelPicker.ts';
 import { buildProviderRows, type ProviderAvailability } from './modelSelectorFilter.ts';
 import { switchableModels } from './agentModel.ts';
@@ -46,6 +46,7 @@ test('model rules: Opus 5.5 is the 1M model, the 200k one never shows, Fable 5.1
   assert.deepEqual(fable.aliases, ['fable']);
   // the agent's own list: the same, and Opus 5 at 200K and at 1M are two models
   const own = pickerModelsFor('claude', 'Claude', AGENT);
+  // A size only where a source states it: none is assumed (Fable 5.1 and Haiku 5.5 have none stated).
   assert.deepEqual(own.map(modelTitle), ['Fable 5.1', 'Haiku 5.5', 'Opus 5 · 200K', 'Opus 5.5 · 1M', 'Opus 5 · 1M']);
 });
 
@@ -58,14 +59,23 @@ test('names and context tags come from the label, the id, the subtitle or the co
   assert.deepEqual(nameAndTag('x', 'Sonnet 5.5'), { name: 'Sonnet 5.5' });
 });
 
-test('only usable providers give models; the agent\'s own list replaces its provider\'s; the rest are grey with a reason', () => {
+test('every picker lists every entry; what can\'t be used here is dimmed with why, never hidden', () => {
   const rows = buildProviderRows(PROVIDERS);
   const all = buildPickerModels(rows, { providerId: 'claude', models: AGENT });
-  assert.ok(all.every((m) => m.providerId === 'claude'));
-  assert.equal(all.length, AGENT.length - 1, 'fable and claude-fable-5-1 are one');
+  const by = (t: string) => all.find((m) => modelTitle(m) === t);
+  // The agent's list adds what only it has (the 1M models); the probe's entries it does not allow stay, dimmed.
+  assert.equal(by('Opus 5 · 1M')?.unavailable, undefined);
+  assert.equal(by('Sonnet 5.5')?.unavailable, NOT_ALLOWED);
+  assert.equal(by('Fable 5.1')?.unavailable, undefined, 'fable and claude-fable-5-1 are one entry, allowed');
+  // Providers that can't be used list their models too, dimmed with their state in words.
+  assert.equal(all.find((m) => m.providerId === 'gemini')?.unavailable, 'Not installed');
+  assert.equal(all.find((m) => m.providerId === 'codex')?.unavailable, 'Not signed in');
+  // Without an agent (Arturo's brain picker): the same probe entries, the usable ones all available.
+  const plain = buildPickerModels(rows);
+  assert.ok(plain.filter((m) => m.providerId === 'claude').every((m) => !m.unavailable));
   assert.deepEqual(greyProviders(rows), [
-    { providerId: 'gemini', label: 'Gemini', reason: 'not-installed' },
-    { providerId: 'codex', label: 'Codex', reason: 'not signed in' },
+    { providerId: 'gemini', label: 'Gemini', reason: 'Not installed' },
+    { providerId: 'codex', label: 'Codex', reason: 'Not signed in' },
   ]);
 });
 
@@ -170,4 +180,38 @@ test('an agent\'s own list keeps the gateway\'s context size, so 200K and 1M mod
   ] };
   const rows = pickerModelsFor('claude', 'Claude', switchableModels(info));
   assert.deepEqual(rows.map(modelTitle), ['Opus 5 · 200K', 'Opus 5 · 1M'], 'the 200k Opus 5.5 never shows; an unavailable one is left out');
+});
+
+test('one order in every picker: by provider, newest first (larger family first at a version, 200K before 1M)', () => {
+  // The agent's list as the gateway answers it (Opus 5.5 last) and the probe's (Opus 5.5 first) come out the same.
+  const gateway = [
+    pm('fable', 'Fable 5.1'), pm('sonnet', 'Sonnet 5.5'), pm('haiku', 'Haiku 5.5'), { ...pm('claude-opus-5', 'Opus 5'), subtitle: '200K context' },
+    pm('claude-opus-4-7', 'Opus 4.7'), pm('claude-sonnet-4-6', 'Sonnet 4.6'), pm('claude-fable-5-1', 'Fable 5.1'),
+    { ...pm('claude-opus-5-5[1m]', 'Opus 5.5 (1M)'), subtitle: '1M context' }, { ...pm('claude-opus-5[1m]', 'Opus 5 (1M)'), subtitle: '1M context' },
+  ];
+  const rows = buildProviderRows(PROVIDERS);
+  const fromAgent = buildPickerModels(rows, { providerId: 'claude', models: gateway }).map(modelTitle);
+  assert.deepEqual(fromAgent.slice(0, 8), ['Opus 5.5 · 1M', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1', 'Opus 5 · 200K', 'Opus 5 · 1M',
+    'Opus 4.7', 'Sonnet 4.6']);
+  const fromProbe = buildPickerModels(rows).map(modelTitle);
+  assert.equal(fromProbe[0], 'Opus 5.5 · 1M');
+  assert.ok(newestFirst({ name: 'GPT-6 Astra' }, { name: 'GPT-5.6 Luna' }) < 0, 'other providers by version too');
+});
+
+test('rows only agents can use (seat_only, the 1M versions): dimmed in Arturo\'s brain picker, usable for an agent', () => {
+  // The probe's Claude list as the API sends it: each 1M row right after its base model, with the reason.
+  const seat = (id: string, label: string) => ({ ...pm(id, label, 1_000_000), seat_only: true, seat_only_reason: "Only for agents; Arturo can't use the 1M versions" });
+  const providers: ProviderAvailability[] = [{ id: 'claude', label: 'Claude', logo_svg: '', installed: true, authed: true, models: [
+    pm('opus', 'Opus 5.5'), seat('claude-opus-5-5[1m]', 'Opus 5.5 (1M)'), pm('claude-opus-5', 'Opus 5', 200_000), seat('claude-opus-5[1m]', 'Opus 5 (1M)'),
+  ] }];
+  const rows = buildProviderRows(providers);
+  const arturo = buildPickerModels(rows, null, { forArturo: true });
+  const a = (t: string) => arturo.find((m) => modelTitle(m) === t);
+  assert.equal(a('Opus 5 · 1M')?.unavailable, "Only for agents; Arturo can't use the 1M versions");
+  assert.equal(a('Opus 5.5 · 1M')?.unavailable, "Only for agents; Arturo can't use the 1M versions");
+  assert.equal(a('Opus 5.5')?.unavailable, undefined, 'his own Opus 5.5 (opus) stays his to pick');
+  assert.equal(a('Opus 5 · 200K')?.unavailable, undefined);
+  const agent = buildPickerModels(rows);
+  assert.equal(agent.find((m) => modelTitle(m) === 'Opus 5 · 1M')?.unavailable, undefined, 'agents can use them');
+  assert.equal(agent.find((m) => modelTitle(m) === 'Opus 5.5 · 1M')?.unavailable, undefined);
 });

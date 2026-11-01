@@ -22,6 +22,9 @@ import { Router, type Request, type Response } from 'express';
 import { execFile, execFileSync } from 'node:child_process';
 import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { principal } from '../lib/principal.js';
+import { dataDir } from '../lib/config.js';
+import { recordLoginShell, sweepLoginShells } from '../lib/loginShells.js';
 
 /** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
  *  binary name, so `cli` is optional and falls back to the provider id (they match for
@@ -59,6 +62,9 @@ export interface NewAgentDeps {
   registeredAgents: () => Record<string, string> | Promise<Record<string, string>>;
   sessionExists: (session: string) => boolean;
   startLoginShell: (args: { session: string; greeting: string }) => Promise<{ ok: boolean; output: string }>;
+  /** List the shell for the web terminal (lib/loginShells.ts): the proxy attaches only to registered seats and to
+   *  shells listed there. Optional so a deps object without it lists nothing. */
+  listLoginShell?: (entry: { session: string; provider: string | null; createdBy: string | null }) => void;
 }
 
 export function normalizeAgentName(raw: unknown): { name: string; error?: string } {
@@ -229,6 +235,13 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
       console.warn(`[login-shell] shell_failed session=${session} cli=${cli} detail=${detail.replace(/\n/g, ' | ')}`);
       return res.status(502).json({ ok: false, reason: 'shell_failed', detail });
     }
+    try {
+      deps.listLoginShell?.({ session, provider: provider || cli, createdBy: principal(req)?.username ?? null });
+    } catch (err) {
+      // The shell is up but the terminal will refuse it: say so here, where it can be traced.
+      console.warn(`[login-shell] list_failed session=${session} detail=${String(err)}`);
+      return res.status(502).json({ ok: false, reason: 'list_failed', detail: String(err).slice(-400) });
+    }
     return res.json({ ok: true, session, cli, hint, machine: 'vps' });
   });
 
@@ -335,6 +348,13 @@ function realStartLoginShell({ session, greeting }: { session: string; greeting:
   });
 }
 
+function realListLoginShell(entry: { session: string; provider: string | null; createdBy: string | null }): void {
+  const dir = dataDir();
+  // A shell that ended since the last sweep must not keep its entry while this one is written.
+  sweepLoginShells(dir, realSessionExists);
+  recordLoginShell(dir, entry);
+}
+
 export const productionDeps: NewAgentDeps = {
   // Installed/authed only, from the shared cache when it is warm. Paying for a live model
   // probe here made opening a terminal a 3.5s round trip — a 502 behind a proxy.
@@ -344,6 +364,10 @@ export const productionDeps: NewAgentDeps = {
   registeredAgents: realRegisteredAgents,
   sessionExists: realSessionExists,
   startLoginShell: realStartLoginShell,
+  listLoginShell: realListLoginShell,
 };
+
+/** The login-shell list's sweep at API start and every 30 s after (lib/loginShells.ts). */
+export { realSessionExists as loginShellSessionExists };
 
 export default createAgentsNewRouter(productionDeps);

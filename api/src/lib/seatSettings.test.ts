@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readSeatSettings, writeSeatSettings, cleanSettingsChange, seatHistory, seatRotates, seatCanCompactNow } from './seatSettings.js';
+import { readSeatSettings, writeSeatSettings, cleanSettingsChange, seatHistory, seatRotates, seatCanCompactNow, readCompactGate, COMPACT_GATE_FILE } from './seatSettings.js';
 
 const box = () => { const d = mkdtempSync(join(tmpdir(), 'seatset-')); mkdirSync(join(d, 'state')); return d; };
 
@@ -73,4 +73,42 @@ test('"Compact now" is offered only where a person\'s /compact can run: a headle
   assert.equal(seatCanCompactNow('dev-demo', reg, headless), false, 'not a test seat: compacting is not turned on for it yet');
   assert.equal(seatCanCompactNow('pm-demo', reg, headless), false, 'a test seat that does not run headless');
   assert.equal(seatCanCompactNow('qa-demo', null, headless), false);
+  assert.equal(seatCanCompactNow('qa-demo', reg, headless, (id) => id === 'qa-demo'), false, 'in Dev the gateway refuses it');
+});
+
+// The case table the gateway runs too (contract/compact-gate.json), read through the same path the route uses.
+const GATE = JSON.parse(readFileSync(COMPACT_GATE_FILE, 'utf-8'));
+
+test('the compact gate file is the contract one, and its flags are today\'s rule', () => {
+  assert.ok(COMPACT_GATE_FILE.endsWith(join('contract', 'compact-gate.json')));
+  assert.deepEqual(readCompactGate(), { needs_headless: true, needs_test_seat: true });
+  assert.ok(GATE.cases.length >= 10);
+});
+
+for (const c of GATE.cases as { name: string; seat: string; headless: boolean; dev: boolean; registry: Record<string, unknown> | null; expected: boolean }[]) {
+  test(`compact gate case: ${c.name}`, () => {
+    const reg = { agents: c.registry ? { [c.seat]: c.registry } : {} };
+    const headless = new Set(c.headless ? [c.seat] : []);
+    assert.equal(seatCanCompactNow(c.seat, reg, headless, (id) => c.dev && id === c.seat), c.expected);
+  });
+}
+
+test('an unreadable or malformed gate file refuses every seat', () => {
+  const d = mkdtempSync(join(tmpdir(), 'compact-gate-'));
+  const f = join(d, 'compact-gate.json');
+  assert.equal(readCompactGate(f), null, 'missing');
+  writeFileSync(f, 'not json');
+  assert.equal(readCompactGate(f), null, 'not json');
+  writeFileSync(f, JSON.stringify({ needs_headless: 'yes', needs_test_seat: true }));
+  assert.equal(readCompactGate(f), null, 'a flag that is not a boolean');
+  const reg = { agents: { 'qa-demo': { test: true } } };
+  assert.equal(seatCanCompactNow('qa-demo', reg, new Set(['qa-demo']), () => false, readCompactGate(f)), false);
+});
+
+test('the flags are read, not assumed: turning one off widens the gate', () => {
+  const reg = { agents: { 'dev-demo': { test: false } } };
+  const headless = new Set(['dev-demo']);
+  assert.equal(seatCanCompactNow('dev-demo', reg, headless, () => false, { needs_headless: true, needs_test_seat: false }), true);
+  assert.equal(seatCanCompactNow('dev-demo', reg, new Set(), () => false, { needs_headless: false, needs_test_seat: false }), true);
+  assert.equal(seatCanCompactNow('dev-demo', reg, headless, () => true, { needs_headless: true, needs_test_seat: false }), false, 'Dev still is not headless');
 });
