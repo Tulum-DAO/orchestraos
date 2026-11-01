@@ -1260,6 +1260,13 @@ def pane_line(seat: str, orch_dir=None) -> str:
     return " ".join(parts)
 
 
+def launch_line(seat: str, orch_dir=None) -> str | None:
+    """What starts this seat in its pane when it is switched headless (Claude only), else None. Every path that
+    brings a seat back in a pane (boot and crash recovery, revive, red alert's dead-pane repair) asks this first:
+    a headless seat comes back as its supervisor, never as a TUI the router and gateway would not deliver to."""
+    return pane_line(seat, orch_dir) if HS.is_headless(seat, orch_dir=orch_dir) else None
+
+
 SHELLS = frozenset({"bash", "zsh", "sh", "dash", "fish"})
 
 
@@ -1310,6 +1317,9 @@ def main(argv=None) -> int:
     sw.add_argument("onoff", choices=("on", "off"))
     sw.add_argument("seat")
     sw.add_argument("--by", default=os.environ.get("USER", ""))
+    ll = sub.add_parser("launch-line", help="print the supervisor line for a headless seat; exit 3 when the seat "
+                                           "is not switched headless (start it as a TUI as usual)")
+    ll.add_argument("seat")
     for name in ("pane-line", "takeover", "status", "pending", "interrupt", "restart"):
         sub.add_parser(name).add_argument("seat")
     s = sub.add_parser("send")
@@ -1342,6 +1352,12 @@ def main(argv=None) -> int:
                        "note": "read each time the CLI starts: `seat_supervisor.py restart <seat>` applies it"})
     if a.cmd == "pane-line":
         print(pane_line(a.seat))
+        return 0
+    if a.cmd == "launch-line":
+        line = launch_line(a.seat)
+        if line is None:
+            return 3
+        print(line)
         return 0
     if a.cmd == "takeover":
         ok, info = takeover(a.seat)

@@ -245,7 +245,31 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
         stopped.append(target)
     return {"seat": seat, "armed": armed, "session_id": entry.get("session_id"),
             "transcript": entry.get("conversation_path") or None, "tmux": stopped,
-            "tmux_kept": None if stopped else target}
+            "tmux_kept": None if stopped else target, "headless_off": _headless_off(st, seat)}
+
+
+def _headless_off(st: S.Settings, seat: str) -> bool:
+    """A retired seat is switched off headless (scripts/headless_switch.py), and its Dev marker goes: stopping its
+    tmux session stopped its supervisor, and a later seat of the same name must not start headless by surprise.
+    Its supervisor folder (the event log) is kept. True when it had been on."""
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        import headless_switch as HS
+        entry = HS.load_switch(st.data_dir).get(seat)
+        if not isinstance(entry, dict):
+            return False
+        was_on = entry.get("headless") is True
+        HS.set_switch(seat, False, runtime=entry.get("runtime") or "", by="orchestra retire", orch_dir=st.data_dir)
+        try:
+            (HS.seat_dir(seat, st.data_dir) / "dev").unlink()
+        except FileNotFoundError:
+            pass
+        return was_on
+    except Exception as e:  # noqa: BLE001 — the retire itself is done; say what was left
+        print(f"warning: {seat}: its headless switch could not be turned off ({e})", file=sys.stderr)
+        return False
 
 
 def cmd_retire(ns) -> int:

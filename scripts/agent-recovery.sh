@@ -35,6 +35,11 @@ tg_chat_id() {
   done
   return 1
 }
+# A seat switched headless (scripts/headless_switch.py) is started as its supervisor, never as a TUI: prints the
+# supervisor's launch line (spawn's environment around seat_supervisor.py run), or fails for any other seat.
+headless_launch_line() {
+    python3 "$BIN_DIR/seat_supervisor.py" launch-line "$1" 2>/dev/null
+}
 SESSION_INDEX="$STATE_DIR/agent-sessions.json"
 HANDOFF_DIR="$STATE_DIR/agent-handoffs"
 REGISTRY="$SCRIPT_DIR/registry.json"
@@ -543,7 +548,11 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         tmux new-session -d -s "$tmux_name" -c "$cwd" 2>/dev/null
         orch_tmux_session_defaults "$tmux_name"
         sleep 1
-        if [ "$runtime" = "gemini" ]; then
+        if HL_LINE=$(headless_launch_line "$agent_id"); then
+            # A headless seat comes back as its supervisor (which resumes the session headless), never as a TUI.
+            log "AUTO-RECOVER $agent_id as headless (its supervisor in the pane)"
+            tmux send-keys -t "$tmux_name" "$HL_LINE" Enter
+        elif [ "$runtime" = "gemini" ]; then
             tmux send-keys -t "$tmux_name" "${SEAT_NICE}agy --conversation $session_id --dangerously-skip-permissions" Enter
         else
             MODEL_FLAG=""
@@ -623,7 +632,10 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
     orch_tmux_session_defaults "$tmux_name"
 
     sleep 1
-    if [ "$runtime" = "gemini" ]; then
+    if HL_LINE=$(headless_launch_line "$agent_id"); then
+        log "RECOVERING $agent_id as headless (its supervisor in the pane)"
+        tmux send-keys -t "$tmux_name" "$HL_LINE" Enter
+    elif [ "$runtime" = "gemini" ]; then
         tmux send-keys -t "$tmux_name" "${SEAT_NICE}agy --conversation $session_id --dangerously-skip-permissions" Enter
     else
         MODEL_FLAG=""

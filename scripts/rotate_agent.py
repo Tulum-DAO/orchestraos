@@ -1010,6 +1010,29 @@ def grade_successor_readback(successor_alias: str, seat_name: str, *,
     return result
 
 
+class RotationRefused(RuntimeError):
+    """The rotation must not start; the message says why and what to do."""
+
+
+def headless_rotation_refusal(seat_name: str) -> str | None:
+    """A seat switched headless (scripts/headless_switch.py) is not rotated: this rotation boots the successor as a TUI
+    in a new pane and promotes it, which would leave a TUI behind a switch that routes its mail to a supervisor that
+    no longer exists. Refused, with the way through, until headless rotation exists. None for every other seat (and
+    on any read failure: the switch defaults off)."""
+    try:
+        try:
+            import headless_switch as HS
+        except ImportError:
+            from scripts import headless_switch as HS
+        if not HS.is_headless(seat_name):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return (f"{seat_name} runs headless and cannot be rotated yet. To rotate it: `seat_supervisor.py stop "
+            f"{seat_name} --tui`, `seat_supervisor.py switch off {seat_name}`, rotate, then switch the new "
+            f"generation on again.")
+
+
 def execute_rotation(
     seat_name: str,
     runtime_override: str | None = None,
@@ -1021,6 +1044,9 @@ def execute_rotation(
 ) -> dict:
     """Execute complete on-demand mechanical rotation transaction."""
     log(f"Starting on-demand rotation for seat: {seat_name} (dry_run={dry_run}, force={force})")
+    refusal = headless_rotation_refusal(seat_name)
+    if refusal:
+        raise RotationRefused(refusal)
 
     # Step 1: Inspect predecessor
     pred = get_agent_registry(seat_name)
