@@ -7,7 +7,8 @@ import {
   fetchAgentModel, switchAgentModel, modelLabel as labelFor, pickRefusal, switchNotice, switchableModels,
   type AgentModelInfo, type SwitchNotice,
 } from '../../lib/agentModel';
-import { ModelSelectorSheet } from './ModelSelectorSheet';
+import ModelPicker from '../kit/ModelPicker';
+import { agentModelTitle } from '../../lib/modelTitle';
 import { useComposerDraft } from '../../stores/composerDrafts';
 import { VoiceControls, type VoiceControlsHandle } from './VoiceControls';
 import ChatInput from '../chat/ChatInput';
@@ -50,6 +51,9 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
     return () => clearTimeout(t);
   }, [notice, setNotice]);
   const modelLabel = labelFor(agentModel, agentModel?.model);
+  // The model as the picker names it ("Opus 5.5 · 1M"), for the chip before the picker has read its list, and for the
+  // overflow item.
+  const modelTitle = agentModelTitle(agentModel);
   const onPick = (pick: { providerId: string; modelId: string; modelLabel: string }) => {
     const refused = pickRefusal(agentModel, pick);
     if (refused) { setNotice({ tone: 'error', text: refused }); return; }
@@ -128,7 +132,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
                 className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
                 onClick={() => { close(); setSheetOpen(true); }}>
                 <Cpu size={15} className="shrink-0 text-muted-foreground" />
-                <span className="truncate">Model <span className="text-muted-foreground">· {modelLabel ?? 'choose'}</span></span>
+                <span className="truncate">Model <span className="text-muted-foreground">· {modelTitle ?? 'choose'}</span></span>
               </button>
               {/* Start only, and only with no call live: a live call's End button is inline. */}
               {draft.trim() === '' && !inCall && (
@@ -142,18 +146,13 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             </>
           )}
           leading={
-            // Compact model chip: the label from sm up, an icon below it. Below 480px it folds
-            // into the pill's overflow menu (menuItems below). Opens the existing ModelSelectorSheet.
-            <button
-              type="button"
-              onClick={() => setSheetOpen(true)}
-              className="touch-circle sm:w-auto sm:h-9 sm:min-w-9 shrink-0 sm:px-2.5 max-w-[130px] flex items-center justify-center gap-1.5 rounded-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[480px]:hidden"
-              title={modelLabel ? `Model: ${modelLabel} — choose the model this agent runs` : 'Choose the model this agent runs'}
-              aria-label={modelLabel ? `Model: ${modelLabel}` : 'Choose a model'}
-            >
-              <Cpu size={16} className="shrink-0 sm:hidden" />
-              <span className="hidden sm:inline truncate">{modelLabel ?? 'Choose a model'}</span>
-            </button>
+            // The kit's model picker: its chip here; below 480px the chip folds into the pill's overflow menu (menuItems
+            // above), whose item opens the same picker. A pick switches this agent (onPick): live on a headless seat.
+            <ModelPicker open={sheetOpen} onOpenChange={setSheetOpen} triggerClassName="max-[480px]:hidden"
+              label={modelTitle ?? modelLabel ?? undefined}
+              value={agentModel?.runtime && agentModel.model ? { providerId: agentModel.runtime, modelId: agentModel.model } : null}
+              onValueChange={onPick}
+              agentModels={agentModel?.runtime ? { providerId: agentModel.runtime, models: switchableModels(agentModel) } : null} />
           }
           trailing={
             <VoiceControls
@@ -169,10 +168,6 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             />
           }
         />
-        <ModelSelectorSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
-          selection={agentModel?.runtime && agentModel.model ? { providerId: agentModel.runtime, modelId: agentModel.model } : null}
-          onPick={onPick}
-          agentModels={agentModel?.runtime ? { providerId: agentModel.runtime, models: switchableModels(agentModel) } : null} />
       </div>
     </div>
   );

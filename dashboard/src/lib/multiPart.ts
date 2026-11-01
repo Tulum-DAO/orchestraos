@@ -11,7 +11,7 @@
  * one part is answered. On a single-select part of a menu blocking an agent in its terminal a pick and typed words
  * are exclusive; every other card takes both (pickAndWords). Pure, so tested here.
  */
-import { canSendWords, visibleOptions, withInputKinds } from './decisionCard';
+import { canSendWords, visibleOptions, withInputKinds } from './decisionCard.ts';
 
 export interface MenuPartOption { n: string; label: string; detail?: string; input_kind?: string }
 export interface MenuPart {

@@ -14,7 +14,7 @@ export interface AgentModelInfo {
   how: string | null;
   allowed: string[];
   /** The gateway names each model in `title` (the Arturo engine picker's shape); `label` is accepted too. */
-  models: { id: string; title?: string; label?: string; available?: boolean; reason?: string }[];
+  models: { id: string; title?: string; label?: string; subtitle?: string; available?: boolean; reason?: string }[];
   pending?: { model?: string } | null;
 }
 
@@ -60,10 +60,12 @@ export function modelLabel(info: AgentModelInfo | null, id: string | null | unde
 
 /** The models this agent can switch to, as picker rows. Capabilities are not part of the gateway's answer, so
  *  none are claimed. */
-export function switchableModels(info: AgentModelInfo | null): ProviderModel[] {
+export function switchableModels(info: AgentModelInfo | null): (ProviderModel & { subtitle?: string })[] {
   return (info?.models ?? []).filter((m) => m.available !== false).map((m) => ({
     id: m.id,
     label: m.title || m.label || m.id,
+    // the context size ("200K context"), which the model picker shows beside the name
+    ...(m.subtitle ? { subtitle: m.subtitle } : {}),
     capabilities: { text: true, image: false, audio: false, video: false, context_window: null },
   }));
 }

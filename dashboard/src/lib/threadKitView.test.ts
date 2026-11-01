@@ -122,3 +122,16 @@ test('Modern rows carry the message; Bubbles rows do not', () => {
   assert.ok(m.kind === 'node' && m.message?.text === 'Hi');
   assert.ok(b.kind === 'node' && b.message === undefined);
 });
+
+test('the pane\'s own status notes and a reply still coming come through as rows of their own', () => {
+  const rows = arturoRows([
+    { role: 'user', text: 'Hello', state: 'sent' },
+    { role: 'arturo', text: '', pending: true },
+    { role: 'arturo', text: 'microphone access was denied', note: true },
+  ], false);
+  const [user, reply, note] = rows;
+  assert.ok(user.kind === 'message' && user.sendState === 'sent');
+  assert.ok(reply.kind === 'message' && reply.pending === true && reply.copyText === '');
+  assert.ok(note.kind === 'message' && note.note === true && note.text === 'microphone access was denied');
+  assert.equal(lastUserKey([{ role: 'user', text: 'Hello' }, { role: 'arturo', text: '', pending: true }]), 't0');
+});

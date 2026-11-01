@@ -29,8 +29,10 @@ import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice
          type VoiceVendor, type VoiceRow, type CurrentVoice } from '../../lib/arturoVoice';
 import { styleOptions, styleLabel, chooseStyle, loadPrefs, useChatStyle, useAgentPrefsStore } from '../../lib/agentPrefs';
 import { HeadlessDevNote } from './HeadlessDevNote';
-import { fetchAgentModel, switchAgentModel, switchableModels, switchNotice, modelLabel, pickRefusal,
+import { fetchAgentModel, switchAgentModel, switchableModels, switchNotice, pickRefusal,
          type AgentModelInfo, type SwitchNotice } from '../../lib/agentModel';
+import ModelPicker from '../kit/ModelPicker';
+import { agentModelTitle } from '../../lib/modelTitle';
 import { renameAgent } from '../../lib/railAgents';
 import './arturo.css';
 import { fetchJobs, elapsed, type ArturoJob } from '../../lib/arturoJobs';
@@ -267,7 +269,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   const activityText = isArturo ? activityValue(jobs) : subagentsValue(agent?.subagents);
   // A phone's drill-in rows carry a live value each, so often there is no need to open them.
   const sectionValue = (s: DrawerSection): string => s === 'history' ? (agent?.waiting ? 'Waiting for you' : activityText)
-    : s === 'setup' ? (isArturo ? styleLabel(style) : modelLabel(model, model?.model) ?? '') : '';
+    : s === 'setup' ? (isArturo ? styleLabel(style) : agentModelTitle(model) ?? '') : '';
   // Each section shows what exists today until its own step fills it, never an empty page. Dev is a chat style,
   // chosen in Setup; there is no terminal row.
   const sectionBody = (s: DrawerSection): ReactNode => s === 'history'
@@ -277,7 +279,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
       <div className="arturo-panel-list" data-drawer-setup>
         {isArturo
           ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
-          : <Row id="model" label="Model" value={modelLabel(model, model?.model) ?? ''} onOpen={push} />}
+          : <Row id="model" label="Model" value={agentModelTitle(model) ?? ''} onOpen={push} />}
         <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
         <Row label="Notifications" soon />
         <Row id="settings" label="Settings" onOpen={push} />
@@ -630,7 +632,6 @@ function ModelPage({ agentId, onChanged }: { agentId: string; onChanged: (m: Age
   }, [agentId]);
   if (info === undefined) return <p className="arturo-panel-empty">Loading…</p>;
   if (info === null) return <p className="arturo-panel-empty">Couldn't read this agent's model.</p>;
-  const models = switchableModels(info);
   const why = pickRefusal(info, { providerId: info.runtime ?? '', modelLabel: '' });
   const pick = (id: string, label: string) => {
     if (busy || id === info.model) return;
@@ -648,15 +649,9 @@ function ModelPage({ agentId, onChanged }: { agentId: string; onChanged: (m: Age
   return (
     <>
       {why ? <p className="arturo-panel-note">{why}</p> : (
-        <div className="arturo-panel-list arturo-panel-list-tight" role="radiogroup" aria-label="Model">
-          {models.map((m) => (
-            <button key={m.id} type="button" role="radio" aria-checked={m.id === info.model} data-model={m.id}
-                    disabled={busy} className="arturo-panel-row arturo-panel-choice" onClick={() => pick(m.id, m.label)}>
-              <span>{m.label}</span>
-              {m.id === info.model ? <Check size={18} className="arturo-panel-check" /> : null}
-            </button>
-          ))}
-        </div>
+        <ModelPicker variant="inline" value={{ providerId: info.runtime ?? '', modelId: info.model ?? '' }}
+          agentModels={{ providerId: info.runtime ?? '', models: switchableModels(info) }}
+          onValueChange={(p) => pick(p.modelId, p.modelLabel)} />
       )}
       {notice && <p className={notice.tone === 'error' ? 'arturo-panel-error' : 'arturo-panel-note'} role="status">{notice.text}</p>}
     </>

@@ -9,7 +9,7 @@
  */
 import type { GroupedNode } from './toolGroups';
 import type { MenuOption } from './menuAnswer';
-import { operatorUserId } from './runtimeConfig';
+import { operatorUserId } from './runtimeConfig.ts';
 
 export type DecisionState = 'pending' | 'answered' | 'expired' | 'withdrawn' | 'dismissed' | 'superseded' | string;
 

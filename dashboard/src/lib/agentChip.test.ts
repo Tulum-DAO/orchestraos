@@ -62,3 +62,10 @@ test('100% left is no reading (the status line before its first reply after a re
   assert.equal(contextLeftLabel({ status: 'idle', context_left_pct: 100 }), null);
   assert.equal(contextLeftLabel({ status: 'idle', context_left_pct: 99 }), '99% left');
 });
+
+test('the logo tooltip names the model by the picker\'s rules when the model id is known', () => {
+  const chip = { provider: 'claude', model_label: 'Opus 5.5', status: 'idle' };
+  assert.equal(providerTitle('Claude', chip, 'claude-opus-5-5[1m]'), 'Runs on Claude · Opus 5.5 · 1M');
+  assert.equal(providerTitle('Claude', chip, 'claude-opus-5-5'), 'Runs on Claude · Opus 5.5 · 200K', 'the hidden model is never plain Opus 5.5');
+  assert.equal(providerTitle('Claude', chip), 'Runs on Claude · Opus 5.5', 'no id: the chip\'s own words');
+});

@@ -87,8 +87,8 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
       {mark && (
         <span
           className="shrink-0 inline-flex w-3.5 h-3.5 [&>svg]:w-full [&>svg]:h-full text-neutral-700 dark:text-neutral-300"
-          title={providerTitle(provName, chip)}
-          aria-label={providerTitle(provName, chip)}
+          title={providerTitle(provName, chip, (agent as { model?: string }).model)}
+          aria-label={providerTitle(provName, chip, (agent as { model?: string }).model)}
           role="img"
           data-testid="rail-provider-mark"
           dangerouslySetInnerHTML={{ __html: mark.svg }}
@@ -113,7 +113,7 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
       {prov && (
         <span
           className="shrink-0 text-[10px] font-medium text-neutral-600 dark:text-neutral-500 tabular-nums"
-          title={providerTitle(provName, chip)}
+          title={providerTitle(provName, chip, (agent as { model?: string }).model)}
         >
           {prov}
         </span>

@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { bellHost } from './bellPlacement.ts';
-import { isNearBottom } from './liveFeedScroll.ts';
+import { isFollowing } from './threadKit/anchor.ts';
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -110,14 +110,16 @@ test('the transcript scroller does not bottom-anchor with justify-end (overflow 
   assert.match(view, /"mt-auto w-full max-w-\[860px\] mx-auto px-4 pt-4 space-y-2\.5"/);
 });
 
-test('the transcript follows the tail only while the reader is at the bottom', () => {
+test('the transcript follows the tail only while the reader is at the bottom, and otherwise holds them still', () => {
   const view = src('components/chat/TranscriptChatView.tsx');
-  assert.match(view, /atBottom\.current = isNearBottom\(el\.scrollTop, el\.scrollHeight, el\.clientHeight, 120\)/);
-  assert.match(view, /if \(el && atBottom\.current\) el\.scrollTop = el\.scrollHeight;/);
-  // the rule itself: 120px from the bottom still follows, a reader 121px up is left alone
-  assert.equal(isNearBottom(880, 2000, 1000, 120), true);
-  assert.equal(isNearBottom(879, 2000, 1000, 120), false);
-  assert.equal(isNearBottom(0, 2000, 1000, 120), false);
+  // the shared thread scroller (lib/useStickToBottom.ts), its rows the column's children
+  assert.match(view, /useStickToBottom\(scrollRef, \{ rows: columnRef \}\)/);
+  assert.match(view, /onScroll=\{stick\.onScroll\}/);
+  assert.match(view, /<div ref=\{columnRef\}/);
+  // the rule itself: only the bottom (rounding aside) follows; a reader up a line or more is left alone
+  assert.equal(isFollowing({ scrollTop: 1000, scrollHeight: 2000, clientHeight: 1000 }), true);
+  assert.equal(isFollowing({ scrollTop: 981, scrollHeight: 2000, clientHeight: 1000 }), false);
+  assert.equal(isFollowing({ scrollTop: 0, scrollHeight: 2000, clientHeight: 1000 }), false);
 });
 
 test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack would eat the scroll', () => {

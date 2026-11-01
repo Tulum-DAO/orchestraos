@@ -9,7 +9,7 @@
  * (ConversationView). Send transport reuses the existing gateway injection.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { isNearBottom } from '../../lib/liveFeedScroll';
+import { useStickToBottom } from '../../lib/useStickToBottom';
 import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
@@ -79,7 +79,10 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const atBottom = useRef(true);
+  const columnRef = useRef<HTMLDivElement>(null);
+  // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT, and otherwise keep what they are reading exactly where it is
+  // while the thread changes (lib/useStickToBottom.ts; the rows are the column's children).
+  const stick = useStickToBottom(scrollRef, { rows: columnRef });
 
   // fixture mode: render given items, no polling
   useEffect(() => {
@@ -177,7 +180,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       const target = focusTarget(decisionsQ.data ?? [], req.decisionId);
       const el = target ? document.getElementById(`decision-${target.id}`) : null;
       if (el) {
-        atBottom.current = false;
+        stick.hold();
         el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       } else if (req.decisionId) {
         setFocusNotice('That card is no longer waiting here — it may have been answered elsewhere.');
@@ -191,7 +194,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     };
     window.addEventListener(FOCUS_DECISION_EVENT, onFocusReq);
     return () => window.removeEventListener(FOCUS_DECISION_EVENT, onFocusReq);
-  }, [agentId, decisionsQ.data]);
+  }, [agentId, decisionsQ.data, stick.hold]); // eslint-disable-line react-hooks/exhaustive-deps
   const st = normalizeAgentState(state);
   // The thread as the kit's thread view draws it: the feed's nodes and cards, then the sends still waiting for their rows.
   // How you see this agent (lib/agentPrefs.ts): Bubbles, its own look, or Modern, Arturo's. A switch only re-draws the
@@ -219,57 +222,38 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // "agent is working…" claim from it.
   const live = !feed || (!isDegraded(feed) && feed.health !== 'updating');
 
-  // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT. A reader who scrolled up stays where they
-  // are when a message lands; one at the bottom is kept there. A layout effect, so a new message
-  // is never painted once at the old position and then jumped.
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    atBottom.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight, 120);
-  };
   // Another seat's transcript (the panel and the page keep this view mounted across seats) opens
   // at ITS newest message, not wherever the previous one was left.
-  useLayoutEffect(() => { atBottom.current = true; }, [agentId]);
+  useLayoutEffect(() => { stick.toBottom(); }, [agentId, stick.toBottom]); // eslint-disable-line react-hooks/exhaustive-deps
   // Tapping into a composer, or the keyboard shrinking the column, brings the conversation to the
   // latest message (Shaw, 2026-10-11). The xterm's hidden textarea is the terminal, not a composer.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const toBottom = () => { el.scrollTop = el.scrollHeight; };
     const onFocus = (e: FocusEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t || !/^(TEXTAREA|INPUT)$/.test(t.tagName) || t.classList.contains('xterm-helper-textarea') || el.contains(t)) return;
-      atBottom.current = true;
-      toBottom();
-      window.setTimeout(toBottom, 350);   // after the keyboard has finished opening
+      stick.toBottom();
+      window.setTimeout(stick.toBottom, 350);   // after the keyboard has finished opening
     };
-    const ro = new ResizeObserver(() => { if (atBottom.current) toBottom(); });
-    ro.observe(el);
-    // The thread's column too: what grows after it is drawn (another agent's message read in by its id, an image,
-    // a card that opens) keeps a reader at the bottom there, not just new rows.
-    if (el.firstElementChild) ro.observe(el.firstElementChild);
     document.addEventListener('focusin', onFocus);
-    return () => { ro.disconnect(); document.removeEventListener('focusin', onFocus); };
-  }, []);
-  // The thread view follows whenever its rows change (a layout effect there too); a switch to another seat follows here.
-  const follow = useMemo(() => ({ follow: () => {
-    const el = scrollRef.current;
-    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  } }), []);
-  useLayoutEffect(() => { follow.follow(); }, [agentId, follow]);
+    return () => document.removeEventListener('focusin', onFocus);
+  }, [stick.toBottom]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The thread view follows (or holds the reader) whenever its rows change, in a layout effect.
+  const follow = useMemo(() => ({ follow: stick.follow }), [stick.follow]);
 
   return (
     <BatchRecordsContext.Provider value={batchesQ.data}>
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
       <div
         ref={scrollRef}
-        onScroll={onScroll}
+        onScroll={stick.onScroll}
         data-testid="transcript-scroll"
         className={
           compact
-            // `dark`: this box is always near-black, so theme-token prose inside it (Markdown)
-            // must resolve dark in the light theme too, or it renders black on black.
-            ? 'dark bg-neutral-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
+            // A step off the page in either theme (the tone scale: near-black in dark, near-white in light), so
+            // the theme-token prose inside it reads in both.
+            ? 'bg-tone-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
             // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
             // and the right edges of tool cards and user bubbles were 130px apart because each
             // sized itself to a different container). ONE column, one pair of edges, shared with
@@ -285,17 +269,17 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the
             pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
         <ChatAgentContext.Provider value={agentId}>
-        <div
+        <div ref={columnRef}
           className={compact ? undefined : ["mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5", modern ? 'kit-modern' : ''].join(' ').trim()}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
         >
         {loading ? (
           <div className="flex items-center gap-2 px-1 py-2">
-            <div className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />
-            <span className="text-xs text-neutral-500">Loading conversation…</span>
+            <div className="w-2 h-2 bg-tone-500 rounded-full animate-pulse" />
+            <span className="text-xs text-tone-500">Loading conversation…</span>
           </div>
         ) : entries.length === 0 ? (
-          <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
+          <span className="text-xs text-tone-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
         ) : null}
         {/* The thread through the kit's thread view (components/kit/ThreadView.tsx), in the agent chat's own skin. */}
         {!loading && (entries.length > 0 || pending.length > 0 || liveText) && (
@@ -304,7 +288,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             onDecisionAnswered={() => void decisionsQ.refetch()} />
         )}
         {focusNotice && (
-          <div role="status" className="sticky bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-neutral-300 px-3 py-1.5 rounded-full border border-neutral-700 bg-neutral-900/95 shadow">
+          <div role="status" className="sticky bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-tone-300 px-3 py-1.5 rounded-full border border-tone-700 bg-tone-900/95 shadow">
             {focusNotice}
           </div>
         )}
@@ -327,7 +311,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {live && st === 'working' && !hideStatusBar && (
           <div className="flex items-center gap-2 px-1 py-1">
             <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-            <span className="text-[11px] text-neutral-500 italic">agent is working…</span>
+            <span className="text-[11px] text-tone-500 italic">agent is working…</span>
           </div>
         )}
         </div>
@@ -339,7 +323,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           fact is how the sidebar and the page came to disagree; they share lib/feedLiveness so
           they cannot say different things, and the page does not show both. */}
       {!hideStatusBar && (
-      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-neutral-800/50">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-tone-800/50">
         <StatePill state={st} feed={feed} />
         {strandedText && (
           <span className="text-[10px] text-yellow-500/90 truncate">
