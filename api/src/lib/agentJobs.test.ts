@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseJobs, endWithCli, lastCliExit, trayJobs } from './agentJobs.js';
+import { parseJobs, endWithCli, lastCliExit, trayJobs, REASON_ERROR, REASON_STOPPED, REASON_RESTARTED, REASON_SUBAGENT_ERROR } from './agentJobs.js';
 import { createAgentJobsRouter } from '../routes/agent-jobs.js';
 
 const at = (m: string) => `2026-11-01T10:${m}Z`;
@@ -112,7 +112,7 @@ test('the supervisor log\'s last CLI exit, from its tail', () => {
 });
 
 test('the tray: running first, then the newest finished, capped', () => {
-  const t = trayJobs(parseJobs(LOG, Date.parse(at('01:00'))), 2);
+  const t = trayJobs(parseJobs(LOG, Date.parse(at('01:00'))), 2, Date.parse(at('01:00')));
   assert.deepEqual(t.map((j) => j.id), ['w4', 'w3', 'w2', 'sa3', 'bg3', 'w1', 'sa2']);
 });
 
@@ -127,6 +127,7 @@ test('GET /api/agents/:id/jobs: headless and tmux seats from the transcript, non
     transcriptPath: (id) => (id === 'qa-demo' ? null : log),
     headless: (id) => id === 'dev-demo',
     eventsFile: () => events,
+    now: () => Date.parse(at('01:00')),
   });
   const app = express();
   app.use('/api/agents', router);
@@ -156,4 +157,55 @@ test('every result_uuid is a row the chat already shows: the notification line o
   }
   const n1 = env.items.find((i: any) => i.uuid === 'n1');
   assert.equal(n1.machine, 'task', 'a finished command is the chat\'s finished-work row');
+});
+
+// The live report: a foreground `sleep 25` the CLI refused at once, shown five days later as "didn't finish".
+const refused = (uuid: string, ts: string, id: string, text: string) =>
+  JSON.stringify({ type: 'user', uuid, timestamp: at(ts), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true,
+    content: [{ type: 'text', text }] }] } });
+const REFUSALS = [
+  use('x1', '00:00', 'sleep25', 'Bash', { command: 'sleep 25' }),
+  refused('y1', '00:00', 'sleep25', '<tool_use_error>Blocked: standalone sleep 25 is not allowed</tool_use_error>'),
+  // A refused background command and a refused subagent: never ran either.
+  use('x2', '00:01', 'bgref', 'Bash', { command: 'npm run sample', run_in_background: true }),
+  refused('y2', '00:01', 'bgref', '<tool_use_error>Permission denied</tool_use_error>'),
+  use('x3', '00:02', 'saref', 'Task', { description: 'Sample review' }),
+  JSON.stringify({ type: 'user', uuid: 'y3', timestamp: at('00:02.4'), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'saref', is_error: true, content: 'The user doesn\'t want to proceed with this tool use.' }] } }),
+  // Ran, then failed: a subagent that errored after a minute, a foreground wait that was interrupted.
+  use('x4', '00:03', 'saran', 'Task', { description: 'Write the example report' }),
+  refused('y4', '01:03', 'saran', 'Agent ran into an API error after 12 steps'),
+  use('x5', '00:04', 'waitrun', 'Bash', { command: 'sleep 120' }),
+  refused('y5', '00:30', 'waitrun', '[Request interrupted by user for tool use]'),
+];
+test('a call the CLI refused at once is never a job, foreground, background or subagent', () => {
+  const j = byId(parseJobs(REFUSALS, Date.parse(at('02:00'))));
+  assert.equal(j.sleep25, undefined, 'the refused sleep');
+  assert.equal(j.bgref, undefined);
+  assert.equal(j.saref, undefined, 'an error within a second is a refusal too');
+});
+
+test('a job that ran and then failed is failed, with a plain reason', () => {
+  const j = byId(parseJobs([...REFUSALS, ...LOG], Date.parse(at('02:00'))));
+  assert.deepEqual([j.saran.status, j.saran.reason, j.saran.result_uuid], ['failed', REASON_SUBAGENT_ERROR, 'y4']);
+  assert.deepEqual([j.waitrun.status, j.waitrun.reason], ['failed', REASON_STOPPED]);
+  assert.deepEqual([j.bg2.status, j.bg2.reason], ['failed', REASON_ERROR], 'a background command whose notification says failed');
+  assert.equal(j.bg1.reason, undefined, 'a done job has no reason');
+  const restarted = byId(endWithCli(parseJobs(LOG, Date.parse(at('01:00'))), at('00:31.500')));
+  assert.equal(restarted.bg3.reason, REASON_RESTARTED);
+  const killed = byId(parseJobs([
+    use('k1', '00:00', 'kill1', 'Bash', { command: 'npm run watch', run_in_background: true }),
+    result('k2', '00:00', 'kill1', 'Command running in background with ID: bash_9'),
+    noticeLine('k3', '00:05', 'kill1', 'killed'),
+  ]));
+  assert.deepEqual([killed.kill1.status, killed.kill1.reason], ['failed', REASON_STOPPED]);
+});
+
+test('finished jobs only within the last hour; running jobs always', () => {
+  const jobs = parseJobs([...REFUSALS, ...LOG], Date.parse(at('02:00')));
+  const soon = trayJobs(jobs, 20, Date.parse(at('30:00')));
+  assert.ok(soon.some((j) => j.id === 'saran' && j.reason === REASON_SUBAGENT_ERROR), 'a recent real failure, with its reason');
+  const later = trayJobs(jobs, 20, Date.parse('2026-11-01T12:00:00Z'));
+  assert.ok(!later.some((j) => j.status !== 'running'), 'an old failure (and every old finished job) is gone');
+  const running = jobs.filter((j) => j.status === 'running').map((j) => j.id).sort();
+  assert.deepEqual(later.map((j) => j.id).sort(), running, 'every running job stays, however old');
 });

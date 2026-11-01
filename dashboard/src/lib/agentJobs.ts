@@ -3,7 +3,9 @@
  * AgentJobTray.tsx): background commands, subagents (one chip each) and waits.
  *
  *   GET /api/agents/:id/jobs → {ok, jobs:[{id, kind:"command"|"subagent"|"wait", title, status:"running"|"done"|"failed",
- *                                         started_at, ended_at?, result_uuid?}]}
+ *                                         started_at, ended_at?, result_uuid?, reason?}]}
+ *
+ * `reason` on a failed job says how it ended ("exited with an error", "was stopped"); the chip shows it, else "failed".
  *
  * A 404 means the route is not there yet: no tray, nothing shown. Running work stays in the tray and out of the
  * thread; a finished job's result card is already in the thread where it finished (lib/threadKit/results.ts), so a
@@ -20,6 +22,8 @@ export interface AgentJob {
   started_at: string;
   ended_at?: string;
   result_uuid?: string;
+  /** How a failed job ended, in words (the server's). */
+  reason?: string;
 }
 
 const KINDS = new Set<AgentJobKind>(['command', 'subagent', 'wait']);
@@ -42,6 +46,7 @@ export async function fetchAgentJobs(agentId: string, fetchFn: typeof fetch = fe
         started_at: String(j.started_at ?? ''),
         ...(typeof j.ended_at === 'string' ? { ended_at: j.ended_at } : {}),
         ...(typeof j.result_uuid === 'string' && j.result_uuid ? { result_uuid: j.result_uuid } : {}),
+        ...(typeof j.reason === 'string' && j.reason.trim() ? { reason: j.reason.trim() } : {}),
       }];
     });
   } catch {
@@ -51,11 +56,17 @@ export async function fetchAgentJobs(agentId: string, fetchFn: typeof fetch = fe
 
 export const KIND_WORD: Record<AgentJobKind, string> = { command: 'Background command', subagent: 'Subagent', wait: 'Waiting' };
 
-/** What the tray shows: running work (oldest first), then failures not yet dismissed. Done work is in the thread. */
-export function trayJobs(jobs: AgentJob[], dismissed: ReadonlySet<string> = new Set()): AgentJob[] {
+/** A failure stays in the tray this long after it ended; an older one (or one with no readable end) is history. */
+export const FAILED_SHOWN_MS = 60 * 60 * 1000;
+
+/** What the tray shows: running work (oldest first), then failures not yet dismissed that ended within the last
+ *  hour. Done work is in the thread. The server already leaves out older ones; this keeps an older API from bringing
+ *  a stale failure back. */
+export function trayJobs(jobs: AgentJob[], dismissed: ReadonlySet<string> = new Set(), now = Date.now()): AgentJob[] {
   const t = (j: AgentJob) => Date.parse(j.started_at) || 0;
   const running = jobs.filter((j) => j.status === 'running').sort((a, b) => t(a) - t(b));
-  const failed = jobs.filter((j) => j.status === 'failed' && !dismissed.has(j.id));
+  const recent = (j: AgentJob) => { const end = j.ended_at ? Date.parse(j.ended_at) : NaN; return Number.isFinite(end) && now - end <= FAILED_SHOWN_MS; };
+  const failed = jobs.filter((j) => j.status === 'failed' && !dismissed.has(j.id) && recent(j));
   return [...running, ...failed];
 }
 
@@ -67,4 +78,9 @@ export function jobElapsed(j: AgentJob, now = Date.now()): string {
   const s = Math.max(0, Math.round(((Number.isFinite(end) ? end : now) - start) / 1000));
   const m = Math.floor(s / 60);
   return m < 60 ? `${m}:${String(s % 60).padStart(2, '0')}` : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** A failed chip's words: the server's reason, else "failed". */
+export function failedLabel(j: AgentJob): string {
+  return j.reason || 'failed';
 }

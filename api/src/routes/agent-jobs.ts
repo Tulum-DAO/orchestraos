@@ -1,7 +1,8 @@
 /**
  * GET /api/agents/:id/jobs -> {ok, agent, jobs: Job[], source}   (lib/agentJobs.ts)
  *
- * The agent's own background work for its job tray: every running job, then the newest finished ones. From the seat's
+ * The agent's own background work for its job tray: every running job, then the newest ones that finished in the
+ * last 60 minutes (a failed one says why, in `reason`). A call the CLI refused at once is never a job. From the seat's
  * current Claude Code transcript, headless or tmux alike; on a headless seat, a job still running when its CLI last
  * exited is ended there. A runtime other than Claude (or no transcript) has no jobs yet: an empty list, and `source`
  * says why. `:id` is scoped like every /api/agents/:id route.
@@ -24,6 +25,8 @@ export interface AgentJobsDeps {
   transcriptPath: (id: string) => string | null;
   headless: (id: string) => boolean;
   eventsFile: (id: string) => string;
+  /** The clock the tray's 60-minute window reads (tests set it). */
+  now?: () => number;
 }
 
 export const defaultAgentJobsDeps: AgentJobsDeps = {
@@ -41,7 +44,7 @@ export function agentJobs(id: string, deps: AgentJobsDeps = defaultAgentJobsDeps
   let jobs: Job[];
   try { jobs = jobsInFile(path); } catch { return { jobs: [], source: 'no_transcript' }; }
   if (deps.headless(id)) jobs = endWithCli(jobs, lastCliExit(deps.eventsFile(id)));
-  return { jobs: trayJobs(jobs), source: 'transcript' };
+  return { jobs: trayJobs(jobs, 20, deps.now ? deps.now() : Date.now()), source: 'transcript' };
 }
 
 export function createAgentJobsRouter(deps: AgentJobsDeps = defaultAgentJobsDeps): Router {

@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Bot, Hourglass, SquareTerminal, X } from 'lucide-react';
-import { fetchAgentJobs, jobElapsed, KIND_WORD, trayJobs, type AgentJob, type AgentJobKind } from '../../lib/agentJobs';
+import { failedLabel, fetchAgentJobs, jobElapsed, KIND_WORD, trayJobs, type AgentJob, type AgentJobKind } from '../../lib/agentJobs';
 import { focusWork } from '../../lib/agentCalls';
 import './agentWorking.css';
 
@@ -34,14 +34,15 @@ export default function AgentJobTray({ agentId }: { agentId: string }) {
       const res = await fetchAgentJobs(agentId);
       if (!alive) return;
       if (res === 'none') { last = []; setGot({ agentId, jobs: [] }); timer = setTimeout(poll, POLL_ABSENT_MS); return; }
-      if (res) { last = res; setGot({ agentId, jobs: res }); }
+      // each answer also moves the clock on, so a failure older than the hour leaves even with nothing running
+      if (res) { last = res; setGot({ agentId, jobs: res }); setNow(Date.now()); }
       timer = setTimeout(poll, last.some((j) => j.status === 'running') ? POLL_RUNNING_MS : POLL_IDLE_MS);
     };
     void poll();
     return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [agentId]);
 
-  const shown = trayJobs(jobs, dismissed);
+  const shown = trayJobs(jobs, dismissed, now);
   const running = shown.some((j) => j.status === 'running');
   useEffect(() => {
     if (!running) return;
@@ -51,7 +52,7 @@ export default function AgentJobTray({ agentId }: { agentId: string }) {
 
   if (shown.length === 0) return null;
   return (
-    <ul className="agent-jobs" data-testid="agent-job-tray" aria-label="Background work">
+    <ul className="agent-jobs" data-testid="agent-job-tray" aria-label="Background work" data-arturo-avoid>
       {shown.map((j) => {
         const Icon = ICON[j.kind];
         return (
@@ -59,7 +60,7 @@ export default function AgentJobTray({ agentId }: { agentId: string }) {
             {/* Its kind by icon; running by its ticking clock, failed in red. */}
             <Icon size={12} className={`shrink-0 ${j.status === 'failed' ? 'text-red' : 'text-ink-3'}`} aria-label={KIND_WORD[j.kind]} />
             <span className="agent-job-title">{j.title}</span>
-            <span className="agent-job-time">{j.status === 'running' ? jobElapsed(j, now) : "didn't finish"}</span>
+            <span className="agent-job-time">{j.status === 'running' ? jobElapsed(j, now) : failedLabel(j)}</span>
             {j.status === 'failed' && j.result_uuid && (
               <button type="button" className="agent-job-open" onClick={() => focusWork(j.result_uuid!)}>See why</button>
             )}

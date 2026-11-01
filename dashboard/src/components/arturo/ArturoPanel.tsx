@@ -44,6 +44,7 @@ import { AgentAvatar } from '../avatar/AgentAvatar';
 import { LookPicker } from '../avatar/LookPicker';
 import { DrawerLibrary } from './DrawerLibrary';
 import { RotationSettings } from './RotationSettings';
+import { ExportChatButton } from '../agent/ExportChatButton';
 import { useAgentRecord, ARTURO_ID } from '../avatar/agentState';
 import { PROVIDER_LABEL } from '../../lib/agentRail';
 import { providerMark } from '../avatar/brandMarks';
@@ -321,6 +322,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           : page === 'library' || page === 'history' || page === 'setup' ? sectionBody(page)
           : (
             <>
+              {!isArturo && <ExportChatButton agentId={agentId} />}
               <DrawerFace agentId={agentId} name={aname} save={saveName} canSave={canSaveLook} canName={canEditName} desktop={desktop}
                           subtitle={liveStatus(arturoRec.status, arturoRec.since, now)}
                           meter={isArturo ? null : contextUsedLabel(agent?.contextLeftPct)}

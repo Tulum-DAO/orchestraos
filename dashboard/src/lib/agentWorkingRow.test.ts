@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { workingRowFor, dotState, type WorkingRowInput } from './agentWorkingRow.ts';
+import { workingRowFor, dotState, rowShown, type WorkingRowInput } from './agentWorkingRow.ts';
 import { normalizeAgentState, STATE_STYLE } from './agentStatus.ts';
 import { railPendingMenu, railStatus } from './agentChip.ts';
 import { avatarStateFor } from './avatarStatus.ts';
@@ -74,5 +74,17 @@ test('the row reads the same state as the sidebar dot, through the same normaliz
     assert.equal(avatarStateFor(d.state, d.menu), avatarStateFor(railStatus(input.chip, input.status), railPendingMenu(input.chip, !!input.pendingMenu)));
     const row = workingRowFor({ ...input, now: NOW });
     if (row.state !== null) assert.equal(row.state, rail);
+  }
+});
+
+test('the row shows for work and for every state that needs the person; idle and unknown hide it', () => {
+  const shown = (i: WorkingRowInput) => rowShown(workingRowFor({ ...i, now: NOW }));
+  const hidden = TABLE.filter(([, i]) => !shown(i)).map(([n]) => n);
+  assert.deepEqual(hidden, ['live step: idle', 'idle', 'unknown', 'absent', 'the chip decides: external is unknown']);
+  for (const name of ['disconnected', 'stale feed', 'updating', 'live step: tool', 'live step: thinking', 'live step: waiting',
+    'working with elapsed and tool', 'stalled with elapsed', 'waiting', 'stranded', 'queued', 'queued, idle step', 'stopped', 'crashed',
+    'offline', 'retired: no Resume', 'a menu on screen needs you', 'the chip decides, as on the dot: down', 'the chip decides: needs you']) {
+    const row = TABLE.find(([n]) => n === name);
+    assert.ok(row && shown(row[1]), name);
   }
 });

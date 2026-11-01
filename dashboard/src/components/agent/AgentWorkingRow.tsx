@@ -10,7 +10,7 @@ import { CircleSlash, HandMetal, Loader2, WifiOff } from 'lucide-react';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { avatarHub, ensureAgent } from '../avatar/agentState';
 import { avatarStateFor } from '../../lib/avatarStatus';
-import { dotState, workingRowFor, type RowTone, type WorkingRowInput } from '../../lib/agentWorkingRow';
+import { dotState, rowShown, workingRowFor, type RowTone, type WorkingRowInput } from '../../lib/agentWorkingRow';
 import { isDegraded } from '../../lib/feedLiveness';
 import './agentWorking.css';
 
@@ -48,13 +48,16 @@ export function AgentWorkingRow({ agentId, name, onResume, ...input }: WorkingRo
     if (prev.status !== face) avatarHub.set(agentId, { status: face });
   }, [agentId, face]);
 
+  // Idle or unknown: no row at all (only work, and states that need the person, show).
+  if (!rowShown(row)) return null;
   const mark = row.mark === 'spin' ? <Loader2 size={12} className={`animate-spin ${row.kind === 'updating' ? 'opacity-60' : ''}`} />
     : row.mark === 'hand' ? <HandMetal size={12} />
     : row.mark === 'off' ? <CircleSlash size={12} />
     : row.mark === 'wifi' ? <WifiOff size={12} />
     : <span className={`w-1.5 h-1.5 rounded-full ${DOT[row.tone]}`} />;
   return (
-    <div className="agent-working" role="status" aria-live="polite" data-row-kind={row.kind} data-row-state={row.state ?? ''}>
+    // data-arturo-avoid: a phone's floating Arturo button lifts above the row when the row reaches its corner.
+    <div className="agent-working" role="status" aria-live="polite" data-row-kind={row.kind} data-row-state={row.state ?? ''} data-arturo-avoid>
       <AgentAvatar agentId={agentId} role="activity" size={24} label={name} />
       <span className="agent-working-name">{name}</span>
       <span className={`agent-working-mark ${TONE[row.tone]}`} aria-hidden>{mark}</span>
