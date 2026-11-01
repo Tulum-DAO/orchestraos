@@ -33,6 +33,7 @@ import { createHash } from 'crypto';
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync } from 'fs';
 import { basename, extname, join, relative, sep } from 'path';
 import { resolveTranscriptPath, resolvePreviousTranscript } from '../routes/chat-transcript.js';
+import { storeRules, storePath, applyRulesToLines } from './conversation-store.js';
 import { parseClaudeLines, itemsFromEvents, ownersOf, kindOf, linksInText, isScratch, ignored, markdownTitle, subtitleFor, resolveIn, type LibraryItem, type Stat, type AgentWindow } from './library-attribution.js';
 
 const DAY = 86_400_000;
@@ -133,6 +134,9 @@ export function openLibraryDb(dataDir: string): DB {
   // read_only came after the first index: add it to an index made before.
   const cols = (db.prepare('pragma table_info(calls)').all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes('read_only')) db.exec('alter table calls add column read_only integer not null default 0');
+  // seed_done came with the conversation store's seed rows: whether this file's seed has all been read past.
+  const curCols = (db.prepare('pragma table_info(cursors)').all() as { name: string }[]).map((c) => c.name);
+  if (!curCols.includes('seed_done')) db.exec('alter table cursors add column seed_done integer not null default 0');
   // Kept copies, pins and missing/moved came with 4g.2: add them to an index made before.
   const itemCols = new Set((db.prepare('pragma table_info(items)').all() as { name: string }[]).map((c) => c.name));
   for (const [c, def] of [['pinned', 'integer not null default 0'], ['missing', 'integer not null default 0'], ['missing_since', 'text'],
@@ -249,7 +253,7 @@ export class LibraryIndex {
   indexLog(agent: string, cwd: string | undefined, path: string, session: string | null) {
     let st;
     try { st = statSync(path); } catch { return; }
-    const cur = this.db.prepare('select offset, ino, size from cursors where path = ?').get(path) as { offset: number; ino: number; size: number } | undefined;
+    const cur = this.db.prepare('select offset, ino, size, seed_done from cursors where path = ?').get(path) as { offset: number; ino: number; size: number; seed_done: number } | undefined;
     if (cur && cur.ino === st.ino && cur.size === st.size) return;     // nothing new since the last read
     const from = cur && cur.ino === st.ino && st.size >= cur.offset ? cur.offset : 0;
     const len = st.size - from;
@@ -260,7 +264,13 @@ export class LibraryIndex {
     const text = buf.toString('utf-8');
     const end = text.lastIndexOf('\n');
     if (end < 0) return;                                               // no complete line yet
-    const lines = text.slice(0, end).split('\n');
+    // What a session only saw (the earlier-conversation block a new session is given, seed rows) is never anyone's
+    // work: the store's rules apply before attribution (services/conversation-store.ts).
+    const raw = text.slice(0, end).split('\n');
+    const rules = storeRules(session, storePath(this.o.dataDir));
+    const wasDone = !!(cur && from > 0 && cur.seed_done);
+    const ruled = applyRulesToLines(raw, rules, wasDone);
+    const lines = ruled.lines;
     const { events, turns, calls } = parseClaudeLines(lines, session ?? undefined);
     const items = itemsFromEvents(agent, events, this.o.stat, session ?? undefined, this.o.scratch, this.o.list);
     const tx = this.db.transaction(() => {
@@ -276,14 +286,20 @@ export class LibraryIndex {
           .run(t.turn, agent, session, t.start, t.end, t.cwd ?? cwd ?? null);
       }
       // Next time, start again at this read's last turn: it may still be growing.
+      // Offsets are counted on the file's own lines (`raw`), never on the lines the store's rules changed.
       let next = from + Buffer.byteLength(text.slice(0, end + 1), 'utf-8');
+      let restartAt = raw.length;
       const lastTurn = turns[turns.length - 1];
       if (lastTurn) {
-        const idx = lines.findIndex((l) => l.includes(`"uuid":"${lastTurn.turn}"`));
-        if (idx > 0) next = from + Buffer.byteLength(lines.slice(0, idx).join('\n') + '\n', 'utf-8');
+        const idx = raw.findIndex((l) => l.includes(`"uuid":"${lastTurn.turn}"`));
+        if (idx > 0) { next = from + Buffer.byteLength(raw.slice(0, idx).join('\n') + '\n', 'utf-8'); restartAt = idx; }
       }
-      this.db.prepare(`insert into cursors(path, agent, session, offset, ino, size) values(?, ?, ?, ?, ?, ?)
-        on conflict(path) do update set offset=excluded.offset, ino=excluded.ino, size=excluded.size`).run(path, agent, session, next, st.ino, st.size);
+      // The seed counts as read past only when its boundary line lies before where the next read starts.
+      const bAt = rules.through ? raw.findIndex((l) => l.includes(`"uuid":"${rules.through}"`)) : -1;
+      const seedDone = !rules.through || wasDone || (bAt >= 0 && bAt < restartAt);
+      this.db.prepare(`insert into cursors(path, agent, session, offset, ino, size, seed_done) values(?, ?, ?, ?, ?, ?, ?)
+        on conflict(path) do update set offset=excluded.offset, ino=excluded.ino, size=excluded.size, seed_done=excluded.seed_done`)
+        .run(path, agent, session, next, st.ino, st.size, seedDone ? 1 : 0);
     });
     tx();
   }

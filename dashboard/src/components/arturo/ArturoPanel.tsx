@@ -43,6 +43,7 @@ import { useAgentSettings } from '../../stores/agentSettings';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { LookPicker } from '../avatar/LookPicker';
 import { DrawerLibrary } from './DrawerLibrary';
+import { RotationSettings } from './RotationSettings';
 import { useAgentRecord, ARTURO_ID } from '../avatar/agentState';
 import { PROVIDER_LABEL } from '../../lib/agentRail';
 import { providerMark } from '../avatar/brandMarks';
@@ -283,6 +284,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
         <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
         <Row label="Notifications" soon />
         <Row id="settings" label="Settings" onOpen={push} />
+        <RotationSettings key={agentId} agentId={agentId} isArturo={isArturo} />
       </div>
     );
 

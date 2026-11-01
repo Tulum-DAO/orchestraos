@@ -272,6 +272,17 @@ def _headless_off(st: S.Settings, seat: str) -> bool:
         return False
 
 
+def _is_headless(st: S.Settings, seat: str) -> bool:
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        import headless_switch as HS
+        return HS.is_headless(seat, orch_dir=st.data_dir)
+    except Exception:  # noqa: BLE001 — the switch defaults off
+        return False
+
+
 def cmd_retire(ns) -> int:
     st = S.load_settings()
     if not st.config_exists:
@@ -835,10 +846,29 @@ def cmd_rotate(ns) -> int:
     row = reg["agents"].get(seat)
     if not row:
         print(f"seat '{seat}' is not in {st.data_dir / 'registry.json'} — `orchestra spawn {seat}` first", file=sys.stderr); return 2
-    # Every refusal BEFORE anything is written: the rotation's own early checks (a headless seat, a runtime it does
-    # not support, no authoritative generation), asked without changing anything, so a refused rotate leaves no
-    # baton, no prompt and no state behind.
     env = S.child_env(st)
+    # A runtime without a built and tested rotation adapter is refused, with the adapter's reason.
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        from rotation_adapters import refusal as _adapter_refusal
+        why = _adapter_refusal(ns.runtime or row.get("runtime") or "claude")
+    except ImportError:
+        why = None
+    if why:
+        print(f"rotate refused: {why}", file=sys.stderr)
+        return 2
+    # A headless seat rotates in place, through its supervisor: it starts at the next turn boundary, with the same
+    # gate; no baton, no new pane.
+    if _is_headless(st, seat):
+        r = subprocess.run([sys.executable, str(st.repo_root / "scripts" / "seat_supervisor.py"), "rotate", seat],
+                           env=env, cwd=str(st.repo_root), capture_output=True, text=True)
+        print((r.stdout or "").strip() or (r.stderr or "").strip())
+        return 0 if r.returncode == 0 else 2
+    # Every refusal BEFORE anything is written: the rotation's own early checks (a runtime it does not support, no
+    # authoritative generation), asked without changing anything, so a refused rotate leaves no baton, no prompt
+    # and no state behind.
     env["AGENT_RUNTIME"] = ns.runtime or row.get("runtime", "claude")
     pre = [sys.executable, str(st.repo_root / "scripts" / "rotate_agent.py"), seat, "--preflight"]
     if ns.runtime:

@@ -261,7 +261,7 @@ def _wake_inject(text, submit):
         gateway = os.environ.get("WATCH_GATEWAY_URL", "http://127.0.0.1:9091")
         req = urllib.request.Request(
             f"{gateway}/agent-message",
-            data=json.dumps({"session": "gm", "text": text}).encode(),
+            data=json.dumps({"session": "gm", "text": text, "source": "mail"}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:
             r = json.loads(resp.read().decode())

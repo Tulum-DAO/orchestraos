@@ -2,11 +2,14 @@
 
   orchestra memory search "<words>" [--agent A] [--session S] [--generation N] [--limit N] [--json]
   orchestra memory ingest <agent> --session <id> [--generation N] [--path FILE] [--json]
+  orchestra memory compaction-status [--agent A] [--limit N] [--json]
 
 `search` is how an agent looks something up instead of relying on recall: every row says which agent, session and
 generation it came from, and the transcript line (uuid) or tool call (tool id) to cite. `ingest` indexes a session's
 transcript (forward from where the last ingest stopped); its file is found from the session id unless `--path`
-names it, and its generation comes from the identity store unless `--generation` gives it.
+names it, and its generation comes from the identity store unless `--generation` gives it. `compaction-status` says
+what happened to each attempt to compact a seat's chat, newest first, one plain line each (when, how it was started,
+what happened, why); `search` returns the same rows first when the question is about compacting.
 """
 from __future__ import annotations
 
@@ -31,10 +34,24 @@ def add_parser(sub) -> None:
     i.add_argument("--generation", type=int, help="default: the identity store's generation for this session")
     i.add_argument("--path", help="the transcript file (default: found from the session id)")
     i.add_argument("--json", action="store_true")
+    c = msub.add_parser("compaction-status", help="each attempt to compact a chat: when, how it was started, what happened, why")
+    c.add_argument("--agent")
+    c.add_argument("--limit", type=int, default=20)
+    c.add_argument("--json", action="store_true")
 
 
 def cmd_memory(ns) -> int:
     from scripts import episodic_memory as EM
+    if ns.memory_cmd == "compaction-status":
+        rows = EM.attempts(ns.agent, limit=ns.limit)
+        if ns.json:
+            print(json.dumps(rows, indent=2))
+        elif not rows:
+            print("no attempts to compact" + (f" for {ns.agent}" if ns.agent else "") + " yet")
+        else:
+            for a in rows:
+                print(EM.attempt_line(a, with_agent=not ns.agent))
+        return 0
     if ns.memory_cmd == "search":
         rows = EM.query(ns.q, agent=ns.agent, session=ns.session, generation=ns.generation, limit=ns.limit)
         if ns.json:
@@ -44,6 +61,9 @@ def cmd_memory(ns) -> int:
             print("no matches")
             return 0
         for r in rows:
+            if r["kind"] == "compaction_attempt":
+                print(f"[compacting] {r['agent']} · {r['snippet']}")
+                continue
             where = f"{r['agent']} · session {r['session_id']}" + (f" · gen {r['generation']}" if r["generation"] is not None else "")
             cite = f"tool {r['tool_id']}" if r["tool_id"] else f"msg {r['uuid']}"
             print(f"[{r['kind']}] {where} · {cite} · {r['ts'] or ''}\n    {r['snippet']}")

@@ -231,9 +231,12 @@ def request(seat: str, payload: dict, orch_dir=None, timeout: float = 5.0) -> di
     return out
 
 
-def send(seat: str, text: str, msg_id: str, *, allow_waiting: bool = False, orch_dir=None) -> dict:
-    return request(seat, {"cmd": "send", "id": msg_id, "text": text, "allow_waiting": allow_waiting},
-                   orch_dir=orch_dir)
+def send(seat: str, text: str, msg_id: str, *, allow_waiting: bool = False, orch_dir=None,
+         source: str = "mail") -> dict:
+    """`source`: "person" for a person's own surface (dashboard, phone, watch), "mail" for everything else (the
+    router's delivery, agent mail); only a person's /compact starts a switch, so mail is the default."""
+    return request(seat, {"cmd": "send", "id": msg_id, "text": text, "allow_waiting": allow_waiting,
+                          "source": "person" if source == "person" else "mail"}, orch_dir=orch_dir)
 
 
 def status(seat: str, orch_dir=None) -> dict:

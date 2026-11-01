@@ -119,6 +119,8 @@ export interface GatewayInjectResult {
   timedOut?: boolean;
   error?: string;
   attempts?: number;
+  /** The gateway's plain words for a refusal (shown to the person as written), e.g. a /compact refused. */
+  detail?: string;
 }
 
 export interface MsgStoreSendResult {
@@ -186,6 +188,7 @@ async function realGatewayInject(session: string, text: string, force = false): 
       hold_failed: body.hold_failed,
       error: body.error,
       attempts: body.attempts,
+      detail: typeof body.detail === 'string' ? body.detail : undefined,
     };
   } catch (err: any) {
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -364,6 +367,14 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
       ...legacy,
       payload: { text, attachments: body.attachments, client_caps: body.client_caps },
     });
+    return;
+  }
+
+  // A person's /compact the gateway refused (compacting isn't turned on for this agent, or its runtime can't): the
+  // answer, not mail. It is never stored for later delivery: as mail the seat would receive "/compact" as text and
+  // answer it. The gateway's own words go back to be shown as written.
+  if (gw.reason === 'compact_refused') {
+    res.status(409).json({ ok: false, reason: 'compact_refused', detail: gw.detail || "This agent can't compact right now." });
     return;
   }
 

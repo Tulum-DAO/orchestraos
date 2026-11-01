@@ -49,6 +49,7 @@ enum ChatItem: Codable, Equatable {
     case toolResult(ToolResultItem)
     case queuedBatch(QueuedBatchItem)
     case rotation(RotationItem)
+    case compaction(CompactionItem)
     case unknown
 
     private enum KindKey: String, CodingKey { case kind }
@@ -62,6 +63,7 @@ enum ChatItem: Codable, Equatable {
         case "tool_result": self = .toolResult(try ToolResultItem(from: decoder))
         case "queued_batch": self = .queuedBatch(try QueuedBatchItem(from: decoder))
         case "rotation": self = .rotation(try RotationItem(from: decoder))
+        case "compaction": self = .compaction(try CompactionItem(from: decoder))
         default: self = .unknown
         }
     }
@@ -74,6 +76,7 @@ enum ChatItem: Codable, Equatable {
         case .toolResult(let v): try v.encode(to: encoder)
         case .queuedBatch(let v): try v.encode(to: encoder)
         case .rotation(let v): try v.encode(to: encoder)
+        case .compaction(let v): try v.encode(to: encoder)
         case .unknown: break
         }
     }
@@ -172,6 +175,19 @@ struct RotationItem: Codable, Equatable {
     let to_session: String
 }
 
+struct CompactionItem: Codable, Equatable {
+    let audience: String?
+    let kind: String
+    let id: String
+    let uuid: String?
+    let state: String
+    let trigger: String?
+    let ts: String
+    let finished_at: String?
+    let before_tokens: Int?
+    let after_tokens: Int?
+}
+
 struct LiveTextBlock: Codable, Equatable {
     let uuid: String?
     let text: String
@@ -193,6 +209,7 @@ enum RenderItem: Codable, Equatable {
     case tool(RenderTool)
     case queuedBatch(RenderQueuedBatch)
     case rotation(RenderRotation)
+    case compaction(RenderCompaction)
     case unknown
 
     private enum KindKey: String, CodingKey { case kind }
@@ -206,6 +223,7 @@ enum RenderItem: Codable, Equatable {
         case "tool": self = .tool(try RenderTool(from: decoder))
         case "queued_batch": self = .queuedBatch(try RenderQueuedBatch(from: decoder))
         case "rotation": self = .rotation(try RenderRotation(from: decoder))
+        case "compaction": self = .compaction(try RenderCompaction(from: decoder))
         default: self = .unknown
         }
     }
@@ -218,6 +236,7 @@ enum RenderItem: Codable, Equatable {
         case .tool(let v): try v.encode(to: encoder)
         case .queuedBatch(let v): try v.encode(to: encoder)
         case .rotation(let v): try v.encode(to: encoder)
+        case .compaction(let v): try v.encode(to: encoder)
         case .unknown: break
         }
     }
@@ -286,6 +305,19 @@ struct RenderRotation: Codable, Equatable {
     let to_generation: Int
     let from_session: String
     let to_session: String
+    let key: String
+}
+
+struct RenderCompaction: Codable, Equatable {
+    let audience: String?
+    let kind: String
+    let id: String
+    let state: String
+    let trigger: String?
+    let ts: String
+    let finished_at: String?
+    let before_tokens: Int?
+    let after_tokens: Int?
     let key: String
 }
 

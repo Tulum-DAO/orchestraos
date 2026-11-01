@@ -5,6 +5,8 @@ import { TopBar } from '../components/agent/TopBar';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
 import { LiveStatusLine } from '../components/chat/LiveStatusLine';
+import { stepFrom } from '../lib/liveStep';
+import { useAgentSteps } from '../stores/agentSteps';
 import { useFeedHealth } from '../hooks/useFeedHealth';
 import { useAgentSettings } from '../stores/agentSettings';
 import { reviveAgent } from '../lib/api';
@@ -47,6 +49,8 @@ export default function AgentPage() {
   const rows = agentRowsFrom(data) as Array<{ id: string; generation?: unknown; tmux_session?: string; machine?: string; full_name?: string }> | undefined;
   const seatRow = id && Array.isArray(rows) ? rows.find((a) => a.id === id) : undefined;
   const feed = useFeedHealth();
+  // What it is doing now, from its open chat stream (the list's `step` until that has spoken).
+  const streamStep = useAgentSteps((s) => (id ? s.byAgent[id] : undefined));
   // The header shows the agent's full name ("Demo · dev"): outside the sidebar there's no project header around it.
   const seat = id ? { id, generation: seatRow?.generation, name: seatRow?.full_name } : undefined;
 
@@ -133,6 +137,7 @@ export default function AgentPage() {
               key={agentId}
               session={seatRow?.tmux_session || agentId.replace('unregistered:', '')}
               machine={seatRow?.machine || 'vps'}
+              closing={chosenMode !== 'dev'}
             />
           </div>
           {/* special keys (arrows, Esc, Tab, ...): a phone has no keyboard for them */}
@@ -173,6 +178,7 @@ export default function AgentPage() {
               feed={feed}
               stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
               tool={(seatRow as { tool?: string } | undefined)?.tool}
+              step={streamStep ?? stepFrom((seatRow as { step?: unknown } | undefined)?.step)}
             />
 
             <DeliverNowBanner agentId={agentId} />

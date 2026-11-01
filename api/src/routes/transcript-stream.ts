@@ -17,6 +17,11 @@
  * the client fallback. Live agent STATE stays the v2-detector lane — never
  * folded into this stream (locked congruence guardrail, DEC-1787826639).
  *
+ *   event: step       data: { agent_id, kind: 'tool'|'thinking'|'waiting'|'idle', tool?, summary?, since }
+ *                         What the agent is doing right now (services/live-step.ts): a headless seat from its
+ *                         supervisor log, a tmux seat from the pane probe (summary from its open tool call). Sent on
+ *                         change and once on connect; `kind: null` = no step to show (stopped, restarting, in Dev).
+ *
  *   event: live_text  data: { agent_id, message_id, text, blocks[{ uuid, text }], done }
  *                         HEADLESS seats only (services/live-text.ts): the reply still being
  *                         written. Sent on change, after the beat's delta, so the frame that brings
@@ -39,6 +44,10 @@ import { isSafeAgentId } from '../lib/agentPaths.js';
 import { dataDir } from '../lib/config.js';
 import { headlessSeats } from '../services/status-stream.js';
 import { LiveText, type LiveTextView } from '../services/live-text.js';
+import { compactionNotices, compactionItem, noticeShown } from '../services/conversation-store.js';
+import { readSeatSettings } from '../lib/seatSettings.js';
+import { headlessStep, openToolUse, stepFromProbe, stepSig, type StepBody } from '../services/live-step.js';
+import { getDetectorStates, type DetectorStatus } from '../services/agent-status.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
@@ -61,8 +70,36 @@ interface Live {
   tailer: TranscriptTailer; timer: NodeJS.Timeout | null; gone: Set<() => void>;
   liveText: LiveText | null; liveTimer: NodeJS.Timeout | null; liveSubs: Set<(v: LiveTextView) => void>;
   headless: boolean;
+  /** Compaction notices already announced: id -> what was sent (state, end, tokens), so a change is sent once. */
+  notices: Map<number, string>; noticeSubs: Set<(item: Record<string, unknown>) => void>;
+  /** The live step last sent, and who hears of a change. */
+  step: StepBody | null; stepKey: string; stepSubs: Set<(s: StepBody | null) => void>;
 }
 const live = new Map<string, Live>();
+
+/** Notices sent on a new connection: the latest few (older ones are in the poll route's pages). */
+const NOTICES_ON_CONNECT = 20;
+
+/** The seat's notices as `event: compaction` items, unless its show_compaction is off. */
+export function visibleNotices(agentId: string): Record<string, unknown>[] {
+  try {
+    if (!readSeatSettings(dataDir(), agentId).show_compaction) return [];
+    return compactionNotices(agentId).filter(noticeShown).map(compactionItem);
+  } catch { return []; }
+}
+
+const noticeSig = (it: Record<string, unknown>) => `${it.state}|${it.finished_at}|${it.after_tokens}|${it.before_tokens}`;
+
+/** A notice that started, finished or gained its numbers since the last beat goes to every client once. */
+function noticeStep(agentId: string, entry: Live): void {
+  for (const it of visibleNotices(agentId)) {
+    const id = Number(String(it.id).slice(4));
+    const sig = noticeSig(it);
+    if (entry.notices.get(id) === sig) continue;
+    entry.notices.set(id, sig);
+    for (const cb of entry.noticeSubs) { try { cb(it); } catch { /* a closed client */ } }
+  }
+}
 
 /** The seat's supervisor log, or null for an id that is not a safe path segment / no data dir. */
 export function headlessEventsPath(agentId: string, root?: string): string | null {
@@ -74,6 +111,35 @@ export function headlessEventsPath(agentId: string, root?: string): string | nul
 export function liveTextOn(agentId: string, headless: Set<string> = headlessSeats(), root?: string): boolean {
   if (!headless.has(agentId) || !isSafeAgentId(agentId)) return false;
   try { return !existsSync(join(root ?? dataDir(), 'state', 'headless', agentId, 'dev')); } catch { return false; }
+}
+
+// The pane probe's latest verdicts (a stale-while-revalidate cache, services/agent-status.ts), kept here so a beat
+// never waits on a scan.
+let probe: Map<string, DetectorStatus> = new Map();
+let probing = false;
+function probeNow(): Map<string, DetectorStatus> {
+  if (!probing) {
+    probing = true;
+    getDetectorStates().then((m) => { probe = m; }).catch(() => { /* keep the last */ }).finally(() => { probing = false; });
+  }
+  return probe;
+}
+
+/** The seat's step now: ONE source, chosen by whether it runs headless (and not in Dev). */
+export function currentStep(agentId: string, entry: Pick<Live, 'headless' | 'tailer'>): StepBody | null {
+  if (headlessSeats().has(agentId)) return entry.headless ? headlessStep(agentId, dataDir()) : null;
+  const tmux = seatTmuxSession(agentId);
+  const d = tmux ? probeNow().get(tmux) : undefined;
+  return stepFromProbe(d, openToolUse(entry.tailer.recentItems()));
+}
+
+function stepBeat(agentId: string, entry: Live): void {
+  let s: StepBody | null = null;
+  try { s = currentStep(agentId, entry); } catch { s = null; }
+  const key = stepSig(s);
+  if (key === entry.stepKey) return;
+  entry.step = s; entry.stepKey = key;
+  for (const cb of entry.stepSubs) { try { cb(s); } catch { /* a closed client */ } }
 }
 
 function liveStep(entry: Live): void {
@@ -88,10 +154,12 @@ function startBeat(agentId: string, entry: Live): void {
   entry.timer = setInterval(() => {
     let r: 'gone' | void = undefined;
     try { r = entry.tailer.tick(); } catch { /* keep the beat alive */ }
+    noticeStep(agentId, entry);
     if (entry.liveText) {
       try { entry.headless = liveTextOn(agentId); } catch { entry.headless = false; }
       liveStep(entry);                     // right after the delta: a landed line leaves the live text in the same beat
     }
+    stepBeat(agentId, entry);
     if (r === 'gone') {
       // Nothing left to tail and no window to come back to: stop asking. The clients stay connected.
       if (entry.timer) clearInterval(entry.timer);
@@ -103,7 +171,7 @@ function startBeat(agentId: string, entry: Live): void {
   }, TICK_MS);
   entry.timer.unref?.();
   if (entry.liveText && !entry.liveTimer) {
-    entry.liveTimer = setInterval(() => liveStep(entry), LIVE_TICK_MS);
+    entry.liveTimer = setInterval(() => { liveStep(entry); if (entry.headless) stepBeat(agentId, entry); }, LIVE_TICK_MS);
     entry.liveTimer.unref?.();
   }
 }
@@ -127,8 +195,11 @@ function getTailer(agentId: string, limit: number): Live {
   const entry: Live = {
     tailer, timer: null, gone: new Set(),
     liveText: events ? new LiveText(events) : null, liveTimer: null, liveSubs: new Set(),
-    headless: false,
+    headless: false, notices: new Map(), noticeSubs: new Set(),
+    step: null, stepKey: '', stepSubs: new Set(),
   };
+  // Notices that exist when the stream starts are already known: a client gets them on connect, not again per beat.
+  for (const it of visibleNotices(agentId)) entry.notices.set(Number(String(it.id).slice(4)), noticeSig(it));
   try { entry.headless = liveTextOn(agentId); } catch { entry.headless = false; }
   startBeat(agentId, entry);
   live.set(agentId, entry);
@@ -178,6 +249,21 @@ router.get('/:id/transcript/stream', (req: Request, res: Response) => {
   const now = entry.liveText?.current();
   if (entry.headless && now && now.text) onLive(now);
 
+  // The compaction notice: the latest ones now, then each start or finish as it happens (same object as the poll
+  // route's `compaction` item; it updates in place by id). Never part of any model's context.
+  const onNotice = (it: Record<string, unknown>) => { res.write(`event: compaction\ndata: ${JSON.stringify(it)}\n\n`); };
+  noticeStep(agentId, entry);
+  for (const it of visibleNotices(agentId).slice(-NOTICES_ON_CONNECT)) onNotice(it);
+  entry.noticeSubs.add(onNotice);
+
+  // The live step: what it is doing now, at once, then each change.
+  const onStep = (st: StepBody | null) => {
+    res.write(`event: step\ndata: ${JSON.stringify(st ? { agent_id: agentId, ...st } : { agent_id: agentId, kind: null })}\n\n`);
+  };
+  stepBeat(agentId, entry);
+  onStep(entry.step);
+  entry.stepSubs.add(onStep);
+
   const heartbeat = setInterval(() => { res.write(': ping\n\n'); }, HEARTBEAT_MS);
   heartbeat.unref?.();
 
@@ -185,6 +271,8 @@ router.get('/:id/transcript/stream', (req: Request, res: Response) => {
     clearInterval(heartbeat);
     entry.gone.delete(onGone);
     entry.liveSubs.delete(onLive);
+    entry.noticeSubs.delete(onNotice);
+    entry.stepSubs.delete(onStep);
     unsubscribe();
     releaseTailer(agentId);
   });

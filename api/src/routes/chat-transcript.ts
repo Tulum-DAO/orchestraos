@@ -15,6 +15,8 @@ import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
+import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
+import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
@@ -838,8 +840,11 @@ export function dropWarmup(items: readonly any[], mark: WarmupMark | null): any[
   return out;
 }
 
-/** A generation's items as the chat shows them, plus the first position of each uuid in them. */
-interface SegmentView { items: readonly any[]; firstAt: Map<string, number> }
+/** A generation's items as the chat shows them, plus the first position of each uuid in them, and the text of each
+ *  user message by uuid (what carriedOver compares). */
+interface SegmentView { items: readonly any[]; firstAt: Map<string, number>; userTexts: Map<string, string> }
+
+const isUserText = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !!it.uuid;
 
 function segmentView(agentId: string, seg: Segment): SegmentView | null {
   const path = seg.file();
@@ -847,13 +852,19 @@ function segmentView(agentId: string, seg: Segment): SegmentView | null {
   let log;
   try { log = cachedLog(path, (lines) => logItems(lines, path.includes('antigravity-cli'))); } catch { return null; }
   const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
-  const key = `view:${seg.session}:${sig}`;
+  // What a session only saw (the earlier-conversation block, seed rows) is never shown (services/conversation-store.ts).
+  const rules = storeRules(seg.session || null);
+  const key = `view:${seg.session}:${sig}:${rules.sig}`;
   const memo = log.memo.get(key) as SegmentView | undefined;
   if (memo) return memo;
-  const items = dropWarmup(log.items, mark);
+  const items = applyStoreRules(dropWarmup(log.items, mark), rules);
   const firstAt = new Map<string, number>();
-  items.forEach((it, i) => { if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i); });
-  const view = { items, firstAt };
+  const userTexts = new Map<string, string>();
+  items.forEach((it, i) => {
+    if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i);
+    if (isUserText(it) && !userTexts.has(String(it.uuid))) userTexts.set(String(it.uuid), String(it.text ?? ''));
+  });
+  const view = { items, firstAt, userTexts };
   // One view per file: an older warm-up signature is never asked for again.
   for (const k of [...log.memo.keys()]) if (k.startsWith('view:')) log.memo.delete(k);
   log.memo.set(key, view);
@@ -873,26 +884,59 @@ function rotationMarker(older: Segment, newer: Segment): Record<string, unknown>
 /** One chat position, newest to oldest: an item of a generation, or the marker above one. */
 interface Unit { item: any; seg: number; at: number }   // at = -1: the marker above segment `seg`
 
+/** The positions in generation `s` that a newer generation carried over: a user message that was being answered when
+ *  the CLI went down is written again, with the same uuid and text, into the rebuilt conversation, and answered there.
+ *  The chat shows it once, at the newer copy. Only user messages, and only on the same text too, because some logs
+ *  number their ids per file (a codex ordinal, an antigravity step) and those repeat between generations by chance.
+ *  Positions keep their index, so a cursor naming a hidden entry still resolves. */
+function carriedOver(s: number, count: number, view: (i: number) => SegmentView | null | undefined): Set<number> {
+  const out = new Set<number>();
+  const v = view(s);
+  if (!v || !v.userTexts.size || s >= count - 1) return out;
+  const newer: SegmentView[] = [];
+  for (let j = s + 1; j < count; j++) { const w = view(j); if (w?.userTexts.size) newer.push(w); }
+  if (!newer.length) return out;
+  v.items.forEach((it, k) => {
+    if (!isUserText(it)) return;
+    const id = String(it.uuid);
+    const text = String(it.text ?? '');
+    if (newer.some((w) => w.userTexts.get(id) === text)) out.add(k);
+  });
+  return out;
+}
+
 /** Everything older than position (seg, at), newest first; markers only between two generations
- *  that both show something. Views are made only as the walk reaches them. */
+ *  that both show something. Views are made only as the walk reaches them, and the newer ones a
+ *  carried-over check needs. */
 function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[],
                     seg: number, at: number): Generator<Unit> {
   const view = (i: number) => {
     if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
     return views[i];
   };
+  const hiddenMemo = new Map<number, Set<number>>();
+  const hidden = (i: number) => {
+    let h = hiddenMemo.get(i);
+    if (!h) { h = carriedOver(i, segs.length, view); hiddenMemo.set(i, h); }
+    return h;
+  };
+  const shows = (i: number) => {
+    const v = view(i);
+    return !!v && v.items.length > hidden(i).size;
+  };
   let s = seg;
   let i = at;
   for (;;) {
     const v = view(s);
     if (i > 0 && v) {
-      for (let k = Math.min(i, v.items.length) - 1; k >= 0; k--) yield { item: v.items[k], seg: s, at: k };
+      const h = hidden(s);
+      for (let k = Math.min(i, v.items.length) - 1; k >= 0; k--) if (!h.has(k)) yield { item: v.items[k], seg: s, at: k };
     }
     // Above the start of segment s: the next older generation that shows anything, if any.
     let t = s - 1;
-    while (t >= 0 && !(view(t)?.items.length)) t--;
+    while (t >= 0 && !shows(t)) t--;
     if (t < 0) return;
-    if (i >= 0 && v && v.items.length) yield { item: rotationMarker(segs[t], segs[s]), seg: s, at: -1 };
+    if (i >= 0 && shows(s)) yield { item: rotationMarker(segs[t], segs[s]), seg: s, at: -1 };
     s = t;
     i = Number.POSITIVE_INFINITY;
   }
@@ -1030,6 +1074,11 @@ export function sanitizeClaudeUserText(text: string): string {
   // on every Back to chat, a switch-on leaves one behind, and on a headless seat typed by hand it IS Back to chat.
   // Its reply ("Goodbye!") is local-command output, already dropped above.
   if (name && /^\/(exit|quit)$/.test(name[1].trim())) return '';
+  // A person's /compact is not conversation either: our rotation runs it (the supervisor never passes it to the CLI)
+  // and the chat shows the compaction notice instead. Only the command itself, as the whole message: a sentence that
+  // mentions /compact is what someone said and stays.
+  if (name && name[1].trim() === '/compact') return '';
+  if (/^\/compact(?:[ \t][^\n]*)?$/.test(t.trim())) return '';
   if (name) {
     const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(t);
     const typed = [name[1].trim(), (args?.[1] || '').trim()].filter(Boolean).join(' ');
@@ -1582,6 +1631,17 @@ export function buildRenderItems(items: any[]): any[] {
       nodes.push(withAudience(node, it));
       continue;
     }
+    if (it.kind === 'compaction') {
+      // The compaction notice: one node per notice, keyed by its id so it updates in place.
+      const node: any = {
+        kind: 'compaction', id: it.id, state: it.state, trigger: it.trigger ?? 'auto', finished_at: it.finished_at ?? null,
+        before_tokens: it.before_tokens ?? null, after_tokens: it.after_tokens ?? null,
+      };
+      if (it.ts !== undefined) node.ts = it.ts;
+      node.key = it.id || key;
+      nodes.push(withAudience(node, it));
+      continue;
+    }
     if (it.kind === 'queued_batch') {
       // B2 processed-batch div (queued-native-render): passthrough as a render node.
       const node: any = { kind: 'queued_batch', count: it.count ?? (Array.isArray(it.entries) ? it.entries.length : 0), entries: it.entries || [] };
@@ -1898,14 +1958,16 @@ export function normalizeTranscript(
   includeQueued = false,
   previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
-  let all = dropWarmup(logItems(lines, antigravityHint), warmupMarkFor(agentId, sessionId).mark);
+  let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint), warmupMarkFor(agentId, sessionId).mark), storeRules(sessionId));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
   // strip. The previous log is read only when this one alone does not fill the window.
   if (previous && all.length < limit) {
     let before: any[] | null = null;
-    try { before = logItems(previous.lines(), previous.antigravity); } catch { before = null; }  // unreadable: this log alone
+    try {
+      before = applyStoreRules(logItems(previous.lines(), previous.antigravity), storeRules(String(previous.divider.from_session ?? '') || null));
+    } catch { before = null; }  // unreadable: this log alone
     if (before) all = [...before, { ...previous.divider, audience: 'user' }, ...all];
   }
   return {
@@ -1956,6 +2018,24 @@ function keepOlderPageSynthetics(items: any[], logged: Set<any>, cursorMs: numbe
   });
 }
 
+/** The seat's compaction notices placed in a window by time (services/conversation-store.ts), unless the seat's
+ *  `show_compaction` is off. The newest window holds the notices from its first item on (all of them when it is the
+ *  whole chat); an older page holds those from its first item (or from the start, when nothing is older) up to its
+ *  cursor, so pages chained by oldest_id carry each notice once. Fail-open: the window as it was. */
+function withNotices(agentId: string, win: { items: any[]; has_older: boolean; cursor_ts: string | null }, limit: number,
+                     before: string | null): any[] {
+  try {
+    if (!readSeatSettings(dataDir(), agentId).show_compaction) return win.items;
+    const notices = compactionNotices(agentId);
+    if (!notices.length) return win.items;
+    const firstTs = win.items.find((it) => it?.ts)?.ts ?? null;
+    const whole = before === null ? win.items.length < limit : !win.has_older;
+    return mergeNotices(win.items, notices, { from: whole ? null : firstTs, to: before === null ? null : win.cursor_ts });
+  } catch {
+    return win.items;
+  }
+}
+
 // GET /api/agents/:id/transcript?limit= -> v2 envelope
 // { agent_id, session_id, grammar_version, items, render_items }
 // GET /api/agents/:id/transcript?before=<cursor>&limit= -> the page just older than the cursor (a
@@ -2002,7 +2082,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
       return;
     }
     const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
-    const body = finishWindow(win.items, agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs });
+    const body = finishWindow(withNotices(agentId, win, limit, before), agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs });
     const env: Record<string, unknown> = { agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, ...body };
     if (before !== null) { env.has_older = win.has_older; env.oldest_id = win.oldest_id; }
     res.json(env);

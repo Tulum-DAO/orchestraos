@@ -27,6 +27,7 @@ import { parseSystemMessage, type SystemMessage, type MachineKind } from '../../
 import AgentMessage from './AgentMessage';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/threadKit/calls';
 import CallCard from '../kit/CallCard';
+import CompactionRow from '../kit/CompactionRow';
 import { type ToolDensity } from '../../lib/toolCardDetail';
 
 /**
@@ -425,6 +426,8 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
     }
     case 'queued_batch':
       return <QueuedBatchCard count={node.count} entries={node.entries} />;
+    case 'compaction':
+      return <CompactionRow state={node.state} trigger={node.trigger} />;
     case 'result':
       return <ResultCard results={node.results} skin="bubbles" view={node.view} />;
     case 'assistant':

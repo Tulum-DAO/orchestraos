@@ -189,3 +189,11 @@ def test_a_non_claude_seat_never_reads_a_claude_file(tmp_path, monkeypatch):
 def test_etime_parses_every_ps_form():
     e = _agent_status()._etime_s
     assert (e("05:07"), e("01:05:07"), e("2-01:05:07"), e("garbage")) == (307, 3907, 176707, None)
+
+
+def test_zero_used_is_no_reading_yet_not_an_empty_seat(tmp_path):
+    # Claude Code's "0% used" (100% remaining) comes before it has any reading: shown as 0 it reads as an empty seat.
+    tr = _seat(tmp_path, remaining=100, used_pct=0)
+    assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (None, None)
+    tr = _seat(tmp_path, remaining=99, used_pct=1)
+    assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (1, 1)

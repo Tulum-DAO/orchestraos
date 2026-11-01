@@ -1,0 +1,39 @@
+/* RotationSettings: the two compaction rows in an agent's Setup. Colours come from the drawer's own variables
+   (arturo.css), so both themes follow it. */
+.rotation-settings{ border-top:1px solid var(--hair); margin-top:12px; }
+.rotation-switch{ position:relative; flex:0 0 auto; width:44px; height:26px; border-radius:13px; border:0; padding:0;
+  background:var(--hair); cursor:pointer; transition:background .15s; }
+.rotation-switch.is-on{ background:#3b82f6; }
+.rotation-switch:disabled{ opacity:.5; cursor:default; }
+.rotation-switch-knob{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .15s; }
+.rotation-switch.is-on .rotation-switch-knob{ transform:translateX(18px); }
+.rotation-switch:focus-visible, .rotation-step:focus-visible, .rotation-number input:focus-visible{ outline:2px solid #3b82f6; outline-offset:2px; }
+.rotation-stepper{ display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+.rotation-step{ width:32px; height:32px; border-radius:8px; border:1px solid var(--hair); background:none; color:var(--text);
+  display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.rotation-step:disabled{ color:var(--grey2); cursor:default; }
+.rotation-number{ display:flex; align-items:center; gap:2px; color:var(--grey); font-size:15px; }
+.rotation-number input{ width:3.2em; height:32px; text-align:right; border:1px solid var(--hair); border-radius:8px; background:none;
+  color:var(--text); font:inherit; font-size:15px; padding:0 6px; }
+.rotation-number input[aria-invalid="true"]{ border-color:var(--err-soft); }
+.rotation-status{ font-size:13px; color:var(--grey); margin:6px 2px 0; }
+.rotation-note{ margin:4px 2px 10px; }
+.rotation-note.is-disabled, .arturo-panel-field.is-disabled label{ color:var(--grey2); }
+/* index.css gives every control min-height:44px on phones (touch targets), which stretched the switch and the stepper
+   out of shape. They keep their drawn size and meet the 44px target with an invisible tap area instead. */
+.rotation-switch, .rotation-step, .rotation-number input{ min-height:0; }
+.rotation-step{ position:relative; }
+.rotation-switch::after{ content:''; position:absolute; inset:-9px 0; }
+.rotation-step::after{ content:''; position:absolute; inset:-6px; }
+/* "Compact now": a small button at the row's end, in the switch's blue; its line under it says how it went. */
+.rotation-compact{ flex:0 0 auto; min-width:84px; height:32px; min-height:0; padding:0 14px; border-radius:16px; border:0;
+  background:#3b82f6; color:#fff; font:inherit; font-size:14px; font-weight:500; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center; position:relative; }
+.rotation-compact:disabled{ background:var(--hair); color:var(--grey2); cursor:default; }
+.rotation-compact::after{ content:''; position:absolute; inset:-6px 0; }
+.rotation-compact:focus-visible{ outline:2px solid #3b82f6; outline-offset:2px; }
+.rotation-compact-line{ margin:4px 2px 10px; }
+.rotation-compact-line.is-done{ color:var(--text); }
+.rotation-compact-line.is-error{ color:var(--err-soft); }
+.arturo-panel-field.is-disabled > span{ color:var(--grey2); }

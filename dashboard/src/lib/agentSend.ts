@@ -50,6 +50,8 @@ export interface AgentSendResult {
   stranded?: { text?: string; age_s?: number };
   payload?: { text?: string; attachments?: SendAttachment[]; client_caps?: string[] };
   error?: string;
+  /** A refusal's reason in words, from the server (a "/compact" the agent cannot do yet): said as it is. */
+  detail?: string;
 }
 
 const CLIENT_CAPS = ['send-states'];
@@ -149,7 +151,7 @@ export function describeSendState(result: AgentSendResult): string {
   if (isComposerHold(result)) return STATE_COPY.stranded;
   if (isUnknown(result)) return COULDNT_CONFIRM;
   if (isFailed(result)) {
-    return result.error
+    return result.detail || result.error
       || (result.httpStatus ? `Send failed (HTTP ${result.httpStatus}) — not delivered` : 'Send failed — not delivered');
   }
   // 'busy_working' is a server CODE (agent-send.ts: mid-turn, the CLI queues natively), not a
