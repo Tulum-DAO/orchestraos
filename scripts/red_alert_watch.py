@@ -363,6 +363,17 @@ def _healthy(seat: str) -> tuple[bool, dict]:
     return RA.classify(ev, seat) is None and not ev["pane_dead"][seat], ev
 
 
+def headless_launch_line(seat: str) -> str | None:
+    """The supervisor line for a seat switched headless, else None (any read failure: None, the usual resume)."""
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import seat_supervisor
+        return seat_supervisor.launch_line(seat)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     """HARD RULE (the operator, 2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
@@ -372,7 +383,9 @@ def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     procs = ev["process_state"].get(seat) or []
     if procs:
         return False, f"process still present ({len(procs)} pids, e.g. {procs[0].get('stat')}) — refusing to respawn (no kills rule); card only"
-    cmd = resume_cmd([], ev["registry_rows"].get(seat))
+    # A seat switched headless comes back as its supervisor (spawn's environment around seat_supervisor.py run),
+    # never as a TUI the router and gateway would not deliver to.
+    cmd = headless_launch_line(seat) or resume_cmd([], ev["registry_rows"].get(seat))
     if not cmd:
         return False, "no resume command derivable (no registry resume_command, no sid)"
     cwd = (ev["registry_rows"].get(seat) or {}).get("cwd") or ORCH

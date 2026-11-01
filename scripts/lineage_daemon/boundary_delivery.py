@@ -198,6 +198,10 @@ def _real_f11_ok(session):
         import importlib
         A = importlib.import_module("agent-status")
         st = A.get_agent_status(session)
+        # A headless seat's held question or permission (agent-status `held_request`) is its menu: the CLI is
+        # waiting on an answer, so mail waits for the boundary after it.
+        if isinstance(st, dict) and isinstance(st.get("held_request"), dict):
+            return False
         menu = st.get("pending_menu") if isinstance(st, dict) else None
         return not (isinstance(menu, dict) and menu.get("kind")
                     in ("permission", "options", "menu"))

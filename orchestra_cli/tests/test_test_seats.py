@@ -163,3 +163,30 @@ def test_a_refused_agent_create_writes_nothing(box, tmp_path, monkeypatch, capsy
     assert not (box.root / "prompts" / "qa-demo.md").exists()             # nothing rendered
     assert M.main(args + ["--test"]) == 0                                 # so the right call still works
     assert (box.root / "prompts" / "qa-demo.md").exists()
+
+
+def test_retire_switches_a_headless_seat_off_and_clears_its_dev_marker(box, tmp_path, monkeypatch, capsys):
+    _ready(box, tmp_path, monkeypatch)
+    import headless_switch as HS
+    assert M.main(["spawn", "qa-demo", "--runtime", "codex", "--test"]) == 0
+    # (the switch accepts claude only; a codex row is fine here, the entry is written as it would be for claude)
+    (box.data / "state").mkdir(exist_ok=True)
+    HS.switch_path(box.data).write_text(json.dumps({"seats": {"qa-demo": {"headless": True, "runtime": "claude",
+                                                                          "message_uuid": False}}}))
+    d = HS.seat_dir("qa-demo", box.data)
+    d.mkdir(parents=True)
+    (d / "dev").write_text("{}")
+    (d / "events.jsonl").write_text("{}\n")
+    res = SE.retire_seat(SE.S.load_settings(), "qa-demo", reason="proof done")
+    assert res["headless_off"] is True
+    entry = HS.load_switch(box.data)["qa-demo"]
+    assert entry["headless"] is False and entry["by"] == "orchestra retire" and entry["message_uuid"] is False
+    assert not (d / "dev").exists() and (d / "events.jsonl").exists()      # its log is kept
+
+
+def test_retire_of_a_seat_never_switched_leaves_no_entry(box, tmp_path, monkeypatch):
+    _ready(box, tmp_path, monkeypatch)
+    import headless_switch as HS
+    assert M.main(["spawn", "dev-demo", "--runtime", "codex"]) == 0
+    res = SE.retire_seat(SE.S.load_settings(), "dev-demo", reason="done")
+    assert res["headless_off"] is False and "dev-demo" not in HS.load_switch(box.data)

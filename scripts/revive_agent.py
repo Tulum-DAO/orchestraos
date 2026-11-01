@@ -9,6 +9,11 @@
 
 Either way it returns as soon as Claude is running in the agent's new pane (a few seconds); the spawn finishes
 in the background.
+
+A seat switched HEADLESS (scripts/headless_switch.py) comes back as its supervisor in its pane (which resumes the
+session headless), never as a TUI the router and gateway would not deliver to: in its pane when the pane is back at
+its shell, else in a new session of its name. A fresh start of a headless seat is refused for now (it would be a new
+generation, which belongs with headless rotation).
 """
 import json
 import os
@@ -106,11 +111,63 @@ def resume(root, orchestra_dir=None, directory=None, spawn=None, session_up=fs._
     return {"id": root, "name": seat.get("name") or root, "mode": "resume", "session_up": up}
 
 
+def _headless(root, orchestra_dir):
+    try:
+        from scripts import headless_switch as HS
+        return HS.is_headless(root, orch_dir=orchestra_dir)
+    except Exception:  # noqa: BLE001 — default off: revive as before
+        return False
+
+
+def _tmux(*args):
+    return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=10)
+
+
+def resume_headless(root, orchestra_dir, *, tmux=_tmux, takeover=None, status=None, wait_s=None) -> dict:
+    """Bring a headless seat back: its supervisor in its pane (the pane's shell when the session is there, a new
+    session of its name otherwise). Raises NotStartable when its supervisor already answers, or the pane is busy
+    with something else."""
+    from scripts import headless_switch as HS
+    from scripts import seat_supervisor as SS
+    status = status or (lambda: HS.status(root, orch_dir=orchestra_dir))
+    takeover = takeover or (lambda: SS.takeover(root, orch_dir=orchestra_dir, tmux=tmux))
+    try:
+        status()
+        raise NotStartable(f"{root} is already running (headless)")
+    except HS.SupervisorDown:
+        pass
+    rec = briefing.seat_record(root, orchestra_dir)
+    session = rec.get("tmux_session") or root
+    if tmux("has-session", "-t", f"={session}").returncode != 0:
+        r = tmux("new-session", "-d", "-s", session, "-c", rec.get("cwd") or str(orchestra_dir))
+        if r.returncode != 0:
+            raise NotStartable(f"{root}: could not start its tmux session ({(r.stderr or '').strip()[:200]})")
+        time.sleep(0.5)
+    ok, why = takeover()
+    if not ok:
+        raise NotStartable(f"{root} runs headless and could not be started in its pane: {why}")
+    deadline = time.monotonic() + (fs.SESSION_WAIT_S if wait_s is None else wait_s)
+    up = False
+    while not up and time.monotonic() <= deadline:
+        try:
+            status()
+            up = True
+        except HS.SupervisorDown:
+            time.sleep(0.25)
+    return {"id": root, "name": rec.get("name") or root, "mode": "resume", "headless": True, "session_up": up}
+
+
 def revive(root, mode="auto", orchestra_dir=None, **kw) -> dict:
     """resume | fresh | auto (resume when its last session can be resumed, else fresh)."""
     if mode not in ("auto", "resume", "fresh"):
         raise ValueError("mode must be auto, resume or fresh")
     od = briefing.data_dir(orchestra_dir)
+    if _headless(base_id(root), od):
+        if mode == "fresh":
+            raise NotStartable(f"{base_id(root)} runs headless: a fresh start is not available for it yet. Resume it, "
+                               f"or switch it off (seat_supervisor.py switch off) and start it fresh as a terminal seat")
+        return resume_headless(base_id(root), od, **{k: v for k, v in kw.items()
+                                                     if k in ("tmux", "takeover", "status", "wait_s")})
     if mode == "auto":
         mode = "resume" if resumable_session(base_id(root), od, kw.get("home")) else "fresh"
     if mode == "resume":
