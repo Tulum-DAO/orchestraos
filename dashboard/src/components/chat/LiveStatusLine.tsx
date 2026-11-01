@@ -12,6 +12,7 @@
 import { Loader2, CircleSlash, HandMetal, WifiOff } from 'lucide-react';
 import { normalizeAgentState, type LiveState, offersResume, QUEUED_LINE } from '../../lib/agentStatus';
 import { lastSeenLabel, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
+import { stepElapsed, stepText, type AgentStep } from '../../lib/liveStep';
 
 export interface LiveStatusProps {
   state?: string;
@@ -20,6 +21,8 @@ export interface LiveStatusProps {
   stateAgeS?: number;
   /** The tool the agent is in right now, when the detector knows. */
   tool?: string;
+  /** What it is doing right now, in detail (lib/liveStep.ts): its words replace "Working · <tool>" while it works. */
+  step?: AgentStep | null;
   onResume?: () => void;
 }
 
@@ -30,7 +33,7 @@ function elapsed(s?: number): string {
   return m < 60 ? `${m}m ${Math.round(s % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveStatusProps) {
+export function LiveStatusLine({ state, feed, stateAgeS, tool, step, onResume }: LiveStatusProps) {
   // DISCONNECTED OUTRANKS EVERY AGENT STATE: with no live feed we cannot claim what it is doing.
   if (feed && isDegraded(feed)) {
     return (
@@ -56,6 +59,37 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
   // Capped and centred on the SAME column as the transcript and the composer: three stacked
   // elements with three different widths is the ragged-edge problem one level up.
   const base = 'w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px]';
+
+  // THE LIVE STEP, when there is one and the agent is up: what it is doing, in words. A stopped, crashed, offline or
+  // retired agent keeps its own line below (it offers the one action that helps).
+  if (step && !(st === 'stopped' || st === 'crashed' || st === 'offline' || st === 'retired')) {
+    if (step.kind === 'tool' || step.kind === 'thinking') {
+      const how = stepElapsed(step);
+      return (
+        <div className={`${base} text-tone-orange-300`} role="status" data-step={step.kind}>
+          <Loader2 size={12} className="animate-spin shrink-0" />
+          <span className="truncate">{stepText(step)}</span>
+          {how && <span className="shrink-0 text-tone-500">· {how}</span>}
+        </div>
+      );
+    }
+    if (step.kind === 'waiting') {
+      return (
+        <div className={`${base} text-tone-amber-300`} role="status" data-step="waiting">
+          <HandMetal size={12} className="shrink-0" />
+          <span>{stepText(step)}</span>
+        </div>
+      );
+    }
+    if (st !== 'queued' && st !== 'stranded') {
+      return (
+        <div className={`${base} text-tone-green-400`} role="status" data-step="idle">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+          <span>Idle · ready for a message</span>
+        </div>
+      );
+    }
+  }
 
   if (st === 'working' || st === 'stalled') {
     const where = tool ? ` · ${tool}` : '';

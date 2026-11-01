@@ -235,7 +235,7 @@ def _real_inject(head, text):
             token = fh.read().strip()
     except OSError:
         pass
-    body = json.dumps({"session": head, "text": text}).encode()
+    body = json.dumps({"session": head, "text": text, "source": "mail"}).encode()
     req = urllib.request.Request(
         f"{gateway}/agent-message", data=body, method="POST",
         headers={"Content-Type": "application/json",

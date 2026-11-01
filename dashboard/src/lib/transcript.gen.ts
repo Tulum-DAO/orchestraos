@@ -12,7 +12,8 @@ export type ChatItem =
   | ToolUseItem
   | ToolResultItem
   | QueuedBatchItem
-  | RotationItem;
+  | RotationItem
+  | CompactionItem;
 
 export interface TextItem {
   audience?: 'user' | 'agent';
@@ -107,6 +108,19 @@ export interface RotationItem {
   to_session: string;
 }
 
+export interface CompactionItem {
+  audience?: 'user' | 'agent';
+  kind: 'compaction';
+  id: string;
+  uuid?: string;
+  state: 'compacting' | 'compacted' | 'failed';
+  trigger?: 'auto' | 'manual';
+  ts: string;
+  finished_at?: string | null;
+  before_tokens?: number | null;
+  after_tokens?: number | null;
+}
+
 export interface LiveTextBlock {
   uuid: string | null;
   text: string;
@@ -126,7 +140,8 @@ export type RenderItem =
   | RenderThinking
   | RenderTool
   | RenderQueuedBatch
-  | RenderRotation;
+  | RenderRotation
+  | RenderCompaction;
 
 export interface RenderUser {
   audience?: 'user' | 'agent';
@@ -191,6 +206,19 @@ export interface RenderRotation {
   to_generation: number;
   from_session: string;
   to_session: string;
+  key: string;
+}
+
+export interface RenderCompaction {
+  audience?: 'user' | 'agent';
+  kind: 'compaction';
+  id: string;
+  state: 'compacting' | 'compacted' | 'failed';
+  trigger?: 'auto' | 'manual';
+  ts: string;
+  finished_at?: string | null;
+  before_tokens?: number | null;
+  after_tokens?: number | null;
   key: string;
 }
 

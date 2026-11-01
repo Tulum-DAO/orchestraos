@@ -169,3 +169,59 @@ test('paged to the start of a numbered thread while the view keeps adding turns:
   assert.equal(items.filter((t) => t.seq === undefined).length, 2, 'two pages read: the view\'s own turns once each, after the stored ones');
   assert.ok(items.slice(-2).every((t) => t.seq === undefined));
 });
+
+// --- a seat that has compacted: notices (cmp-<n>) and markers between conversations (rot:<session>) in the items ---
+
+test('the first cursor skips a compaction notice and a marker between conversations: the first real line', () => {
+  const win = [
+    { kind: 'compaction', id: 'cmp-2', uuid: 'cmp-2', state: 'compacted' },
+    { kind: 'rotation', role: 'system', uuid: 'rot:s-example-3' },
+    { kind: 'text', role: 'user', uuid: 'line-40', text: 'Sample question' },
+    { kind: 'text', role: 'assistant', uuid: 'line-41', text: 'Example answer' },
+  ];
+  assert.equal(firstCursor(win), 'line-41');            // line-40 may be cut (the window's top): the next whole line
+  assert.equal(firstCursor(win.slice(0, 2)), null);      // nothing a cursor can name
+  assert.equal(firstCursor([win[0], win[2]]), 'line-40');
+});
+
+test('paged back across five generations to the first message: every line, notice and marker once, in order', () => {
+  // Five generations of 60 lines each; each later generation starts with a marker and the notice of its switch.
+  type It = { kind: string; uuid: string; ts: number; id?: string; text?: string; role?: string };
+  const all: It[] = [];
+  let t = 0;
+  for (let g = 1; g <= 5; g++) {
+    if (g > 1) {
+      all.push({ kind: 'compaction', id: `cmp-${g}`, uuid: `cmp-${g}`, ts: t++ });
+      all.push({ kind: 'rotation', role: 'system', uuid: `rot:s-${g}`, ts: t++ });
+    }
+    for (let n = 0; n < 60; n++) all.push({ kind: 'text', role: n % 2 ? 'assistant' : 'user', uuid: `g${g}-${n}`, ts: t++, text: `Sample ${g}.${n}` });
+  }
+  all[0].text = 'From now on, end every reply with the Example word.';
+  // The route: pages only from a real line's uuid (anything else: unknown cursor). A page holds the `limit` lines
+  // before it, with the notices and markers in its time range.
+  const route = (before: string, limit = 40) => {
+    const at = all.findIndex((x) => x.uuid === before && x.kind === 'text');
+    if (at < 0) return { items: [] as It[], hasOlder: false, next: null as string | null, error: 'unknown cursor' };
+    let start = at, lines = 0;
+    while (start > 0 && lines < limit) { start--; if (all[start].kind === 'text') lines++; }
+    const page = all.slice(start, at);
+    const firstLine = page.find((x) => x.kind === 'text');
+    return { items: page, hasOlder: start > 0, next: firstLine ? firstLine.uuid : null };
+  };
+  // Two live windows: one deep in the last generation, and one whose top is the last line before a switch (its notice
+  // and marker then come in the window AND in the first older page).
+  for (const from of [all.length - 70, all.findIndex((x) => x.uuid === 'g4-59')]) {
+    const live = all.slice(from);
+    let list: It[] = [];
+    let cursor = firstCursor(live);
+    for (let guard = 0; cursor && guard < 20; guard++) {
+      const page = route(cursor);
+      assert.ok(!('error' in page && page.error), `cursor ${cursor} is a real line`);
+      list = joinHead(page.items, joinTail(list, live, k as never).items, k as never);
+      cursor = page.hasOlder ? page.next : null;
+    }
+    const items = joinTail(list, live, k as never).items as It[];
+    assert.equal(items[0].text, 'From now on, end every reply with the Example word.');
+    assert.deepEqual(items.map((x) => x.uuid), all.map((x) => x.uuid));
+  }
+});

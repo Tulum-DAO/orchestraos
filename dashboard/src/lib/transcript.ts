@@ -17,8 +17,12 @@
 // the exact web-vs-iOS drift the contract exists to kill.
 import type { ChatItem as GenChatItem, TranscriptEnvelope } from './transcript.gen';
 import type { ResultNode } from './threadKit/results';
+import { compactionText, isCompaction, type CompactionItem } from './compaction';
+import { isTranscriptLine } from './threadKit/paging';
 
-export type ChatItem = GenChatItem;
+// The compaction notice (lib/compaction.ts) is a transcript item the generated contract types do not name yet; it
+// joins the union here until they do.
+export type ChatItem = GenChatItem | CompactionItem;
 export type TranscriptResponse = TranscriptEnvelope;
 export { GRAMMAR_VERSION } from './transcript.gen';
 
@@ -48,6 +52,8 @@ export type RenderNode =
   | { kind: 'assistant'; text: string; ts?: string; key: string }
   | { kind: 'thinking'; text: string; ts?: string; key: string }
   | { kind: 'queued_batch'; count: number; entries: BatchEntryNode[]; ts?: string; key: string }
+  /** The chat's compaction notice (lib/compaction.ts): one line that changes in place, keyed by the notice's id. */
+  | { kind: 'compaction'; state: CompactionItem['state']; trigger?: CompactionItem['trigger']; ts?: string; key: string }
   | ToolBlock
   /** Finished work (lib/threadKit/results.ts markResults): one result or a stack. Built on the client. */
   | ResultNode;
@@ -73,6 +79,13 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
   // older pages added above, or the live window's top moving down, must not rename (and so redraw) every row.
   const seen = new Map<string, number>();
   for (const it of items) {
+    if (it.kind === 'compaction') {
+      if (isCompaction(it) && compactionText(it.state, it.trigger)) {
+        nodes.push({ kind: 'compaction', state: it.state, ...(it.trigger ? { trigger: it.trigger } : {}), ts: it.ts, key: it.id });
+      }
+      i++;
+      continue;
+    }
     let key: string;
     if ('uuid' in it && it.uuid) {
       const n = seen.get(it.uuid) ?? 0;
@@ -240,5 +253,16 @@ export async function fetchOlderTranscript(agentId: string, before: string, limi
   const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/transcript?before=${encodeURIComponent(before)}&limit=${limit}`);
   if (!res.ok) throw new Error(`transcript ${agentId}: ${res.status}`);
   const body = await res.json() as TranscriptResponse & { has_older?: boolean; oldest_id?: string | null };
-  return { items: body.items || [], hasOlder: !!body.has_older && !body.error, next: body.oldest_id ?? null };
+  const items = body.items || [];
+  // The next cursor is the route's own oldest_id, a transcript line's uuid; should it ever name a notice or a marker
+  // between conversations instead, the page's first real line stands in (the route pages only from those).
+  const oldest = body.oldest_id ?? null;
+  const next = oldest && isTranscriptLine({ uuid: oldest }) ? oldest : firstLineUuid(items);
+  return { items, hasOlder: !!body.has_older && !body.error, next };
+}
+
+/** The uuid of a page's first real transcript line (not a notice, not a marker), or null. */
+function firstLineUuid(items: readonly object[]): string | null {
+  const it = items.find(isTranscriptLine) as { uuid?: string } | undefined;
+  return it?.uuid ?? null;
 }

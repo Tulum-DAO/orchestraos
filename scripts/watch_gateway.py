@@ -2738,7 +2738,7 @@ def _status_runtime(st) -> str:
     return (rt or "").strip().lower()
 
 
-def verified_inject(session, text, force=False, idle_only=False):
+def verified_inject(session, text, force=False, idle_only=False, source="mail"):
     """_verified_inject_locked under the ONE cross-process pane lock (pane_lock.py) for the WHOLE
     call, gates included: the composer read that protects the operator's typed text must not race another
     typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
@@ -2748,13 +2748,35 @@ def verified_inject(session, text, force=False, idle_only=False):
     A seat switched to headless (scripts/headless_switch.py, Claude only, default off) is not
     typed into: its words go to the seat's supervisor over stdin instead (_headless_inject)."""
     hl_seat = _headless_seat_for(session)
+    if source == "person" and (text or "").strip() == "/compact" and not _compact_allowed(session, hl_seat):
+        # A person's /compact is our switch, never the CLI's own; until it is turned on for a seat, nothing is sent
+        # anywhere: not to the pane, not to the supervisor.
+        return False, {"reason": "compact_refused", "detail": COMPACT_OFF}
     if hl_seat:
-        return _headless_inject(hl_seat, text, idle_only=idle_only)
+        return _headless_inject(hl_seat, text, idle_only=idle_only, source=source)
     with _pane_guard(session) as _pane_held:
         if not _pane_held:
             return False, {"reason": "busy", "state": "busy",
                            "activity": "another sender is typing into this pane"}
         return _verified_inject_locked(session, text, force, idle_only)
+
+
+COMPACT_OFF = "Compacting isn't turned on for this agent yet."
+
+
+def _is_test_seat(session) -> bool:
+    """Its registry row says test: true (by seat id or tmux session), the router's own test-seat rule."""
+    reg = (_load_json(ORCH_DIR / "registry.json") or {}).get("agents") or {}
+    for name, row in reg.items():
+        if isinstance(row, dict) and row.get("test") is True and session in (name, row.get("tmux_session")):
+            return True
+    return False
+
+
+def _compact_allowed(session, hl_seat=None) -> bool:
+    """Whether a person's /compact may run for this seat: only a TEST seat that runs headless, until the operator
+    turns compacting on for real seats (then this is the one line to change)."""
+    return bool(hl_seat) and _is_test_seat(session)
 
 
 def _headless_seat_for(session):
@@ -2768,7 +2790,7 @@ def _headless_seat_for(session):
         return None
 
 
-def _headless_inject(seat, text, idle_only=False):
+def _headless_inject(seat, text, idle_only=False, source="mail"):
     """verified_inject for a headless seat: the message is handed to the seat's supervisor,
     which writes it to the warm process's stdin once (it dedupes by id) and reports queued,
     then delivered when the CLI echoes it. Same reply shape as the pane path, so every caller
@@ -2789,7 +2811,7 @@ def _headless_inject(seat, text, idle_only=False):
     text = (text or "").rstrip("\r\n")
     msg_id = f"gw-{_uuid.uuid4().hex}"
     try:
-        out = headless_switch.send(seat, text, msg_id)
+        out = headless_switch.send(seat, text, msg_id, source=source)
     except headless_switch.SupervisorDown as e:
         return False, {"reason": "busy", "state": "offline", "headless": True,
                        "activity": f"the seat's headless supervisor is not running ({e})"}
@@ -5140,6 +5162,9 @@ async def handle_agent_message(request):
     session = str(data.get("session", "")).strip()
     text = str(data.get("text", "")).strip()
     force = bool(data.get("force"))
+    # Who is sending: a person's surface (the dashboard, the phone, the watch) unless the caller says it is mail
+    # (the lineage daemon's deliveries do). Only a person's /compact starts a switch.
+    source = "mail" if data.get("source") == "mail" else "person"
     if not session or not text:
         return _json({"ok": False, "error": "session and text required"}, status=400)
     refusal = _protected_refusal(request, session)
@@ -5153,7 +5178,10 @@ async def handle_agent_message(request):
 
     import asyncio
     ok, info = await asyncio.get_event_loop().run_in_executor(
-        None, verified_inject, session, text, force)
+        None, lambda: verified_inject(session, text, force, source=source))
+    if not ok and info.get("reason") == "compact_refused":
+        # A plain refusal the person reads as is ("Compacting isn't turned on for this agent yet."): nothing was sent.
+        return _json({"ok": False, "delivered": False, **info}, status=409)
     if not ok and info.get("reason") == "busy":
         # §9.6 P0: ONLY the pure mid-turn 'working' refusal converts to hold.
         # A stranded dict or an unsubmitted composer_text keeps the legacy 409

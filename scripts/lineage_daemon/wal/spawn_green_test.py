@@ -19,6 +19,22 @@ from lineage_daemon.wal import spawn_green  # noqa: E402
 from lineage_daemon.wal.bg_state import BgStateStore  # noqa: E402
 
 
+# FENCE: these sessions are real tmux sessions, so they go to a PRIVATE tmux server (its own TMUX_TMPDIR, $TMUX
+# unset) for every test here, never the box's real one; the server goes when the test does. The suite-wide guard
+# (conftest.py) refuses a `tmux new-session` on the real server.
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.fixture(autouse=True)
+def _private_tmux_server(tmp_path_factory, monkeypatch):
+    sock = tmp_path_factory.mktemp("tmux")
+    monkeypatch.setenv("TMUX_TMPDIR", str(sock))
+    monkeypatch.delenv("TMUX", raising=False)
+    yield
+    if os.environ.get("TMUX_TMPDIR") == str(sock) and not os.environ.get("TMUX"):   # only ever the private server
+        subprocess.run(["tmux", "kill-server"], capture_output=True, timeout=5)
+
+
 def _tmux(*args):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5)
 

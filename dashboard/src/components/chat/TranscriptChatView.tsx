@@ -10,6 +10,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from '../../lib/useStickToBottom';
+import { addNotice, latestNotice, withNotices, type CompactionItem } from '../../lib/compaction';
+import { useCompactionNotices } from '../../stores/compactionNotices';
+import { stepFrom } from '../../lib/liveStep';
+import { useAgentSteps } from '../../stores/agentSteps';
 import { buildRenderList, fetchOlderTranscript, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { useNearTop, useOlderPages } from '../../lib/threadKit/useOlderPages';
 import { firstCursor, transcriptKey } from '../../lib/threadKit/paging';
@@ -85,6 +89,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const [liveEv, setLiveEv] = useState<{ agentId: string; ev: LiveTextEvent } | null>(null);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
+  // Compaction notices the stream sent (lib/compaction.ts), by id, kept with the agent they came from: the stream's
+  // snapshots and deltas carry the transcript's lines only, so these are laid into the items on read.
+  const [notices, setNotices] = useState<{ agentId: string; byId: Record<string, CompactionItem> }>({ agentId, byId: {} });
   const scrollRef = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
   // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT, and otherwise keep what they are reading exactly where it is
@@ -121,6 +128,11 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     tick(); // instant backfill regardless of stream health
     const disposeStream = subscribeTranscriptStream(agentId, 150, {
       onLiveText: (ev) => { if (!cancelled) setLiveEv(ev.text ? { agentId, ev } : null); },
+      // What the agent is doing now, for the line under the chat (stores/agentSteps).
+      onStep: (st) => { if (!cancelled) useAgentSteps.getState().set(agentId, stepFrom(st)); },
+      onCompaction: (n) => {
+        if (!cancelled) setNotices((s) => ({ agentId, byId: addNotice(s.agentId === agentId ? s.byId : {}, n) }));
+      },
       onItems: (its) => {
         if (cancelled) return;
         streamLive = true;
@@ -138,6 +150,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
 
     return () => {
       cancelled = true;
+      useAgentSteps.getState().drop(agentId);
       disposeStream();
       if (pollIv) clearInterval(pollIv);
     };
@@ -148,7 +161,13 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // cursor (`oldest_id`); the first from the first item of the live window that starts a log line of its own, since
   // the window's top can start partway through one line (the older page brings that line back whole).
   const loadPage = useCallback(async (before: string) => fetchOlderTranscript(agentId, before), [agentId]);
-  const paged = useOlderPages<ChatItem>({ live: items, keyOf: transcriptKey, firstCursor, load: loadPage, resetKey: agentId,
+  // The live window with the stream's notices in it (a notice the window already holds is updated where it stands).
+  const liveItems = useMemo(() => (notices.agentId === agentId ? withNotices(items, notices.byId) : items) as ChatItem[],
+    [items, notices, agentId]);
+  // The newest notice, for "Compact now" in the slideout (stores/compactionNotices).
+  const newest = useMemo(() => latestNotice(liveItems), [liveItems]);
+  useEffect(() => { if (!fixtureItems) useCompactionNotices.getState().set(agentId, newest); }, [agentId, newest, fixtureItems]);
+  const paged = useOlderPages<ChatItem>({ live: liveItems, keyOf: transcriptKey, firstCursor, load: loadPage, resetKey: agentId,
     enabled: !fixtureItems && !loading });
   const sentinelRef = useRef<HTMLDivElement>(null);
   useNearTop(scrollRef, sentinelRef, () => { void paged.loadOlder(); }, paged.items.length, !fixtureItems && !loading && paged.hasOlder);

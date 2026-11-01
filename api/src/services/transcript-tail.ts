@@ -34,6 +34,7 @@ import {
   normalizeTranscript, buildRenderItems, GRAMMAR_VERSION,
   mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
 } from '../routes/chat-transcript.js';
+import { storeRules } from './conversation-store.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
@@ -87,6 +88,7 @@ export class TranscriptTailer {
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
   private interrupted: Interrupted;
   private interruptedSig = '';
+  private rulesSig = '';
   private windowGone: () => boolean;
   private goneBeats = 0;
   private stopped = false;
@@ -105,6 +107,11 @@ export class TranscriptTailer {
 
   get subscriberCount(): number {
     return this.subs.size;
+  }
+
+  /** The newest items read so far (the live step: the tool call still running). Read only. */
+  recentItems(n = 50): readonly any[] {
+    return this.items.slice(-n);
   }
 
   /** Whether the items read so far hold this uuid (live text: its finished line has landed). */
@@ -133,7 +140,11 @@ export class TranscriptTailer {
     try { size = statSync(path).size; } catch { size = -1; }
     let isig = '';
     try { isig = this.interrupted.sig(); } catch { isig = ''; }
-    if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig) {
+    // The store's rules for this session (seen-only entries, seed rows): marking an entry seen-only changes what is
+    // shown without the log growing, so it re-reads and re-sends the window.
+    let rsig = '';
+    try { rsig = storeRules(sid).sig; } catch { rsig = ''; }
+    if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig && rsig === this.rulesSig) {
       return { rotated: false, grewFrom: null };
     }
 
@@ -170,6 +181,8 @@ export class TranscriptTailer {
       }
     }
     if (insertedBeforeTail) restated = true;
+    if (!rotated && path === this.path && prevCount > 0 && rsig !== this.rulesSig) restated = true;
+    this.rulesSig = rsig;
     this.sid = sid;
     this.path = path;
     this.fileSize = size;

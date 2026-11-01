@@ -55,7 +55,9 @@ export function joinHead<T>(page: T[], list: T[], keyOf: KeyOf<T>): T[] {
   const inPage = new Set(page.map(keyOf));
   let i = 0;
   while (i < list.length && inPage.has(keyOf(list[i]))) i++;
-  return [...page, ...list.slice(i)];
+  // Past the shared start, anything the page also holds is the page's copy too: a notice placed by time can sit in
+  // both (the window's range and the page's meet at the cut line), and the list must hold it once.
+  return [...page, ...list.slice(i).filter((x) => !inPage.has(keyOf(x)))];
 }
 
 type ItemFields = { uuid?: string; kind?: string; id?: string; tool_use_id?: string; key?: string };
@@ -68,13 +70,22 @@ export function transcriptKey(item: object): string {
 
 /** The cursor for the first page older than a live window: the first item that starts a log line of its own. The
  *  window's top can start partway through one line's items, and a page read from an item's uuid holds everything
- *  older than that item's line, so it brings the cut line back whole (joinHead keeps its copy once). Null when the
- *  window has no item a cursor can name. */
+ *  older than that item's line, so it brings the cut line back whole (joinHead keeps its copy once). Only a real
+ *  transcript line can be a cursor: a compaction notice (`cmp-<n>`) or a marker between two conversations
+ *  (`rot:<session>`) carries an id of its own that the route does not page from. Null when the window has no item a
+ *  cursor can name. */
 export function firstCursor(items: readonly object[]): string | null {
-  const uuids = items.map((it) => (it as ItemFields).uuid);
-  const firstUuid = uuids.find(Boolean);
+  const uuids = items.filter(isTranscriptLine).map((it) => (it as ItemFields).uuid as string);
+  const firstUuid = uuids[0];
   if (!firstUuid) return null;
-  return uuids.find((u) => u && u !== firstUuid) ?? firstUuid;
+  return uuids.find((u) => u !== firstUuid) ?? firstUuid;
+}
+
+/** An item that is a line of the transcript itself (it has the transcript's own uuid), not one the server adds. */
+export function isTranscriptLine(item: object): boolean {
+  const it = item as ItemFields;
+  if (!it.uuid || it.kind === 'compaction' || it.kind === 'rotation') return false;
+  return !/^(cmp-|rot:)/.test(it.uuid);
 }
 
 /** A numbered turn's seq; undefined for one not stored yet. */

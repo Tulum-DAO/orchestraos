@@ -26,11 +26,13 @@ import { CODE_ROOT } from '../lib/codeRoot.js';
 import { decorateIdentity, readSeatNames } from '../lib/agentIdentity.js';
 import { readPins, writePins, cleanPins } from '../lib/agentPins.js';
 import { readPrefs, writePrefs, cleanPrefsChange, isAgentId } from '../lib/agentPrefs.js';
+import { readSeatSettings, writeSeatSettings, cleanSettingsChange, seatHistory, seatRotates, seatCanCompactNow } from '../lib/seatSettings.js';
 import { getProjectsKnowledge } from '../services/state-reader.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
 import { headlessSeats } from '../services/status-stream.js';
+import { headlessStep, stepFromProbe } from '../services/live-step.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -75,14 +77,41 @@ function mergeDetector(agent: AgentEntry, d: DetectorStatus | undefined): void {
   agent.alive = true;
 }
 
-/** A retired generation of a TEST lineage (the <root>-gen<N> row a test seat's later generation leaves in the
- *  registry): a leftover throwaway, never listed (so never "Not running"), as the gateway's /agents leaves it out. A
- *  real lineage's old generation is unchanged. */
-export function isTestLeftover(def: Record<string, unknown>, defs: Record<string, Record<string, unknown>>): boolean {
+/** A retired past generation (the <root>-gen<N> row a later generation leaves in the registry): never listed, so the
+ *  agents list shows one row per seat and never a "Not running" ghost, as the gateway's /agents leaves it out. Any
+ *  lineage, not only test ones. A retired test seat is a throwaway and goes too. Never hides a row that is alive, a
+ *  canonical root or a root's live head, and only when its root is itself in the registry: the "never hide the only
+ *  agent answering for its root" rule. `alive` is the row's resolved liveness, as supersededBy takes it. */
+export function isGenerationLeftover(args: {
+  id: string;
+  def: Record<string, unknown>;
+  defs: Record<string, Record<string, unknown>>;
+  alive: boolean;
+  index: CanonicalIndex | null;
+}): boolean {
+  const { id, def, defs, alive, index } = args;
   if (String(def?.status || '') !== 'retired') return false;
+  if (alive) return false;
+  if (index && (index.roots.has(id) || index.sessions.has(id))) return false;
   if (def.test === true) return true;
-  const root = typeof def.lineage_root === 'string' ? defs[def.lineage_root] : undefined;
-  return !!root && root !== def && root.test === true;
+  const rootId = typeof def.lineage_root === 'string' ? def.lineage_root : '';
+  const root = rootId && rootId !== id ? defs[rootId] : undefined;
+  return !!root && root !== def;
+}
+
+/** Is this registry row left out of GET / — a parked rotation leftover (supersededBy) or a retired past generation?
+ *  One predicate so the list, its counts and the tests cannot disagree. The /:id routes, /:id/generations and
+ *  revive never consult it: a hidden row is still addressable by id. */
+export function hiddenFromListing(args: {
+  id: string;
+  def: Record<string, unknown>;
+  defs: Record<string, Record<string, unknown>>;
+  alive: boolean;
+  index: CanonicalIndex | null;
+}): boolean {
+  const { id, def, alive, index } = args;
+  return !!supersededBy({ id, defStatus: def.status as string | undefined, alive, index })
+    || isGenerationLeftover(args);
 }
 
 const router = Router();
@@ -109,10 +138,6 @@ interface AgentEntry {
   tmux_alive: boolean;
   inbox_count: number;
   machine_status: string;
-  /** Set ONLY on a parked rotation leftover (DEC-1790826247484632): the canonical root that
-   *  supersedes this row. Absent on every other row, so a client that does not know the field
-   *  behaves exactly as before. */
-  superseded_by?: string;
   /** How many generations this agent's lineage has, when the identity DB is readable. Absent
    *  (never 0) when there is no DB or no history, so a client just offers no history list. */
   generations_total?: number;
@@ -183,8 +208,9 @@ router.get('/', async (_req: Request, res: Response) => {
     } catch { /* use empty */ }
 
     const agents: AgentEntry[] = [];
+    // Sessions of the rows left out below, so a leftover never comes back as an unregistered chip.
+    const hiddenSessions = new Set<string>();
     for (const [id, def] of Object.entries(agentDefs)) {
-      if (isTestLeftover(def as Record<string, unknown>, agentDefs as Record<string, Record<string, unknown>>)) continue;
       const state = states[id] || {};
       const tmuxSession = (def.tmux_session as string) || id;
       const unified = unifiedStatus[id];
@@ -216,18 +242,15 @@ router.get('/', async (_req: Request, res: Response) => {
       // the state-file spread above must not clobber them (blank-name spawn
       // stubs blanked seats off the web dashboard; see agents-identity.ts).
       applyIdentityPrecedence(agent, def, id, tmuxSession, machine, unified?.tmux_alive ?? isLocalAlive);
-      // DEC-1790826247484632: flag a parked rotation leftover so the fleet view can undraw it.
-      // AFTER applyIdentityPrecedence, which owns `status`/`retired` — a leftover is NOT
-      // retired (the registry never said so) and `status` stays `parked`, so the evidence a
-      // reader needs to audit this survives in the payload. `def.status`, not `agent.status`:
-      // the state spread and the detector pass both overwrite the latter.
-      const superseded = supersededBy({
-        id,
-        defStatus: def.status as string | undefined,
-        alive: agent.alive as boolean,
-        index: canonIndex,
-      });
-      if (superseded) (agent as any).superseded_by = superseded;
+      // One row per seat: leave out parked rotation leftovers and retired past generations. Here, AFTER
+      // applyIdentityPrecedence, because both rules need the row's resolved liveness (a fresh local tmux probe sees
+      // only this host's sessions) and must never hide a row that is alive. Before the detector pass, which can only
+      // turn a row offline, so it cannot make a live row hideable. `def.status`, not `agent.status`: the state
+      // spread and the detector pass both overwrite the latter.
+      if (hiddenFromListing({ id, def: def as Record<string, unknown>, defs: agentDefs, alive: agent.alive as boolean, index: canonIndex })) {
+        hiddenSessions.add(tmuxSession);
+        continue;
+      }
       // Defense-in-depth: the /agents UI iterates several fields with
       // (field||[]).forEach / .includes / .map — that guards null but NOT a
       // wrong TYPE. A registry record with a string where an array is expected
@@ -248,7 +271,7 @@ router.get('/', async (_req: Request, res: Response) => {
     }
 
     // Discover unregistered tmux sessions (VPS local + Mac via cached probe)
-    const registeredSessions = new Set(agents.map(a => a.tmux_session));
+    const registeredSessions = new Set([...agents.map(a => a.tmux_session), ...hiddenSessions]);
     const allTmuxSessions = localSessions;
     const unregistered: AgentEntry[] = [];
 
@@ -393,6 +416,20 @@ router.get('/', async (_req: Request, res: Response) => {
         }
       }
     } catch { /* detector unavailable -> legacy fields stand */ }
+
+    // The live step (services/live-step.ts), for the cards' line: a headless seat from its supervisor log, a tmux seat
+    // from the pane probe's verdict merged above (no tool input here; an open chat's stream adds the summary).
+    try {
+      const headless = headlessSeats();
+      for (const agent of allAgents) {
+        const st = headless.has(agent.id)
+          ? (headlessInDev(agent.id) ? null : headlessStep(agent.id, dataDir()))
+          : (agent.status_source === 'detector' || agent.status_source === 'transcript')
+            ? stepFromProbe({ state: agent.status, tool: agent.tool as string | undefined, state_age_s: agent.state_age_s as number | undefined }, null)
+            : null;
+        if (st) (agent as any).step = { agent_id: agent.id, ...st };
+      }
+    } catch { /* no step: the cards show the state as before */ }
 
     allAgents.sort((a, b) => a.tier.localeCompare(b.tier) || a.name.localeCompare(b.name));
 
@@ -555,6 +592,31 @@ router.put('/:id/prefs', (req: Request, res: Response) => {
   if ('error' in r) { res.status(400).json({ ok: false, error: r.error }); return; }
   writePrefs(dataDir(), who, req.params.id, r.change);
   res.json({ ok: true, agent: req.params.id, ...readPrefs(dataDir(), who, req.params.id) });
+});
+
+// GET/PUT /api/agents/:id/settings {auto_compact?, show_compaction?, compact_at?} — the seat's rotation settings
+// (lib/seatSettings.ts, the twin of scripts/seat_settings.py). Per AGENT, unlike /prefs: every person sees and changes
+// the same values; each change is recorded in the seat's history with who made it. The supervisor reads them at every
+// turn end, so a change applies on the next turn.
+// `rotates`: whether this seat can use our rotation at all (lib/seatSettings.ts seatRotates); the slideout hides the
+// rotation rows when it can't, and a change for such a seat is refused (409).
+router.get('/:id/settings', (req: Request, res: Response) => {
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  // `compact_now`: whether a person's "/compact" can run for this seat (lib/seatSettings.ts seatCanCompactNow, the
+  // gateway's gate): the slideout offers "Compact now" only where it can work.
+  res.json({ ok: true, agent: req.params.id, rotates: seatRotates(req.params.id, getRegistry() as any),
+             compact_now: seatCanCompactNow(req.params.id, getRegistry() as any, headlessSeats()),
+             ...readSeatSettings(dataDir(), req.params.id), history: seatHistory(dataDir(), req.params.id).slice(-20) });
+});
+router.put('/:id/settings', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  if (!seatRotates(req.params.id, getRegistry() as any)) { res.status(409).json({ ok: false, error: "This agent can't compact yet" }); return; }
+  const r = cleanSettingsChange(req.body);
+  if ('error' in r) { res.status(400).json({ ok: false, error: r.error }); return; }
+  const now = writeSeatSettings(dataDir(), req.params.id, r.change, who);
+  res.json({ ok: true, agent: req.params.id, rotates: true, ...now, history: seatHistory(dataDir(), req.params.id).slice(-20) });
 });
 
 // PUT /api/agents/:id/name {name} — rename an agent (scripts/identity_store/seat_names.py: names unique per project,

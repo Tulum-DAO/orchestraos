@@ -1028,9 +1028,24 @@ def headless_rotation_refusal(seat_name: str) -> str | None:
             return None
     except Exception:  # noqa: BLE001
         return None
-    return (f"{seat_name} runs headless and cannot be rotated yet. To rotate it: `seat_supervisor.py stop "
-            f"{seat_name} --tui`, `seat_supervisor.py switch off {seat_name}`, rotate, then switch the new "
-            f"generation on again.")
+    return (f"{seat_name} runs headless: it rotates through its supervisor, not here "
+            f"(`seat_supervisor.py rotate {seat_name}`, or `orchestra rotate {seat_name}`, which goes there).")
+
+
+def rotate_headless(seat_name: str, request=None) -> int:
+    """Ask the seat's supervisor to rotate (it starts at the next turn boundary). 0 when it took the request."""
+    try:
+        try:
+            import headless_switch as HS
+        except ImportError:
+            from scripts import headless_switch as HS
+        req = request or (lambda: HS.request(seat_name, {"cmd": "rotate"}))
+        out = req()
+    except Exception as e:  # noqa: BLE001 — the supervisor is down, or the socket refused
+        print(json.dumps({"ok": False, "seat": seat_name, "reason": f"its supervisor did not answer: {e}"}))
+        return 1
+    print(json.dumps({"seat": seat_name, "via": "supervisor", **out}))
+    return 0 if out.get("ok") else 1
 
 
 def preflight_refusal(seat_name: str, runtime_override: str | None = None) -> str | None:
@@ -1380,6 +1395,10 @@ def main() -> int:
                              "go ahead, 3 with the reason when refused")
 
     args = parser.parse_args()
+    if not args.preflight and not args.dry_run and headless_rotation_refusal(args.seat_name):
+        # A headless seat rotates in place, through its supervisor (seat_supervisor.py rotate): same boundary rule,
+        # same gate, no new pane.
+        return rotate_headless(args.seat_name)
     if args.preflight:
         why = preflight_refusal(args.seat_name, args.runtime)
         print(json.dumps({"ok": why is None, **({"refused": why} if why else {})}))

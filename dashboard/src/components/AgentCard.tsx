@@ -24,6 +24,8 @@ import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
 import { canStopTurn } from '../lib/composerGate';
 import { AGENT_CARD_TITLE_CLASS } from '../lib/agentCardTitle';
+import { stepFrom } from '../lib/liveStep';
+import { StepLine } from './chat/StepLine';
 
 const PALETTE = [
   'bg-amber-600', 'bg-blue-600', 'bg-green-600', 'bg-purple-600',
@@ -453,6 +455,8 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
         {agent.alive && agent.pane_command && normalizeAgentState(agent.status) === 'stopped' && (
           <p className="text-xs mt-0.5 text-tone-red-300" role="status">{agent.activity}</p>
         )}
+        {/* What it is doing right now, in words (lib/liveStep.ts: the agent list's `step`). */}
+        {agent.alive && <StepLine step={stepFrom((agent as { step?: unknown }).step)} className="mt-0.5" />}
         <p className={clsx('text-sm mt-0.5 leading-snug', truncatedTask ? 'text-tone-300' : 'text-tone-600')}>
           {/* was 'Idle' — which reads as a STATE and now sits next to a state
               badge that can say "working", so an active agent with no recorded

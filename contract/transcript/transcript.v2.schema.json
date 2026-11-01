@@ -35,7 +35,8 @@
         { "$ref": "#/$defs/ToolUseItem" },
         { "$ref": "#/$defs/ToolResultItem" },
         { "$ref": "#/$defs/QueuedBatchItem" },
-        { "$ref": "#/$defs/RotationItem" }
+        { "$ref": "#/$defs/RotationItem" },
+        { "$ref": "#/$defs/CompactionItem" }
       ],
       "discriminator": { "propertyName": "kind" }
     },
@@ -179,6 +180,23 @@
         "to_session": { "type": "string", "description": "The newer generation's session id." }
       }
     },
+    "CompactionItem": {
+      "type": "object",
+      "description": "ADDITIVE v2 (provider-agnostic rotation): the chat's compaction notice, \"Chat compacting…\" while a new provider session is made ready, then \"Chat compacted\" once it took over (\"failed\": the old one kept serving). Stored in the conversation store (episodic-memory.db compaction_notices), so it survives a restart; never written to a transcript and never part of any model's context. Placed by time; ONE item per notice that updates in place (same id); the live stream sends `event: compaction` with this same object when it starts or finishes. Omitted entirely when the seat's show_compaction setting is off. Clients draw their own words (no token numbers in the text in Release 1); the counts are data. Older clients: unknown kind is skipped.",
+      "required": ["kind", "id", "state", "ts"],
+      "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation; agent = folded into the strip. A compaction notice is always user." },
+        "kind": { "const": "compaction" },
+        "id": { "type": "string", "description": "cmp-<notice id>: stable; a later state of the same notice carries the same id." },
+        "uuid": { "type": "string", "description": "Same as id (list diffing). Never a page cursor." },
+        "state": { "enum": ["compacting", "compacted", "failed"] },
+        "trigger": { "enum": ["auto", "manual"], "description": "ADDITIVE: how it was started: 'auto' (the seat's Auto-compact) or 'manual' (a person's /compact). A failed notice is only ever sent for 'manual' (draw \"Couldn't compact the chat right now.\"); an automatic notice is made only once the switch is committed." },
+        "ts": { "type": "string", "description": "When it started (ISO 8601): its place in the chat." },
+        "finished_at": { "type": ["string", "null"], "description": "When it ended; null while compacting." },
+        "before_tokens": { "type": ["integer", "null"], "description": "Context size before (data only)." },
+        "after_tokens": { "type": ["integer", "null"], "description": "Context size after, from the first turn's usage; null until known." }
+      }
+    },
     "LiveTextBlock": {
       "type": "object",
       "description": "One text block of a live_text event: its words so far and the transcript uuid its finished line will carry (null until the CLI has finished the block).",
@@ -207,7 +225,8 @@
         { "$ref": "#/$defs/RenderThinking" },
         { "$ref": "#/$defs/RenderTool" },
         { "$ref": "#/$defs/RenderQueuedBatch" },
-        { "$ref": "#/$defs/RenderRotation" }
+        { "$ref": "#/$defs/RenderRotation" },
+        { "$ref": "#/$defs/RenderCompaction" }
       ],
       "discriminator": { "propertyName": "kind" }
     },
@@ -298,6 +317,23 @@
         "from_session": { "type": "string", "description": "The older generation's session id." },
         "to_session": { "type": "string", "description": "The newer generation's session id." },
         "key": { "type": "string" }
+      }
+    },
+    "RenderCompaction": {
+      "type": "object",
+      "description": "Server-paired render node for the compaction notice. Same data as CompactionItem; draw one quiet line: \"Chat compacting…\" then \"Chat compacted\" (Bubbles and Modern), keyed by id so it updates in place.",
+      "required": ["kind", "id", "state", "ts", "key"],
+      "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation; agent = folded into the strip. A compaction notice is always user." },
+        "kind": { "const": "compaction" },
+        "id": { "type": "string" },
+        "state": { "enum": ["compacting", "compacted", "failed"] },
+        "trigger": { "enum": ["auto", "manual"] },
+        "ts": { "type": "string" },
+        "finished_at": { "type": ["string", "null"] },
+        "before_tokens": { "type": ["integer", "null"] },
+        "after_tokens": { "type": ["integer", "null"] },
+        "key": { "type": "string", "description": "The notice's id (cmp-<n>): stable across its states." }
       }
     }
   }

@@ -75,6 +75,10 @@ def test_recovery_asks_for_the_launch_line_before_starting_claude(orch):
 
 # --- revive ------------------------------------------------------------------------------------------
 
+class RealSeatStart(AssertionError):
+    """A test reached a path that starts a real seat (tmux, spawn-agent.sh, claude)."""
+
+
 @pytest.fixture
 def revive(orch, monkeypatch):
     spec = importlib.util.spec_from_file_location("revive_agent_hl", HERE / "revive_agent.py")
@@ -82,7 +86,26 @@ def revive(orch, monkeypatch):
     spec.loader.exec_module(m)
     monkeypatch.setattr(m.briefing, "seat_record", lambda root, od: {"tmux_session": root, "cwd": str(orch), "name": root})
     monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    # FENCE: revive falls back to the terminal path when the headless check says no (and that check reads any error
+    # as no), and the terminal path starts a REAL seat: a fresh start, or spawn-agent.sh through Popen, in a real tmux
+    # session. A wrong turn here once left a real `claude` running in a tmux session named after a test seat. Every
+    # way out to a real seat raises instead.
+    def real(*a, **k):
+        raise RealSeatStart(f"a test tried to start a real seat: {a!r}")
+    monkeypatch.setattr(m.fs, "start", real)
+    monkeypatch.setattr(m, "subprocess", types.SimpleNamespace(Popen=real, run=real, DEVNULL=None, STDOUT=None))
+    monkeypatch.setattr(m, "_tmux", real)
     return m
+
+
+def test_the_revive_fixture_never_reaches_a_real_seat(revive, orch, monkeypatch):
+    # The headless check failing (as a wrong keyword once made it) drops into the terminal path: fenced.
+    monkeypatch.setattr(revive, "_headless", lambda root, od: False)
+    for mode in ("auto", "fresh", "resume"):
+        with pytest.raises((RealSeatStart, revive.NotStartable)):
+            revive.revive("dev-demo", mode, orch, wait_s=0)
+    with pytest.raises(RealSeatStart):
+        revive.resume_headless.__globals__["_tmux"]("has-session", "-t", "=dev-demo")
 
 
 class _T:
@@ -179,10 +202,24 @@ def test_rotation_refuses_a_headless_seat_before_doing_anything(orch, monkeypatc
     assert RA.headless_rotation_refusal("dev-demo") is None
     HS.set_switch("dev-demo", True, runtime="claude", orch_dir=orch)
     why = RA.headless_rotation_refusal("dev-demo")
-    assert "runs headless" in why and "switch off dev-demo" in why
+    assert "runs headless" in why and "seat_supervisor.py rotate dev-demo" in why
     monkeypatch.setattr(RA, "log", lambda *a, **k: None)
     with pytest.raises(RA.RotationRefused):
         RA.execute_rotation("dev-demo", dry_run=True)
+
+
+def test_a_headless_rotation_goes_to_its_supervisor(capsys):
+    spec = importlib.util.spec_from_file_location("rotate_agent_hl2", HERE / "rotate_agent.py")
+    RA = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(RA)
+    asked = []
+    assert RA.rotate_headless("dev-demo", request=lambda: asked.append(1) or {"ok": True, "pending": True}) == 0
+    assert asked == [1] and '"via": "supervisor"' in capsys.readouterr().out
+
+    def down():
+        raise HS.SupervisorDown("no socket")
+    assert RA.rotate_headless("dev-demo", request=down) == 1
+    assert "did not answer" in capsys.readouterr().out
 
 
 # --- boundary delivery -------------------------------------------------------------------------------

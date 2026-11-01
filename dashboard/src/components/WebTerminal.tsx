@@ -10,10 +10,13 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { useRecentAgents } from '../stores/recentAgents';
 import { cliShift } from '../lib/terminalAnchor';
+import { closeNotice, type CloseNotice } from '../lib/terminalClose';
 
 interface WebTerminalProps {
   session: string;
   machine: string;
+  /** The page is closing this terminal (Back to chat): its connection ending is expected, so nothing is said. */
+  closing?: boolean;
 }
 
 const TMUX_PREFIX = '\x02'; // Ctrl+B
@@ -27,12 +30,19 @@ function getWsUrl(session: string, machine: string, cols: number, rows: number):
   return `${proto}//${window.location.host}/ws/terminal?session=${encodeURIComponent(session)}&machine=${encodeURIComponent(machine)}&cols=${cols}&rows=${rows}&_auth=1`;
 }
 
-export default function WebTerminal({ session, machine }: WebTerminalProps) {
+export default function WebTerminal({ session, machine, closing = false }: WebTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const inCopyMode = useRef(false);
+  // Says when the connection ended, unless the close turns out to be expected (lib/terminalClose.ts).
+  const noticeRef = useRef<CloseNotice | null>(null);
+  const closingRef = useRef(closing);
+  useEffect(() => {
+    closingRef.current = closing;
+    if (closing) noticeRef.current?.expect();
+  }, [closing]);
 
   const connect = useCallback(() => {
     if (!containerRef.current) return;
@@ -119,13 +129,13 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
       }
     };
 
-    ws.onclose = () => {
-      term.write('\r\n\x1b[31m[Disconnected]\x1b[0m\r\n');
-    };
-
-    ws.onerror = () => {
-      term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
-    };
+    // The words wait a moment: Back to chat, or the terminal left from inside it, closes this socket before the page
+    // moves on, and that close is expected. A real drop is still said.
+    const notice = closeNotice((text) => term.write(text));
+    noticeRef.current = notice;
+    if (closingRef.current) notice.expect();
+    ws.onclose = () => { notice.closed(); };
+    ws.onerror = () => { notice.error(); };
 
     // ── Helper: exit copy-mode ──────────────────────────────────
     const exitCopyMode = () => {
@@ -328,6 +338,7 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
       resizeObserver?.disconnect();
       // Our own close (the view leaving, Back to chat) is not a dropped connection: closing a socket still
       // connecting fires onerror, and either message would flash on a terminal on its way out.
+      notice.dispose();
       ws.onclose = null;
       ws.onerror = null;
       ws.onmessage = null;

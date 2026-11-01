@@ -4,9 +4,13 @@ import { X, FileText, AlertTriangle, Link2, Copy, Check, ArrowDown, WifiOff, Sen
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
 import { TierBadge } from './TierBadge';
 import { AgentGenerations } from './AgentGenerations';
-import { buildRenderList, toolSummary, fetchTranscript, type RenderNode } from '../lib/transcript';
-import { subscribeTranscriptStream } from '../lib/transcriptStream';
+import { buildRenderList, toolSummary, fetchTranscript, type ChatItem, type RenderNode } from '../lib/transcript';
+import { liveTextOf, subscribeTranscriptStream } from '../lib/transcriptStream';
+import type { LiveTextEvent } from '../lib/transcript.gen';
 import { isNearBottom } from '../lib/liveFeedScroll';
+import { compactionText } from '../lib/compaction';
+import { stepFrom, type AgentStep } from '../lib/liveStep';
+import { StepLine } from './chat/StepLine';
 import { sendToAgent, isDelivered, isHeld, isQueued, isComposerHold, describeSendState, type SendState } from '../lib/agentSend';
 
 export interface AgentDetailPanelProps {
@@ -80,6 +84,8 @@ function blockText(node: RenderNode): string {
       return node.entries.map((e) => `${e.agent}: ${e.body}`).join('\n');
     case 'result':
       return node.results.map((r) => `${r.title}: ${r.outcome}`).join('\n');
+    case 'compaction':
+      return compactionText(node.state, node.trigger) ?? '';
     default:
       return node.text;
   }
@@ -90,7 +96,13 @@ function blockText(node: RenderNode): string {
  * if the stream drops (§12: show the drop, don't render stale as fresh). */
 function DetailLiveFeed({ agentId }: { agentId: string }) {
   const [nodes, setNodes] = useState<RenderNode[]>([]);
+  // A headless seat's reply still being written (event: live_text), drawn after the feed until its line lands.
+  const [items, setItems] = useState<ChatItem[]>([]);
+  const [liveEv, setLiveEv] = useState<LiveTextEvent | null>(null);
+  const liveText = liveTextOf(liveEv, items);
   const [live, setLive] = useState(true);
+  // What it is doing right now (event: step), for the line under the feed.
+  const [step, setStep] = useState<AgentStep | null>(null);
   const [following, setFollowing] = useState(true);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -99,9 +111,13 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
     let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     const unsubscribe = subscribeTranscriptStream(agentId, 150, {
-      onItems: (items) => setNodes(buildRenderList(items)),
+      onItems: (its) => { setItems(its); setNodes(buildRenderList(its)); },
+      onLiveText: (ev) => setLiveEv(ev.text ? ev : null),
+      onStep: (st) => setStep(stepFrom(st)),
       onFallback: () => {
         setLive(false);
+        setLiveEv(null);
+        setStep(null);                            // the poll carries no step
         const poll = async () => {
           try {
             const res = await fetchTranscript(agentId, 150);
@@ -125,7 +141,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
     if (!following) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [nodes, following]);
+  }, [nodes, following, liveText?.text]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -161,7 +177,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
         onScroll={handleScroll}
         className="relative rounded-xl border border-tone-800 bg-tone-950 p-2.5 max-h-64 overflow-y-auto space-y-1.5"
       >
-        {nodes.length === 0 && <p className="text-xs text-tone-600">No activity yet</p>}
+        {nodes.length === 0 && !liveText && <p className="text-xs text-tone-600">No activity yet</p>}
         {nodes.map((node) => {
           const text = blockText(node);
           return (
@@ -196,6 +212,9 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
             </div>
           );
         })}
+        {liveText && (
+          <p data-live-text className="text-xs break-words whitespace-pre-wrap text-tone-300">{liveText.text}</p>
+        )}
         {!following && (
           <button
             onClick={jumpToLatest}
@@ -206,6 +225,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
           </button>
         )}
       </div>
+      <StepLine step={step} className="mt-1.5 px-1" />
     </div>
   );
 }

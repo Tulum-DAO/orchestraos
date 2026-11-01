@@ -202,3 +202,11 @@ def pytest_sessionfinish(session, exitstatus):
         else:
             print(msg)
         session.exitstatus = _pytest.ExitCode.TESTS_FAILED
+
+
+# --- no real seat from a test (a stray test once left a real `claude` running in a tmux session) ----------------
+# Every process a test starts goes through subprocess.Popen (asyncio's too): scripts/seat_launch_guard.py refuses the
+# real `claude` and a `tmux new-session` on the real tmux server, for the whole run.
+import seat_launch_guard as _seat_launch_guard  # noqa: E402
+
+_seat_launch_guard.install()
