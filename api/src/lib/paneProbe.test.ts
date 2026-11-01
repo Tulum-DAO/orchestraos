@@ -3,13 +3,13 @@
  * paneProbe answers the same questions from ONE cached tmux call and /proc reads. These pin:
  *  - the same panes as before (first pane's pid for Gemini, active pane's id for the hook file),
  *  - pgrep -P parity (children of every thread), Gemini sid found from child fds,
- *  - the cache: N polls in TTL = 1 tmux call; after TTL or a dead pane = asked again; misses not cached.
+ *  - the cache: N polls in TTL = 1 tmux call; after TTL or a dead pane = asked again; a miss cached MISS_TTL_MS.
  *
  * Run: npx tsx --test src/lib/paneProbe.test.ts   (from api/)
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { paneInfo, liveGeminiSid, childPids, setPaneProbeDeps, TTL_MS, type PaneDeps } from './paneProbe.js';
+import { paneInfo, liveGeminiSid, childPids, setPaneProbeDeps, TTL_MS, MISS_TTL_MS, type PaneDeps } from './paneProbe.js';
 
 const CID = 'aaaaaaaa-0000-4000-8000-00000000000a';
 
@@ -108,10 +108,13 @@ test('CACHE: a dead pane process is asked of tmux again at once, inside the TTL'
   assert.equal(h.calls.tmux, 2);
 });
 
-test('CACHE: a miss (no such session) is never cached', () => {
+test('CACHE: a miss (no such session) is cached for MISS_TTL_MS, then asked again', () => {
   const h = host('ERR', GEMINI_HOST);
   for (let i = 0; i < 3; i++) assert.deepEqual(paneInfo('gone'), { panePid: null, paneId: null });
-  assert.equal(h.calls.tmux, 3);
+  assert.equal(h.calls.tmux, 1);
+  h.advance(MISS_TTL_MS + 1);
+  assert.deepEqual(paneInfo('gone'), { panePid: null, paneId: null });
+  assert.equal(h.calls.tmux, 2);
 });
 
 test('CONTROL (cache off = old cost): 20 polls at TTL+1 apart = 20 tmux calls', () => {

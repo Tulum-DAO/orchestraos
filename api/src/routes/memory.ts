@@ -11,6 +11,9 @@ import {
 } from '../services/state-reader.js';
 import { homedir } from 'os';
 import { loadConfig } from '../lib/config.js';
+import { searchEpisodic } from '../services/episodic-memory.js';
+import { principal } from '../lib/principal.js';
+import { canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
 
 const router = Router();
 
@@ -334,16 +337,30 @@ router.get('/search', (req: Request, res: Response) => {
       return;
     }
     const project = req.query.project as string | undefined;
+    // ?sources=a,b picks sources; left out, the original three. `episodic` (what agents said and did, from the
+    // conversation index) is asked for by name: it holds tool output, so a caller opts in, and it only ever returns
+    // agents this caller may see, as the transcript routes do, with a snippet rather than the stored text.
+    const asked = typeof req.query.sources === 'string' && req.query.sources.trim()
+      ? new Set(req.query.sources.split(',').map((x) => x.trim()).filter(Boolean)) : null;
+    const want = (src: string) => (asked ? asked.has(src) : src !== 'episodic');
+    const str = (v: unknown) => (typeof v === 'string' && /^[\w.@:[\]-]{1,128}$/.test(v) ? v : undefined);
+    const gen = typeof req.query.generation === 'string' && /^\d{1,6}$/.test(req.query.generation) ? Number(req.query.generation) : undefined;
+    const who = principal(req);
 
-    const autoMemoryResults = searchAutoMemory(q);
-    const factsResults = searchOmniFacts(q, project);
-    const handoffResults = searchOmniHandoffs(q);
+    const autoMemoryResults = want('auto-memory') ? searchAutoMemory(q) : [];
+    const factsResults = want('omni-facts') ? searchOmniFacts(q, project) : [];
+    const handoffResults = want('omni-handoff') ? searchOmniHandoffs(q) : [];
+    const episodicResults = want('episodic')
+      ? searchEpisodic(q, { agent: str(req.query.agent), session: str(req.query.session), generation: gen, limit: Number(req.query.limit) || 20 },
+                       (agent) => canPrincipalSeeAgent(who, { id: agent, tags: defaultResolveTags(agent) }))
+      : [];
 
     // Merge and sort by score descending
     const combined: SearchResult[] = [
       ...autoMemoryResults,
       ...factsResults,
       ...handoffResults,
+      ...episodicResults.map((r): SearchResult => ({ ...r })),
     ];
     combined.sort((a, b) => b.score - a.score);
 

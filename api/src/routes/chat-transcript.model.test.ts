@@ -1,4 +1,4 @@
-// `model` on assistant transcript items (ios-watch-dev, Shaw-approved 2026-10-22): clients draw
+// `model` on assistant transcript items: clients draw
 // "Model changed · Fable 5.1 -> Opus 5.5" where it changes. Run: npx tsx --test src/routes/chat-transcript.model.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -318,6 +318,18 @@ test('a turn read-back (?turn=) survives the hop, escaped', async () => {
   assert.equal(deps.urls[1], `${GATEWAY_URL}/arturo/threads/c1?turn=a%26b%3Dc`);
 });
 
+test('a thread read a page at a time (?before=&limit=) survives the hop; anything else is not passed on', async () => {
+  const deps = makeDeps();
+  await get(deps, '/api/arturo/threads/c1?before=120&limit=100');
+  assert.equal(deps.urls[0], `${GATEWAY_URL}/arturo/threads/c1?before=120&limit=100`);
+  await get(deps, '/api/arturo/threads/c1?limit=50');
+  assert.equal(deps.urls[1], `${GATEWAY_URL}/arturo/threads/c1?limit=50`);
+  await get(deps, '/api/arturo/threads/c1?before=' + encodeURIComponent('1&x=y') + '&offset=3');
+  assert.equal(deps.urls[2], `${GATEWAY_URL}/arturo/threads/c1`, 'not a whole number: the whole thread, as before');
+  await get(deps, '/api/arturo/threads/c1');
+  assert.equal(deps.urls[3], `${GATEWAY_URL}/arturo/threads/c1`);
+});
+
 // --- the voice picker's pass-throughs: GET vendor / voices / voice, PUT voice ---
 
 async function put(deps: ArturoDeps, path: string, body: unknown, headers: Record<string, string> = {}) {

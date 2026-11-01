@@ -107,3 +107,28 @@ test('busy states and the note', () => {
   for (const s of ['idle', 'stopped', undefined]) assert.equal(isBusy(s), false);
   assert.equal(DEV_NOTE, 'Uses the terminal. Switching back takes a few seconds.');
 });
+
+test('the terminal left from inside it while shown is Back to chat: never switched on again by the page', () => {
+  // the page shows the terminal (Dev wanted, the TUI holds the pane)...
+  const open = step(hl({ actualDev: true }), chosen);
+  assert.equal(open.action, 'none');
+  assert.equal(viewOf(hl({ actualDev: true })), 'dev');
+  // ...and the TUI exits in the terminal: the page saves the chat style (the caller's Back to chat), sends nothing
+  const left = step(hl({ actualDev: false }), open.mem);
+  assert.equal(left.action, 'leftTerminal');
+  assert.equal(viewOf(hl({ actualDev: false })), 'chat', 'the chat at once, not an empty terminal');
+  // once the style is the chat one, nothing more is sent (the seat is already streaming again)
+  const after = step(hl({ wantDev: false, actualDev: false }), styleChanged(left.mem));
+  assert.equal(after.action, 'none');
+  assert.equal(bannerFor(after.mem, 'Sample'), null);
+  // it is said once: with Dev wanted again later, the page switches on as for any choice
+  assert.equal(step(hl({ actualDev: false }), left.mem).action, 'switchOn');
+});
+
+test('a terminal never seen open is not "left": Dev chosen on an idle seat still switches on', () => {
+  assert.equal(step(hl(), chosen).action, 'switchOn');
+  assert.equal(step(hl(), INITIAL).action, 'switchOn', 'a page that opens in Dev too');
+  // stopping a turn to switch: the terminal is not open yet, nothing was left
+  const stopping = chooseStop({ ...chosen, sawDev: true });
+  assert.notEqual(step(hl({ busy: true }), stopping).action, 'leftTerminal');
+});

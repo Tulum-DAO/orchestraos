@@ -7518,6 +7518,24 @@ def thread_detail_endpoint(conversation_id):
     if request.args.get("jobs"):
         # The job tray's poll: this thread's running and just-finished jobs, without loading the transcript.
         return jsonify({"ok": True, "jobs": _JOBS.for_thread(conversation_id) if _JOBS is not None else []})
+    if request.args.get("before") is not None or request.args.get("limit") is not None:
+        # A long thread read a page at a time (scrolling up): the newest `limit` turns, or the `limit` just older
+        # than the turn `before` names, each with its seq, plus has_older and oldest_seq (thread_store
+        # get_thread_page). Without either, the whole thread exactly as before.
+        try:
+            before = int(request.args["before"]) if request.args.get("before") is not None else None
+            limit = int(request.args.get("limit") or _thread_store.DEFAULT_PAGE_TURNS)
+        except ValueError:
+            return jsonify({"ok": False, "error": "bad_paging"}), 400
+        if limit < 1:
+            return jsonify({"ok": False, "error": "bad_paging"}), 400
+        page = _THREADS.get_thread_page(conversation_id, before=before, limit=limit)
+        if page is None:
+            return jsonify({"ok": True, "thread": None, "has_older": False, "oldest_seq": None})
+        has_older, oldest = page.pop("has_older"), page.pop("oldest_seq")
+        error = page.pop("error", None)
+        return jsonify({"ok": True, "thread": page, "has_older": has_older, "oldest_seq": oldest,
+                        **({"error": error} if error else {})})
     thread = _THREADS.get_thread(conversation_id)
     if thread is None:
         # A thread that has no turns yet is the NORMAL state the first time the pill opens (the

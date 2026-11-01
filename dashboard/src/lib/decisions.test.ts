@@ -34,6 +34,18 @@ test('a card no message names goes at the end of the turn it was filed in, or be
   assert.deepEqual(keys(interleave(nodes, [d({ id: 'late', created_at: '2026-10-24T21:00:00Z' })])).at(-1), 'late');
 });
 
+test('a thread read from partway: a card filed before its first message waits above it, not in the first turn shown', () => {
+  // Older pages are added above as the reader scrolls up; a card drawn at the end of the first turn shown would jump
+  // up past what they are reading when its own page lands.
+  const nodes = [tools('work', '2026-10-24T20:01:20Z'), node('reply', '2026-10-24T20:01:25Z'), user('next', '2026-10-24T20:05:00Z')];
+  const early = d({ id: 'early', created_at: '2026-10-24T20:00:00Z' });
+  assert.deepEqual(keys(interleave(nodes, [early], { cutAbove: true })), ['early', 'work', 'reply', 'next']);
+  assert.deepEqual(keys(interleave(nodes, [early])), ['work', 'reply', 'early', 'next']);          // the whole thread: as before
+  const named = [node('Raised req-n1 for you.', '2026-10-24T20:01:25Z'), user('next', '2026-10-24T20:05:00Z')];
+  assert.deepEqual(keys(interleave(named, [d({ id: 'req-n1', created_at: '2026-10-24T20:00:00Z' })], { cutAbove: true })).map((k) => k.slice(0, 6)),
+    ['Raised', 'req-n1', 'next']);                                                                  // a message naming it still holds it
+});
+
 test('a long summary previews at a line break and never shows a stray ** or backtick', () => {
   const text = 'This is a test.\n\nWhat a real card has:\n- **The question** — one line.\n- **Why it matters** ' + 'x'.repeat(300);
   const p = previewText(text, 120);

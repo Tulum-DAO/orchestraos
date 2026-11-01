@@ -23,6 +23,8 @@ export function stripContextLine(text: string): string {
 }
 
 export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[];
+  /** The stored turn's number in its thread, when it was read a page at a time: its identity and paging cursor. */
+  seq?: number;
   /** A finished background job (meta kind "job_result"): drawn as a result card (components/kit/ResultCard.tsx). */
   result?: FinishedResult;
   /** The choice card the reply showed, what was sent in answer (the next message), or that it was dismissed. */
@@ -56,7 +58,7 @@ export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
                ...(x.role !== 'user' && x.meta?.kind === 'card' && x.meta.choices
                  ? { choices: { ...x.meta.choices, card_id: x.meta.card_id }, ...(x.meta.dismissed ? { dismissed: true } : {}),
                      ...(x.meta.answer ? { answered: storedAnswerText(x.meta.choices.options, x.meta.answer), answeredOnServer: true } : {}) } : {}),
-               ...(typeof x.ts === 'number' ? { ts: x.ts } : {}) };
+               ...(typeof x.ts === 'number' ? { ts: x.ts } : {}), ...(typeof x.seq === 'number' ? { seq: x.seq } : {}) };
     })
     .filter((x) => !(x.role === 'user' && isPageOpener(x.text)))
     // A card's answer is its own record on the server; a card from before those were kept is answered by the message

@@ -645,6 +645,12 @@ class Supervisor:
                 self.ctx_window = best[1]
 
     def _on_replay(self, ev: dict):
+        origin = ev.get("origin")
+        if isinstance(origin, dict) and origin.get("kind"):
+            # The CLI's own input (a background task's notification, ...), echoed like ours but never written by us:
+            # it must not take the place of one of our queued messages by order.
+            self.log("sup", what="replay-cli", uuid=ev.get("uuid"), origin=origin.get("kind"))
+            return
         content = (ev.get("message") or {}).get("content")
         if isinstance(content, list):
             content = "".join(b.get("text", "") for b in content

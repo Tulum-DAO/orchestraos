@@ -17,7 +17,7 @@
  * Every turn goes through POST /api/arturo/text (gateway → :5071/text), which runs the full
  * tool-enabled turn on whichever brain the install has (api key / authed CLI / none).
  */
-import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, PhoneOff } from 'lucide-react';
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
@@ -32,7 +32,7 @@ import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationI
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER,
   cardRefusal, type CardAnswer, type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
-import { loadThread, dismissCard } from '../lib/arturoThreads';
+import { loadThreadPage, dismissCard, type ThreadTurn } from '../lib/arturoThreads';
 import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy } from '../lib/arturoResume';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
@@ -49,6 +49,9 @@ import { cardAnswer, isCardEcho, storedAnswerText } from '../lib/choiceCard';
 import PairCodeCard from '../components/arturo/PairCodeCard';
 import JobTray from '../components/arturo/JobTray';
 import { useStickToBottom } from '../lib/useStickToBottom';
+import { useArturoThreadPages } from '../lib/useArturoThreadPages';
+import { useNearTop } from '../lib/threadKit/useOlderPages';
+import OlderPagesNote from '../components/kit/OlderPagesNote';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
 import AgentIdentityPill from '../components/avatar/AgentIdentityPill';
 import { applyTextDelta, applyToolCall, applyToolResult, hasToolParts, type TurnPart } from '../lib/turnParts';
@@ -62,7 +65,7 @@ import { canChangeLook, showsLookCard, readDismissed, writeDismissed } from '../
 import { HeaderEndSlotContext } from '../lib/headerSlot';
 import { SidebarMenuButton } from '../components/SidebarMenuButton';
 
-type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; images?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
+type Turn = { id: number; seq?: number; role: 'user' | 'arturo'; text: string; tools?: string[]; images?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
   parts?: TurnPart[];
   decision?: { options: string[]; onPick: (v: string) => void };
@@ -181,7 +184,7 @@ export default function ArturoHome() {
   /** A background job ended: its result was posted into the thread server-side; show the thread as it is now. */
   const reloadThread = async () => {
     const id = convId.current;
-    const t = id ? await loadThread(id) : null;
+    const t = id ? (await loadThreadPage(id))?.thread ?? null : null;
     if (id !== convId.current) return;               // switched again while it loaded
     const switched = lastShown.current !== id;
     lastShown.current = id;
@@ -228,7 +231,7 @@ export default function ArturoHome() {
       // The conversation this browser was in is on the server: show it (it used to open empty, and
       // only a sidebar round trip brought the history back). Onboarding hydrates its own thread.
       if (h.onboarded || ls(LS_ONBOARDED) === '1') {
-        const t = convId.current ? await loadThread(convId.current) : null;
+        const t = convId.current ? (await loadThreadPage(convId.current))?.thread ?? null : null;
         if (alive && t) setTurns(hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })));
         // This thread is the one on screen: a job ending in it re-reads it in place, never as "another thread
         // opened", which jumped a reader who had scrolled up to the bottom.
@@ -246,7 +249,13 @@ export default function ArturoHome() {
   // thread view follows whenever what it draws grows (the turns, a live call's captions); the page jumps to the
   // bottom itself on a send or a thread switch.
   const stick = useStickToBottom(feedRef);
-  const rows = useMemo(() => arturoRows(turns, call.inCall, aname), [turns, call.inCall, aname]);
+  // The thread opens on its newest page; scrolling up reads older pages above it (lib/useArturoThreadPages.ts), held
+  // in place by the scroller's anchor. What this page adds (sends, streamed replies, a call) stays the live window.
+  const hydratePage = useCallback((page: ThreadTurn[]) => hydrateTurns(page).map((x) => ({ id: nextId.current++, ...x })), []);
+  const paged = useArturoThreadPages<Turn>(turns, convId.current, hydratePage, turns.length > 0);
+  const olderRef = useRef<HTMLDivElement>(null);
+  useNearTop(feedRef, olderRef, () => { void paged.loadOlder(); }, paged.items.length, turns.length > 0 && paged.hasOlder);
+  const rows = useMemo(() => arturoRows(paged.items, call.inCall, aname), [paged.items, call.inCall, aname]);
   // How you see him (lib/agentPrefs.ts): Modern, his own look, or Bubbles, the agent chat's. Switching it in his panel
   // only re-draws the thread: the conversation, the draft and any send in flight are untouched.
   const threadSkin = useChatStyle(ARTURO_ID) === 'bubbles' ? 'bubbles' : 'modern';
@@ -259,7 +268,7 @@ export default function ArturoHome() {
   };
   const patch = (id: number, extra: Partial<Turn>) => setTurns((t) => t.map((x) => x.id === id ? { ...x, ...extra } : x));
   // The thread view names a turn by its message key (lib/threadKit/view turnKey: `t<id>`).
-  const byKey = (key: string) => turns.find((x) => `t${x.id}` === key);
+  const byKey = (key: string) => paged.items.find((x) => `t${x.id}` === key);
   const patchKey = (key: string, extra: Partial<Turn>) => setTurns((t) => t.map((x) => `t${x.id}` === key ? { ...x, ...extra } : x));
 
   // --- onboarding thread -------------------------------------------------------------
@@ -283,7 +292,7 @@ export default function ArturoHome() {
   async function runOpener(switched = false) {
     const conv = onboardingConversation(onbConv.current, convId.current);
     if (conv !== convId.current) { convId.current = conv; setCurrentThread(conv); arturoPrewarm(conv, toWireBrain(brainChoice)); }
-    const t = await loadThread(conv);
+    const t = (await loadThreadPage(conv))?.thread ?? null;
     lastShown.current = conv;                          // on screen now (see reloadThread)
     const stored = t ? hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })) : [];
     // A message the operator sent while the history loaded stays, after it (it waits for this opener).
@@ -588,6 +597,9 @@ export default function ArturoHome() {
           </div>
         ) : (
           <>
+            {/* Older pages are read when this nears the top (never the scroll anchor: it stays above them). */}
+            <div ref={olderRef} data-anchor-skip data-older-sentinel aria-hidden style={{ height: 0, flexShrink: 0 }} />
+            <OlderPagesNote show={paged.loading} />
             {lookCard}
             {/* His thread through the kit's thread view (components/kit/ThreadView.tsx): replies, tool runs, calls,
                 finished work, his choice cards; the page adds only what it alone has (extras). */}

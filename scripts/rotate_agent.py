@@ -1033,6 +1033,23 @@ def headless_rotation_refusal(seat_name: str) -> str | None:
             f"generation on again.")
 
 
+def preflight_refusal(seat_name: str, runtime_override: str | None = None) -> str | None:
+    """Why a rotation of `seat_name` would be refused before it changes anything, or None: the same early checks
+    execute_rotation makes (a headless seat, a runtime rotation does not support, a predecessor with no
+    authoritative generation), and nothing written. `orchestra rotate` asks this BEFORE it writes a baton, so a
+    refused rotation leaves no file behind."""
+    refusal = headless_rotation_refusal(seat_name)
+    if refusal:
+        return refusal
+    try:
+        pred = get_agent_registry(seat_name)
+        refuse_if_phase2_unsupported(runtime_override or pred.get("runtime"), "rotation")
+        resolve_pred_generation_or_refuse(seat_name, pred)
+    except Exception as e:  # noqa: BLE001 — each is a refusal with its own words
+        return str(e) or type(e).__name__
+    return None
+
+
 def execute_rotation(
     seat_name: str,
     runtime_override: str | None = None,
@@ -1358,8 +1375,15 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Simulate rotation without spawning or modifying state")
     parser.add_argument("--force", action="store_true", help="Force rotation regardless of context thresholds")
     parser.add_argument("--skip-spawn", action="store_true", help="Skip spawning new tmux session if already started")
+    parser.add_argument("--preflight", action="store_true",
+                        help="Only check whether the rotation would be refused (writes nothing): exit 0 when it may "
+                             "go ahead, 3 with the reason when refused")
 
     args = parser.parse_args()
+    if args.preflight:
+        why = preflight_refusal(args.seat_name, args.runtime)
+        print(json.dumps({"ok": why is None, **({"refused": why} if why else {})}))
+        return 3 if why else 0
     try:
         res = execute_rotation(
             seat_name=args.seat_name,

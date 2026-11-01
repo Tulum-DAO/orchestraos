@@ -114,3 +114,8 @@ test("a card's tapped answer is not echoed as a bubble on reload; words typed in
   assert.equal(turns[4].cardEcho, undefined);     // words alone stay the operator's message
   assert.equal(turns[3].answered, 'neither, thanks');
 });
+
+test('a stored turn read a page at a time keeps its seq (its identity when older pages join); a whole read has none', () => {
+  const out = hydrateTurns([{ role: 'user', content: 'q', seq: 7 }, { role: 'assistant', content: 'a', seq: 8 }, { role: 'assistant', content: 'b' }]);
+  assert.deepEqual(out.map((t) => t.seq), [7, 8, undefined]);
+});

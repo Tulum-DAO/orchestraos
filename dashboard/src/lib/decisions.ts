@@ -169,12 +169,17 @@ export function anchorIndex(nodes: GroupedNode[], d: Decision): number {
   return i;
 }
 
-/** The conversation with each decision placed at its anchor (anchorIndex), in filing order. */
-export function interleave(nodes: GroupedNode[], decisions: Decision[]): FeedEntry[] {
+/** The conversation with each decision placed at its anchor (anchorIndex), in filing order.
+ *  `cutAbove`: the nodes start partway through the thread (older pages not read yet). A card filed before the first
+ *  of them that none of them names belongs up there, so it waits above everything (not at the end of the first turn shown, from where it
+ *  would jump up past what the reader is looking at when its page lands). */
+export function interleave(nodes: GroupedNode[], decisions: Decision[], { cutAbove = false } = {}): FeedEntry[] {
   const after = new Map<number, Decision[]>();
   const ds = [...decisions].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const firstTs = cutAbove ? nodes.map(nodeTs).find((t) => t > -Infinity) : undefined;
   for (const d of ds) {
-    const k = anchorIndex(nodes, d);
+    const named = nodes.findIndex((n) => n.kind === 'assistant' && (n as { text?: string }).text?.includes(d.id));
+    const k = named < 0 && firstTs !== undefined && Date.parse(d.created_at) < firstTs ? -1 : anchorIndex(nodes, d);
     after.set(k, [...(after.get(k) ?? []), d]);
   }
   const out: FeedEntry[] = [];

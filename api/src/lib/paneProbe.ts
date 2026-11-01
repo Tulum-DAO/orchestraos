@@ -5,8 +5,11 @@
  * seconds, per seat) forked `tmux list-panes` + `pgrep -P` (liveGeminiSid) and `tmux display-message`
  * (hookEventSid). Now:
  *  - ONE tmux call gives both answers (first pane's pid, active pane's id: the same panes the two old
- *    calls picked), cached per tmux session for TTL_MS. A miss is never cached, and a cached pane whose
- *    process is gone (/proc/<pid> missing: a respawned or killed pane) is asked of tmux again at once.
+ *    calls picked), cached per tmux session for TTL_MS. A cached pane whose process is gone (/proc/<pid>
+ *    missing: a respawned or killed pane) is asked of tmux again at once.
+ *  - a MISS (no such window: an agent with no tmux session, like the assistant, or a retired seat whose page
+ *    is still open) is cached for MISS_TTL_MS, so an open page asks tmux at most once per MISS_TTL_MS, and
+ *    tmux's own "can't find window" line is never let through to the API's log (stderr ignored).
  *    A missing hook-event file is NOT staleness: codex/gemini panes never write one.
  *  - the pane's children come from /proc/<pid>/task/<tid>/children (every thread, as pgrep -P saw them),
  *    a file read, not a fork.
@@ -21,6 +24,9 @@ import { execFileSync } from 'child_process';
 import { readFileSync, readdirSync, readlinkSync } from 'fs';
 
 export const TTL_MS = 10_000;
+export const MISS_TTL_MS = 5_000;
+/** stderr ignored: a missing window is an answer here (nulls), not a line for the API's log. */
+export const TMUX_EXEC = { timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] as ['ignore', 'pipe', 'ignore'] };
 
 export interface PaneDeps {
   tmux(args: string[]): string;
@@ -31,7 +37,7 @@ export interface PaneDeps {
 }
 
 const REAL: PaneDeps = {
-  tmux: (args) => execFileSync('tmux', args, { timeout: 2000 }).toString(),
+  tmux: (args) => execFileSync('tmux', args, TMUX_EXEC).toString(),
   readText: (p) => readFileSync(p, 'utf-8'),
   readDir: (p) => readdirSync(p),
   readLink: (p) => readlinkSync(p),
@@ -41,12 +47,14 @@ const REAL: PaneDeps = {
 let deps: PaneDeps = REAL;
 const panes = new Map<string, { at: number; panePid: string | null; paneId: string | null }>();
 const geminiSids = new Map<string, { at: number; sid: string; pid: string }>();
+const misses = new Map<string, number>();       // tmux session -> when it was last found missing
 
 /** Tests only: swap the deps (null = real) and start from empty caches. */
 export function setPaneProbeDeps(d: PaneDeps | null): void {
   deps = d ?? REAL;
   panes.clear();
   geminiSids.clear();
+  misses.clear();
 }
 
 /** First pane's pid + active pane's id (without the %) for a tmux session target, or nulls. */
@@ -56,11 +64,14 @@ export function paneInfo(tmuxSession: string): { panePid: string | null; paneId:
     return { panePid: hit.panePid, paneId: hit.paneId };
   }
   panes.delete(tmuxSession);
+  const missedAt = misses.get(tmuxSession);
+  if (missedAt !== undefined && deps.now() - missedAt < MISS_TTL_MS) return { panePid: null, paneId: null };
   let out = '';
   try { out = deps.tmux(['list-panes', '-t', tmuxSession, '-F', '#{pane_pid} #{pane_id} #{pane_active}']); }
-  catch { return { panePid: null, paneId: null }; }
+  catch { misses.set(tmuxSession, deps.now()); return { panePid: null, paneId: null }; }
   const rows = out.trim().split('\n').map((l) => l.trim().split(' ')).filter((r) => r.length >= 3 && r[0]);
-  if (!rows.length) return { panePid: null, paneId: null };
+  if (!rows.length) { misses.set(tmuxSession, deps.now()); return { panePid: null, paneId: null }; }
+  misses.delete(tmuxSession);
   const panePid = rows[0][0];
   const active = rows.find((r) => r[2] === '1') ?? rows[0];
   const paneId = active[1].replace('%', '') || null;
@@ -76,6 +87,12 @@ function alive(pid: string): boolean {
 export function forgetPane(tmuxSession: string): void {
   panes.delete(tmuxSession);
   geminiSids.delete(tmuxSession);
+  misses.delete(tmuxSession);
+}
+
+/** No tmux window by that name (from the same cache: at most one tmux call per MISS_TTL_MS for a missing one). */
+export function paneGone(tmuxSession: string): boolean {
+  return paneInfo(tmuxSession).panePid === null;
 }
 
 /** Child pids of `pid` across all its threads (what `pgrep -P pid` lists), or null if pid is gone. */

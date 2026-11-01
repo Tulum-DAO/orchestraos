@@ -172,6 +172,19 @@ struct RotationItem: Codable, Equatable {
     let to_session: String
 }
 
+struct LiveTextBlock: Codable, Equatable {
+    let uuid: String?
+    let text: String
+}
+
+struct LiveTextEvent: Codable, Equatable {
+    let agent_id: String
+    let message_id: String?
+    let text: String
+    let blocks: [LiveTextBlock]
+    let done: Bool
+}
+
 /// Discriminated on `kind`. Unknown kinds decode to .unknown (graceful degradation).
 enum RenderItem: Codable, Equatable {
     case user(RenderUser)
@@ -282,5 +295,7 @@ struct TranscriptEnvelope: Codable, Equatable {
     let grammar_version: Int
     let items: [ChatItem]
     let render_items: [RenderItem]
+    let has_older: Bool?
+    let oldest_id: String?
     let error: String?
 }

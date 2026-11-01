@@ -9,6 +9,7 @@
     orchestra starter  the default first-install team: gm (T0) -> a project manager (T1) -> a worker (T2)
     orchestra spawn    register + launch a seat in tmux (--gm = the General Manager)
     orchestra rotate   rotate a seat: successor answers the baton's canary, strict grade, promote
+    orchestra memory   the conversation index: `memory search "<words>"`, `memory ingest <agent> --session <id>`
 
 Everything comes from orchestra.toml (path: $ORCHESTRA_CONFIG, else <repo>/orchestra.toml)
 plus a few env vars; there are no operator-specific literals in this package.

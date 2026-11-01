@@ -20,7 +20,8 @@ import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
-import { sessionOwners, predecessorOf } from '../services/identity-store-reader.js';
+import { sessionOwners, predecessorOf, lineageChainOf } from '../services/identity-store-reader.js';
+import { cachedLog } from '../services/transcript-log-cache.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
 import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdown.js';
@@ -447,6 +448,14 @@ export function sessionIsThisSeats(agentId: string, sid: string | null | undefin
 // Resolve an agent id to its transcript JSONL path (re-read fresh per request).
 // Exported for the F1 streaming lane (transcript-stream.ts) — same resolution,
 // same file, so poll and stream can never disagree on WHICH transcript.
+/** The tmux session a seat's pane lives in (its sessions record, else its id): what the live stream asks paneProbe
+ *  about to tell a gone window from one that has not written its transcript yet. Null for an unsafe id. */
+export function seatTmuxSession(agentId: string): string | null {
+  if (!isSafeAgentId(agentId)) return null;
+  const e = loadAgentSessions()[agentId] || {};
+  return String(e.tmux_session || agentId);
+}
+
 export function resolveTranscriptPath(agentId: string): { path: string | null; sid: string | null } {
   // The id becomes state/agents/<id>.json and a tmux target. A raw one read any .json for its
   // session_id. Safe ids only; no registry check, so a scratch tmux seat still resolves.
@@ -594,7 +603,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   return { path: null, sid };
 }
 
-/** The stitched chat (ios-watch-dev msg_41c00a45, Shaw-approved): what the poll route puts above a
+/** The stitched chat: what the poll route puts above a
  *  seat's current conversation, so a rotation keeps the thread. Only when `sid` is the current head
  *  of `agentId`'s lineage and the generation it took over from has a file this box can read:
  *  Claude by the lineage's project dir (else the row's conversation_path), Codex by its thread's
@@ -673,7 +682,11 @@ function predecessorFor(agentId: string, sid: string | null): Predecessor | null
 
 /** The predecessor's own log file, or null. */
 function previousFilePath({ p }: Predecessor): string | null {
-  const from = p.from_session;
+  return sessionFilePath(p.from_session, p.cwd, p.conversation_path);
+}
+
+/** A past generation's own log file, or null. */
+function sessionFilePath(from: string, cwd: string | null, conversationPath: string | null): string | null {
   const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
   const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
   // Tried in order, each only when the ones before found nothing (the directory scan is the last
@@ -681,8 +694,8 @@ function previousFilePath({ p }: Predecessor): string | null {
   // generation may have run in another directory than the lineage's, and its row may name no
   // path), then Codex's rollout and Gemini's brain log.
   const candidates: (() => string | null)[] = [
-    () => p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
-    () => ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    () => cwd ? ownFile(join(CLAUDE_PROJECTS, String(cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    () => ownFile(conversationPath, CLAUDE_PROJECTS, claudeOwn),
     () => claudeFileAnywhere(from, claudeOwn),
     () => ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
     () => ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
@@ -697,23 +710,277 @@ export function resolvePreviousTranscript(agentId: string, sid: string | null): 
   return pred && path ? { path, antigravity: path.includes('antigravity-cli'), divider: pred.divider } : null;
 }
 
-/** The route's form: the divider now, the file only when normalizeTranscript actually reads the
- *  previous log (the current one alone does not fill the window). A poll whose current log fills
- *  the window never looks for the previous file at all (codex R1 on #473). */
-export function lazyPreviousTranscript(agentId: string, sid: string | null, currentPath: string):
-    { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null {
-  const pred = predecessorFor(agentId, sid);
-  if (!pred) return null;
-  let found: string | null | undefined;
-  const file = () => {
-    if (found === undefined) found = previousFilePath(pred);
-    if (!found || found === currentPath) throw new Error('no previous log');   // caller: this log alone
-    return found;
+// ---- The whole lineage in one chat --------------------------------------------------------------
+// A seat's chat is every generation of its lineage whose log this box can read, oldest first,
+// with ONE quiet marker item (kind 'rotation') where one generation took over from the one before.
+// The newest page is the poll route's window; older pages are read with `before=<cursor>`. Files
+// are found and parsed only as far back as a page reaches, and each parse is kept per file
+// (services/transcript-log-cache.ts) until the file changes.
+
+/** One generation of the chat. `file` is looked for on first use only. */
+interface Segment {
+  session: string;                      // '' for a current log with no known session
+  generation: number | null;
+  promotedAt: string | null;
+  file: () => string | null;
+}
+
+// Where each past generation's file is, so a page further back does not search the disk again
+// for every generation it passes (a file not found is not looked for again for a while either).
+const PAST_FILE_TTL_MS = 5 * 60_000;
+const pastFiles = new Map<string, { path: string | null; at: number }>();
+
+function pastFile(sid: string, cwd: string | null, conversationPath: string | null): string | null {
+  const hit = pastFiles.get(sid);
+  if (hit && Date.now() - hit.at < PAST_FILE_TTL_MS) {
+    // A found file is used only while it still passes the same check (moved or replaced: look again).
+    if (hit.path === null) return null;
+    try { if (realpathSync(hit.path) === hit.path) return hit.path; } catch { /* gone: look again */ }
+  }
+  const path = sessionFilePath(sid, cwd, conversationPath);
+  pastFiles.set(sid, { path, at: Date.now() });
+  return path;
+}
+
+/** Tests: forget where past generations' files were. */
+export function forgetPastFiles(): void { pastFiles.clear(); }
+
+/** The chat's generations, oldest first, the current log last. Past generations come only from
+ *  this seat's own lineage, by session ids that are plain ids, each through ownFile. */
+export function chatSegments(agentId: string, sid: string | null, currentPath: string): Segment[] {
+  let chain: ReturnType<typeof lineageChainOf> = null;
+  if (sid) { try { chain = lineageChainOf(sid); } catch { chain = null; } }
+  const head = chain && lineageOf(chain.root) === lineageOf(agentId) ? chain : null;
+  const last = head?.links[head.links.length - 1];
+  const current: Segment = {
+    session: sid ?? '', generation: last?.generation ?? null, promotedAt: last?.promoted_at ?? null,
+    file: () => currentPath,
   };
+  if (!head) return [current];
+  const past: Segment[] = [];
+  for (const l of head.links.slice(0, -1)) {
+    const from = l.session_id;
+    if (!from || !SESSION_ID.test(from) || from === sid) continue;
+    let found: string | null | undefined;
+    past.push({
+      session: from, generation: l.generation, promotedAt: l.promoted_at,
+      file: () => {
+        if (found === undefined) {
+          found = pastFile(from, head.cwd, l.conversation_path);
+          if (found === currentPath) found = null;
+        }
+        return found;
+      },
+    });
+  }
+  return [...past, current];
+}
+
+// The warm-up a rotation runs in the incoming generation before it takes over (the handoff and the
+// model's first answer) is not part of the conversation. The supervisor marks it in
+// <data dir>/state/headless/<seat>/warmup.json:
+//   { "sessions": { "<session id>": { "uuids": ["<log uuid>", ...], "through": "<log uuid>" } } }
+// `uuids`: every item with one of these uuids, or belonging to the exchange one of them opened, is
+// left out. `through`: everything in that session's log up to and including the last item with
+// this uuid is left out. Either may be given alone. Written before the generation takes over, so
+// nothing has been shown yet. Fail-open: no file, a bad file, nothing left out.
+export interface WarmupMark { uuids: Set<string>; through: string | null }
+
+export function warmupMarkPath(agentId: string, root?: string): string | null {
+  if (!isSafeAgentId(agentId)) return null;
+  try {
+    return join(root ?? dataDir(), 'state', 'headless', agentId, 'warmup.json');
+  } catch {
+    return null;
+  }
+}
+
+const warmupCache = new Map<string, { sig: string; doc: any }>();
+
+function warmupDoc(agentId: string): { sig: string; doc: any } {
+  const p = warmupMarkPath(agentId);
+  if (!p) return { sig: '', doc: null };
+  let sig = '';
+  try { const st = statSync(p); sig = `${st.size}:${st.mtimeMs}`; } catch { return { sig: '', doc: null }; }
+  const hit = warmupCache.get(p);
+  if (hit && hit.sig === sig) return hit;
+  let doc: any = null;
+  try { doc = JSON.parse(readFileSync(p, 'utf-8')); } catch { doc = null; }
+  const got = { sig, doc };
+  warmupCache.set(p, got);
+  return got;
+}
+
+/** The mark for one session of `agentId`, with a signature that changes when the file does. */
+export function warmupMarkFor(agentId: string, session: string | null): { sig: string; mark: WarmupMark | null } {
+  if (!session) return { sig: '', mark: null };
+  const { sig, doc } = warmupDoc(agentId);
+  const s = doc && typeof doc === 'object' && doc.sessions && typeof doc.sessions === 'object' ? doc.sessions[session] : null;
+  if (!s || typeof s !== 'object') return { sig: '', mark: null };
+  const uuids = new Set<string>(Array.isArray(s.uuids) ? s.uuids.filter((u: unknown) => typeof u === 'string' && u) : []);
+  const through = typeof s.through === 'string' && s.through ? s.through : null;
+  if (!uuids.size && !through) return { sig: '', mark: null };
+  return { sig, mark: { uuids, through } };
+}
+
+export function dropWarmup(items: readonly any[], mark: WarmupMark | null): any[] {
+  if (!mark) return items as any[];
+  let start = 0;
+  if (mark.through) {
+    for (let i = items.length - 1; i >= 0; i--) if (items[i]?.uuid === mark.through) { start = i + 1; break; }
+  }
+  const out: any[] = [];
+  for (let i = start; i < items.length; i++) {
+    const it = items[i];
+    if (mark.uuids.size && ((it?.uuid && mark.uuids.has(String(it.uuid))) || (it?.exchange && mark.uuids.has(String(it.exchange))))) continue;
+    out.push(it);
+  }
+  return out;
+}
+
+/** A generation's items as the chat shows them, plus the first position of each uuid in them. */
+interface SegmentView { items: readonly any[]; firstAt: Map<string, number> }
+
+function segmentView(agentId: string, seg: Segment): SegmentView | null {
+  const path = seg.file();
+  if (!path) return null;
+  let log;
+  try { log = cachedLog(path, (lines) => logItems(lines, path.includes('antigravity-cli'))); } catch { return null; }
+  const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
+  const key = `view:${seg.session}:${sig}`;
+  const memo = log.memo.get(key) as SegmentView | undefined;
+  if (memo) return memo;
+  const items = dropWarmup(log.items, mark);
+  const firstAt = new Map<string, number>();
+  items.forEach((it, i) => { if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i); });
+  const view = { items, firstAt };
+  // One view per file: an older warm-up signature is never asked for again.
+  for (const k of [...log.memo.keys()]) if (k.startsWith('view:')) log.memo.delete(k);
+  log.memo.set(key, view);
+  return view;
+}
+
+function rotationMarker(older: Segment, newer: Segment): Record<string, unknown> {
+  const m: Record<string, unknown> = {
+    kind: 'rotation', role: 'system', uuid: `rot:${newer.session}`,
+    from_generation: older.generation, to_generation: newer.generation,
+    from_session: older.session, to_session: newer.session, audience: 'user',
+  };
+  if (newer.promotedAt) m.ts = newer.promotedAt;
+  return m;
+}
+
+/** One chat position, newest to oldest: an item of a generation, or the marker above one. */
+interface Unit { item: any; seg: number; at: number }   // at = -1: the marker above segment `seg`
+
+/** Everything older than position (seg, at), newest first; markers only between two generations
+ *  that both show something. Views are made only as the walk reaches them. */
+function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[],
+                    seg: number, at: number): Generator<Unit> {
+  const view = (i: number) => {
+    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
+    return views[i];
+  };
+  let s = seg;
+  let i = at;
+  for (;;) {
+    const v = view(s);
+    if (i > 0 && v) {
+      for (let k = Math.min(i, v.items.length) - 1; k >= 0; k--) yield { item: v.items[k], seg: s, at: k };
+    }
+    // Above the start of segment s: the next older generation that shows anything, if any.
+    let t = s - 1;
+    while (t >= 0 && !(view(t)?.items.length)) t--;
+    if (t < 0) return;
+    if (i >= 0 && v && v.items.length) yield { item: rotationMarker(segs[t], segs[s]), seg: s, at: -1 };
+    s = t;
+    i = Number.POSITIVE_INFINITY;
+  }
+}
+
+/** The cursor for a unit: the marker's own uuid, `<session>~<uuid>`, or `<session>~#<index>` for
+ *  an item with no uuid. Sessions are plain ids, so '~' never appears in one. */
+function cursorOf(u: Unit, segs: Segment[]): string {
+  if (u.at < 0) return String(u.item.uuid);
+  const s = segs[u.seg].session;
+  return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${u.at}`;
+}
+
+/** Where a cursor points: (segment, index), or null for one this chat does not have. A bare uuid
+ *  is looked for from the newest generation back. */
+function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[], cursor: string):
+    { seg: number; at: number } | null {
+  const view = (i: number) => {
+    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
+    return views[i];
+  };
+  if (cursor.startsWith('rot:')) {
+    const s = segs.findIndex((g) => g.session && `rot:${g.session}` === cursor);
+    return s > 0 ? { seg: s, at: -1 } : null;
+  }
+  const tilde = cursor.indexOf('~');
+  if (tilde >= 0) {
+    const s = segs.findIndex((g) => g.session === cursor.slice(0, tilde));
+    const rest = cursor.slice(tilde + 1);
+    const v = s >= 0 ? view(s) : null;
+    if (!v) return null;
+    if (/^#\d+$/.test(rest)) {
+      const n = Number(rest.slice(1));
+      return n < v.items.length ? { seg: s, at: n } : null;
+    }
+    const at = v.firstAt.get(rest);
+    return at === undefined ? null : { seg: s, at };
+  }
+  for (let s = segs.length - 1; s >= 0; s--) {
+    const at = view(s)?.firstAt.get(cursor);
+    if (at !== undefined) return { seg: s, at };
+  }
+  return null;
+}
+
+/** A window of the stitched chat: the newest `limit` positions (no cursor), or the `limit`
+ *  positions just older than `before`. A page never starts inside one log line's items, so the
+ *  next page, read from its `oldest_id`, neither repeats nor skips any. */
+export function chatWindow(agentId: string, segs: Segment[], limit: number, before: string | null):
+    { items: any[]; has_older: boolean; oldest_id: string | null; cursor_ts: string | null } | null {
+  const views: (SegmentView | null | undefined)[] = segs.map(() => undefined);
+  const last = segs.length - 1;
+  let from = { seg: last, at: Number.POSITIVE_INFINITY };
+  let cursorTs: string | null = null;
+  if (before !== null) {
+    const at = cursorAt(agentId, segs, views, before);
+    if (!at) return null;
+    from = at;
+    const v = views[at.seg];
+    cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
+  }
+  const walk = olderThan(agentId, segs, views, from.seg, from.at);
+  const units: Unit[] = [];
+  // Never one step past `limit` without a cursor: a window the current log fills must not look
+  // for, or read, an older generation's file.
+  while (units.length < limit) {
+    const got = walk.next();
+    if (got.done) break;
+    units.push(got.value);
+  }
+  let hasOlder = false;
+  if (before !== null) {
+    let next = walk.next();
+    // Keep one line's items together: take the rest of the oldest item's line too.
+    const edge = units[units.length - 1];
+    while (edge && edge.at >= 0 && edge.item?.uuid && !next.done
+           && next.value.seg === edge.seg && next.value.item?.uuid === edge.item.uuid) {
+      units.push(next.value);
+      next = walk.next();
+    }
+    hasOlder = !next.done;
+  }
+  units.reverse();
   return {
-    divider: pred.divider,
-    lines: () => readFileSync(file(), 'utf-8').split('\n'),
-    get antigravity() { return file().includes('antigravity-cli'); },
+    items: units.map((u) => ({ ...u.item })),          // shallow copies: the cache keeps the originals
+    has_older: hasOlder,
+    oldest_id: units.length ? cursorOf(units[0], segs) : null,
+    cursor_ts: cursorTs,
   };
 }
 
@@ -759,6 +1026,10 @@ export function sanitizeClaudeUserText(text: string): string {
   // A model switch (`/model <id>`, typed by the dashboard's model picker or by hand) is not part of the conversation:
   // the thread already marks where the model changed ("Model changed", from the assistant entries' model).
   if (name && name[1].trim() === '/model') return '';
+  // Leaving the TUI (`/exit`, or its alias `/quit`) is not conversation either: a headless seat's supervisor types it
+  // on every Back to chat, a switch-on leaves one behind, and on a headless seat typed by hand it IS Back to chat.
+  // Its reply ("Goodbye!") is local-command output, already dropped above.
+  if (name && /^\/(exit|quit)$/.test(name[1].trim())) return '';
   if (name) {
     const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(t);
     const typed = [name[1].trim(), (args?.[1] || '').trim()].filter(Boolean).join(' ');
@@ -1627,7 +1898,7 @@ export function normalizeTranscript(
   includeQueued = false,
   previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
-  let all = logItems(lines, antigravityHint);
+  let all = dropWarmup(logItems(lines, antigravityHint), warmupMarkFor(agentId, sessionId).mark);
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
@@ -1637,14 +1908,28 @@ export function normalizeTranscript(
     try { before = logItems(previous.lines(), previous.antigravity); } catch { before = null; }  // unreadable: this log alone
     if (before) all = [...before, { ...previous.divider, audience: 'user' }, ...all];
   }
-  let windowed = all.slice(-limit);
+  return {
+    agent_id: agentId,
+    session_id: sessionId,
+    grammar_version: GRAMMAR_VERSION,
+    ...finishWindow(all.slice(-limit), agentId, includeQueued),
+  };
+}
+
+/** The merges and tags every window gets once its log items are chosen. `olderPage` is set for a
+ *  page read with a cursor: msg_store's synthetics then stay only where they belong to that page
+ *  (no still-pending turn, and nothing after its last log item that a newer page draws). */
+function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
+                      olderPage: { cursorMs: number | null } | null = null): { items: any[]; render_items: any[] } {
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
   // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
   // the log's own order is the delivery order). POLL-ONLY —
   // the SSE tailer never sets includeQueued, so its monotonic-append delta stays
   // free of the ephemeral B1 synthetics (§3e/A1). Fail-open inside mergeQueuedItems.
   if (includeQueued) {
+    const logged = new Set(windowed);
     windowed = mergeQueuedItems(windowed, agentId);
+    if (olderPage) windowed = keepOlderPageSynthetics(windowed, logged, olderPage.cursorMs);
     // An agent message delivered mid-turn exists as BOTH a batch row and a queued_command.
     // The batch wins: it knows who sent it.
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
@@ -1654,20 +1939,34 @@ export function normalizeTranscript(
     windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
   windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
-  return {
-    agent_id: agentId,
-    session_id: sessionId,
-    grammar_version: GRAMMAR_VERSION,
-    items: windowed,
-    render_items: buildRenderItems(windowed),
-  };
+  return { items: windowed, render_items: buildRenderItems(windowed) };
+}
+
+/** On an older page: a still-pending turn is the live end's, and a batch placed after the page's
+ *  last log item is drawn by the newer page unless it is older than that page's first item. */
+function keepOlderPageSynthetics(items: any[], logged: Set<any>, cursorMs: number | null): any[] {
+  let lastLogged = -1;
+  items.forEach((it, i) => { if (logged.has(it)) lastLogged = i; });
+  return items.filter((it, i) => {
+    if (logged.has(it)) return true;
+    if (it?.queued && typeof it.uuid === 'string' && it.uuid.startsWith('queued:')) return false;
+    if (i < lastLogged) return true;
+    const t = Date.parse(String(it?.ts ?? ''));
+    return it?.kind === 'queued_batch' && cursorMs !== null && !Number.isNaN(t) && t < cursorMs;
+  });
 }
 
 // GET /api/agents/:id/transcript?limit= -> v2 envelope
 // { agent_id, session_id, grammar_version, items, render_items }
+// GET /api/agents/:id/transcript?before=<cursor>&limit= -> the page just older than the cursor (a
+// page's own `oldest_id`, or an item's uuid), the same envelope plus { has_older, oldest_id }.
+const PAGE_LIMIT = 100;
+
 router.get('/:id/transcript', (req: Request, res: Response) => {
   const agentId = String(req.params.id);
-  const limit = Math.min(parseInt(String(req.query.limit)) || 150, 500);
+  const before = typeof req.query.before === 'string' && req.query.before ? req.query.before.slice(0, 300) : null;
+  const limit = Math.min(parseInt(String(req.query.limit)) || (before === null ? 150 : PAGE_LIMIT), 500);
+  const paged = (body: Record<string, unknown>) => before === null ? body : { has_older: false, oldest_id: null, ...body };
   // Resolution is INSIDE the try (gm ruling on DEC-1790239929422621): it touches the filesystem,
   // tmux and now a sqlite index, and this route is reachable on a PUBLIC ingress — an
   // unhandled throw here is a 500, not an empty pane.
@@ -1676,29 +1975,39 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
   try {
     ({ path, sid } = resolveTranscriptPath(agentId));
   } catch (err) {
-    res.json({ agent_id: agentId, session_id: null, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+    res.json(paged({ agent_id: agentId, session_id: null, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) }));
     return;
   }
   if (!path) {
-    res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'no transcript resolved' });
+    res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'no transcript resolved' }));
     return;
   }
   try {
-    const raw = readFileSync(path, 'utf-8');
-    const lines = raw.split('\n');
     // NOTE: match the Gemini/Antigravity brain-log path via 'antigravity-cli'
     // ONLY. A bare 'brain' substring also matches Claude agents whose project
     // dir contains "brain" (e.g. second-brain-dev, cwd ~/repos/second-brain),
     // misclassifying their Claude JSONL as Antigravity and yielding 0 items.
     // Real Gemini brain logs always live under .gemini/antigravity-cli/brain/,
-    // so 'antigravity-cli' + the content sniff in normalizeTranscript cover them.
-    // The stitched chat: the generation this one took over from, above it. Fail-open: anything
-    // wrong with the previous file and the chat is this file alone, as before.
-    let previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null;
-    try { previous = lazyPreviousTranscript(agentId, sid, path); } catch { previous = null; }
-    res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true, previous));
+    // so 'antigravity-cli' + the content sniff in logItems cover them (segmentView).
+    // The stitched chat: every earlier generation of the lineage this box can read, above this
+    // one. Fail-open: anything wrong with the chain and the chat is this file alone, as before.
+    // This generation's own log first, outside the fail-open views: unreadable is an error here.
+    const current = path;
+    cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+    let segs: Segment[];
+    try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
+    const win = chatWindow(agentId, segs, limit, before);
+    if (!win) {
+      res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'unknown cursor' }));
+      return;
+    }
+    const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
+    const body = finishWindow(win.items, agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs });
+    const env: Record<string, unknown> = { agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, ...body };
+    if (before !== null) { env.has_older = win.has_older; env.oldest_id = win.oldest_id; }
+    res.json(env);
   } catch (err) {
-    res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+    res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) }));
   }
 });
 

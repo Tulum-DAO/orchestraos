@@ -326,6 +326,11 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
       anchorSubs.forEach((d) => d.dispose());
       cancelAnimationFrame(anchorFrame);
       resizeObserver?.disconnect();
+      // Our own close (the view leaving, Back to chat) is not a dropped connection: closing a socket still
+      // connecting fires onerror, and either message would flash on a terminal on its way out.
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
       ws.close();
       term.dispose();
     };

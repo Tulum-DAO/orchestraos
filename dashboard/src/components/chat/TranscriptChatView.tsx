@@ -8,10 +8,14 @@
  * This is the single chat rendering grammar intended to be shared with iOS
  * (ConversationView). Send transport reuses the existing gateway injection.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from '../../lib/useStickToBottom';
-import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
-import { subscribeTranscriptStream } from '../../lib/transcriptStream';
+import { buildRenderList, fetchOlderTranscript, fetchTranscript, type ChatItem } from '../../lib/transcript';
+import { useNearTop, useOlderPages } from '../../lib/threadKit/useOlderPages';
+import { firstCursor, transcriptKey } from '../../lib/threadKit/paging';
+import OlderPagesNote from '../kit/OlderPagesNote';
+import { liveTextOf, subscribeTranscriptStream } from '../../lib/transcriptStream';
+import type { LiveTextEvent } from '../../lib/transcript.gen';
 import { GroupedNodeView } from './TranscriptCards';
 import { groupToolRuns } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
@@ -74,8 +78,11 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar, liveText }: Props) {
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar, liveText: liveTextProp }: Props) {
   const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
+  // A headless seat's reply still being written, from this view's own stream (a caller's liveText wins).
+  // Kept with the agent it came from, so a page that switches agents never draws the last one's words.
+  const [liveEv, setLiveEv] = useState<{ agentId: string; ev: LiveTextEvent } | null>(null);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -113,6 +120,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
 
     tick(); // instant backfill regardless of stream health
     const disposeStream = subscribeTranscriptStream(agentId, 150, {
+      onLiveText: (ev) => { if (!cancelled) setLiveEv(ev.text ? { agentId, ev } : null); },
       onItems: (its) => {
         if (cancelled) return;
         streamLive = true;
@@ -123,6 +131,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       onFallback: () => {
         if (cancelled || pollIv) return;
         streamLive = false;
+        setLiveEv(null);                          // the poll carries no live words
         pollIv = setInterval(tick, 3000); // today's poll cadence
       },
     });
@@ -134,7 +143,22 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     };
   }, [agentId, fixtureItems]);
 
-  const flat = useMemo(() => buildRenderList(items), [items]);
+  // Scrolling up reads the chat's history a page at a time (lib/threadKit/useOlderPages.ts): the live window above,
+  // kept current by the stream or the poll, with older pages added above it. A page is read from the route's own
+  // cursor (`oldest_id`); the first from the first item of the live window that starts a log line of its own, since
+  // the window's top can start partway through one line (the older page brings that line back whole).
+  const loadPage = useCallback(async (before: string) => fetchOlderTranscript(agentId, before), [agentId]);
+  const paged = useOlderPages<ChatItem>({ live: items, keyOf: transcriptKey, firstCursor, load: loadPage, resetKey: agentId,
+    enabled: !fixtureItems && !loading });
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useNearTop(scrollRef, sentinelRef, () => { void paged.loadOlder(); }, paged.items.length, !fixtureItems && !loading && paged.hasOlder);
+  const flat = useMemo(() => buildRenderList(paged.items), [paged.items]);
+  const streamedLive = useMemo(
+    // The live words belong after the newest line, so the live window is all they are checked against (older pages
+    // hold nothing still being written).
+    () => (fixtureItems || liveEv?.agentId !== agentId ? null : liveTextOf(liveEv.ev, items)),
+    [liveEv, items, fixtureItems, agentId]);
+  const liveText = liveTextProp !== undefined ? liveTextProp : streamedLive;
   // Just-sent bubbles (lib/pendingSends): drawn until their own row arrives. Derived in render as
   // well as retired in the store, so the frame that brings the row never also draws the bubble.
   const rows = useMemo(() => userRows(items), [items]);
@@ -166,7 +190,8 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const shownNodes = useMemo(
     () => foldCardAnswers(nodes as { kind: string; text?: string; machine?: string }[], new Set((decisionsQ.data ?? []).map((d) => d.id))) as typeof nodes,
     [nodes, decisionsQ.data]);
-  const entries = useMemo(() => interleave(shownNodes, decisionsQ.data ?? []), [shownNodes, decisionsQ.data]);
+  const entries = useMemo(() => interleave(shownNodes, decisionsQ.data ?? [], { cutAbove: paged.hasOlder }),
+    [shownNodes, decisionsQ.data, paged.hasOlder]);
   // "Needs you" sends you to this agent's first open decision; the bell, to a named one. A card that
   // is no longer here (answered and gone, or never drawn in this chat) says so instead of doing nothing.
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
@@ -269,6 +294,10 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the
             pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
         <ChatAgentContext.Provider value={agentId}>
+        {/* A screen and a half above the first row, the next older page is read (useNearTop). No height of its own,
+            and outside the rows, so neither it nor its "loading" line ever moves what the reader is looking at. */}
+        {!compact && <div ref={sentinelRef} data-anchor-skip data-older-sentinel aria-hidden className="h-0 shrink-0" />}
+        {!compact && <OlderPagesNote show={paged.loading} />}
         <div ref={columnRef}
           className={compact ? undefined : ["mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5", modern ? 'kit-modern' : ''].join(' ').trim()}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}

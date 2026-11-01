@@ -30,6 +30,10 @@
  * live menu) and passes a handle; the view follows whenever what it draws changes, before the paint, so a new message
  * is never drawn once at the old position and then jumped.
  *
+ * WORDS STILL BEING WRITTEN (lib/threadKit/paragraphs.ts): Modern and the pane show them word by word; Bubbles a
+ * paragraph at a time, the paragraph still being written held back behind the working indicator. The same rule for a
+ * reply still streaming in the thread and for the live overlay below.
+ *
  * LIVE TEXT (the hook for a live-text stream): pass `liveText` = { key?, text, parts? } and the view draws it as a
  * streaming reply at the end of the thread, following the bottom, until a row with that key is in the thread (the
  * finished turn replaces it in place). Nothing else changes: the overlay is not part of the thread, so Copy, the
@@ -52,6 +56,7 @@ import type { GroupedNode } from '../../lib/toolGroups';
 import { sendStateLabel, type SendState } from '../../lib/arturo';
 import { hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
 import { showLive, type LiveText, type ThreadRow } from '../../lib/threadKit/view';
+import { completeParts, completeText } from '../../lib/threadKit/paragraphs';
 import type { MessagePart, ThreadMessage } from '../../lib/threadKit/thread';
 
 export interface ThreadViewCall {
@@ -88,6 +93,27 @@ function ReplyWords({ text, skin }: { text: string; skin: Skin }) {
   );
 }
 
+/** Words still being written, in Bubbles: the complete paragraphs only, then the working indicator while the next
+ *  one is written. Null when nothing is complete yet and nothing waits (an empty reply). */
+function Unfinished({ text, parts, skin }: { text: string; parts?: MessagePart[]; skin: Skin }) {
+  const c = parts?.length ? completeParts(parts) : null;
+  const t = c ? null : completeText(text);
+  const pending = c ? c.pending : t!.pending;
+  return (
+    <>
+      {c ? (c.parts.length > 0 && <Parts parts={c.parts} skin={skin} />) : t!.text && <MessageText text={t!.text} skin={skin} />}
+      {/* The agent chat's own working indicator (its pulsing dot and line), not Arturo's page dot, whose colour exists
+          only on his page. */}
+      {pending && (
+        <div className="flex items-center gap-2 px-1 py-1" role="status" aria-label="writing" data-paragraph-pending>
+          <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+          <span className="text-[11px] text-tone-500 italic">writing…</span>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** A reply's text and tool runs, in the order they happened. Indices are stable: parts only ever grow at the end. */
 function Parts({ parts, skin }: { parts: MessagePart[]; skin: Skin }) {
   return (
@@ -116,6 +142,7 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
   return (
     <div className={skin === 'bubbles' ? 'turn-assistant group w-full min-w-0' : 'turn-assistant'} data-thread-key={m.key}>
       {m.pending ? <span className="thinking" aria-label="thinking" />
+        : m.streaming && skin === 'bubbles' ? <Unfinished text={m.text} parts={m.parts} skin={skin} />
         : m.parts ? <Parts parts={m.parts} skin={skin} />
         : <ReplyWords text={m.text} skin={skin} />}
       {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="tools">ran {m.toolNames.join(', ')}</div>}
@@ -224,7 +251,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
       {rows.map((r) => {
         if (r.kind === 'call') {
           return (
-            <CallCard key={r.key} skin={skin === 'bubbles' ? 'modern' : skin} callId={r.callId} turns={r.turns.map((t) => ({ role: t.role, text: t.text, ...(t.parts ? { parts: t.parts } : {}) }))}
+            <CallCard key={r.key} skin={skin === 'bubbles' ? 'modern' : skin} callId={r.callId} turns={r.turns.map((t) => ({ role: t.role, text: t.text, ...(t.parts ? { parts: t.parts } : {}), ...(t.id !== undefined ? { key: String(t.id) } : {}) }))}
               live={r.live} startTs={r.startTs} endTs={r.endTs}
               liveSince={r.live ? call?.liveSince : null} liveUser={r.live ? call?.liveUser : undefined}
               liveArturo={r.live ? call?.liveArturo : undefined} connecting={r.live && !!call?.connecting} />
@@ -245,7 +272,9 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
           }
           return renderNode ? <NodeSlot key={r.key}>{renderNode(r.node, r.interrupted)}</NodeSlot> : null;
         }
-        if (r.kind === 'decision') return <DecisionBubble key={r.key} decision={r.decision} onAnswered={() => onDecisionAnswered?.()} />;
+        // Never the scroll anchor: a card is placed by its time, so one filed before the oldest message loaded moves down
+        // into place when an older page brings that moment in; what the reader is looking at is held by the text.
+        if (r.kind === 'decision') return <div key={r.key} data-anchor-skip><DecisionBubble decision={r.decision} onAnswered={() => onDecisionAnswered?.()} /></div>;
         if (r.kind === 'pending') return <PendingBubble key={r.key} text={r.text} kind={r.pending} />;
         if (r.kind !== 'message') return null;
         if (r.note) {
@@ -259,8 +288,9 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
       })}
       {live && (
         <div className={skin === 'bubbles' ? 'flex justify-start' : skin === 'pane' ? 'row arturo' : 'turn-assistant'} data-live-text>
-          <div className={skin === 'bubbles' ? 'w-full min-w-0' : undefined}>
-            {live.parts?.length ? <Parts parts={live.parts} skin={skin} /> : <MessageText text={live.text} skin={skin} />}
+          <div className={skin === 'bubbles' ? 'turn-assistant w-full min-w-0' : undefined}>
+            {skin === 'bubbles' ? <Unfinished text={live.text} parts={live.parts} skin={skin} />
+              : live.parts?.length ? <Parts parts={live.parts} skin={skin} /> : <MessageText text={live.text} skin={skin} />}
           </div>
         </div>
       )}

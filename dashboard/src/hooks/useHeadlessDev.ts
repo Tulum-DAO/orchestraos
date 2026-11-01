@@ -23,6 +23,8 @@ export const useDevInfoStore = create<DevInfoStore>((set) => ({
 }));
 
 const POLL_MS = 5000;
+/** While the terminal is wanted: it can be left from inside it at any time, and the page should follow quickly. */
+const DEV_POLL_MS = 2000;
 
 export async function loadDevInfo(agentId: string, fetchFn: typeof fetch = fetch): Promise<DevInfo | null> {
   try {
@@ -55,23 +57,29 @@ export interface HeadlessDev {
   act: (id: 'wait' | 'stop' | 'retry') => void;
 }
 
+/** `onLeftTerminal`: the terminal was left from inside it while this page shows it; the page does what its Back to
+ *  chat button does (save the chat style), so the result is the same. */
 export function useHeadlessDev(agentId: string, mode: 'chat' | 'dev', status: string | undefined,
-  seatName: string): HeadlessDev {
+  seatName: string, onLeftTerminal?: () => void): HeadlessDev {
   const info = useDevInfoStore((s) => s.info[agentId]);
   const [mem, setMem] = useState<DevMemory>(INITIAL);
   const wantDev = mode === 'dev';
   const busy = isBusy(status);
   const flight = useRef(false);
   const lastWant = useRef<boolean | null>(null);
+  const leftRef = useRef(onLeftTerminal);
+  useEffect(() => { leftRef.current = onLeftTerminal; }, [onLeftTerminal]);
 
   // A new seat starts over; its info is asked for at once and kept fresh (the terminal can be left from inside it).
   useEffect(() => {
     setMem(INITIAL);
     lastWant.current = null;
     void loadDevInfo(agentId);
-    const t = setInterval(() => { if (!flight.current) void loadDevInfo(agentId); }, POLL_MS);
-    return () => clearInterval(t);
   }, [agentId]);
+  useEffect(() => {
+    const t = setInterval(() => { if (!flight.current) void loadDevInfo(agentId); }, wantDev ? DEV_POLL_MS : POLL_MS);
+    return () => clearInterval(t);
+  }, [agentId, wantDev]);
 
   const inputs = { headless: info?.headless ?? null, actualDev: info?.dev ?? false, wantDev, busy };
 
@@ -85,6 +93,7 @@ export function useHeadlessDev(agentId: string, mode: 'chat' | 'dev', status: st
     const { mem: next, action } = step(inputs, base);
     if (JSON.stringify(next) !== JSON.stringify(mem)) setMem(next);
     if (action === 'none') return;
+    if (action === 'leftTerminal') { leftRef.current?.(); return; }
     const on = action === 'switchOn';
     flight.current = true;
     void postDev(agentId, on).then(async (r) => {

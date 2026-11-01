@@ -22,6 +22,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { applyScreenAnswer, focusOf, getScreen, screenLabel, screenPayload, subscribeScreen } from '../../lib/screenCards';
 import JobTray from './JobTray';
 import { useStickToBottom } from '../../lib/useStickToBottom';
+import { useArturoThreadPages } from '../../lib/useArturoThreadPages';
+import { useNearTop } from '../../lib/threadKit/useOlderPages';
+import OlderPagesNote from '../kit/OlderPagesNote';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../../lib/arturoCurrent';
 import ThreadView from '../kit/ThreadView';
 import { arturoRows, lastUserKey } from '../../lib/threadKit/view';
@@ -34,8 +37,9 @@ import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentIma
 import './arturo.css';
 import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, cardRefusal, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type CardAnswer, type ChoiceCard, type SendState } from '../../lib/arturo';
 import {
-  listThreads, loadThread, dismissCard, contextCardLabel, isContextDismissed, dismissContext,
+  listThreads, loadThreadPage, dismissCard, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
+  type ThreadTurn,
 } from '../../lib/arturoThreads';
 import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
@@ -49,6 +53,8 @@ import { arturoComposerText, arturoShownText } from '../../lib/arturoComposer';
 import { useAssistantName } from '../../lib/assistantName';
 
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
+  /** The stored turn's number in the thread (read a page at a time); none on a turn this pane added. */
+  seq?: number;
   /** Images the operator attached to this message (upload URLs). */
   images?: string[];
   spawned?: string[]; at: number; live?: boolean; state?: SendState;
@@ -69,6 +75,16 @@ interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
   callTools?: boolean; parts?: TurnPart[];
   /** When it was said (epoch seconds): the call card's length. */
   ts?: number }
+/** Stored turns read the way Arturo's page reads them (lib/arturoResume hydrateTurns): context lines and attachment
+ *  markers off, a finished job as its steps and its text, a choice card with the server's answer. A job's result stays
+ *  a reply here (its steps, then its words), the pane's small layout, not a result card. */
+function hydratePane(turns: ThreadTurn[]): PillTurn[] {
+  return hydrateTurns(turns).map((x) => ({ ...x, result: undefined, at: (x.ts || 0) * 1000 }));
+}
+/** A turn's name in the thread view: its seq once stored, else its place among the pane's own turns. */
+function pillKey(t: PillTurn, i: number): string {
+  return t.seq !== undefined ? `s${t.seq}` : `l${i}`;
+}
 /** Which thread was I in: the browser's ONE current thread, shared with the home (lib/arturoCurrent). */
 function loadConv(): string {
   const existing = currentThread();
@@ -210,15 +226,12 @@ export function ArturoPill() {
   const resumeGen = useRef(0);
   const resume = useCallback(async (id: string) => {
     const mine = ++resumeGen.current;
-    const t = await loadThread(id);
+    const t = (await loadThreadPage(id))?.thread ?? null;   // its newest page; older ones load on scrolling up
     if (mine !== resumeGen.current) return;          // superseded by a send or a newer reload
     // A thread the server knows answers on the brain it last used. A fresh thread (null) leaves
     // the current choice alone: resume runs on every open, and must not undo a pick just made.
     if (t) chooseBrain(brainFromThread(t, {}));
-    // The stored thread read the way Arturo's page reads it (lib/arturoResume hydrateTurns): context lines and
-    // attachment markers off, a finished job as its steps and its text, a choice card with the server's answer. A
-    // job's result stays a reply here (its steps, then its words), the pane's small layout, not a result card.
-    setTurns(hydrateTurns(t?.turns || []).map((x) => ({ ...x, result: undefined, at: (x.ts || 0) * 1000 })));
+    setTurns(hydratePane(t?.turns || []));
   }, [chooseBrain]);
 
   useEffect(() => { setCtxOn(!isContextDismissed(convId)); }, [convId]);
@@ -226,7 +239,17 @@ export function ArturoPill() {
   // New turns and live captions push the feed up only while you're at the bottom; scrolled up, it stays put.
   const stick = useStickToBottom(scroller);
   // The thread view follows whenever what it draws grows (turns, a streamed reply, a live call's captions).
-  const rows = useMemo(() => arturoRows(turns, inCall, aname), [turns, inCall, aname]);
+  // Scrolling up reads older pages of the thread above what is loaded (lib/useArturoThreadPages.ts). Rows are named
+  // by the stored turn's seq, or by a turn's place among this pane's own (never by its place in the whole list, which
+  // every older page would shift).
+  const paged = useArturoThreadPages<PillTurn>(turns, convId, hydratePane, open && turns.length > 0);
+  const keyed = useMemo(() => {
+    const at = paged.items.length - turns.length;
+    return paged.items.map((t, i) => ({ ...t, id: pillKey(t, i - at) }));
+  }, [paged.items, turns.length]);
+  const olderRef = useRef<HTMLDivElement>(null);
+  useNearTop(scroller, olderRef, () => { void paged.loadOlder(); }, paged.items.length, open && turns.length > 0 && paged.hasOlder);
+  const rows = useMemo(() => arturoRows(keyed, inCall, aname), [keyed, inCall, aname]);
   useEffect(() => { if (open) stick.toBottom(); }, [open, convId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
@@ -425,14 +448,16 @@ export function ArturoPill() {
           {/* His thread through the kit's thread view (components/kit/ThreadView.tsx) in the pane's own skin: his
               replies (Markdown, tool runs in order, streamed as written), a voice call as one card with its live
               captions, his choice cards, the pane's status notes. */}
-          <ThreadView rows={rows} skin="pane" by={aname} lastUserKey={lastUserKey(turns)} stick={stick}
+          <div ref={olderRef} data-anchor-skip data-older-sentinel aria-hidden style={{ height: 0, flexShrink: 0 }} />
+          <OlderPagesNote show={paged.loading} />
+          <ThreadView rows={rows} skin="pane" by={aname} lastUserKey={lastUserKey(keyed)} stick={stick}
             call={{ liveSince: callSince, liveUser, liveArturo, connecting: callState === 'connecting' }}
             noteText={(m) => (m.text === STARTING_TEXT ? m.text : `I can't do that yet — ${m.text}.`)}
             choice={{
               onAnswer: (m, text, a) => { const c = m.choices!; void send(text, c.card_id ? cardAnswer(c.card_id, c.options, a.picked, a.words) : undefined); },
               onDismiss: async (m) => {
                 const err = await dismissCard(convId, m.choices!.card_id!);
-                if (!err) { const k = m.key; setTurns((prev) => prev.map((x, i) => (`t${i}` === k ? { ...x, dismissed: true } : x))); }
+                if (!err) { const k = m.key; setTurns((prev) => prev.map((x, i) => (`t${pillKey(x, i)}` === k ? { ...x, dismissed: true } : x))); }
                 return err;
               },
             }}

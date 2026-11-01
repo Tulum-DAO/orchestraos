@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS summaries (
 );
 """
 
+# A page of a thread read a page at a time (get_thread_page): its default and its most.
+DEFAULT_PAGE_TURNS = 100
+MAX_PAGE_TURNS = 500
+
 # A turn mark outlives any client still waiting on its turn by far; older ones are pruned.
 TURN_MARK_TTL_S = 7 * 24 * 3600
 
@@ -664,6 +668,44 @@ class ThreadStore:
                 out = self._clean_title(conn, _thread_row(head))
             # What a client reads: the page-context line is the model's, not the operator's words.
             out["turns"] = [_client_turn(r) for r in rows]
+            return out
+        except Exception:  # noqa: BLE001
+            return None
+
+    def get_thread_page(self, conversation_id, before=None, limit=DEFAULT_PAGE_TURNS):
+        """One page of a thread, newest turns last, for a client that reads a long thread a page at a time
+        (scrolling up): `before` None = the newest `limit` turns, else the `limit` turns just older than the turn
+        whose seq it is. Each turn carries its `seq` (the client's cursor and its identity, so a page that meets
+        what the client already holds is joined without duplicates); `has_older` says whether anything older
+        remains and `oldest_seq` is the cursor for the next page (None on an empty page). A `before` that is not a
+        turn of this thread is an empty page with has_older False and error "unknown cursor". None when the
+        thread does not exist (as get_thread)."""
+        if not self.usable or not conversation_id:
+            return None
+        limit = max(1, min(int(limit), MAX_PAGE_TURNS))
+        try:
+            with self._connect() as conn:
+                head = conn.execute(
+                    f"SELECT {_THREAD_COLS} FROM threads WHERE id = ?", (conversation_id,)).fetchone()
+                if head is None:
+                    return None
+                out = self._clean_title(conn, _thread_row(head))
+                cols = "seq, role, content, ts, brain_provider, brain_model, mode, meta"
+                if before is not None and conn.execute(
+                        "SELECT 1 FROM turns WHERE thread_id = ? AND seq = ?", (conversation_id, before)).fetchone() is None:
+                    out.update(turns=[], has_older=False, oldest_seq=None, error="unknown cursor")
+                    return out
+                if before is None:
+                    rows = conn.execute(f"SELECT {cols} FROM turns WHERE thread_id = ? ORDER BY seq DESC LIMIT ?",
+                                        (conversation_id, limit + 1)).fetchall()
+                else:
+                    rows = conn.execute(f"SELECT {cols} FROM turns WHERE thread_id = ? AND seq < ?"
+                                        " ORDER BY seq DESC LIMIT ?", (conversation_id, before, limit + 1)).fetchall()
+            has_older = len(rows) > limit
+            rows = list(reversed(rows[:limit]))
+            out["turns"] = [{"seq": r["seq"], **_client_turn(r)} for r in rows]
+            out["has_older"] = has_older
+            out["oldest_seq"] = rows[0]["seq"] if rows else None
             return out
         except Exception:  # noqa: BLE001
             return None

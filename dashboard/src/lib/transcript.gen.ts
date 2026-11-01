@@ -107,6 +107,19 @@ export interface RotationItem {
   to_session: string;
 }
 
+export interface LiveTextBlock {
+  uuid: string | null;
+  text: string;
+}
+
+export interface LiveTextEvent {
+  agent_id: string;
+  message_id: string | null;
+  text: string;
+  blocks: LiveTextBlock[];
+  done: boolean;
+}
+
 export type RenderItem =
   | RenderUser
   | RenderAssistant
@@ -187,5 +200,7 @@ export interface TranscriptEnvelope {
   grammar_version: 2;
   items: ChatItem[];
   render_items: RenderItem[];
+  has_older?: boolean;
+  oldest_id?: string | null;
   error?: string;
 }
