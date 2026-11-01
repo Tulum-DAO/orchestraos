@@ -61,6 +61,13 @@ export function dotState(i: Pick<WorkingRowInput, 'status' | 'chip' | 'pendingMe
   return { state: normalizeAgentState(railStatus(i.chip, i.status)), menu: railPendingMenu(i.chip, !!i.pendingMenu) };
 }
 
+/** Whether the row shows at all: not while the agent is idle (at its prompt, or idle by its step) or its state is
+ *  unknown. Every state that is work, or that needs the person (waiting, a menu, a draft, queued, down with Resume,
+ *  retired, the feed down or updating), keeps it. The job tray under it is separate and shows while jobs run. */
+export function rowShown(row: WorkingRow): boolean {
+  return row.kind !== 'idle' && row.kind !== 'idleStep' && row.kind !== 'unknown';
+}
+
 export function workingRowFor(i: WorkingRowInput): WorkingRow {
   const feed = i.feed;
   // DISCONNECTED OUTRANKS EVERY AGENT STATE: with no live feed we cannot claim what it is doing.

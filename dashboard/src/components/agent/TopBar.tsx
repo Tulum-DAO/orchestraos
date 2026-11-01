@@ -4,7 +4,6 @@ import { HeaderEndSlotContext } from '../../lib/headerSlot';
 import { GenChip } from '../GenChip';
 import AgentIdentityPill from '../avatar/AgentIdentityPill';
 import { useAgentRecord } from '../avatar/agentState';
-import { ExportMenu } from './ExportMenu';
 
 interface TopBarProps {
   onMenuOpen: () => void;
@@ -27,13 +26,15 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOp
 
 
   return (
-    // `justify-between` across THREE children is what put the theme toggle in the middle of the
-    // bar with nothing either side of it. The bar now has exactly two groups — the seat identity
-    // on the left and every control on the right — so nothing floats unanchored.
+    // Three columns: the menu button, the seat's pill, the controls. The two ends are equal (1fr each) while they fit,
+    // so the pill sits in the middle of the bar's full width, phone and desktop; neither end ever goes below its own
+    // width, so with a long name the pill truncates in the room left between them rather than covering them.
     // Even 6px top and bottom (53px with the 40px row and the border: the height it always had, now centred).
     // No safe-top here: it REPLACED the top padding (0 on a desktop, so the row sat flush at the top) and <main>
     // already adds the notch inset on a phone (here it was counted twice).
-    <div className="touch-compact sticky top-0 z-20 flex items-center gap-2 px-4 py-1.5 border-b bg-background border-border relative">
+    <div className="touch-compact sticky top-0 z-20 grid grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)] items-center gap-2 px-4 py-1.5 border-b bg-background border-border relative"
+         data-top-bar>
+      <div className="flex items-center justify-self-start">
       {/* The desktop sidebar is permanently visible (DashboardLayout renders it at md+), so this
           drawer trigger is a SECOND nav entry there. It is the mobile affordance only. */}
       <button
@@ -43,13 +44,11 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOp
       >
         <Menu size={24} />
       </button>
+      </div>
 
-      {/* From md up, centred on the bar whatever sits at either end, as Arturo's title is, and narrow enough to clear
-          the controls. On a phone the controls leave no room in the middle, so it sits in the row after the menu
-          button and truncates to fit. */}
-      {seat && (
-        <div className="flex items-center gap-2 min-w-0 md:absolute md:left-1/2 md:-translate-x-1/2 md:max-w-[calc(100%-12rem)]"
-             data-seat-header={seat.id}>
+      {/* The middle column: centred on the bar, as Arturo's title is, and truncating to fit between the ends. */}
+      {seat ? (
+        <div className="flex items-center justify-center gap-2 min-w-0" data-seat-header={seat.id}>
           <AgentIdentityPill agentId={seat.id} name={seat.name || seat.id} size={32} className="min-w-0"
             title={seat.name && seat.name !== seat.id ? seat.id : undefined}
             onClick={onSettings} aria-label={`${seat.name || seat.id}: open settings`} aria-expanded={!!settingsOpen}
@@ -58,7 +57,7 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOp
                       shape: rec.shape, color: rec.color, eyeColor: rec.eyeColor, provider: rec.provider }} />
           <GenChip generation={seat.generation} />
         </div>
-      )}
+      ) : <div />}
 
 
       {/* DashboardLayout owns the one shared notification bell (#400) and portals it into the
@@ -66,11 +65,9 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOp
           centre as the icons beside it. (It used to be a FIXED box at top-4, with right padding
           here reserving room for it; this bar's top padding is env(safe-area-inset-top), not py-3's
           12px, so the fixed bell sat 16px below the row.) */}
-      <div className="ml-auto flex items-center gap-1">
+      <div className="justify-self-end flex items-center gap-1">
         {/* No Chat/Dev switch up here: most people never want the terminal, so it is a chat style (Modern,
             Bubbles or Dev) chosen in the agent's panel, behind the gear. */}
-        {/* Export the conversation as Markdown (one icon; chat view only). */}
-        {seat && mode === 'chat' && <ExportMenu agentId={seat.id} />}
         {seat && mode === 'dev' && onBackToChat && (
           <button type="button" onClick={onBackToChat} data-back-to-chat
                   className="mr-1 inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[13px] font-medium text-foreground hover:bg-muted">

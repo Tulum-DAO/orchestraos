@@ -16,6 +16,11 @@
  *
  * `result_uuid`: the transcript line a finished job's result landed on (the notification line, or the tool_result's
  * line), the row the chat already draws: the dashboard puts the job's result card there.
+ *
+ * A call the CLI refused never became a job: its first result is an error whose body is a <tool_use_error> (a blocked
+ * `sleep 25`, a refused permission), or any error within REFUSED_WITHIN_MS of the call. It is left out. A job that
+ * ran and then failed (a background command that exited non-zero, a subagent that errored after running) is a failed
+ * job, with a short `reason`.
  */
 import fs from 'fs';
 
@@ -24,7 +29,20 @@ export type JobStatus = 'running' | 'done' | 'failed';
 export interface Job {
   id: string; kind: JobKind; title: string; status: JobStatus;
   started_at: string | null; ended_at?: string; result_uuid?: string;
+  /** Failed jobs only: why, in a few plain words. */
+  reason?: string;
 }
+
+/** An error answered this soon after the call is the CLI turning it down, not a job that ran and failed. */
+export const REFUSED_WITHIN_MS = 1000;
+/** Finished jobs stay in the tray this long after they end; running ones always. */
+export const FINISHED_KEEP_MS = 60 * 60 * 1000;
+
+export const REASON_ERROR = 'exited with an error';
+export const REASON_SUBAGENT_ERROR = 'ended with an error';
+export const REASON_STOPPED = 'was stopped';
+export const REASON_RESTARTED = 'the agent restarted';
+export const REASON_UNFINISHED = "didn't finish";
 
 const SUBAGENT_TOOLS = new Set(['Task', 'Agent']);
 const WAIT_TOOLS = new Set(['Monitor', 'Sleep', 'Wait', 'ScheduleWakeup']);
@@ -67,23 +85,32 @@ function wakeDelayS(input: any): number | null {
   return null;
 }
 
-/** A notification's own status: completed is done; failed, killed, an error or anything else is failed. */
-const noticeStatus = (text: string): JobStatus => (/^(completed|success|done)$/i.test(NOTICE_STATUS.exec(text)?.[1] || '') ? 'done' : 'failed');
+/** A notification's own status: completed is done; failed, killed, an error or anything else is failed, with why. */
+function noticeOutcome(text: string): { status: JobStatus; reason?: string } {
+  const st = NOTICE_STATUS.exec(text)?.[1] || '';
+  if (/^(completed|success|done)$/i.test(st)) return { status: 'done' };
+  if (/^(killed|stopped|cancell?ed|interrupted|aborted)$/i.test(st)) return { status: 'failed', reason: REASON_STOPPED };
+  if (/^(failed|error|errored)$/i.test(st)) return { status: 'failed', reason: REASON_ERROR };
+  return { status: 'failed', reason: REASON_UNFINISHED };
+}
 
 /** Every job in one Claude Code log, in the order they started. `now` decides a ScheduleWakeup's end. */
 export function parseJobs(lines: readonly string[], now: number = Date.now()): Job[] {
-  const jobs = new Map<string, Job & { awaitNotice?: boolean; wakeUntil?: number }>();
-  const finish = (id: string, status: JobStatus, ts: string | null, uuid: unknown) => {
+  const jobs = new Map<string, Job & { awaitNotice?: boolean; launched?: boolean; wakeUntil?: number }>();
+  const finish = (id: string, status: JobStatus, ts: string | null, uuid: unknown, reason?: string) => {
     const j = jobs.get(id);
     if (!j || j.status !== 'running') return;
     j.status = status;
     if (ts) j.ended_at = ts;
     if (typeof uuid === 'string' && uuid) j.result_uuid = uuid;
+    if (status === 'failed' && reason) j.reason = reason;
   };
   const notice = (text: string, ts: string | null, uuid: unknown) => {
     if (!/<task-notification>/.test(text)) return;
     const id = NOTICE_ID.exec(text)?.[1];
-    if (id) finish(id, noticeStatus(text), ts, uuid);
+    if (!id) return;
+    const { status, reason } = noticeOutcome(text);
+    finish(id, status, ts, uuid, reason);
   };
   for (const raw of lines) {
     if (!raw.trim()) continue;
@@ -109,10 +136,18 @@ export function parseJobs(lines: readonly string[], now: number = Date.now()): J
         const j = jobs.get(b.tool_use_id);
         if (!j || j.status !== 'running') continue;
         const text = resultText(b.content);
-        const failed = b.is_error === true || /^<tool_use_error>/.test(text);
-        if (failed) { finish(j.id, 'failed', ts, o.uuid); continue; }
+        const refusal = /^\s*<tool_use_error>/.test(text);
+        const failed = b.is_error === true || refusal;
+        if (failed) {
+          // Refused, not run: the first answer to the call is the CLI turning it down. Never a job.
+          const quick = !!(ts && j.started_at) && Date.parse(ts) - Date.parse(j.started_at!) <= REFUSED_WITHIN_MS;
+          if (!j.launched && (refusal || quick)) { jobs.delete(j.id); continue; }
+          const stopped = /\[Request interrupted|interrupted by user|was (?:stopped|cancell?ed|killed)/i.test(text);
+          finish(j.id, 'failed', ts, o.uuid, stopped ? REASON_STOPPED : j.kind === 'subagent' ? REASON_SUBAGENT_ERROR : REASON_ERROR);
+          continue;
+        }
         // Launched, not finished: it ends with its notification (or, for a wakeup, its delay).
-        if (j.awaitNotice || /^\s*Async agent launched/i.test(text)) { j.awaitNotice = true; continue; }
+        if (j.awaitNotice || /^\s*Async agent launched/i.test(text)) { j.awaitNotice = true; j.launched = true; continue; }
         if (j.wakeUntil !== undefined) continue;
         finish(j.id, 'done', ts, o.uuid);
       } else if (o.type === 'user' && b.type === 'text' && typeof b.text === 'string') {
@@ -122,7 +157,7 @@ export function parseJobs(lines: readonly string[], now: number = Date.now()): J
   }
   const out: Job[] = [];
   for (const j of jobs.values()) {
-    const { awaitNotice: _a, wakeUntil, ...job } = j;
+    const { awaitNotice: _a, launched: _l, wakeUntil, ...job } = j;
     if (job.status === 'running' && wakeUntil !== undefined && now >= wakeUntil) {
       job.status = 'done';
       job.ended_at = new Date(wakeUntil).toISOString();
@@ -138,7 +173,7 @@ export function endWithCli(jobs: Job[], exitAt: string | null): Job[] {
   if (!exitAt) return jobs;
   const t = Date.parse(exitAt);
   return jobs.map((j) => (j.status === 'running' && j.started_at && Date.parse(j.started_at) < t
-    ? { ...j, status: 'failed' as const, ended_at: new Date(t).toISOString() } : j));
+    ? { ...j, status: 'failed' as const, ended_at: new Date(t).toISOString(), reason: REASON_RESTARTED } : j));
 }
 
 /** When the headless seat's CLI last exited, from the tail of its supervisor log (state/headless/<seat>/events.jsonl).
@@ -163,11 +198,16 @@ export function lastCliExit(eventsFile: string, tailBytes = 512 * 1024): string 
   } catch { return null; } finally { if (fd !== null) try { fs.closeSync(fd); } catch { /* closed */ } }
 }
 
-/** The tray's list: every running job, then the newest finished ones (`keepDone`), newest first. */
-export function trayJobs(jobs: Job[], keepDone = 20): Job[] {
+/** The tray's list: every running job, then the newest finished ones (`keepDone`) that ended within FINISHED_KEEP_MS
+ *  of `now`, newest first. A finished job with no end time is judged by when it started. */
+export function trayJobs(jobs: Job[], keepDone = 20, now: number = Date.now()): Job[] {
   const newest = (a: Job, b: Job) => Date.parse(b.started_at || '') - Date.parse(a.started_at || '');
   const running = jobs.filter((j) => j.status === 'running').sort(newest);
-  const done = jobs.filter((j) => j.status !== 'running').sort(newest).slice(0, keepDone);
+  const recent = (j: Job) => {
+    const t = Date.parse(j.ended_at || j.started_at || '');
+    return !Number.isNaN(t) && now - t <= FINISHED_KEEP_MS;
+  };
+  const done = jobs.filter((j) => j.status !== 'running' && recent(j)).sort(newest).slice(0, keepDone);
   return [...running, ...done];
 }
 
