@@ -4,8 +4,12 @@
  * every rule is tested without a browser.
  *
  * Model rules:
- *   - "Opus 5.5" is claude-opus-5-5[1m]: the short `opus` id the probe lists is that model, not another one.
- *   - Opus 5.5 at 200k context never appears, under any id or name.
+ *   - Every picker lists the same entries in the same order: every provider's models (the probe's list, plus an
+ *     agent's own when it has one), grouped by provider, newest first. An entry that can't be used here is shown
+ *     dimmed with why ("Not allowed for this agent", "Not installed", "Not signed in"), never hidden.
+ *   - "Opus 5.5" is claude-opus-5-5[1m]: the short `opus` id the probe lists is that model; Opus 5.5 at 200k context
+ *     never appears (standing rules, CANONICAL and HIDDEN below).
+ *   - A size shows only when a source states it (nameAndTag); nothing is assumed.
  *   - One model, one row: a short id and its full id under the same name ("Fable 5.1" as `fable` and as
  *     claude-fable-5-1) are one row, the full id kept and the short one remembered as an alias, so a seat already
  *     on the short id still shows as current.
@@ -27,6 +31,8 @@ export interface PickerModel {
   /** Extra words search matches: family, provider names, nicknames. */
   keywords: string[];
   capabilities: ProviderCapabilities;
+  /** Why it can't be picked here (shown dimmed, never hidden); absent: it can. */
+  unavailable?: string;
 }
 
 export interface PickerGroup {
@@ -45,7 +51,7 @@ export interface PickerValue { providerId: string; modelId: string }
 const CANONICAL: Record<string, Record<string, string>> = {
   claude: { opus: 'claude-opus-5-5[1m]' },
 };
-/** Models never offered. */
+/** Models never offered (a standing rule, not a permission: an entry an agent may not use is dimmed instead). */
 const HIDDEN: Record<string, Set<string>> = {
   claude: new Set(['claude-opus-5-5', 'claude-opus-5-5[200k]']),
 };
@@ -57,6 +63,30 @@ export function canonicalId(providerId: string, id: string): string {
 
 export function isHidden(providerId: string, id: string): boolean {
   return !!HIDDEN[providerId]?.has(canonicalId(providerId, id));
+}
+
+/** Family order for models of the same version (newest first is by version; then the larger model). */
+const FAMILY_RANK: Record<string, number> = { opus: 0, sonnet: 1, haiku: 2, fable: 3 };
+
+/** The version a name carries ("Opus 5.5" → [5, 5], "GPT-6 Astra" → [6]). */
+function versionOf(name: string): number[] {
+  const m = name.match(/(\d+(?:\.\d+)*)/);
+  return m ? m[1].split('.').map(Number) : [];
+}
+
+/** Newest first: by version, then family (Opus before Sonnet before Haiku), then the standard size before 1M; the
+ *  source's order otherwise. The one order both pickers show. Pure. */
+export function newestFirst(a: Pick<PickerModel, 'name' | 'tag'>, b: Pick<PickerModel, 'name' | 'tag'>): number {
+  const va = versionOf(a.name), vb = versionOf(b.name);
+  for (let i = 0; i < Math.max(va.length, vb.length); i++) {
+    const d = (vb[i] ?? 0) - (va[i] ?? 0);
+    if (d) return d;
+  }
+  const fam = (n: string) => FAMILY_RANK[n.toLowerCase().split(/\s+/)[0]] ?? 9;
+  const f = fam(a.name) - fam(b.name);
+  if (f) return f;
+  const size = (t?: string) => (t?.endsWith('M') ? 1 : 0);
+  return size(a.tag) - size(b.tag);
 }
 
 const PROVIDER_WORDS: Record<string, string[]> = {
@@ -100,12 +130,15 @@ const isShortId = (id: string) => !/[-.\d]/.test(id);
  *  a context window. */
 type SourceModel = ProviderModel & { subtitle?: string };
 
-export function pickerModelsFor(providerId: string, providerLabel: string, source: SourceModel[]): PickerModel[] {
+/** `asNamed`: take the short ids as the models they name (Arturo's brain: its `opus` is Opus 5.5 as the brain runs it,
+ *  never the agents' 1M version, which it cannot use), not by the agents' rules (CANONICAL). */
+export function pickerModelsFor(providerId: string, providerLabel: string, source: SourceModel[], { asNamed = false } = {}): PickerModel[] {
   const out: PickerModel[] = [];
   for (const s of source) {
     if (isHidden(providerId, s.id)) continue;
-    const id = canonicalId(providerId, s.id);
-    // A short id standing for a 1M model names it as that model.
+    const id = asNamed ? s.id : canonicalId(providerId, s.id);
+    // THE SIZE RULE, for every entry of every picker: only what a source states (nameAndTag: the label "(1M)", a 1M id
+    // `…[1m]`, the gateway's "200K context", the probe's context window). No source, no size.
     const { name, tag } = nameAndTag(id, s.label, s.subtitle, s.capabilities?.context_window ?? null);
     const same = out.find((m) => m.id === id || (m.name === name && m.tag === tag));
     if (same) {
@@ -128,14 +161,33 @@ export function pickerModelsFor(providerId: string, providerLabel: string, sourc
   return out;
 }
 
-/** Every model the picker offers, provider by provider, from the probe's rows: only providers that can be used
- *  give models. On an agent's page, that agent's own provider lists the models the agent can switch to. */
-export function buildPickerModels(rows: ProviderRow[], agentModels?: { providerId: string; models: SourceModel[] } | null): PickerModel[] {
+export const NOT_ALLOWED = 'Not allowed for this agent';
+export const SEAT_ONLY = "Only for agents; Arturo can't use it";
+
+/** Every entry every picker lists, provider by provider, newest first: each provider's models from the probe, plus an
+ *  agent's own list for its provider (the models it may switch to, scripts/agent_model.py: some exist only there).
+ *  Nothing is left out. An entry is dimmed with why when it can't be picked here: its provider not installed or not
+ *  signed in (the probe's state, in words), on an agent's page a model the agent's list does not allow, or in
+ *  Arturo's brain picker (`forArturo`) a model only agents can use (`seat_only`). */
+export function buildPickerModels(rows: ProviderRow[], agentModels?: { providerId: string; models: SourceModel[] } | null,
+  opts: { forArturo?: boolean } = {}): PickerModel[] {
   const out: PickerModel[] = [];
   for (const r of rows) {
-    if (!r.selectable) continue;
-    const own = agentModels && agentModels.providerId === r.provider.id && agentModels.models.length > 0;
-    out.push(...pickerModelsFor(r.provider.id, r.provider.label, own ? agentModels!.models : r.provider.models));
+    const own = agentModels && agentModels.providerId === r.provider.id && agentModels.models.length > 0 ? agentModels.models : null;
+    const known = new Set(r.provider.models.map((m) => m.id));
+    const source: SourceModel[] = [...r.provider.models, ...(own ?? []).filter((m) => !known.has(m.id))];
+    const allowed = own ? new Set(own.map((m) => m.id)) : null;
+    // A row only agents can use (`seat_only`, the 1M Opus versions): Arturo's brain picker shows it dimmed with the
+    // server's reason; for an agent it is a model like any other.
+    const seatOnly = new Map(source.filter((m) => m.seat_only).map((m) => [m.id, m.seat_only_reason || SEAT_ONLY]));
+    const list = pickerModelsFor(r.provider.id, r.provider.label, source, { asNamed: !!opts.forArturo }).map((m) => {
+      if (!r.selectable) return { ...m, unavailable: r.greyReason ?? 'Not available' };
+      const seat = opts.forArturo ? [m.id, ...m.aliases].map((x) => seatOnly.get(x)).find(Boolean) : undefined;
+      if (seat) return { ...m, unavailable: seat };
+      if (allowed && ![m.id, ...m.aliases].some((x) => allowed.has(x))) return { ...m, unavailable: NOT_ALLOWED };
+      return m;
+    });
+    out.push(...list.map((m, i) => ({ m, i })).sort((a, b) => newestFirst(a.m, b.m) || a.i - b.i).map((x) => x.m));
   }
   return out;
 }

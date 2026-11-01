@@ -3,6 +3,11 @@
  * (state/agent-prefs.json: {"users": {"<username>": {"<agent id>": {"style": "bubbles", "accent": "#3b82f6"}}}}),
  * so the choice follows you across devices the way pins do. Telemetry and history stay keyed by agent id; this is
  * only the view. Atomic tmp-replace writes; a missing or bad file reads as no preferences.
+ *
+ * `style_before_dev` is the style Back to chat returns to. The server records it, never a client: a write that turns
+ * the style to 'dev' saves the style it leaves (the chosen one, else the default), so no client can forget it and it
+ * survives restarts and follows the person to another device. It is never accepted in a change, and it never touches
+ * `style` itself.
  */
 import fs from 'fs';
 import path from 'path';
@@ -10,7 +15,10 @@ import path from 'path';
 export type ChatStyle = 'modern' | 'bubbles' | 'dev';
 export const CHAT_STYLES: readonly ChatStyle[] = ['modern', 'bubbles', 'dev'];
 
-export interface AgentPrefs { style?: ChatStyle; accent?: string }
+export interface AgentPrefs { style?: ChatStyle; accent?: string; style_before_dev?: ChatStyle }
+
+/** The fields a person may change; `style_before_dev` is the server's own. */
+type ChangeField = 'style' | 'accent';
 
 const AGENT_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
 const ACCENT_RE = /^#[0-9a-fA-F]{6}$/;
@@ -33,10 +41,10 @@ export function isAgentId(id: unknown): id is string {
 }
 
 /** The known fields of a change, checked; a reason when anything in it is wrong. `null` clears a field. */
-export function cleanPrefsChange(raw: unknown): { change: Partial<Record<keyof AgentPrefs, string | null>> } | { error: string } {
+export function cleanPrefsChange(raw: unknown): { change: Partial<Record<ChangeField, string | null>> } | { error: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'expected {style?, accent?}' };
   const r = raw as Record<string, unknown>;
-  const change: Partial<Record<keyof AgentPrefs, string | null>> = {};
+  const change: Partial<Record<ChangeField, string | null>> = {};
   if ('style' in r) {
     if (r.style !== null && !CHAT_STYLES.includes(r.style as ChatStyle)) return { error: `style must be one of ${CHAT_STYLES.join(', ')}` };
     change.style = r.style as string | null;
@@ -49,24 +57,37 @@ export function cleanPrefsChange(raw: unknown): { change: Partial<Record<keyof A
   return { change };
 }
 
-/** What this person sees for this agent, with the defaults filled in, and which fields they chose themselves. */
-export function readPrefs(orchestraDir: string, username: string, agentId: string): { style: ChatStyle; accent: string | null; chosen: (keyof AgentPrefs)[] } {
+const defaultStyle = (agentId: string): ChatStyle => DEFAULT_STYLE[agentId] ?? 'bubbles';
+const validStyle = (s: unknown): ChatStyle | null => (CHAT_STYLES.includes(s as ChatStyle) ? (s as ChatStyle) : null);
+
+/** What this person sees for this agent, with the defaults filled in, and which fields they chose themselves.
+ *  `style_before_dev` is never 'dev': with nothing recorded it is the agent's default. */
+export function readPrefs(orchestraDir: string, username: string, agentId: string):
+    { style: ChatStyle; accent: string | null; style_before_dev: ChatStyle; chosen: ChangeField[] } {
   const own = (readAll(orchestraDir).users[username] || {})[agentId] || {};
-  const style = CHAT_STYLES.includes(own.style as ChatStyle) ? (own.style as ChatStyle) : null;
+  const style = validStyle(own.style);
   const accent = typeof own.accent === 'string' && ACCENT_RE.test(own.accent) ? own.accent : null;
+  const before = validStyle(own.style_before_dev);
   return {
-    style: style ?? DEFAULT_STYLE[agentId] ?? 'bubbles',
+    style: style ?? defaultStyle(agentId),
     accent,
+    style_before_dev: before && before !== 'dev' ? before : defaultStyle(agentId),
     chosen: [...(style ? ['style' as const] : []), ...(accent ? ['accent' as const] : [])],
   };
 }
 
 export function writePrefs(orchestraDir: string, username: string, agentId: string,
-                           change: Partial<Record<keyof AgentPrefs, string | null>>): void {
+                           change: Partial<Record<ChangeField, string | null>>): void {
   const all = readAll(orchestraDir);
   const mine = (all.users[username] ||= {});
   const rec: Record<string, unknown> = { ...(mine[agentId] || {}) };
+  // Entering Dev: keep the style it leaves for Back to chat. Already in Dev, the earlier record stands.
+  if (change.style === 'dev') {
+    const leaving = validStyle(rec.style) ?? defaultStyle(agentId);
+    if (leaving !== 'dev') rec.style_before_dev = leaving;
+  }
   for (const [k, v] of Object.entries(change)) {
+    if (k !== 'style' && k !== 'accent') continue;
     if (v === null) delete rec[k];
     else rec[k] = v;
   }

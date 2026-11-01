@@ -103,8 +103,9 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
 {
   // On a phone the tile's title attribute is not a real affordance, so the modal is where
   // the reason has to appear. It must never be empty for a disconnected provider.
-  assert.match(reasonText(notInstalled), /not-installed/);
-  assert.match(reasonText(installedLoggedOut), /loggedIn=false/);
+  // In words people read ('Not installed', 'Not signed in', never the probe's code).
+  assert.equal(reasonText(notInstalled), 'Not installed');
+  assert.equal(reasonText(installedLoggedOut), 'Not signed in');
   assert.equal(reasonText(connected), '');
   // a provider with no reason string still gets an honest sentence, never a blank
   assert.notEqual(reasonText({ id: 'x', label: 'X', installed: true, authed: false }), '');

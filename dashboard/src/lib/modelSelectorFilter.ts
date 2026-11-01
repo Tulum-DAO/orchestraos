@@ -22,6 +22,9 @@ export interface ProviderModel {
   id: string;
   label: string;
   capabilities: ProviderCapabilities;
+  /** A model only agents can use (the 1M Opus versions): Arturo's brain picker lists it dimmed, with the reason. */
+  seat_only?: boolean;
+  seat_only_reason?: string;
 }
 
 export interface ProviderAvailability {
@@ -51,16 +54,16 @@ export interface ProviderRow {
 export function buildProviderRows(providers: ProviderAvailability[]): ProviderRow[] {
   return providers.map((provider) => {
     if (!provider.installed) {
-      return { provider, selectable: false, greyReason: provider.auth_reason || 'not installed' };
+      return { provider, selectable: false, greyReason: statusLabel({ ...provider, installed: false }) };
     }
     if (provider.authed === true) {
       return { provider, selectable: true };
     }
     if (provider.authed === 'unverified') {
-      return { provider, selectable: false, greyReason: provider.auth_reason || 'unverified' };
+      return { provider, selectable: false, greyReason: statusLabel({ ...provider, authed: 'unverified' }) };
     }
     // authed === false
-    return { provider, selectable: false, greyReason: provider.auth_reason || 'not signed in' };
+    return { provider, selectable: false, greyReason: statusLabel({ ...provider, authed: false }) };
   });
 }
 
@@ -121,4 +124,18 @@ export function isVideoUploadAllowed(
   if (!row || !row.selectable) return false;
   const model = row.provider.models.find((m) => m.id === modelId);
   return model?.capabilities.video === true;
+}
+
+/** A provider's state in words people read, from the probe's reason code ("not-installed", "signed-out",
+ *  "loggedIn=false", "auth-probe-cmd-failed", …): 'Not installed', 'Not signed in', or that its sign-in could not be
+ *  checked. Every surface (the picker's greyed rows, the Connect sheet) says it this way. */
+export function statusLabel(p: { installed?: boolean; authed?: boolean | 'unverified' | null; auth_reason?: string | null }): string {
+  const code = (p.auth_reason || '').toLowerCase();
+  if (p.installed === false || code === 'not-installed' || code === 'not installed') return 'Not installed';
+  if (p.authed === true && !code) return '';
+  if (p.authed === 'unverified' || /^(auth-probe|no-probe|unknown-probe|auth-file-unparseable|auth-file-missing-expiry)/.test(code) || code === 'unverified') {
+    return "Couldn't check the sign-in";
+  }
+  if (code === 'token-expired') return 'Sign-in expired';
+  return 'Not signed in';
 }

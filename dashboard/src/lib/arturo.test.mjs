@@ -149,7 +149,8 @@ assert.equal(onboardingDone(null), false);
   for (const f of ['../pages/ArturoHome.tsx', '../components/arturo/ArturoPill.tsx']) {
     const t = src(f);
     assert.match(t, /disabled=\{dictateLocked\(/, `${f}: Dictate locked through dictateLocked`);
-    assert.match(t, /disabled=\{!handsFreeReady\(health\)\}/, `${f}: Live voice mode gated on /health`);
+    // Home's own call button, or the pane's one round button (lib/roundAction.ts) offering the call only when ready.
+    assert.match(t, /disabled=\{!handsFreeReady\(health\)\}|available: handsFreeReady\(health\)/, `${f}: Live voice mode gated on /health`);
     assert.doesNotMatch(t, /handsFreeTitle\(true\)/, `${f}: no hard-coded "key present" tooltip`);
   }
 }

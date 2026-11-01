@@ -603,9 +603,10 @@ router.put('/:id/prefs', (req: Request, res: Response) => {
 router.get('/:id/settings', (req: Request, res: Response) => {
   if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
   // `compact_now`: whether a person's "/compact" can run for this seat (lib/seatSettings.ts seatCanCompactNow, the
-  // gateway's gate): the slideout offers "Compact now" only where it can work.
+  // gateway's gate, contract/compact-gate.json): the slideout offers "Compact now" only where it can work. A seat in
+  // Dev is not headless to the gateway, so it is not offered there either.
   res.json({ ok: true, agent: req.params.id, rotates: seatRotates(req.params.id, getRegistry() as any),
-             compact_now: seatCanCompactNow(req.params.id, getRegistry() as any, headlessSeats()),
+             compact_now: seatCanCompactNow(req.params.id, getRegistry() as any, headlessSeats(), headlessInDev),
              ...readSeatSettings(dataDir(), req.params.id), history: seatHistory(dataDir(), req.params.id).slice(-20) });
 });
 router.put('/:id/settings', (req: Request, res: Response) => {

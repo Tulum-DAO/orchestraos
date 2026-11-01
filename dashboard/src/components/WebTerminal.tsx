@@ -11,6 +11,8 @@ import '@xterm/xterm/css/xterm.css';
 import { useRecentAgents } from '../stores/recentAgents';
 import { cliShift } from '../lib/terminalAnchor';
 import { closeNotice, type CloseNotice } from '../lib/terminalClose';
+import { blockMouseModes, copyKeyAction } from '../lib/terminalMouse';
+import './webTerminal.css';
 
 interface WebTerminalProps {
   session: string;
@@ -51,9 +53,8 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
     const fontSize = screenW < 768 ? 11 : 13;
     const term = new Terminal({
       cursorBlink: true,
-      // Seats run tmux with mouse on, which turns on mouse reporting, so a plain drag goes
-      // to tmux. Option-drag (macOS) must still select in the browser; Shift-drag does
-      // elsewhere by default.
+      // The pane's mouse reporting never reaches this terminal (blockMouseModes below), so a plain drag selects.
+      // Kept for a terminal that does get a mouse mode some other way: Option-drag still selects.
       macOptionClickForcesSelection: true,
       fontSize,
       fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
@@ -82,6 +83,21 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
       },
       allowProposedApi: true,
       scrollback: 5000,
+    });
+
+    // Seats run tmux with mouse on; its mouse-reporting modes are kept away from this terminal, which scrolls by its
+    // own wheel and touch handlers, so a plain drag is a browser selection (lib/terminalMouse.ts).
+    const mouseHook = blockMouseModes(term);
+    // Cmd/Ctrl+C with a selection copies it; with none, the key goes to the pane (Ctrl+C interrupts) as ever. Handled
+    // before xterm.js sends anything, so the copy-mode exit on typing never sees it and the selection stays.
+    term.attachCustomKeyEventHandler((ev) => {
+      const act = copyKeyAction(ev, term.hasSelection());
+      if (act === 'pass') return true;
+      if (act === 'copy') {
+        const text = term.getSelection();
+        if (text) navigator.clipboard?.writeText(text).catch(() => { /* the browser refused: nothing else is sent */ });
+      }
+      return false;
     });
 
     const fit = new FitAddon();
@@ -339,6 +355,7 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
       // Our own close (the view leaving, Back to chat) is not a dropped connection: closing a socket still
       // connecting fires onerror, and either message would flash on a terminal on its way out.
       notice.dispose();
+      mouseHook.dispose();
       ws.onclose = null;
       ws.onerror = null;
       ws.onmessage = null;
@@ -360,7 +377,7 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
       // a terminal that silently loses a keystroke to a UI overlay is a worse bug than having
       // no palette. Without the attribute that refusal is dead code.
       data-terminal="true"
-      className="w-full h-full bg-black overscroll-contain"
+      className="web-terminal w-full h-full bg-black overscroll-contain"
       style={{ minHeight: '200px', padding: 0, margin: 0 }}
     />
   );

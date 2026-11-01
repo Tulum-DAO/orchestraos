@@ -47,9 +47,42 @@ NO_SWITCH = {"grok": "this runtime cannot switch models yet"}
 # Claude seats); the 200k one is left out under its full id and under the two names Claude's own model list gives
 # it ("opus", and "default", which it describes as Opus 5.5). Other aliases name other models and stay.
 NOT_FOR_SEATS = {"claude": frozenset({"claude-opus-5-5", "opus", "default"})}
-# 1M-context models a seat may switch to. They live here, not in providers.json: that list is also
-# Arturo's brain catalog, whose model ids cannot carry the "[1m]" suffix (services/arturo/brain.py).
-SEAT_MODELS = {"claude": [("claude-opus-5-5[1m]", "Opus 5.5 (1M)"), ("claude-opus-5[1m]", "Opus 5 (1M)")]}
+# 1M-context models a seat may switch to, per runtime: contract/seat-models.json (one list, which the API's
+# /api/runtimes/available reads too, so the two cannot drift). Not in providers.json: that list is also Arturo's
+# brain catalog, whose model ids cannot carry the "[1m]" suffix (services/arturo/brain.py).
+SEAT_MODELS_FILE = Path(__file__).resolve().parent.parent / "contract" / "seat-models.json"
+_seat_models_cache: dict = {"key": None, "value": {}, "logged": set()}
+
+
+def seat_models(path=None) -> dict:
+    """{runtime: [(id, label), ...]} from the seat-models file, re-read only when it changes. A missing or bad file
+    is an empty table (no 1M choices offered), said once on stderr."""
+    p = Path(path) if path else SEAT_MODELS_FILE
+    try:
+        key = (str(p), p.stat().st_mtime)
+    except OSError as e:
+        return _seat_models_off(p, f"missing ({e.strerror or e})")
+    if _seat_models_cache["key"] == key:
+        return _seat_models_cache["value"]
+    try:
+        models = json.loads(p.read_text())["models"]
+        value = {str(rt): [(str(m["id"]), str(m["label"])) for m in rows] for rt, rows in models.items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        return _seat_models_off(p, f"unreadable ({type(e).__name__}: {e})")
+    _seat_models_cache.update(key=key, value=value)
+    return value
+
+
+def _seat_models_off(p: Path, why: str) -> dict:
+    _seat_models_cache.update(key=None, value={})
+    if (str(p), why) not in _seat_models_cache["logged"]:
+        _seat_models_cache["logged"].add((str(p), why))
+        import sys
+        print(f"[agent_model] {p} {why}: no 1M models offered to seats", file=sys.stderr, flush=True)
+    return {}
+
+
+SEAT_MODELS = seat_models()
 
 _SET_MODEL = re.compile(r"<local-command-stdout>\s*Set model to\s+`?([^`<\n]+?)`?(?:\s+and saved[^<]*|\s+for this session[^<]*)?\s*</local-command-stdout>")
 _STDOUT = re.compile(r"<local-command-stdout>(.*?)</local-command-stdout>", re.S)
@@ -122,7 +155,7 @@ def load_catalog(runtime: str, providers_path: Path, state_dir: Path) -> list[di
                     add(m.get("id"), m.get("label"), m.get("capabilities"))
     except Exception:  # noqa: BLE001
         pass
-    for mid, label in SEAT_MODELS.get(runtime, ()):
+    for mid, label in seat_models().get(runtime, ()):
         add(mid, label)
     try:
         live = json.loads((state_dir / LIVE_CATALOG).read_text())

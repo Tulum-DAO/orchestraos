@@ -22,6 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { applyScreenAnswer, focusOf, getScreen, screenLabel, screenPayload, subscribeScreen } from '../../lib/screenCards';
 import JobTray from './JobTray';
 import { useStickToBottom } from '../../lib/useStickToBottom';
+import RoundAction from '../kit/RoundAction';
+import { roundView } from '../../lib/roundAction';
 import { useArturoThreadPages } from '../../lib/useArturoThreadPages';
 import { useNearTop } from '../../lib/threadKit/useOlderPages';
 import OlderPagesNote from '../kit/OlderPagesNote';
@@ -31,11 +33,11 @@ import { arturoRows, lastUserKey } from '../../lib/threadKit/view';
 import { cardAnswer, isCardEcho, storedAnswerText } from '../../lib/choiceCard';
 import { applyTextDelta, applyToolCall, applyToolResult, hasToolParts, type TurnPart } from '../../lib/turnParts';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, MicOff, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
+import { Mic, MicOff, X, History, Focus, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentImages, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, cardRefusal, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type CardAnswer, type ChoiceCard, type SendState } from '../../lib/arturo';
+import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, cardRefusal, isStarting, waitForArturo, STARTING_TEXT, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type CardAnswer, type ChoiceCard, type SendState } from '../../lib/arturo';
 import {
   listThreads, loadThreadPage, dismissCard, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
@@ -539,20 +541,18 @@ export function ArturoPill() {
                       aria-pressed={dictating} title={dictateTitle(inCall, dictMode)}
                       onClick={toggleDictation} disabled={dictateLocked(inCall, dictMode)}><Mic size={16} /></button>
             )}
-            {inCall ? (
-              <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
-                      onClick={() => void toggleCall()}><PhoneOff size={18} /></button>
-            ) : arturoComposerText(draft, attachments.length) ? (
-              <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
-            ) : (
-              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health), aname)}
-                      disabled={!handsFreeReady(health)} onClick={() => void toggleCall()}><AudioLines size={16} /></button>
-            )}
+            {/* The one round button (lib/roundAction.ts): Send, his call when the box is empty (End during it), or a
+                disabled Send that says why a call isn't possible. Its icons crossfade in place. */}
+            <RoundAction className="circle-btn white" callIcon={<AudioLines size={16} />}
+              view={roundView({ hasContent: !!arturoComposerText(draft, attachments.length), sending: busy,
+                                call: { inCall, available: handsFreeReady(health), reason: handsFreeTitle(handsFreeReady(health), aname) } },
+                              { agent: aname })}
+              onAction={(mode) => { if (mode === 'send') void send(); else if (mode === 'call' || mode === 'end') void toggleCall(); }} />
           </div>
         </div>
       </div>
       {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}). */}
-      <ModelPicker trigger={false} open={open && modelOpen} onOpenChange={setModelOpen}
+      <ModelPicker chooser="arturo" trigger={false} open={open && modelOpen} onOpenChange={setModelOpen}
         value={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
         onValueChange={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
         onPickDefault={() => chooseBrain(null)} />

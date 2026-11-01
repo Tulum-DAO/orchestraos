@@ -13,6 +13,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 export const BUILTIN = { auto_compact: false, show_compaction: true, compact_at: 65 } as const;
 export const GUARD_PCT = 90;
@@ -111,13 +112,33 @@ export function seatHistory(dataDir: string, seat: string): HistoryRow[] {
  *  (scripts/headless_switch.py HEADLESS_RUNTIMES; scripts/rotation_adapters). Others refuse until theirs exists. */
 export const ROTATING_RUNTIMES: ReadonlySet<string> = new Set(['claude']);
 
+/** The /compact gate both sides read: contract/compact-gate.json at the checkout root, found from this module so it is
+ *  the same file from src/ under tsx and from dist/ in production. */
+export const COMPACT_GATE_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'contract', 'compact-gate.json');
+
+export interface CompactGate { needs_headless: boolean; needs_test_seat: boolean }
+
+/** The gate's two flags, or null when the file is missing, unreadable or a flag is not a boolean: then nothing is
+ *  offered, the same as the gateway, which refuses when it cannot read the gate. */
+export function readCompactGate(file: string = COMPACT_GATE_FILE): CompactGate | null {
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (typeof doc?.needs_headless !== 'boolean' || typeof doc?.needs_test_seat !== 'boolean') return null;
+    return { needs_headless: doc.needs_headless, needs_test_seat: doc.needs_test_seat };
+  } catch { return null; }
+}
+
 /** Whether a person's "/compact" can run for this seat now: the gateway's own gate (scripts/watch_gateway.py
- *  _compact_allowed: a seat that runs headless and whose registry row says it is a test seat, until compacting is
- *  turned on for real seats). The slideout reads it to offer "Compact now" only where it can work; the gateway still
- *  decides, so the two must change together. */
+ *  _compact_allowed), with its flags from contract/compact-gate.json, whose cases both sides run. Headless means
+ *  switched on and NOT in Dev: in Dev the seat's TUI runs in the pane, the gateway reads it as not headless and
+ *  refuses, so this must not offer it. The slideout reads it to offer "Compact now" only where it can work; the
+ *  gateway still decides. */
 export function seatCanCompactNow(agentId: string, registry: { agents?: Record<string, { test?: unknown; tmux_session?: unknown }> } | null,
-  headless: Set<string>): boolean {
-  if (!headless.has(agentId)) return false;
+  headless: Set<string>, inDev: (id: string) => boolean = () => false,
+  gate: CompactGate | null = readCompactGate()): boolean {
+  if (!gate) return false;
+  if (gate.needs_headless && (!headless.has(agentId) || inDev(agentId))) return false;
+  if (!gate.needs_test_seat) return true;
   const agents = registry?.agents ?? {};
   for (const [name, row] of Object.entries(agents)) {
     if (row && typeof row === 'object' && row.test === true && (name === agentId || row.tmux_session === agentId)) return true;

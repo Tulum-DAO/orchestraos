@@ -666,15 +666,60 @@ def sessions_of(agent: str, db_path: Path | str | None = None) -> list[dict]:
         conn.close()
 
 
+def locate_cached(session_id: str, db_path: Path | str | None = None) -> Path | None:
+    """A session's transcript: the path its cursor already holds while that file is still there, else the full
+    search (find_transcript). A session indexed once is never searched for again until its file moves."""
+    if not session_id:
+        return None
+    conn = connect(db_path)
+    try:
+        rows = conn.execute("SELECT path FROM cursors WHERE session_id = ? ORDER BY updated DESC", (session_id,)).fetchall()
+    finally:
+        conn.close()
+    for r in rows:
+        p = Path(r["path"])
+        if p.is_file():
+            return p
+    return find_transcript(session_id)
+
+
+def _lock_path(agent: str, db_path: Path | str | None) -> Path:
+    base = (Path(db_path).parent if db_path else default_db_path().parent) / "ingest-locks"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / (re.sub(r"[^A-Za-z0-9._-]", "_", agent) + ".lock")
+
+
 def ingest_tick(agent: str, db_path: Path | str | None = None,
-                locate: "callable | None" = None) -> dict:
+                locate: "callable | None" = None, wait_s: float | None = 30.0) -> dict:
+    """One pass under the seat's ingest lock (the minute beat, a supervisor's save after each message and a
+    rotation's export all take it, so two never read one seat at once). ``wait_s``: how long to wait for it (0: do
+    not wait; the pass is then reported as ``{"skipped": "busy"}``)."""
+    import fcntl
+    fh = open(_lock_path(agent, db_path), "a+")
+    try:
+        deadline = time.monotonic() + (wait_s or 0)
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    return {"agent": agent, "sessions": [], "added": 0, "lag_bytes": None, "at": _now(), "skipped": "busy"}
+                time.sleep(0.05)
+        return _ingest_tick(agent, db_path, locate)
+    finally:
+        fh.close()
+
+
+def _ingest_tick(agent: str, db_path: Path | str | None = None,
+                 locate: "callable | None" = None) -> dict:
     """One automatic ingest pass for a seat: its ACTIVE session's transcript, and the tail of the session before it
     (the last lines it wrote before it was replaced). Forward from each file's cursor; seed rows skipped and
     seen-only blocks stripped (as ``ingest_session`` always does). Records the lag (transcript bytes not yet indexed
     after this pass) and the tick time, readable through ``stats()["ingest_lag"]``. ``locate(provider_session_id)``
     finds a session's file (default: ``find_transcript``). Returns ``{"agent", "sessions": [...], "added",
     "lag_bytes", "at"}``; a session whose file is missing or unreadable is reported in its entry, never raised."""
-    locate = locate or find_transcript
+    locate = locate or (lambda sid: locate_cached(sid, db_path))
     rows = sessions_of(agent, db_path=db_path)
     active = [r for r in rows if r["state"] == "active"]
     previous = [r for r in rows if r["state"] != "active" and r["ended_at"] and r["was_active"]]
@@ -1011,3 +1056,76 @@ def generation_of(session_id: str) -> int | None:
 if __name__ == "__main__":  # pragma: no cover - the CLI lives in orchestra_cli/memory_cmd.py
     from orchestra_cli.memory_cmd import main
     sys.exit(main(sys.argv[1:]))
+
+
+
+# ── Purge: a throwaway seat leaves nothing behind ───────────────────────────────────────────────────────────────
+
+class StillRegistered(ValueError):
+    """The agent is still in the registry: its rows are its conversation, not leftovers."""
+
+
+def _registered(agent: str, registry: Path | None = None) -> bool:
+    reg = Path(registry) if registry else data_dir() / "registry.json"
+    try:
+        agents = (json.loads(reg.read_text()) or {}).get("agents") or {}
+    except (OSError, ValueError, AttributeError):
+        raise StillRegistered(f"the registry ({reg}) could not be read, so {agent} cannot be shown to be gone")
+    return agent in agents or any(isinstance(r, dict) and r.get("tmux_session") == agent for r in agents.values())
+
+
+def purge(agent: str, db_path: Path | str | None = None, registry: Path | str | None = None,
+          dry_run: bool = False) -> dict:
+    """Delete everything the index holds for an agent that is no longer in the registry: its entries (and their
+    search rows and embeddings), cursors, provider sessions with their seen-only marks and seed boundaries, notices,
+    attempts and ingest state. Refuses (StillRegistered) for a registered agent. Idempotent. Returns the row counts
+    per table (what was deleted, or with dry_run what would be)."""
+    if not agent:
+        raise ValueError("agent is required")
+    if _registered(agent, registry):
+        raise StillRegistered(f"{agent} is still in the registry: retire it first")
+    conn = connect(db_path)
+    try:
+        sids = [r[0] for r in conn.execute("SELECT provider_session_id FROM provider_sessions WHERE agent = ?", (agent,))]
+        sids += [r[0] for r in conn.execute("SELECT DISTINCT session_id FROM entries WHERE agent = ?", (agent,))
+                 if r[0] not in sids]
+        marks = ",".join("?" * len(sids)) or "NULL"
+        plan = [
+            ("embeddings", "DELETE FROM embeddings WHERE entry_id IN (SELECT id FROM entries WHERE agent = ?)", (agent,)),
+            ("entries", "DELETE FROM entries WHERE agent = ?", (agent,)),
+            ("cursors", "DELETE FROM cursors WHERE agent = ?", (agent,)),
+            ("seen_only", f"DELETE FROM seen_only WHERE provider_session_id IN ({marks})", tuple(sids)),
+            ("seed_boundary", f"DELETE FROM seed_boundary WHERE provider_session_id IN ({marks})", tuple(sids)),
+            ("provider_sessions", "DELETE FROM provider_sessions WHERE agent = ?", (agent,)),
+            ("compaction_notices", "DELETE FROM compaction_notices WHERE agent = ?", (agent,)),
+            ("compaction_attempts", "DELETE FROM compaction_attempts WHERE agent = ?", (agent,)),
+            ("ingest_state", "DELETE FROM ingest_state WHERE agent = ?", (agent,)),
+        ]
+        counts = {}
+        with conn:
+            for table, sql, args in plan:
+                count_sql = sql.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
+                counts[table] = conn.execute(count_sql, args).fetchone()[0]
+                if not dry_run and counts[table]:
+                    conn.execute(sql, args)
+        return counts
+    finally:
+        conn.close()
+
+
+def counts_for(agent: str, db_path: Path | str | None = None) -> dict:
+    """How many rows each per-agent table holds for an agent (read only; for a check after a retire)."""
+    conn = connect(db_path)
+    try:
+        sids = [r[0] for r in conn.execute("SELECT provider_session_id FROM provider_sessions WHERE agent = ?", (agent,))]
+        marks = ",".join("?" * len(sids)) or "NULL"
+        out = {t: conn.execute(f"SELECT COUNT(*) FROM {t} WHERE agent = ?", (agent,)).fetchone()[0]
+               for t in ("entries", "cursors", "provider_sessions", "compaction_notices", "compaction_attempts",
+                         "ingest_state")}
+        out["seen_only"] = conn.execute(f"SELECT COUNT(*) FROM seen_only WHERE provider_session_id IN ({marks})",
+                                        tuple(sids)).fetchone()[0]
+        out["seed_boundary"] = conn.execute(f"SELECT COUNT(*) FROM seed_boundary WHERE provider_session_id IN ({marks})",
+                                            tuple(sids)).fetchone()[0]
+        return out
+    finally:
+        conn.close()

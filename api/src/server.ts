@@ -21,7 +21,8 @@ import voiceRouter from './routes/voice.js';
 import awayRouter from './routes/away.js';
 import usageRouter from './routes/usage.js';
 import arturoRouter from './routes/arturo.js';
-import agentsNewRouter from './routes/agents-new.js';
+import agentsNewRouter, { loginShellSessionExists } from './routes/agents-new.js';
+import { startLoginShellSweeper } from './lib/loginShells.js';
 import approvalsRouter from './routes/approvals.js';
 import analyticsRouter from './routes/analytics.js';
 import workflowsRouter from './routes/workflows.js';
@@ -54,7 +55,7 @@ import chatHistoryRouter from './routes/chat-history.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
-import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket } from './routes/voice-live.js';
+import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket, createVoiceLiveReadyRouter } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
 import { principal } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
@@ -194,6 +195,7 @@ app.use('/api/activity', activityRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/api/roadmaps', roadmapsRouter);
+app.use('/api/voice', createVoiceLiveReadyRouter());   // GET /live/ready: will a call start (read-only)
 app.use('/api/voice', voiceRouter);
 app.use('/api', awayRouter); // /api/away + /api/presence (RFC 0002, the away card)
 app.use('/api', usageRouter); // /api/usage: plan usage per provider (admin only)
@@ -295,6 +297,10 @@ server.listen(Number(PORT), HOST, () => console.log(
 
 // The library index (parity 4g.1): what each agent made, kept in <data dir>/state/library.db. Not under tests.
 if (!process.env.NODE_TEST_CONTEXT) startLibraryIndex(process.env.ORCHESTRA_DIR || loadConfig().dataDir);
+
+// The web terminal's list of login shells (lib/loginShells.ts): drop entries whose tmux session is gone or that
+// expired, now and every 30 s, so a shell that ended is no longer attachable.
+if (!process.env.NODE_TEST_CONTEXT) startLoginShellSweeper(process.env.ORCHESTRA_DIR || loadConfig().dataDir, loginShellSessionExists);
 
 // A 60 s memory heartbeat so a supervisor restart leaves a trend in the API log
 // (heap cap vs event-loop stall was unanswerable without it — docs/RED_ALERT.md api_health_fail).

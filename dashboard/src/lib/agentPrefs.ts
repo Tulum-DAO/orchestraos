@@ -54,21 +54,31 @@ function writeCache(all: Record<string, ChatStyle>) {
 
 interface PrefsStore {
   styles: Record<string, ChatStyle>;
+  /** The style each seat had before Dev, as its prefs on the server keep it (`style_before_dev`). */
+  beforeDev: Record<string, ChatStyle | undefined>;
   errors: Record<string, string | undefined>;
   set: (agentId: string, style: ChatStyle) => void;
+  setBeforeDev: (agentId: string, style: ChatStyle | undefined) => void;
   setError: (agentId: string, error: string | undefined) => void;
 }
 
 export const useAgentPrefsStore = create<PrefsStore>((set) => ({
   styles: readCache(),
+  beforeDev: {},
   errors: {},
   set: (agentId, style) => set((s) => {
     const styles = { ...s.styles, [agentId]: style };
     writeCache(styles);
     return { styles };
   }),
+  setBeforeDev: (agentId, style) => set((s) => ({ beforeDev: { ...s.beforeDev, [agentId]: style } })),
   setError: (agentId, error) => set((s) => ({ errors: { ...s.errors, [agentId]: error } })),
 }));
+
+const STYLES = new Set<ChatStyle>(['modern', 'bubbles', 'dev']);
+/** The server's `style_before_dev` from a prefs answer, when it holds one. */
+const beforeDevOf = (d: { style_before_dev?: unknown } | null | undefined): ChatStyle | undefined =>
+  typeof d?.style_before_dev === 'string' && STYLES.has(d.style_before_dev as ChatStyle) ? d.style_before_dev as ChatStyle : undefined;
 
 /** Read this agent's saved style from the server into the store. */
 export async function loadPrefs(agentId: string, fetchFn: typeof fetch = fetch): Promise<void> {
@@ -76,13 +86,27 @@ export async function loadPrefs(agentId: string, fetchFn: typeof fetch = fetch):
     const r = await fetchFn(`/api/agents/${encodeURIComponent(agentId)}/prefs`);
     const d = await r.json().catch(() => null);
     if (r.ok && d?.ok && typeof d.style === 'string') useAgentPrefsStore.getState().set(agentId, d.style as ChatStyle);
+    if (r.ok && d?.ok) useAgentPrefsStore.getState().setBeforeDev(agentId, beforeDevOf(d));
   } catch { /* offline: the last answer this browser saw stands */ }
 }
 
-/** Choose a style: it shows at once; if the server refuses, the old one comes back with its reason. */
+/** The chat style to go back to from Dev: the one the seat had before Dev was chosen, which its prefs on the server
+ *  keep (`style_before_dev`: a seat keeps the configuration it was set to); else its default. */
+export function styleBeforeDev(agentId: string): ChatStyle {
+  const s = useAgentPrefsStore.getState().beforeDev[agentId];
+  return s && s !== 'dev' && styleOptions(agentId).some((o) => o.id === s && o.available) ? s : defaultStyle(agentId);
+}
+
+/** Choose a style: it shows at once; if the server refuses, the old one comes back with its reason. Choosing Dev
+ *  notes the style it leaves (the server keeps it as `style_before_dev`), for Back to chat (styleBeforeDev). */
 export async function chooseStyle(agentId: string, style: ChatStyle, fetchFn: typeof fetch = fetch): Promise<boolean> {
   const st = useAgentPrefsStore.getState();
   const before = st.styles[agentId];
+  // The server records the style Dev leaves (`style_before_dev`); this page knows it at once, the same way.
+  if (style === 'dev') {
+    const leaving = effectiveStyle(agentId, before);
+    if (leaving !== 'dev') st.setBeforeDev(agentId, leaving);
+  }
   st.set(agentId, style);
   st.setError(agentId, undefined);
   try {
@@ -90,7 +114,7 @@ export async function chooseStyle(agentId: string, style: ChatStyle, fetchFn: ty
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ style }),
     });
     const d = await r.json().catch(() => ({}));
-    if (r.ok && d.ok) return true;
+    if (r.ok && d.ok) { const kept = beforeDevOf(d); if (kept) st.setBeforeDev(agentId, kept); return true; }
     throw new Error(d.error || `HTTP ${r.status}`);
   } catch (e) {
     if (before) st.set(agentId, before);

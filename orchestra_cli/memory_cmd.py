@@ -34,6 +34,14 @@ def add_parser(sub) -> None:
     i.add_argument("--generation", type=int, help="default: the identity store's generation for this session")
     i.add_argument("--path", help="the transcript file (default: found from the session id)")
     i.add_argument("--json", action="store_true")
+    pg = msub.add_parser("purge", help="delete everything the index holds for an agent that is no longer registered "
+                                       "(a retired throwaway); without --yes, only says what it would delete")
+    pg.add_argument("agent")
+    pg.add_argument("--yes", action="store_true", help="really delete")
+    pg.add_argument("--json", action="store_true")
+    ct = msub.add_parser("counts", help="how many rows the index holds for an agent, per table (read only)")
+    ct.add_argument("agent")
+    ct.add_argument("--json", action="store_true")
     c = msub.add_parser("compaction-status", help="each attempt to compact a chat: when, how it was started, what happened, why")
     c.add_argument("--agent")
     c.add_argument("--limit", type=int, default=20)
@@ -42,6 +50,23 @@ def add_parser(sub) -> None:
 
 def cmd_memory(ns) -> int:
     from scripts import episodic_memory as EM
+    if ns.memory_cmd == "purge":
+        try:
+            counts = EM.purge(ns.agent, dry_run=not ns.yes)
+        except EM.StillRegistered as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+        if ns.json:
+            print(json.dumps({"agent": ns.agent, "deleted" if ns.yes else "would_delete": counts}))
+        else:
+            what = "deleted" if ns.yes else "would delete (run again with --yes)"
+            print(f"{ns.agent}: {what}: " + ", ".join(f"{t} {n}" for t, n in counts.items()))
+        return 0
+    if ns.memory_cmd == "counts":
+        counts = EM.counts_for(ns.agent)
+        print(json.dumps({"agent": ns.agent, **counts}) if ns.json else
+              f"{ns.agent}: " + ", ".join(f"{t} {n}" for t, n in counts.items()) + f" (total {sum(counts.values())})")
+        return 0
     if ns.memory_cmd == "compaction-status":
         rows = EM.attempts(ns.agent, limit=ns.limit)
         if ns.json:

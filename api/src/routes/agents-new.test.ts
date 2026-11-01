@@ -229,6 +229,28 @@ test('POST /login-shell names the first NOT-installed cli when nothing is instal
   assert.match(r.json.hint, /install/i);
 });
 
+test('POST /login-shell lists the shell it started for the web terminal, and only once it is up', async () => {
+  const listed: any[] = [];
+  const deps = makeDeps({ rows: [authedRow('codex', 'codex')], listLoginShell: (e) => { listed.push(e); } });
+  const r = await post(deps, '/api/agents/login-shell', { provider: 'codex' });
+  assert.equal(r.status, 200);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].session, 'login-codex');
+  assert.equal(listed[0].provider, 'codex');
+  assert.ok(listed[0].createdBy === null || typeof listed[0].createdBy === 'string');
+  const failed: any[] = [];
+  const down = makeDeps({ startLoginShell: async () => ({ ok: false, output: 'no tmux' }), listLoginShell: (e) => { failed.push(e); } });
+  assert.equal((await post(down, '/api/agents/login-shell', {})).status, 502);
+  assert.deepEqual(failed, [], 'a shell that did not start is never listed');
+});
+
+test('POST /login-shell says so when the shell cannot be listed, rather than hand back a terminal that refuses', async () => {
+  const deps = makeDeps({ listLoginShell: () => { throw new Error('read-only state dir'); } });
+  const r = await post(deps, '/api/agents/login-shell', {});
+  assert.equal(r.status, 502);
+  assert.equal(r.json.reason, 'list_failed');
+});
+
 // --- G21: /login-shell must target the provider the operator CLICKED ------------------------
 // The disconnected-provider modal (operator, 2026-09-18) opens a login for the tile that was
 // tapped. Before this, loginHint() picked `installed[0]` — so tapping Gemini on a box where

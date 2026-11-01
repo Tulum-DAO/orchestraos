@@ -1,0 +1,9 @@
+/* WebTerminal on a touch screen: touch and drag scrolls (its own handlers), and a long press never starts a text
+   selection or the iOS callout. Desktop keeps the browser's selection, so a drag selects and Cmd/Ctrl+C copies. */
+@media (pointer: coarse) {
+  .web-terminal, .web-terminal * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}

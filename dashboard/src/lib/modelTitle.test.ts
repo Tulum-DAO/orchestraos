@@ -14,7 +14,7 @@ test('an agent\'s model is named as the picker names it: the name and its contex
   ];
   assert.equal(agentModelTitle(info('claude-opus-5-5[1m]', models)), 'Opus 5.5 · 1M');
   assert.equal(agentModelTitle(info('claude-opus-5', models)), 'Opus 5 · 200K');
-  assert.equal(agentModelTitle(info('fable', models)), 'Fable 5.1');
+  assert.equal(agentModelTitle(info('fable', models)), 'Fable 5.1');   // no source states its size: none shown
 });
 
 test('a short id that stands for the 1M Opus 5.5 is named as it; an unknown model keeps its id; none is null', () => {

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
-import { X, FileText, AlertTriangle, Link2, Copy, Check, ArrowDown, WifiOff, Send } from 'lucide-react';
+import { X, FileText, AlertTriangle, Link2, Copy, Check, ArrowDown, WifiOff } from 'lucide-react';
+import RoundAction from './kit/RoundAction';
+import { roundView } from '../lib/roundAction';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
 import { TierBadge } from './TierBadge';
 import { AgentGenerations } from './AgentGenerations';
@@ -282,14 +284,14 @@ function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boo
             aria-describedby={disabled ? `msg-disabled-${agentId}` : undefined}
             className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-tone-900 border border-tone-800 text-tone-100 placeholder:text-tone-600 focus:outline-none focus:border-tone-600 disabled:opacity-50 disabled:cursor-not-allowed"
           />
-          <button
-            onClick={submit}
-            disabled={disabled || status === 'sending' || !text.trim()}
-            className="shrink-0 p-1.5 rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label="Send"
-          >
-            <Send size={14} />
-          </button>
+          {/* The composers' one round button (lib/roundAction.ts). This panel has no call, so an empty box is a disabled
+              Send that says why. */}
+          <RoundAction
+            view={roundView({ hasContent: !!text.trim(), sending: status === 'sending', blocked: disabled })}
+            busy={status === 'sending'}
+            onAction={(mode) => { if (mode === 'send') submit(); }}
+            className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+          />
         </div>
         {disabled && (
           <p id={`msg-disabled-${agentId}`} className="text-[11px] text-tone-500">
