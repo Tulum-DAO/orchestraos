@@ -52,6 +52,7 @@ import inspectFeedbackRouter from './routes/inspect-feedback.js';
 import telemetryRouter from './routes/telemetry.js';
 import agentSendRouter, { defaultAgentSendDeps, postAgentMessage } from './routes/agent-send.js';
 import { startReactionWake, messageTextIn } from './services/reaction-wake.js';
+import { reactionStore } from './lib/reactions-store.js';
 import runtimesAvailableRouter from './routes/runtimes-available.js';
 import factsRouter from './routes/facts.js';
 import chatHistoryRouter from './routes/chat-history.js';
@@ -261,12 +262,15 @@ try { ensureAgentReactToken(); } catch (e) { console.warn(`[reactions] agent rea
 
 // The reaction wake (services/reaction-wake.ts): the operator's reaction in an agent's chat reaches that agent 3 s after
 // the last change, through the gateway with no hold and no force (nothing stored; refused twice = dropped). The
-// reacted message's first words come from the chat itself, by ref.
+// reacted message's first words come from the chat itself, by ref. Its emoji-only answer is stored as its reaction.
 const stopReactionWake = startReactionWake({
   agentExists: defaultAgentSendDeps.agentExists,
   resolveSession: defaultAgentSendDeps.resolveSession,
   inject: (session, text) => postAgentMessage(session, text, { hold: false, actor: 'operator:reaction' }),
   messageText: (agentId, ref) => messageTextIn(chatItemsFor(agentId), ref),
+  // The agent's emoji answer to a wake becomes its reaction on that message (opened on first use, like the route).
+  chatItems: (agentId) => chatItemsFor(agentId),
+  reactions: { list: (surface, conv) => reactionStore().list(surface, conv), toggle: (key, emoji) => reactionStore().toggle(key, emoji) },
 });
 
 // PORT (supervisor) > ORCHESTRA_API_PORT (orchestra-env.sh) > [api] port in orchestra.toml.

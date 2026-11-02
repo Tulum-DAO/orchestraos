@@ -15,7 +15,7 @@ import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
-import { hasReactionWake, stripReactionWake } from '../lib/reaction-wake-text.js';
+import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
 import { refable, partAt } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff } from '../lib/agentCalls.js';
@@ -1909,6 +1909,10 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
   // before (dashboard lib/transcript.ts afterReaction, view.ts withReactions).
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
     && hasReactionWake(it.text) ? { ...it, text: stripPageContext(it.text), reaction_wake: true } : it));
+  // The agent's answer to that wake when it is not a message (NO_REPLY, "(no reply needed)", one emoji): marked here,
+  // dropped from what the chat is sent (finishWindow, the tailer after its refs). chatItemsFor keeps them marked: the
+  // wake watcher (services/reaction-wake.ts) turns an emoji answer into a real reaction.
+  items = markWakeReplies(items);
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
     && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
     ? { ...it, text: stripPageContext(it.text) } : it));
@@ -1923,6 +1927,24 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
   return tagAudience(enrichItems(items));
+}
+
+/** The assistant text answering a reaction wake (after a reaction_wake turn, before the next user text) that is not a
+ *  message: copies marked wake_reply 'silent' (NO_REPLY, a "no reply" phrase) or 'emoji' (a reaction written as text).
+ *  Real words, and the same words answering a real message, are left alone. Read-only: nothing is recorded. */
+export function markWakeReplies(items: any[]): any[] {
+  let inWake = false;
+  return items.map((it) => {
+    if (it?.kind === 'text' && it.role === 'user') { inWake = it.reaction_wake === true; return it; }
+    if (!inWake || it?.kind !== 'text' || it.role !== 'assistant') return it;
+    const quiet = silentReply(it.text);
+    return quiet ? { ...it, wake_reply: quiet } : it;
+  });
+}
+
+/** What the chat is sent: the marked wake answers left out (markWakeReplies). */
+export function dropWakeReplies(items: any[]): any[] {
+  return items.some((it) => it?.wake_reply) ? items.filter((it) => !it?.wake_reply) : items;
 }
 
 // A headless seat's cut turns (scripts/seat_supervisor.py): a message whose turn did not finish
@@ -2017,6 +2039,7 @@ export function normalizeTranscript(
   antigravityHint = false,
   includeQueued = false,
   previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
+  keepWakeReplies = false,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
   let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint), warmupMarkFor(agentId, sessionId).mark), storeRules(sessionId));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
@@ -2034,7 +2057,8 @@ export function normalizeTranscript(
     agent_id: agentId,
     session_id: sessionId,
     grammar_version: GRAMMAR_VERSION,
-    ...finishWindow(all.slice(-limit), agentId, includeQueued),
+    // keepWakeReplies: the tailer stamps refs first (parts numbered as the poll route numbers them), then drops them.
+    ...finishWindow(all.slice(-limit), agentId, includeQueued, null, keepWakeReplies),
   };
 }
 
@@ -2042,7 +2066,10 @@ export function normalizeTranscript(
  *  page read with a cursor: msg_store's synthetics then stay only where they belong to that page
  *  (no still-pending turn, and nothing after its last log item that a newer page draws). */
 function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
-                      olderPage: { cursorMs: number | null } | null = null): { items: any[]; render_items: any[] } {
+                      olderPage: { cursorMs: number | null } | null = null,
+                      keepWakeReplies = false): { items: any[]; render_items: any[] } {
+  // A wake's silent or emoji answer is never sent (markWakeReplies); refs were stamped with it in place (chatWindow).
+  if (!keepWakeReplies) windowed = dropWakeReplies(windowed);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
   // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
   // the log's own order is the delivery order). POLL-ONLY —

@@ -223,3 +223,44 @@ def test_a_malformed_reactor_is_ignored_not_a_crash():
         assert len(tail.read()) == 2
     finally:
         tail.close() if hasattr(tail, "close") else None
+
+
+# --- the agent's answer to a reaction wake is never spoken or noted (follow-up: NO_REPLY) ------------------------------
+def _echo(text):
+    return {"kind": "out", "ev": {"type": "user", "isReplay": True, "message": {"content": text}}}
+
+
+def _delta(text):
+    return {"kind": "out", "ev": {"type": "stream_event", "parent_tool_use_id": None,
+                                  "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}}}
+
+
+_END = {"kind": "out", "ev": {"type": "result"}}
+_WAKE = ('<reaction from="user:sam" emoji="👍" on="Deployed."/> Reply, react with `orchestra react <emoji>`, or answer '
+         'exactly NO_REPLY to stay silent.')
+_OLD_WAKE = '<reaction from="user:sam" emoji="👍" on="Deployed."/> You may reply, react (`orchestra react`), or do nothing.'
+
+
+def test_is_wake_reply_quiet():
+    for t in ("NO_REPLY", " NO_REPLY\n", "(no reply needed)", "No response required.", "no reply", "👍", "👍🏽", "🎉"):
+        assert AC.quiet_reply(t), t
+    for t in ("Thanks, will do.", "NO_REPLY please", "no reply needed, but here is why", "", "👍 done"):
+        assert not AC.quiet_reply(t), t
+
+
+def test_a_wake_and_its_quiet_answer_are_never_spoken_or_noted():
+    for wake in (_WAKE, _OLD_WAKE):
+        for answer in ("NO_REPLY", "(no reply needed)", "👍"):
+            m = AC.ChatMirror("Demo", agent="pm-x")
+            assert m.feed([_echo(wake), _delta(answer), _END]) == [], (wake, answer)
+
+
+def test_a_wake_folded_into_a_typed_turn_is_not_noted_and_its_no_reply_not_said():
+    m = AC.ChatMirror("Demo", agent="pm-x")
+    out = m.feed([_echo("status?\n" + _WAKE)])
+    assert out[0][0] == "note" and "reaction" not in out[0][1] and out[0][2] == "status?"
+    out = m.feed([_delta("NO_REPLY"), _END])
+    assert [a[0] for a in out] == ["done"], out
+    m.feed([_echo("again?")])
+    out = m.feed([_delta("(no reply needed)"), _END])
+    assert [a[0] for a in out] == ["done"], out

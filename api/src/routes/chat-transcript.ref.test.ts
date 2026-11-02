@@ -38,7 +38,7 @@ const LOG = join(projects, `${SID}.jsonl`);
 writeFileSync(LOG, [user('u1', 'hello'), twoBlocks('a1')].join('\n') + '\n');
 writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({ session_id: SID, cwd: '/repo' }));
 
-const { default: router, resolveTranscriptPath } = await import('./chat-transcript.js');
+const { default: router, resolveTranscriptPath, chatItemsFor } = await import('./chat-transcript.js');
 const { TranscriptTailer } = await import('../services/transcript-tail.js');
 const express = (await import('express')).default;
 const app = express();
@@ -74,4 +74,22 @@ test('the stream gives every item the same ref as the poll route (snapshot and d
     assert.deepEqual(delta.items.map((i: any) => i.ref), [`${SID}~u3#0`]);
     assert.deepEqual(pairs((await get()).items).slice(-1), pairs(delta.items));
   } finally { off(); }
+});
+
+test('a reaction wake and its silent/emoji answers: hidden on the poll route and the stream alike, same refs; chatItemsFor keeps them marked', async () => {
+  const wake = '<reaction from="user:sam" emoji="👍" on="more"/> Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent.';
+  const said = (uuid: string, text: string) => JSON.stringify({ type: 'assistant', uuid, timestamp: '2026-11-02T10:00:05Z',
+    message: { id: `m-${uuid}`, role: 'assistant', content: [{ type: 'text', text }] } });
+  appendFileSync(LOG, [user('w1', wake), said('s1', 'NO_REPLY'), said('s2', '🎉'), said('s3', 'Real words.'), user('u9', 'ok'), said('s4', '👍')].join('\n') + '\n');
+  const polled = await get();
+  const texts = polled.items.filter((i: any) => i.kind === 'text' && i.role === 'assistant').map((i: any) => i.text);
+  assert.deepEqual(texts.slice(-2), ['Real words.', '👍']);
+  assert.ok(!texts.includes('NO_REPLY') && !texts.includes('🎉'));
+  assert.equal(polled.render_items.some((n: any) => n.text === 'NO_REPLY' || n.text === '🎉'), false);
+  const tailer = new TranscriptTailer({ agentId: SEAT, resolve: () => resolveTranscriptPath(SEAT) });
+  const events: any[] = [];
+  const off = tailer.subscribe((ev) => events.push(ev));
+  try { assert.deepEqual(pairs(events[0].items), pairs(polled.items)); } finally { off(); }
+  const marked = chatItemsFor(SEAT).filter((i: any) => i.wake_reply).map((i: any) => [i.uuid, i.wake_reply, i.ref]);
+  assert.deepEqual(marked, [['s1', 'silent', `${SID}~s1#0`], ['s2', 'emoji', `${SID}~s2#0`]]);
 });

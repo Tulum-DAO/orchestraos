@@ -105,6 +105,24 @@ def mode(seat, orch_dir=None) -> str:
 VOICE_CONTEXT_CHARS = 8000      # the agent's recent conversation handed to the call (GPT-Live's instructions, the CLM)
 _TAIL_BYTES = 400_000
 _TAG_RE = re.compile(r"<(page-context|system-reminder|voice-call-live|voice-call-said)>[\s\S]*?</\1>")
+# The reaction wake (api lib/reaction-wake-text.ts): one line, the tag and either note (the current one or the one
+# older logs carry). The agent reads it; nobody said it, so the mirror never notes it.
+_WAKE_LINE_RE = re.compile(r'^[ \t]*<reaction from="user:[^"<>\n]*" emoji="[^"<>\n]*" on="[^"<>\n]*"/>'
+                           r'(?:[ \t]*(?:You may reply, react \(`orchestra react`\), or do nothing\.'
+                           r'|Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent\.))?[ \t]*$',
+                           re.M)
+# What an agent answers to a wake when it has nothing to say (api reaction-wake-text.ts silentReply).
+_NO_REPLY_RE = re.compile(r"^\(?\s*no (reply|response)( needed| required)?\s*\)?\.?$", re.I)
+
+
+def quiet_reply(text) -> bool:
+    """NO_REPLY, a "no reply" phrase, or one emoji: an answer to a reaction wake that is not a message (never said)."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if t == "NO_REPLY" or _NO_REPLY_RE.match(t):
+        return True
+    return len(t) <= 16 and not re.search(r"[\w\s]", t) and any(ord(ch) > 0x7F for ch in t)
 
 
 def session_log(seat, orch_dir=None):
@@ -577,8 +595,8 @@ class ChatMirror:
             kept.append(s)
             n += len(s) + 1
         say = " ".join(kept).strip()
-        if not re.search(r"\w", say):
-            return                           # nothing to say: an empty reply, or just a 👍 reaction
+        if not re.search(r"\w", say) or quiet_reply(say):
+            return                           # nothing to say: an empty reply, a 👍, or NO_REPLY (a reaction wake's answer)
         p = self.prompt[:300]
         prompt = self.prompt
         note = (f"You ({self.name}) just answered in your chat what the operator typed (\"{p}\"). The answer is on "
@@ -591,7 +609,7 @@ class ChatMirror:
 
     def _start(self, text, out):
         self._say(out)                       # a message landing mid-turn: what was collected is still said first
-        text = _TAG_RE.sub("", text or "").strip()
+        text = _WAKE_LINE_RE.sub("", _TAG_RE.sub("", text or "")).strip()   # a wake alone: a turn not mirrored
         self.kind, self.prompt, self.speech, self.sents = None, "", Speech(), []
         if text.startswith(VOICE_CALL_TAG):
             self.kind, self.prompt = "commissioned", text[len(VOICE_CALL_TAG):].strip()

@@ -152,6 +152,8 @@ def test_the_foundation_teaches_orchestra_react():
     assert {"--to", "--remove"} <= flags
     for flag in flags:
         assert f'"{flag}"' in react, f"orchestra react has no {flag}"
+    # the wake's own words (api lib/reaction-wake-text.ts REACTION_WAKE_NOTE): NO_REPLY is how an agent says nothing
+    assert "Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent." in text
 
 
 def test_the_hackathon_examples_left_prompts():

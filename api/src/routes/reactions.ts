@@ -29,16 +29,9 @@ const CONV = /^[\w.:-]{1,200}$/;
 const AGENT_CHAT_REF = /^[^~\s]{1,200}~[^~\s]{1,300}#\d{1,6}$/;
 /** arturo: the turn seq; call: the journal turn index. */
 const INDEX_REF = /^\d{1,9}$/;
-const KEYCAP = /^[0-9#*]\uFE0F?\u20E3$/;
-const PICTOGRAPH = /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u;
-
-/** One emoji (skin tones, flags, keycaps and ZWJ sequences included): no letters, no spaces, at most 32 code units. */
-export function isEmoji(v: unknown): v is string {
-  if (typeof v !== 'string' || v.length === 0 || v.length > 32) return false;
-  if (/[\x00-\x7f]/.test(v) && !KEYCAP.test(v)) return false;          // no ASCII, except inside a keycap
-  if (/[\s\p{L}]/u.test(v) || !PICTOGRAPH.test(v)) return false;
-  return [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(v)].length === 1;
-}
+// One emoji: lib/emoji.ts (shared with the chat's wake-reply hiding and the wake's emoji-reply reaction).
+export { isEmoji } from '../lib/emoji.js';
+import { isEmoji } from '../lib/emoji.js';
 
 export interface Target { surface: Surface; conv: string; ref: string }
 

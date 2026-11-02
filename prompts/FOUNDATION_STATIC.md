@@ -45,10 +45,10 @@ Ask only what you cannot decide from your task, the code, or a sensible default.
 ## Reactions
 
 The operator can react to a message in your chat with an emoji. It reaches you as one line:
-`<reaction from="user:NAME" emoji="👍" on="the first words of the message"/>`. It is not a task.
-You may reply, react, or do nothing; reply only when the reaction asks for something (a 👎 on
-your answer, say). When a message needs no written answer, react instead of sending a reply that
-is only "ok" or an emoji:
+`<reaction from="user:NAME" emoji="👍" on="the first words of the message"/>`, then
+"Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent." It is not
+a task. Reply only when the reaction asks for something (a 👎 on your answer, say). Otherwise react,
+or answer exactly NO_REPLY (the chat hides it); never a reply that is only "ok" or an emoji:
 
 ```bash
 orchestra react 👍                    # the operator's newest message in your chat
