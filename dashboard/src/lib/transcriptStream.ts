@@ -19,6 +19,7 @@
  */
 import type { ChatItem, LiveTextEvent } from './transcript.gen';
 import type { LiveText } from './threadKit/view';
+import { answeringWake, couldBeQuiet } from './wakeQuiet';
 
 export interface TranscriptStreamEvent {
   type: 'snapshot' | 'delta';
@@ -49,13 +50,18 @@ export function applyStreamEvent(items: ChatItem[], ev: TranscriptStreamEvent): 
 
 /** The live words to draw after the thread: the blocks whose finished line is not among `items` yet (the server
  *  drops a block once the transcript has it, a beat after the delta that brought it; this closes that gap so the
- *  words are never drawn twice). Null when nothing is live. */
+ *  words are never drawn twice). Null when nothing is live, or when the answer to a reaction wake could still be a
+ *  quiet one. */
 export function liveTextOf(ev: LiveTextEvent | null, items: readonly object[]): LiveText | null {
   if (!ev || !Array.isArray(ev.blocks) || !ev.blocks.length) return null;
   const landed = new Set<string>();
   for (const it of items) { const u = (it as { uuid?: unknown }).uuid; if (typeof u === 'string') landed.add(u); }
   const text = ev.blocks.filter((b) => !(b.uuid && landed.has(b.uuid))).map((b) => b.text).filter((t) => t.trim()).join('\n\n');
-  return text.trim() ? { text } : null;
+  if (!text.trim()) return null;
+  // Answering a reaction wake: NO_REPLY, a "no reply" phrase or an emoji is hidden once written (the server drops it),
+  // so while the words could still become one, nothing is live: no "Typing…", no live bubble (lib/wakeQuiet.ts).
+  if (answeringWake(items) && couldBeQuiet(text)) return null;
+  return { text };
 }
 
 export interface TranscriptStreamHandlers {
