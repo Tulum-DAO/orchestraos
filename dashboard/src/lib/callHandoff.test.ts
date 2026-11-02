@@ -45,5 +45,12 @@ test('muted: your layer of the waveform reads no microphone (flat); the agent la
   assert.match(wave, /if \(micOffRef\.current\) mic = 0;\s*else \[mic, micBuf\] = read\(levels\.mic\(\), micBuf\);/);
   assert.match(wave, /\[play, playBuf\] = read\(levels\.playback\(\), playBuf\);/);
   const bar = src('components/call/CallBar.tsx');
-  assert.equal((bar.match(/micOff=\{call\.muted\}/g) ?? []).length, 2);
+  assert.equal((bar.match(/micOff=\{call\.muted\}/g) ?? []).length, 1);   // one bar; the phone's full-screen view is gone
+});
+
+test('the call bar is a chip at a phone\'s width everywhere; its transcript drops down, never full screen', () => {
+  const bar = src('components/call/CallBar.tsx');
+  assert.match(bar, /max-w-\[420px\]/);
+  assert.doesNotMatch(bar, /data-call-full|fixed inset-0/);
+  assert.match(bar, /\{open && <CallTranscript /);
 });

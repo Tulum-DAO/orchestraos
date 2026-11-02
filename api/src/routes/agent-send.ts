@@ -47,7 +47,7 @@
  * never guesses at composer state itself.
  */
 import { Router, type Request, type Response } from 'express';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync, existsSync, appendFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
@@ -117,6 +117,40 @@ export function pageContextLine(ctx: SendBody['page_context']): string {
     + `Use it only if they ask about the page; do not mention it otherwise.</page-context>`;
 }
 
+// A message typed in an agent's chat while the operator is on a "voice"-mode call with it (services/arturo/agent_call.py):
+// the agent is told the call is live and that the voice is itself (one tag, one line, hidden from the chat like the
+// page line), and the call's relay is handed the words AT ONCE (typed.jsonl beside the seat's call marker) so the voice
+// knows the moment they land, not when the agent gets round to them.
+export const VOICE_CALL_LIVE_TAG = '<voice-call-live>The operator is on a live voice call with you right now. The voice '
+  + 'on the call is you: it speaks for you, and it says your chat replies aloud in its own words. This message was typed '
+  + 'in the chat during the call. Reply in text only with what is worth reading on screen; if it needs no written '
+  + 'answer (a test, small talk, something the call already covered), reply with just 👍. Never say you cannot hear or '
+  + 'speak: the call does.</voice-call-live>';
+const CALL_MARK_FRESH_MS = 90_000;     // the relay touches the marker every 10 s; the supervisor's own staleness rule
+
+/** A "voice"-mode call with this seat is live: its call marker is fresh and its switch is not "forced". */
+export function voiceCallLive(seat: string, dataDir: string = ORCHESTRA_DIR, now = Date.now()): boolean {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(seat)) return false;
+  try {
+    const mark = join(dataDir, 'state', 'headless', seat, 'call');
+    if (now - statSync(mark).mtimeMs > CALL_MARK_FRESH_MS) return false;
+    const sw = JSON.parse(readFileSync(join(dataDir, 'state', 'agent-calls.json'), 'utf-8'));
+    const row = sw?.seats?.[seat];
+    return !!row && row.on === true && row.mode !== 'forced';
+  } catch {
+    return false;
+  }
+}
+
+/** Hand the typed words to the live call's relay (it tails this file). Best effort: never the send. */
+export function noteTypedOnCall(seat: string, text: string, dataDir: string = ORCHESTRA_DIR): void {
+  try {
+    const dir = join(dataDir, 'state', 'headless', seat);
+    if (!existsSync(dir)) return;
+    appendFileSync(join(dir, 'typed.jsonl'), JSON.stringify({ at: Date.now() / 1000, text }) + '\n');
+  } catch { /* the call simply hears it later, from the agent's own log */ }
+}
+
 export interface GatewayInjectResult {
   httpStatus: number;
   ok: boolean;
@@ -157,6 +191,10 @@ export interface AgentSendDeps {
   gatewayInject(session: string, text: string, force?: boolean): Promise<GatewayInjectResult>;
   /** Durable-first fallback: python3 msg_store.py send --body-file <tmp>. */
   msgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult>;
+  /** A "voice"-mode call with this seat is live (voiceCallLive). Optional: absent = never. */
+  voiceCallLive?(seat: string): boolean;
+  /** The typed words, to the live call's relay at once (noteTypedOnCall). */
+  noteTypedOnCall?(seat: string, text: string): void;
 }
 
 // ── real deps ────────────────────────────────────────────────────────────
@@ -249,6 +287,8 @@ export const defaultAgentSendDeps: AgentSendDeps = {
   resolveSession: realResolveSession,
   gatewayInject: realGatewayInject,
   msgStoreSend: realMsgStoreSend,
+  voiceCallLive: (seat) => voiceCallLive(seat),
+  noteTypedOnCall: (seat, text) => noteTypedOnCall(seat, text),
 };
 
 // ── capability gate (D5) ─────────────────────────────────────────────────
@@ -334,7 +374,15 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // Never on a slash command: the CLI and the gateway read a command as the whole message (a person's /compact is
   // matched exactly), so a trailing tag would turn it into words.
   const context = messageText.startsWith('/') ? '' : pageContextLine(body.page_context);
-  const deliveredText = context ? `${messageText} ${context}` : messageText;
+  const onCall = !messageText.startsWith('/') && !!deps.voiceCallLive?.(agentId);
+  if (onCall) {
+    // the voice hears of it now, before delivery: the typed words, and what came with them (never a file's path)
+    const n = body.attachments?.length ?? 0;
+    const withFiles = n ? ` (with ${n} attachment${n > 1 ? 's' : ''})` : '';
+    deps.noteTypedOnCall?.(agentId, `${text}${withFiles}`.trim());
+  }
+  const tags = [context, onCall ? VOICE_CALL_LIVE_TAG : ''].filter(Boolean).join(' ');
+  const deliveredText = tags ? `${messageText} ${tags}` : messageText;
 
   // force: the route's own contract (header: "a client can re-POST with force:true") was never
   // honoured. It was dropped here, so "Overwrite draft & send" got the same 409 forever (review of #198).

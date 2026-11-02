@@ -161,6 +161,15 @@ function Choice({ m, choice }: { m: ThreadMessage; choice: ThreadViewChoice }) {
   );
 }
 
+/** The agent's reaction under the operator's message (lib/threadKit/view withReactions). */
+function Reaction({ emoji }: { emoji: string }) {
+  return (
+    <div className="flex justify-end !-mt-1.5 pr-3" data-anchor-skip data-reaction>
+      <span className="rounded-full border border-border bg-muted px-1.5 text-sm leading-6 shadow-sm" aria-label={`Reacted ${emoji}`}>{emoji}</span>
+    </div>
+  );
+}
+
 function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin; latest: boolean; times?: boolean }) {
   const images = (m.attachments ?? []).filter((a) => a.kind === 'image' && a.url);
   const state = m.sendState as SendState | undefined;
@@ -264,6 +273,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
                 {r.message.role === 'user'
                   ? <UserMessage m={r.message} skin={skin} latest={false} times={times} />
                   : <Reply m={r.message} skin={skin} times={times} />}
+                {r.reaction && <Reaction emoji={r.reaction} />}
               </Fragment>
             );
           }
@@ -273,6 +283,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
             <Fragment key={r.key}>
               <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
               <NodeSlot>{renderNode(r.node, r.interrupted)}</NodeSlot>
+              {r.reaction && <Reaction emoji={r.reaction} />}
             </Fragment>
           ) : null;
         }

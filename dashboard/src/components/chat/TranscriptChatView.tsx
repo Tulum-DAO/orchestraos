@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from '../../lib/useStickToBottom';
 import { addNotice, latestNotice, withNotices, type CompactionItem } from '../../lib/compaction';
+import { fetchCallCards, withCallCards, type AgentCallRow } from '../../lib/callCards';
+import { useCallStore } from '../../stores/callStore';
 import { useCompactionNotices } from '../../stores/compactionNotices';
 import { stepFrom } from '../../lib/liveStep';
 import { useAgentSteps } from '../../stores/agentSteps';
@@ -122,6 +124,19 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     return () => window.removeEventListener(TRANSCRIPT_REFRESH_EVENT, on);
   }, [agentId]);
 
+  // This agent's calls, for their cards on the live stream (lib/callCards.ts): read on open, on a hand-off's refresh,
+  // and again once a call on this page ends (its journal is finalized a moment after the call bar goes).
+  const [calls, setCalls] = useState<{ agentId: string; rows: AgentCallRow[] }>({ agentId, rows: [] });
+  const onCallHere = useCallStore((s) => !!s.call && s.call.agentId === agentId);
+  useEffect(() => {
+    if (fixtureItems || onCallHere) return;
+    let alive = true;
+    const read = () => { void fetchCallCards(agentId).then((rows) => { if (alive) setCalls({ agentId, rows }); }); };
+    read();
+    const again = setTimeout(read, 2500);   // the call just ended: the journal's end time lands shortly after
+    return () => { alive = false; clearTimeout(again); };
+  }, [agentId, fixtureItems, refreshKey, onCallHere]);
+
   // live mode: SSE stream (F1) with the interval poll as the fallback lane.
   // One immediate poll fetch always runs first so the chat renders instantly
   // even if the stream endpoint is unavailable (deploy skew, proxy, old API) —
@@ -181,8 +196,11 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // the window's top can start partway through one line (the older page brings that line back whole).
   const loadPage = useCallback(async (before: string) => fetchOlderTranscript(agentId, before), [agentId]);
   // The live window with the stream's notices in it (a notice the window already holds is updated where it stands).
-  const liveItems = useMemo(() => (notices.agentId === agentId ? withNotices(items, notices.byId) : items) as ChatItem[],
-    [items, notices, agentId]);
+  // And each ended call's card where it started (lib/callCards.ts; the poll window may already hold it).
+  const liveItems = useMemo(() => {
+    const withN = (notices.agentId === agentId ? withNotices(items, notices.byId) : items) as ChatItem[];
+    return calls.agentId === agentId ? withCallCards(withN, calls.rows) : withN;
+  }, [items, notices, calls, agentId]);
   // The newest notice, for "Compact now" in the slideout (stores/compactionNotices).
   const newest = useMemo(() => latestNotice(liveItems), [liveItems]);
   useEffect(() => { if (!fixtureItems) useCompactionNotices.getState().set(agentId, newest); }, [agentId, newest, fixtureItems]);

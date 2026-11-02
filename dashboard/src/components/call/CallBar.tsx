@@ -6,14 +6,15 @@
  *           talking), and the call's time
  *   middle  the rolling waveform (CallWaveform) in the agent's colour: you full colour, the agent a muted shade
  *   right   settings, mute, and a red hang-up
- *   under   a small drag handle: a tap, or pulling it down, opens the call's transcript (CallTranscript). On a
- *           desktop it drops down under the bar; on a phone it is full screen (a big avatar, the name and the time,
- *           mute / settings / hang-up at the bottom) and ⌃ collapses it back.
+ *   width   a phone's width on every screen (the desktop bar was too wide), centred
+ *   under   a small drag handle: a tap, or pulling it down, opens the call's transcript (CallTranscript) in a window
+ *           that drops down under the bar, on a phone as on a desktop (an expandable chip, never full
+ *           screen); pulling it up, or a tap, closes it.
  *
  * Everything comes from the app's one call (stores/callStore.ts).
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ChevronUp, Mic, MicOff, PhoneOff, Settings } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, Settings } from 'lucide-react';
 import CallTranscript from './CallTranscript';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { resolveColor, shade } from '../avatar/avatarCore';
@@ -37,9 +38,6 @@ const subscribeDark = (cb: () => void) => {
   return () => mo.disconnect();
 };
 const isDark = () => document.documentElement.classList.contains('dark');
-const PHONE = '(max-width: 639px)';
-const subscribePhone = (cb: () => void) => { const mq = window.matchMedia(PHONE); mq.addEventListener('change', cb); return () => mq.removeEventListener('change', cb); };
-const isPhone = () => window.matchMedia(PHONE).matches;
 
 export default function CallBar({ agentId, name: seatName, onSettings, onExpand, onBackToChat, levels = callLevels }: {
   agentId: string;
@@ -63,7 +61,6 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
   const rec = party.rec;
   const name = call?.party === 'agent' ? seatName : party.name;
   const dark = useSyncExternalStore(subscribeDark, isDark, () => false);
-  const phone = useSyncExternalStore(subscribePhone, isPhone, () => false);
   const [open, setOpenState] = useState(false);
   const setOpen = (o: boolean) => { setOpenState(o); onExpand?.(o); };
   const drag = useRef<number | null>(null);
@@ -88,41 +85,9 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
     </div>
   );
 
-  // Phone, open: the call full screen.
-  if (open && phone) {
-    const big = 'flex size-14 items-center justify-center rounded-full transition-colors';
-    return (
-      <div className="fixed inset-0 z-[70] flex flex-col bg-background pb-[env(safe-area-inset-bottom)]" data-call-full role="dialog" aria-label={`Call with ${name}`}>
-        <div className="flex items-center justify-between px-3 pt-3">
-          <button type="button" onClick={() => setOpen(false)} aria-label="Collapse the call" title="Collapse"
-                  className={`${btn} text-foreground/70 hover:bg-muted`} data-call-collapse><ChevronUp size={22} /></button>
-          <span className="text-[12px] text-muted-foreground" data-call-phase={call.phase}>{phaseWords}</span>
-          <span className="size-9" />
-        </div>
-        <div className="flex flex-col items-center gap-1 pt-2 pb-3">
-          <AgentAvatar agentId={party.id} role="drawer" size={96} state={avatarStateForCall(call.phase)} label={name}
-                       shape={rec.shape} color={rec.color} eyeColor={rec.eyeColor} />
-          <span className="text-[17px] font-semibold text-foreground">{name}</span>
-          <span className="text-[13px] tabular-nums text-muted-foreground">{clock(now - call.startedAt)}</span>
-          <div className="w-full max-w-[360px] px-6 pt-1"><CallWaveform levels={levels} color={color} muted={muted} micOff={call.muted} /></div>
-        </div>
-        {devLine}
-        <CallTranscript turns={call.turns} name={name} skin={turnSkin} className="min-h-0 flex-1 border-t border-border px-5" />
-        <div className="flex items-center justify-center gap-8 border-t border-border py-4">
-          <button type="button" className={`${big} ${call.muted ? 'bg-red-500 text-white' : 'bg-muted text-foreground'}`}
-                  onClick={() => setMuted(!call.muted)} aria-pressed={call.muted} aria-label={call.muted ? 'Unmute' : 'Mute'}>
-            {call.muted ? <MicOff size={22} /> : <Mic size={22} />}
-          </button>
-          <button type="button" className={`${big} bg-muted text-foreground`} onClick={onSettings} aria-label="Call settings"><Settings size={22} /></button>
-          <button type="button" className={`${big} bg-red-500 text-white`} onClick={hangUp} aria-label="Hang up"><PhoneOff size={22} /></button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-2" data-call-bar={call.phase}>
-      <div className="pointer-events-auto mx-auto w-full max-w-[800px] rounded-2xl border border-border bg-card/95 shadow-lg backdrop-blur-md">
+      <div className="pointer-events-auto mx-auto w-full max-w-[420px] rounded-2xl border border-border bg-card/95 shadow-lg backdrop-blur-md">
         <div className="flex items-center gap-2.5 px-2.5 pt-2 pb-1">
           <div className="flex shrink-0 flex-col items-center">
             {/* its own look and colour, in the call's state (a state-driven avatar takes its look from these) */}
@@ -146,7 +111,7 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
                   aria-label="Hang up" title={`End the call with ${name}`}><PhoneOff size={17} /></button>
         </div>
         {devLine}
-        {/* desktop, open: the transcript drops down under the bar */}
+        {/* open: the transcript drops down under the bar (phone and desktop) */}
         {open && <CallTranscript turns={call.turns} name={name} skin={turnSkin} className="max-h-[45vh] border-t border-border px-4" />}
         {/* the drag handle: a tap, or pulling it down (up to close), opens the transcript */}
         <button type="button" aria-expanded={open} aria-label={open ? "Hide the call's transcript" : "Show the call's transcript"}

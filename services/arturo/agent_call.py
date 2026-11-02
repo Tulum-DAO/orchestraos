@@ -93,6 +93,81 @@ def enabled(seat, orch_dir=None) -> bool:
     return bool(headless_seat(seat, orch_dir, include_dev=True))
 
 
+def mode(seat, orch_dir=None) -> str:
+    """How a call with this agent runs. "voice" (the default): GPT-Live answers naturally AS the agent, with its context,
+    and work it is asked for is commissioned into the agent's own session. "forced": every caller line goes to the
+    agent's own session and GPT-Live only reads its replies (agent-calls.json "mode": "forced")."""
+    return "forced" if seat_conf(seat, orch_dir).get("mode") == "forced" else "voice"
+
+
+VOICE_CONTEXT_CHARS = 8000      # the agent's recent conversation handed to the call (GPT-Live's instructions, the CLM)
+_TAIL_BYTES = 400_000
+_TAG_RE = re.compile(r"<(page-context|system-reminder|voice-call-live|voice-call-said)>[\s\S]*?</\1>")
+
+
+def session_log(seat, orch_dir=None):
+    """The seat's own Claude session file (headless seat.json: session_id + cwd), or None."""
+    try:
+        st = json.loads((data_dir(orch_dir) / "state" / "headless" / str(seat) / "seat.json").read_text())
+        sid, cwd = str(st.get("session_id") or ""), str(st.get("cwd") or "")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", sid) or not cwd:
+        return None
+    root = Path(os.path.expanduser("~/.claude/projects"))
+    p = root / re.sub(r"[^A-Za-z0-9]", "-", cwd) / f"{sid}.jsonl"
+    if p.is_file():
+        return p
+    return next(iter(sorted(root.glob(f"*/{sid}.jsonl"))), None)      # a project dir named some other way
+
+
+def _log_lines(path, tail_bytes=_TAIL_BYTES):
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - tail_bytes))
+        raw = f.read()
+    lines = raw.decode("utf-8", "replace").splitlines()
+    return lines[1:] if size > tail_bytes else lines        # a cut first line is never parsed
+
+
+def voice_context(seat, orch_dir=None, max_chars=VOICE_CONTEXT_CHARS) -> str:
+    """The agent's recent conversation as plain lines ("Operator: ..." / "<name>: ..."), newest last, at most
+    max_chars (the oldest dropped first). Text only: no tool calls or results, no side chains, no meta or command
+    lines, no hidden page tags. Any failure: "" (the call still runs, without the context)."""
+    try:
+        path = session_log(seat, orch_dir)
+        if path is None or not path.is_file():
+            return ""
+        name = display_name(seat, orch_dir)
+        out = []
+        for line in _log_lines(path):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            role = d.get("type")
+            if role not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta") or d.get("isCompactSummary"):
+                continue
+            text = _content_text((d.get("message") or {}).get("content"))
+            text = _TAG_RE.sub("", text).strip()
+            # the operator's own words only: no command/tag lines (<...>), no mail or relayed lines ([Arturo Voice]:,
+            # [Voice call]:, [from gm] ...), no compaction summaries
+            if not text or text.startswith("<") or (role == "user" and (text.startswith("[")
+                                                                        or text.startswith("This session is being continued"))):
+                continue
+            out.append(f"{'Operator' if role == 'user' else name}: {' '.join(text.split())}")
+        kept, n = [], 0
+        for row in reversed(out):
+            if n + len(row) + 1 > max_chars:
+                break
+            kept.append(row)
+            n += len(row) + 1
+        return "\n".join(reversed(kept))
+    except Exception:  # noqa: BLE001 — context is best effort, never the call
+        return ""
+
+
 DEV_LINE = "I'm open in the terminal right now. Tap Back to chat and I'll take this myself."
 
 
@@ -278,6 +353,8 @@ class EventTail:
 
     def read(self) -> list:
         try:
+            if self.path.stat().st_size < self.pos:      # truncated or replaced: read the new file from its start
+                self.pos, self._part = 0, b""
             with open(self.path, "rb") as fh:
                 fh.seek(self.pos)
                 data = fh.read()
@@ -325,6 +402,107 @@ def classify(rec: dict):
         if e.get("type") == "content_block_start" and (e.get("content_block") or {}).get("type") == "tool_use":
             return "tool", (e.get("content_block") or {}).get("name") or ""
     return None
+
+
+# --- the agent's own chat during a "voice"-mode call ------------------------------------------------------------
+MIRROR_SAY_MAX = 1200
+VOICE_CALL_TAG = "[Voice call]:"
+
+
+# A request the operator SAID on a "voice"-mode call, handed to the agent's own session (stream_relay _oa_agent_turn):
+# the agent knows its reply is spoken as it writes it. The chat hides the line (the call's card holds it); the agent's
+# reply stays in the chat. One line, like the page tag.
+VOICE_SAID_TAG = ("<voice-call-said>The operator SAID this to you on a live voice call. Your reply is spoken to them "
+                  "as you write it: answer in short spoken sentences first, then put any details, lists or code in the "
+                  "chat. Do the work they ask for yourself, as you would for a typed message.</voice-call-said>")
+
+
+def typed_path(seat, orch_dir=None) -> Path:
+    """What the API hands a live "voice"-mode call the moment the operator sends a message in the agent's chat
+    (api agent-send.ts noteTypedOnCall): {"at", "text"} lines, beside the call marker."""
+    return data_dir(orch_dir) / "state" / "headless" / str(seat) / "typed.jsonl"
+
+
+def typed_note(name, text) -> str:
+    return (f"The operator just SENT this in your chat during the call (typed, not said aloud): \"{text[:600]}\". It "
+            "is on their screen now. React to it out loud right away, naturally, in a few words (for example that it "
+            "just came through); answer it only if it asks you something. If it needs work or a written answer, your "
+            "chat side takes it and you will be given what it sends back.")
+
+
+class ChatMirror:
+    """What happens in the agent's own chat while GPT-Live is on a call as it: fed the seat's event
+    log records, returns ("note", context) for something the operator typed there, and ("say", reply, context) when the
+    agent answers it, or answers work commissioned on the call ("[Voice call]: ..."). Mail, the hand-off and other
+    automation turns are not mirrored."""
+
+    def __init__(self, name):
+        self.name = name
+        self.kind = None          # "typed" | "commissioned" | None (a turn not mirrored)
+        self.prompt = ""
+        self.speech = None
+        self.sents = []
+
+    def _say(self, out):
+        """The turn collected so far, said (at its end, or when a new message lands mid-turn); then ("done", prompt),
+        whatever was said, so the relay can let go of a request it handed over itself."""
+        if not self.kind:
+            return
+        prompt = self.prompt
+        self._say_text(out)
+        out.append(("done", prompt))
+
+    def _say_text(self, out):
+        self.sents += self.speech.flush()
+        sents = [s for s in self.sents if s]
+        self.kind_said, kind = self.kind, self.kind
+        self.kind = None
+        # whole sentences up to the cap (a cut inside one could split a secret before the relay scrubs it)
+        kept, n = [], 0
+        for s in sents:
+            if kept and n + len(s) + 1 > MIRROR_SAY_MAX:
+                kept.append("... the rest is in the chat.")
+                break
+            kept.append(s)
+            n += len(s) + 1
+        say = " ".join(kept).strip()
+        if not re.search(r"\w", say):
+            return                           # nothing to say: an empty reply, or just a 👍 reaction
+        p = self.prompt[:300]
+        prompt = self.prompt
+        note = (f"You ({self.name}) just answered in your chat what the operator typed (\"{p}\"). The answer is on "
+                "their screen now: say it briefly and naturally as your follow-up, in your own words, not word for "
+                "word." if kind == "typed" else
+                f"The work you started on this call (\"{p}\") just came back in your chat; the full result is on "
+                "their screen. Tell them where it stands in a sentence or two, as news that just arrived (they did not "
+                "just ask).")
+        out.append(("say", say, note, prompt))
+
+    def _start(self, text, out):
+        self._say(out)                       # a message landing mid-turn: what was collected is still said first
+        text = _TAG_RE.sub("", text or "").strip()
+        self.kind, self.prompt, self.speech, self.sents = None, "", Speech(), []
+        if text.startswith(VOICE_CALL_TAG):
+            self.kind, self.prompt = "commissioned", text[len(VOICE_CALL_TAG):].strip()
+        elif text and not text.startswith(("<", "[")):
+            self.kind, self.prompt = "typed", text
+            # the relay skips this when the API already handed it over on send (typed.jsonl): the third field matches
+            out.append(("note", typed_note(self.name, text), text))
+
+    def feed(self, records) -> list:
+        out: list = []
+        for rec in records or []:
+            c = classify(rec)
+            if c is None:
+                continue
+            k, v = c
+            if k == "echo":
+                self._start(v, out)
+            elif k == "text" and self.kind:
+                self.sents += self.speech.feed(v)
+            elif k == "end":
+                self._say(out)
+        return out
 
 
 # --- one delegated turn ------------------------------------------------------------------------------------------

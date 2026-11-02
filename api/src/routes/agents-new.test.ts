@@ -507,3 +507,19 @@ test('a new Claude seat is spawned on Opus 5.5 with the 1M context (AGENT_MODEL 
   assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'codex', null).AGENT_MODEL, 'gpt-5.6-terra');   // others unchanged
   assert.equal(spawnEnv({ PARENT_AGENT_ID: 'leak' } as NodeJS.ProcessEnv, 'claude', null).PARENT_AGENT_ID, undefined);
 });
+
+test('POST /new brings a Claude worker over to headless (its own calls); never the gm, never another runtime', async () => {
+  const adopted: string[] = [];
+  const w = makeDeps({ adoptHeadless: (n: string) => { adopted.push(n); } });
+  const r = await post(w, '/api/agents/new', { name: 'caller' });
+  assert.equal(r.json.headless, 'pending');
+  assert.deepEqual(adopted, ['caller']);
+  const g = makeDeps({ existingNames: () => new Set<string>(), adoptHeadless: (n: string) => { adopted.push(n); } });
+  const rg = await post(g, '/api/agents/new', { name: 'gm', gm: true });
+  assert.equal(rg.json.headless, false);
+  const c = makeDeps({ rows: [authedRow('codex', 'codex')], adoptHeadless: (n: string) => { adopted.push(n); } });
+  const rc = await post(c, '/api/agents/new', { name: 'cx' });
+  assert.equal(rc.json.ok, true);
+  assert.equal(rc.json.headless, false);
+  assert.deepEqual(adopted, ['caller']);
+});
