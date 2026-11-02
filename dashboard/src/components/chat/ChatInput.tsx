@@ -4,7 +4,7 @@
  */
 import { useState, useRef, useLayoutEffect, useEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Plus, Paperclip, X, ClipboardList, MoreHorizontal } from 'lucide-react';
+import { Plus, Paperclip, X, ClipboardList, MoreHorizontal, AudioLines } from 'lucide-react';
 import RoundAction from '../kit/RoundAction';
 import { roundView } from '../../lib/roundAction';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
@@ -683,6 +683,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               else if (mode === 'stop') void handleStop();
               else if (mode === 'call' || mode === 'end') call?.onToggle();
             }}
+            // Arturo's button: the same round button as his composer, so the call is his waveform, not a
+            // phone. Send, Stop, End and who the call reaches are unchanged.
+            callIcon={<AudioLines size={16} />}
             className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:opacity-40')}
           />
         </div>
