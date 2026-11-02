@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 
 import agentsRouter from './routes/agents.js';
 import redAlertRouter from './routes/red-alert.js';
-import chatTranscriptRouter from './routes/chat-transcript.js';
+import chatTranscriptRouter, { chatItemsFor } from './routes/chat-transcript.js';
 import agentMessagesRouter from './routes/agent-messages.js';
 import transcriptStreamRouter from './routes/transcript-stream.js';
 import tasksRouter from './routes/tasks.js';
@@ -50,10 +50,13 @@ import peopleRouter from './routes/people.js';
 import agentStateRouter from './routes/agent-state.js';
 import inspectFeedbackRouter from './routes/inspect-feedback.js';
 import telemetryRouter from './routes/telemetry.js';
-import agentSendRouter from './routes/agent-send.js';
+import agentSendRouter, { defaultAgentSendDeps, postAgentMessage } from './routes/agent-send.js';
+import { startReactionWake, messageTextIn } from './services/reaction-wake.js';
 import runtimesAvailableRouter from './routes/runtimes-available.js';
 import factsRouter from './routes/facts.js';
 import chatHistoryRouter from './routes/chat-history.js';
+import reactionsRouter from './routes/reactions.js';
+import { ensureAgentReactToken } from './lib/agent-react-token.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
@@ -232,6 +235,7 @@ app.use('/api/telemetry', telemetryRouter); // Build B: read-only telemetry quer
 app.use('/api/runtimes', runtimesAvailableRouter);
 app.use('/api/facts', factsRouter);
 app.use('/api/chat-history', chatHistoryRouter); // the /chat-history page's list + thread reads (router existed, was never mounted)
+app.use('/api/reactions', reactionsRouter); // message reactions: GET/PUT/DELETE + /stream SSE (routes/reactions.ts)
 
 const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 // Stored-XSS fix (attach spec §B.2.4, agent-state-truth): uploads are USER
@@ -250,9 +254,26 @@ app.use('/uploads', (req, res, next) => {
 initActivityStream();
 initStatusStream();
 
+// The agent react token (lib/agent-react-token.ts): <data dir>/state/agent-react-token, 0600, made now if missing so
+// an agent's `orchestra react` can read it. Fail-soft: without it no request is an agent, and reactions still work
+// for the operator.
+try { ensureAgentReactToken(); } catch (e) { console.warn(`[reactions] agent react token not created: ${String(e)}`); }
+
+// The reaction wake (services/reaction-wake.ts): the operator's reaction in an agent's chat reaches that agent 3 s after
+// the last change, through the gateway with no hold and no force (nothing stored; refused twice = dropped). The
+// reacted message's first words come from the chat itself, by ref.
+const stopReactionWake = startReactionWake({
+  agentExists: defaultAgentSendDeps.agentExists,
+  resolveSession: defaultAgentSendDeps.resolveSession,
+  inject: (session, text) => postAgentMessage(session, text, { hold: false, actor: 'operator:reaction' }),
+  messageText: (agentId, ref) => messageTextIn(chatItemsFor(agentId), ref),
+});
+
 // PORT (supervisor) > ORCHESTRA_API_PORT (orchestra-env.sh) > [api] port in orchestra.toml.
 const PORT = process.env.PORT || process.env.ORCHESTRA_API_PORT || loadConfig().apiPort;
 const server = createServer(app);
+// Shutdown: server.close() tears the wake down too (unsubscribes from the bus, clears its pending timers).
+server.on('close', () => stopReactionWake());
 
 // WebSocket terminal server on /ws/terminal. It is a shell into a seat's pane and browsers do
 // not apply the same-origin policy to WebSockets, so every handshake passes lib/ws-origin.ts.

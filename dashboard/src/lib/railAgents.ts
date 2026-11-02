@@ -78,26 +78,46 @@ export async function renameAgent(id: string, name: string, fetchFn: typeof fetc
 }
 
 /** Long-press for touch: fires after `ms` unless the finger moves or lifts first (so scrolling never opens it).
- *  The tap the browser sends when that finger lifts is swallowed (onClickCapture), so it never also opens the row. */
+ *  The tap the browser sends when that finger lifts is swallowed (onClickCapture), so it never also opens the row.
+ *  Only that tap: a click with the finger still down or within GHOST_CLICK_MS of it lifting. A later click (a screen
+ *  reader's activation, a mouse, a keyboard) always goes through, even when no tap followed the long-press. */
 export function longPress(onFire: () => void, ms = 500) {
+  return longPressControl(onFire, ms).handlers;
+}
+
+export const GHOST_CLICK_MS = 400;
+
+/** longPress with its controls: `reset()` forgets a fired press (call it when what the press opened closes), and
+ *  `onEnd(fired)` is told whenever the finger lifts, is cancelled, or moves away. */
+export function longPressControl(onFire: () => void, ms = 500, opts: { onEnd?: (fired: boolean) => void } = {}) {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let x = 0, y = 0, fired = false;
+  let x = 0, y = 0, fired = false, down = false, upAt = 0;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
-  return {
+  const end = () => {
+    const wasDown = down;
+    clear();
+    down = false;
+    upAt = Date.now();
+    if (wasDown) opts.onEnd?.(fired);
+  };
+  const handlers = {
     onClickCapture: (e: { preventDefault: () => void; stopPropagation: () => void }) => {
-      if (fired) { fired = false; e.preventDefault(); e.stopPropagation(); }
+      if (fired && (down || Date.now() - upAt <= GHOST_CLICK_MS)) { e.preventDefault(); e.stopPropagation(); }
+      fired = false;
     },
     onTouchStart: (e: { touches: ArrayLike<{ clientX: number; clientY: number }> }) => {
       const t = e.touches[0]; x = t.clientX; y = t.clientY;
       clear();
       fired = false;
+      down = true;
       timer = setTimeout(() => { timer = null; fired = true; onFire(); }, ms);
     },
     onTouchMove: (e: { touches: ArrayLike<{ clientX: number; clientY: number }> }) => {
       const t = e.touches[0];
-      if (Math.abs(t.clientX - x) > 8 || Math.abs(t.clientY - y) > 8) clear();
+      if (timer && (Math.abs(t.clientX - x) > 8 || Math.abs(t.clientY - y) > 8)) end();
     },
-    onTouchEnd: clear,
-    onTouchCancel: clear,
+    onTouchEnd: end,
+    onTouchCancel: end,
   };
+  return { handlers, reset: () => { clear(); fired = false; } };
 }

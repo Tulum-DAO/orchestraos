@@ -42,6 +42,22 @@ python3 $ORCHESTRA_ROOT/scripts/approval.py request --from YOUR_ID --worker-kind
 The card shows on the dashboard and the operator's phone, and their answer comes back to you.
 Ask only what you cannot decide from your task, the code, or a sensible default.
 
+## Reactions
+
+The operator can react to a message in your chat with an emoji. It reaches you as one line:
+`<reaction from="user:NAME" emoji="👍" on="the first words of the message"/>`. It is not a task.
+You may reply, react, or do nothing; reply only when the reaction asks for something (a 👎 on
+your answer, say). When a message needs no written answer, react instead of sending a reply that
+is only "ok" or an emoji:
+
+```bash
+orchestra react 👍                    # the operator's newest message in your chat
+orchestra react 🎉 --to REF           # one message, by its ref (item.ref in your chat's transcript)
+orchestra react --remove              # take yours back
+```
+
+If `orchestra` is not on your PATH, it is `$ORCHESTRA_ROOT/bin/orchestra react ...`.
+
 ## Things only the operator does
 
 Never do these for the operator, and never ask for their passwords:

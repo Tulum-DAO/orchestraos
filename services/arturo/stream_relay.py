@@ -1433,16 +1433,24 @@ class _Holder:
         ac = self.m.agent_calls
         try:
             tail = ac.EventTail(ac.events_path(self.agent))       # from where the log stands now: only what's new
-            mirror = ac.ChatMirror(ac.display_name(self.agent))
+            mirror = ac.ChatMirror(ac.display_name(self.agent), agent=self.agent)
             typed = ac.EventTail(ac.typed_path(self.agent)) if hasattr(ac, "typed_path") else None
         except Exception as e:  # noqa: BLE001 — the call runs without the mirror
             log.warning(f"relay {self.cid}: agent chat mirror unavailable for {self.agent}: {e!r}")
             return
-        self._chat_watch = threading.Thread(target=self._agent_chat_watch, args=(tail, mirror, typed), daemon=True,
+        # The agent's own reactions in its chat (`orchestra react`), told to the voice as silent notes (spec "Voice calls").
+        reactions = None
+        if hasattr(ac, "ReactionTail"):
+            try:
+                reactions = ac.ReactionTail(self.agent)
+            except Exception as e:  # noqa: BLE001 — the call runs without them
+                log.warning(f"relay {self.cid}: reactions unavailable for {self.agent}: {e!r}")
+        self._chat_watch = threading.Thread(target=self._agent_chat_watch, args=(tail, mirror, typed),
+                                            kwargs={"reactions": reactions}, daemon=True,
                                             name=f"agent-chat-{self.cid[:8]}")
         self._chat_watch.start()
 
-    def _agent_chat_watch(self, tail, mirror, typed=None, poll_s=None):
+    def _agent_chat_watch(self, tail, mirror, typed=None, poll_s=None, reactions=None):
         """What the operator types in the agent's chat reaches GPT-Live as context the moment it is sent (typed.jsonl,
         from the API), or else when the agent's session takes it; what the agent answers there (to that, or to work
         commissioned on the call) GPT-Live says as its own words. One worker, so lines keep their order."""
@@ -1459,6 +1467,8 @@ class _Holder:
                         pending.append(("note", self.m.agent_calls.typed_note(mirror.name, text), text))
                 for k in [k for k, h in heard.items() if now - h[1] > 600]:
                     del heard[k]
+                for ch in (reactions.read() if reactions is not None else []):
+                    pending.extend(mirror.reaction(ch))     # ("note", ...): _oa_note below, never spoken
                 for act in mirror.feed(tail.read()):
                     said = (" ".join(act[1].split()) if act[0] == "done" else
                             " ".join(act[3].split()) if act[0] == "say" and len(act) > 3 else
@@ -1492,6 +1502,11 @@ class _Holder:
             except Exception as e:  # noqa: BLE001 — never the call
                 log.warning(f"relay {self.cid}: agent chat mirror failed: {e!r}")
             time.sleep(AGENT_CHAT_POLL_S if poll_s is None else poll_s)
+        if reactions is not None:
+            try:
+                reactions.close()
+            except Exception:  # noqa: BLE001
+                pass
         if pending:
             log.info(f"relay {self.cid}: AGENT-CHAT {len(pending)} line(s) undelivered at the call's end (in the chat)")
 

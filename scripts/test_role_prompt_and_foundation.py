@@ -133,11 +133,25 @@ def test_every_command_the_foundation_cites_exists():
     store = (ROOT / "msg_store.py").read_text()
     for sub in re.findall(r"msg_store\.py (\w+)", text):
         assert re.search(rf'add_parser\("{sub}"', store), f"msg_store has no '{sub}' command"
-    for flag in set(re.findall(r"(--[a-z][a-z-]+)", text)) - {"--worker-kind", "--summary"}:
+    # `orchestra react` lines cite that verb's flags (checked in the next test), not msg_store's.
+    rest = "\n".join(ln for ln in text.splitlines() if "orchestra react" not in ln)
+    for flag in set(re.findall(r"(--[a-z][a-z-]+)", rest)) - {"--worker-kind", "--summary"}:
         assert f'"{flag}"' in store, f"msg_store.py has no {flag}"
     approval = (ROOT / "scripts" / "approval.py").read_text()
     for flag in ("--from", "--worker-kind", "--summary"):
         assert f'"{flag}"' in approval or f"'{flag}'" in approval, flag
+
+
+def test_the_foundation_teaches_orchestra_react():
+    text = FOUNDATION.read_text()
+    assert "## Reactions" in text and "orchestra react 👍" in text
+    assert '<reaction from="user:' in text                 # the line an agent receives (api lib/reaction-wake-text.ts)
+    react = (ROOT / "orchestra_cli" / "react_cmd.py").read_text()
+    lines = "\n".join(ln for ln in text.splitlines() if "orchestra react" in ln)
+    flags = set(re.findall(r"(--[a-z][a-z-]+)", lines))
+    assert {"--to", "--remove"} <= flags
+    for flag in flags:
+        assert f'"{flag}"' in react, f"orchestra react has no {flag}"
 
 
 def test_the_hackathon_examples_left_prompts():

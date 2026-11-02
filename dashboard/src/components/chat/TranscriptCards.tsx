@@ -14,6 +14,8 @@ import Markdown from '../kit/Markdown';
 import { withRefs } from '../kit/RefText';
 import { scrubIds } from '../../lib/cardRefs';
 import Message from '../kit/Message';
+import { SlotBadges, SlotBar } from '../kit/ReactionBadges';
+import { anchorProps, useReactionSlot } from '../kit/reactionsContext';
 import ResultCard from '../kit/ResultCard';
 import ToolCalls, { type ToolRunEntry } from '../kit/ToolCard';
 import { AnsweredMultiPart } from './MultiPartCard';
@@ -149,6 +151,8 @@ export function MessageTime({ ts, align = 'left' }: { ts?: string; align?: 'left
 
 export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSystem?: boolean; queued?: boolean; ts?: string }) {
   const [open, setOpen] = useState(false);
+  // A message that can be reacted to (components/kit/Reactions.tsx): the bubble carries its badges and hover icons.
+  const slot = useReactionSlot();
   if (isSystem) {
     return (
       <div className="flex justify-center my-1">
@@ -181,8 +185,9 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
         </div>
       )}
       {(words || !attachments.length) && (
-        <div className={BUBBLES_USER}>
+        <div className={BUBBLES_USER} {...anchorProps(slot, 'user')}>
           {withRefs(words)}
+          {slot && <><SlotBar side="user" /><SlotBadges side="user" /></>}
         </div>
       )}
       {queued && (

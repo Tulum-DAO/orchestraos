@@ -1251,8 +1251,10 @@ class Supervisor:
 
     def _proc_env(self) -> dict:
         """The CLI's environment: its own compaction off ONLY while our Auto-compact is on (with it off, a full window
-        must still be compacted by the CLI, or it becomes an error)."""
+        must still be compacted by the CLI, or it becomes an error). ORCHESTRA_AGENT_ID is always this seat's id, for
+        `orchestra react` and any tool that must know who it runs as."""
         env = dict(self.env)
+        env["ORCHESTRA_AGENT_ID"] = self.seat
         if self.rot_conf.get("auto_compact"):
             env["DISABLE_AUTO_COMPACT"] = "1"
         else:
@@ -2482,7 +2484,7 @@ def pane_line(seat: str, orch_dir=None) -> str:
     orch = str(HS.data_dir(orch_dir))
     parts = ["env"] + [f"-u {v}" for v in INSTALLER_SESSION_ENV]
     parts += [f"ORCHESTRA_DIR={shlex.quote(orch)}", f"ORCH_DIR={shlex.quote(orch)}",
-              f"ORCHESTRA_ROOT={shlex.quote(_ROOT)}"]
+              f"ORCHESTRA_ROOT={shlex.quote(_ROOT)}", f"ORCHESTRA_AGENT_ID={shlex.quote(seat)}"]
     for k in ("ORCHESTRA_CONFIG", "CLAUDE_CONFIG_DIR", "ORCHESTRA_CLAUDE_BIN"):
         if os.environ.get(k):
             parts.append(f"{k}={shlex.quote(os.environ[k])}")

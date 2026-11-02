@@ -124,8 +124,8 @@ export function pageContextLine(ctx: SendBody['page_context']): string {
 export const VOICE_CALL_LIVE_TAG = '<voice-call-live>The operator is on a live voice call with you right now. The voice '
   + 'on the call is you: it speaks for you, and it says your chat replies aloud in its own words. This message was typed '
   + 'in the chat during the call. Reply in text only with what is worth reading on screen; if it needs no written '
-  + 'answer (a test, small talk, something the call already covered), reply with just 👍. Never say you cannot hear or '
-  + 'speak: the call does.</voice-call-live>';
+  + 'answer (a test, small talk, something the call already covered), react with `orchestra react 👍` instead of '
+  + 'replying. Never say you cannot hear or speak: the call does.</voice-call-live>';
 const CALL_MARK_FRESH_MS = 90_000;     // the relay touches the marker every 10 s; the supervisor's own staleness rule
 
 /** A "voice"-mode call with this seat is live: its call marker is fresh and its switch is not "forced". */
@@ -211,7 +211,13 @@ function realResolveSession(agentId: string): string {
   return agentId;
 }
 
-async function realGatewayInject(session: string, text: string, force = false): Promise<GatewayInjectResult> {
+/** POST /agent-message on the watch gateway. Never throws: network/auth failures come back as {unreachable:true}.
+ *  `hold` (default true, the web send) sends accepts:['held'], so the gateway may keep what it cannot type now for the
+ *  next boundary (a held_message row). The reaction wake passes hold:false: a busy pane answers 409 and NOTHING is
+ *  stored (spec "Agent wake": no force, no store). `actor` is the X-Actor header. */
+export async function postAgentMessage(session: string, text: string,
+  opts: { force?: boolean; hold?: boolean; actor?: string } = {}): Promise<GatewayInjectResult> {
+  const { force = false, hold = true, actor = 'operator:web' } = opts;
   let token = '';
   try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token provisioned */ }
   if (!token) return { httpStatus: 0, ok: false, unreachable: true, error: 'gateway token unavailable' };
@@ -219,13 +225,12 @@ async function realGatewayInject(session: string, text: string, force = false): 
     const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
-        // A person typed this (the web chat): the gateway counts it as the operator's own message.
-        'X-Actor': 'operator:web' },
+        // operator:web = a person typed this (the web chat): the gateway counts it as the operator's own message.
+        'X-Actor': actor },
       // accepts:['held'] lets the gateway durable-hold the cases it must — a menu or
       // permission prompt on screen, or a pane that is not running — rather than 409-ing
       // them back to us. It no longer holds a plain mid-turn 'working' seat: that injects.
-      body: JSON.stringify(force ? { session, text, accepts: ['held'], force: true }
-                                 : { session, text, accepts: ['held'] }),
+      body: JSON.stringify({ session, text, ...(hold ? { accepts: ['held'] } : {}), ...(force ? { force: true } : {}) }),
       signal: AbortSignal.timeout(25000),
     });
     const body: any = await resp.json().catch(() => ({}));
@@ -250,6 +255,12 @@ async function realGatewayInject(session: string, text: string, force = false): 
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
     return { httpStatus: 0, ok: false, unreachable: !timedOut, timedOut, error: err?.message || 'gateway unreachable' };
   }
+}
+
+/** The web send's gateway call: held accepted, force only when the person asked for it. Body unchanged from before
+ *  postAgentMessage existed ({session, text, accepts} or {session, text, accepts, force:true}). */
+function realGatewayInject(session: string, text: string, force = false): Promise<GatewayInjectResult> {
+  return postAgentMessage(session, text, { force });
 }
 
 async function realMsgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult> {

@@ -35,6 +35,7 @@ import {
   mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
 } from '../routes/chat-transcript.js';
 import { storeRules } from './conversation-store.js';
+import { stampRefs } from '../lib/messageRef.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
@@ -159,6 +160,11 @@ export class TranscriptTailer {
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }
     env.items = mergeInterruptedTurns(env.items, turns);
+    // The server's message ref on each log item (lib/messageRef.ts): the same `<session>~<uuid>#<part>` the poll
+    // route's chatWindow gives it, so a reaction made from either view names one message. Cut-turn lines get none.
+    // Parts are numbered over this read (up to TAIL_ITEM_CAP items): only a line cut by that cap, at the very oldest
+    // edge of a huge log, could number differently from the poll route.
+    env.items = stampRefs(env.items, sid);
     // A cut-turn line new this beat and placed before the old tail: every later item moved, which
     // a delta (append only) cannot say. Sent as a snapshot.
     const sentUuids = new Set(this.items.map((it) => it?.uuid));

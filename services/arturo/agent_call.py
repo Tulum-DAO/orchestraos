@@ -20,6 +20,8 @@ import os
 import re
 import threading
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ACK_AFTER_S = 3.0           # silent this long, then one acknowledgement (a setting per seat)
@@ -430,14 +432,123 @@ def typed_note(name, text) -> str:
             "chat side takes it and you will be given what it sends back.")
 
 
+# --- the agent's own reactions during a "voice"-mode call (spec "Voice calls") --------------------------------------
+REACTION_STREAM_TIMEOUT_S = 75.0     # the API pings every 25 s; silence past this means the stream is gone
+REACTION_RETRY_S = 3.0
+REACTION_ON_MAX = 120
+
+
+def api_base() -> str:
+    """The Node API: $ORCH_API_URL (orchestra child_env), else loopback on $ORCHESTRA_API_PORT (8888)."""
+    url = (os.environ.get("ORCH_API_URL") or "").strip()
+    if url:
+        return url.rstrip("/")
+    return f"http://127.0.0.1:{os.environ.get('ORCHESTRA_API_PORT') or 8888}"
+
+
+def message_text(agent, ref, base=None, limit=300) -> str:
+    """The text of the message `ref` names in the agent's chat (the API's transcript items carry server refs), or ""
+    when it is not among the newest `limit` items, has no text, or the API cannot be read."""
+    url = f"{base or api_base()}/api/agents/{urllib.parse.quote(str(agent), safe='')}/transcript?limit={int(limit)}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            doc = json.loads(resp.read() or b"{}")
+    except Exception:  # noqa: BLE001 — a note without the words, never a failure
+        return ""
+    for it in reversed(doc.get("items") or []):
+        if isinstance(it, dict) and it.get("ref") == ref:
+            return str(it.get("text") or "")
+    return ""
+
+
+def reaction_note(name, emoji, on="") -> str:
+    """What the voice is told when the agent reacts in its chat (`orchestra react`): background, never read out."""
+    said = " ".join(str(on or "").split())
+    if len(said) > REACTION_ON_MAX:
+        said = said[:REACTION_ON_MAX - 3] + "..."
+    to = f" to '{said}'" if said else ""
+    return (f"{name} reacted {emoji}{to} in the chat. It is a reaction, not a reply, and it is on the operator's "
+            "screen already. Do not read it out or describe it; just carry on.")
+
+
+class ReactionTail:
+    """The API's reaction events for one agent's chat (GET /api/reactions/stream?surface=agent-chat&conv=<agent>),
+    read on a daemon thread and reopened when the stream ends. read() returns what arrived since the last read; an
+    agent's new reaction carries "on", the reacted message's text (looked up by ref). close() stops it."""
+
+    def __init__(self, agent, base=None, retry_s=REACTION_RETRY_S):
+        self.agent = str(agent)
+        self.base = (base or api_base()).rstrip("/")
+        self.retry_s = retry_s
+        self._q: list = []
+        self._lock = threading.Lock()
+        self._closed = False
+        self._resp = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name=f"reactions-{self.agent[:16]}")
+        self._thread.start()
+
+    def _url(self):
+        return f"{self.base}/api/reactions/stream?" + urllib.parse.urlencode({"surface": "agent-chat", "conv": self.agent})
+
+    def _run(self):
+        while not self._closed:
+            try:
+                with urllib.request.urlopen(self._url(), timeout=REACTION_STREAM_TIMEOUT_S) as resp:
+                    self._resp = resp
+                    event, data = None, []
+                    for raw in resp:
+                        if self._closed:
+                            return
+                        line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                        if not line:
+                            if event == "reaction" and data:
+                                self._take("\n".join(data))
+                            event, data = None, []
+                        elif line.startswith("event:"):
+                            event = line[6:].strip()
+                        elif line.startswith("data:"):
+                            data.append(line[5:].lstrip())
+            except Exception:  # noqa: BLE001 — API restarting, network blip: reopen after a pause
+                pass
+            if not self._closed:
+                time.sleep(self.retry_s)
+
+    def _take(self, payload):
+        try:
+            ch = json.loads(payload)
+        except ValueError:
+            return
+        if not isinstance(ch, dict):
+            return
+        who = ch.get("reactor")
+        if ch.get("emoji") and isinstance(who, dict) and who.get("kind") == "agent":
+            ch["on"] = message_text(self.agent, str(ch.get("ref") or ""), base=self.base)
+        with self._lock:
+            self._q.append(ch)
+
+    def read(self) -> list:
+        with self._lock:
+            out, self._q = self._q, []
+        return out
+
+    def close(self):
+        self._closed = True
+        try:
+            if self._resp is not None:
+                self._resp.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class ChatMirror:
     """What happens in the agent's own chat while GPT-Live is on a call as it: fed the seat's event
     log records, returns ("note", context) for something the operator typed there, and ("say", reply, context) when the
     agent answers it, or answers work commissioned on the call ("[Voice call]: ..."). Mail, the hand-off and other
     automation turns are not mirrored."""
 
-    def __init__(self, name):
+    def __init__(self, name, agent=None):
         self.name = name
+        self.agent = agent        # the seat id: only ITS reactions are noted (None: any agent's)
         self.kind = None          # "typed" | "commissioned" | None (a turn not mirrored)
         self.prompt = ""
         self.speech = None
@@ -488,6 +599,21 @@ class ChatMirror:
             self.kind, self.prompt = "typed", text
             # the relay skips this when the API already handed it over on send (typed.jsonl): the third field matches
             out.append(("note", typed_note(self.name, text), text))
+
+    def reaction(self, change) -> list:
+        """A reaction in the agent's chat (ReactionTail): the agent's own new emoji becomes a silent note for the voice
+        (never spoken; the emoji is on the operator's screen). The operator's reactions (the wake tells the agent),
+        removals and other reactors: nothing."""
+        if not isinstance(change, dict):
+            return []
+        who = change.get("reactor")
+        if not isinstance(who, dict):
+            return []
+        if who.get("kind") != "agent" or not change.get("emoji"):
+            return []
+        if self.agent and who.get("id") != self.agent:
+            return []
+        return [("note", reaction_note(self.name, str(change["emoji"]), str(change.get("on") or "")))]
 
     def feed(self, records) -> list:
         out: list = []

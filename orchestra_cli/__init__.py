@@ -10,6 +10,7 @@
     orchestra spawn    register + launch a seat in tmux (--gm = the General Manager)
     orchestra rotate   rotate a seat: successor answers the baton's canary, strict grade, promote
     orchestra memory   the conversation index: `memory search "<words>"`, `memory ingest <agent> --session <id>`
+    orchestra react    an agent reacts to a message in its own chat: `react 👍`, `react 🎉 --to <ref>`, `react --remove`
 
 Everything comes from orchestra.toml (path: $ORCHESTRA_CONFIG, else <repo>/orchestra.toml)
 plus a few env vars; there are no operator-specific literals in this package.

@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { TranscriptTailer, type TailEvent } from '../src/services/transcript-tail.js';
 import { normalizeTranscript, GRAMMAR_VERSION } from '../src/routes/chat-transcript.js';
+import { stampRefs } from '../src/lib/messageRef.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, '..', '..', 'contract', 'transcript', 'fixtures', 'claude-basic.input.jsonl');
@@ -46,7 +47,8 @@ function makeTailer(limit = 150): TranscriptTailer {
 
 function fullItems(): any[] {
   const lines = readFileSync(path, 'utf-8').split('\n');
-  return normalizeTranscript(lines, 'fixture-agent', sid, Number.MAX_SAFE_INTEGER).items;
+  // The tailer stamps the server's message ref (reactions build step 1); the contract builder does not.
+  return stampRefs(normalizeTranscript(lines, 'fixture-agent', sid, Number.MAX_SAFE_INTEGER).items, sid);
 }
 
 beforeEach(() => {

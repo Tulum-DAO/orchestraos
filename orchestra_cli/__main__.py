@@ -138,6 +138,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ist.add_argument("--json", action="store_true")
     from .memory_cmd import add_parser as _add_memory
     _add_memory(sub)
+    from .react_cmd import add_parser as _add_react
+    _add_react(sub)
     s = sub.add_parser("status", help="show the supervisor's process table")
     s.add_argument("--json", action="store_true")
     return p.parse_args(argv)
@@ -272,11 +274,12 @@ def main(argv=None) -> int:
     from .install_unit import cmd_install_unit
     from .identity_cmd import cmd_identity
     from .memory_cmd import cmd_memory
+    from .react_cmd import cmd_react
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "retire": cmd_retire, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
             "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit,
-            "identity": cmd_identity, "memory": cmd_memory}[ns.command](ns)
+            "identity": cmd_identity, "memory": cmd_memory, "react": cmd_react}[ns.command](ns)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,9 @@ import CallCard from './CallCard';
 import ResultCard from './ResultCard';
 import Markdown from './Markdown';
 import { MessageActions, MessageText, type Skin } from './Message';
+import { ReactionAnchor } from './ReactionBadges';
+import { ReactionRow } from './Reactions';
+import { useReactionsCtx } from './reactionsContext';
 import { withRefs } from './RefText';
 import ChoiceCard from '../chat/ChoiceCard';
 import DecisionBubble from '../chat/DecisionBubble';
@@ -57,7 +60,7 @@ import { assistantTurnClass } from '../../lib/chatSkin';
 import type { GroupedNode } from '../../lib/toolGroups';
 import { sendStateLabel, type SendState } from '../../lib/arturo';
 import { hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
-import { showLive, type LiveText, type ThreadRow } from '../../lib/threadKit/view';
+import { rowReactions, showLive, type LiveText, type NodeRow, type ThreadRow } from '../../lib/threadKit/view';
 import { completeParts, completeText } from '../../lib/threadKit/paragraphs';
 import type { MessagePart, ThreadMessage } from '../../lib/threadKit/thread';
 
@@ -139,7 +142,7 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
       {m.pending ? <span className="thinking" aria-label="thinking" />
         : m.streaming && skin === 'bubbles' ? <Unfinished text={m.text} parts={m.parts} skin={skin} />
         : m.parts ? <Parts parts={m.parts} skin={skin} />
-        : <ReplyWords text={m.text} skin={skin} />}
+        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} /></ReactionAnchor>}
       {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="tools">ran {m.toolNames.join(', ')}</div>}
       {!m.pending && !m.streaming && (m.copyText || times) && (
         <MessageActions copyText={m.copyText} skin={skin} meta={times ? <MessageTime ts={m.at} /> : undefined} />
@@ -161,7 +164,8 @@ function Choice({ m, choice }: { m: ThreadMessage; choice: ThreadViewChoice }) {
   );
 }
 
-/** The agent's reaction under the operator's message (lib/threadKit/view withReactions). */
+/** An OLD log's emoji reply under the operator's message (lib/threadKit/view withReactions), where the row cannot be
+ *  reacted to (no ref, or no reactions on this page): otherwise its badge is drawn by ReactionRow. */
 function Reaction({ emoji }: { emoji: string }) {
   return (
     <div className="flex justify-end !-mt-1.5 pr-3" data-anchor-skip data-reaction>
@@ -245,6 +249,13 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
   noteText?: (message: ThreadMessage) => string;
 }) {
   const live = showLive(rows, liveText) ? liveText! : null;
+  // The chat's reactions (TranscriptChatView provides them; Arturo's page and pane do not): a message row that can be
+  // reacted to is drawn inside its ReactionRow, which adds no element of its own.
+  const rx = useReactionsCtx();
+  const reactable = (r: NodeRow, content: ReactNode) => (rx && r.ref && (r.node.kind === 'user' || r.node.kind === 'assistant')
+    ? <ReactionRow reactRef={r.ref} side={r.node.kind === 'user' ? 'user' : 'agent'} list={rowReactions(r, rx.agentId)}
+        text={r.node.text} skin={skin}>{content}</ReactionRow>
+    : <>{content}{r.reaction && <Reaction emoji={r.reaction} />}</>);
   useLayoutEffect(() => { stick?.follow(); }, [rows, live?.text, live?.parts?.length, call?.liveUser, call?.liveArturo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -270,10 +281,9 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
             return (
               <Fragment key={r.key}>
                 <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
-                {r.message.role === 'user'
+                {reactable(r, r.message.role === 'user'
                   ? <UserMessage m={r.message} skin={skin} latest={false} times={times} />
-                  : <Reply m={r.message} skin={skin} times={times} />}
-                {r.reaction && <Reaction emoji={r.reaction} />}
+                  : <Reply m={r.message} skin={skin} times={times} />)}
               </Fragment>
             );
           }
@@ -282,8 +292,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
           return renderNode ? (
             <Fragment key={r.key}>
               <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
-              <NodeSlot>{renderNode(r.node, r.interrupted)}</NodeSlot>
-              {r.reaction && <Reaction emoji={r.reaction} />}
+              {reactable(r, <NodeSlot>{renderNode(r.node, r.interrupted)}</NodeSlot>)}
             </Fragment>
           ) : null;
         }
