@@ -67,3 +67,19 @@ test('no session id: no refs (no stable identity to give)', () => {
   t.subscribe((ev) => got.push(ev));
   assert.equal(got[0].items[0].ref, undefined);
 });
+
+test('a wake answer the chat hides (NO_REPLY, an emoji) is never sent; refs around it stay those of the poll route', () => {
+  const wake = '<reaction from="user:sam" emoji="👍" on="looking"/> Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent.';
+  const said = (uuid: string, text: string) => JSON.stringify({ type: 'assistant', uuid, timestamp: '2026-11-02T10:00:02Z',
+    message: { id: `m-${uuid}`, role: 'assistant', content: [{ type: 'text', text }] } }) + '\n';
+  const f = log(user('u1', 'hello') + twoBlocks('a1') + user('u2', wake) + said('a2', 'NO_REPLY'));
+  const t = new TranscriptTailer({ agentId: 'zz-tail-ref', resolve: () => ({ path: f, sid: 'S1' }), interrupted: NONE });
+  const got: TailEvent[] = [];
+  t.subscribe((ev) => got.push(ev));
+  assert.deepEqual(got[0].items.map((i: any) => i.uuid), ['u1', 'a1', 'a1', 'u2']);
+  assert.equal(got[0].render_items!.some((n: any) => n.text === 'NO_REPLY'), false);
+  appendFileSync(f, said('a3', '👍') + user('u3', 'thanks') + said('a4', 'NO_REPLY'));
+  t.tick();
+  assert.equal(got[1].type, 'delta');
+  assert.deepEqual(got[1].items.map((i: any) => [i.uuid, i.text, i.ref]), [['u3', 'thanks', 'S1~u3#0'], ['a4', 'NO_REPLY', 'S1~a4#0']]);
+});

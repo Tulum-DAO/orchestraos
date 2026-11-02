@@ -31,7 +31,7 @@
  */
 import { readFileSync, statSync } from 'fs';
 import {
-  normalizeTranscript, buildRenderItems, GRAMMAR_VERSION,
+  normalizeTranscript, buildRenderItems, dropWakeReplies, GRAMMAR_VERSION,
   mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
 } from '../routes/chat-transcript.js';
 import { storeRules } from './conversation-store.js';
@@ -156,7 +156,7 @@ export class TranscriptTailer {
     // DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
     const env = normalizeTranscript(
-      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'));
+      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, null, true);
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }
     env.items = mergeInterruptedTurns(env.items, turns);
@@ -165,6 +165,8 @@ export class TranscriptTailer {
     // Parts are numbered over this read (up to TAIL_ITEM_CAP items): only a line cut by that cap, at the very oldest
     // edge of a huge log, could number differently from the poll route.
     env.items = stampRefs(env.items, sid);
+    // A reaction wake's silent or emoji answer (chat-transcript markWakeReplies): numbered like the poll route, never sent.
+    env.items = dropWakeReplies(env.items);
     // A cut-turn line new this beat and placed before the old tail: every later item moved, which
     // a delta (append only) cannot say. Sent as a snapshot.
     const sentUuids = new Set(this.items.map((it) => it?.uuid));

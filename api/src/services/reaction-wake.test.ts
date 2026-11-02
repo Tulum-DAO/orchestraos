@@ -68,7 +68,7 @@ test('a user reaction reaches the agent 3 s later, as the exact wake line, to it
   assert.equal(h.sent.length, 0);
   await h.c.advance(1);
   assert.deepEqual(h.sent, [{ session: 'tmux-pm-x',
-    text: '<reaction from="user:sam" emoji="👍" on="Deployed the fix to staging."/> You may reply, react (`orchestra react`), or do nothing.' }]);
+    text: '<reaction from="user:sam" emoji="👍" on="Deployed the fix to staging."/> Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent.' }]);
   assert.equal(h.wake.pendingCount(), 0);
 });
 

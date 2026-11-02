@@ -6,14 +6,33 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reactionWakeText, hasReactionWake, stripReactionWake, REACTION_WAKE_NOTE, REACTION_ON_MAX } from './reaction-wake-text.js';
+import { reactionWakeText, hasReactionWake, stripReactionWake, REACTION_WAKE_NOTE, REACTION_ON_MAX, NO_REPLY, silentReply } from './reaction-wake-text.js';
 
 test('the exact line: tag, then the note, one line', () => {
   assert.equal(
     reactionWakeText({ user: 'sam', emoji: '👍', on: 'Deployed the fix to staging.' }),
-    '<reaction from="user:sam" emoji="👍" on="Deployed the fix to staging."/> You may reply, react (`orchestra react`), or do nothing.',
+    '<reaction from="user:sam" emoji="👍" on="Deployed the fix to staging."/> Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent.',
   );
-  assert.equal(REACTION_WAKE_NOTE, 'You may reply, react (`orchestra react`), or do nothing.');
+  assert.equal(REACTION_WAKE_NOTE, 'Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent.');
+});
+
+test('a wake written with the OLD note (existing logs) is still recognised and stripped', () => {
+  const old = '<reaction from="user:sam" emoji="👍" on="Deployed."/> You may reply, react (`orchestra react`), or do nothing.';
+  assert.equal(hasReactionWake(old), true);
+  assert.equal(stripReactionWake(old), '');
+});
+
+test('silentReply: NO_REPLY, a "no reply" phrase, or one emoji; real words are not', () => {
+  assert.equal(NO_REPLY, 'NO_REPLY');
+  assert.equal(silentReply('NO_REPLY'), 'silent');
+  assert.equal(silentReply('  NO_REPLY \n'), 'silent');
+  for (const t of ['(no reply needed)', 'No reply needed.', 'no response', '(No response required)', 'no reply']) {
+    assert.equal(silentReply(t), 'silent', t);
+  }
+  for (const t of ['👍', ' 🎉 ', '👍🏽', '🇺🇸', '❤️']) assert.equal(silentReply(t), 'emoji', t);
+  for (const t of ['Thanks, will do.', 'no reply needed, but here is why', '👍 done', '👍👍', 'NO_REPLY please', 'no_reply', '', 42, null]) {
+    assert.equal(silentReply(t as any), null, String(t));
+  }
 });
 
 test('on= is the first 120 characters, on one line, with nothing that could close the tag', () => {
