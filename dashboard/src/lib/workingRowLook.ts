@@ -13,8 +13,6 @@ export const WORKING_ROW_TEXT = 13;
 
 /** Avatar to text, as a share of A. */
 export const ROW_GAP_A = 0.73;
-/** The working bob's travel, as a share of A (the sidebar's own bob is smaller). */
-export const ROW_BOB_A = 0.14;
 /** The reply's rise as it lands, as a share of A. */
 export const REPLY_RISE_A = 0.39;
 
@@ -23,11 +21,6 @@ export const REPLY_RISE_A = 0.39;
 export const BODY_HALF_UNITS = 0.86;
 export function canvasSizeFor(a: number, layoutU: number): number {
   return a / (2 * BODY_HALF_UNITS * layoutU);
-}
-/** The state bob is `bob` units of half travel; the row's should be ROW_BOB_A of A: the multiplier for the canvas. */
-export function bobScaleFor(stateBobUnits: number): number {
-  // 1 unit = A / (2 * BODY_HALF_UNITS) px, so the row's half travel in units is ROW_BOB_A / 2 * 2 * BODY_HALF_UNITS
-  return stateBobUnits > 0 ? (ROW_BOB_A * BODY_HALF_UNITS) / stateBobUnits : 1;
 }
 
 /** The phrase's shimmer: a lighter band sweeping left to right, once per SHIMMER_MS. Colours live in agentWorking.css. */

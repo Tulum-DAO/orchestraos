@@ -285,8 +285,6 @@ export interface AttachOpts {
   /** Follow a mouse from any distance and keep looking at it while it rests (not only within the radius and
    *  for a few seconds after it moves). Touch keeps the usual rules, so a face never stares at an old tap. */
   followAlways?: boolean;
-  /** Scale the state's bob for this instance (the working row's bob is larger than the sidebar's). */
-  bob?: number;
 }
 interface Shown { dot: DotSpec | { color: string } | null; badge: BadgePlace | null; following: boolean; look: { x: number; y: number }; t: number; blinkAt: number }
 interface Entry {
@@ -378,7 +376,6 @@ function frame(now: number) {
       pose.lookX = e.look.x; pose.lookY = e.look.y;
       e.following = follow;
     }
-    if (o.bob && pose.bobY) pose.dy += (o.bob - 1) * pose.bobY;
     const dot = o.legacyDot ? undefined : dotFor({ role: o.role, state: model.state, size: e.size, phone });
     const shownDot = dot === undefined ? (pose.dot ? { color: pose.dot } : null) : dot;
     const badge = badgeFor({ role: o.role, shape: pose.shape, size: e.size, provider: o.provider, hover: e.hover, dot: shownDot });
