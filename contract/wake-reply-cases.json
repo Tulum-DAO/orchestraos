@@ -1,0 +1,16 @@
+{
+  "_comment": "An agent's answer to a reaction wake: how the API hides it (api/src/lib/reaction-wake-text.ts silentReply) and how the dashboard recognises it while it is still being written (dashboard/src/lib/wakeQuiet.ts). BOTH run every case, so the two cannot drift. final: the whole answer's class ('silent' | 'emoji' | null). partials: text still being written that could still become a quiet answer (quiet: true) or no longer can (quiet: false).",
+  "final": [
+    ["NO_REPLY", "silent"], [" NO_REPLY\n", "silent"], ["(no reply needed)", "silent"], ["No reply needed.", "silent"],
+    ["no response", "silent"], ["(No response required)", "silent"], ["no reply", "silent"],
+    ["👍", "emoji"], [" 🎉 ", "emoji"], ["👍🏽", "emoji"], ["🇺🇸", "emoji"], ["❤️", "emoji"],
+    ["Thanks, will do.", null], ["no reply needed, but here is why", null], ["👍 done", null], ["👍👍", null],
+    ["NO_REPLY please", null], ["no_reply", null], ["Glad it works.", null], ["", null]
+  ],
+  "partials": [
+    ["", true], ["N", true], ["NO_R", true], ["NO_REPLY", true], ["(no rep", true], ["(", true], ["No", true],
+    ["no reply ne", true], ["(no response req", true], ["👍", true], ["👍🏽", true], ["🙏 ", true],
+    ["Glad", false], ["NO_REPLY please", false], ["No problem", false], ["Nope", false], ["👍 done", false], ["Sure", false],
+    ["no reply needed, but", false], ["1", false]
+  ]
+}

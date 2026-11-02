@@ -6,6 +6,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { reactionWakeText, hasReactionWake, stripReactionWake, REACTION_WAKE_NOTE, REACTION_ON_MAX, NO_REPLY, silentReply } from './reaction-wake-text.js';
 
 test('the exact line: tag, then the note, one line', () => {
@@ -73,4 +76,10 @@ test('only a message that IS the wake is hidden: embedded or quoted tags are unt
   assert.equal(hasReactionWake('uses <reaction  in prose'), false);
   assert.equal(hasReactionWake('<reaction '), false);
   assert.equal(stripReactionWake('<reaction '), '<reaction');
+});
+
+test('silentReply runs every final case in contract/wake-reply-cases.json (the dashboard runs them too)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const cases = JSON.parse(readFileSync(join(here, '..', '..', '..', 'contract', 'wake-reply-cases.json'), 'utf8'));
+  for (const [text, want] of cases.final as [string, string | null][]) assert.equal(silentReply(text), want, JSON.stringify(text));
 });
