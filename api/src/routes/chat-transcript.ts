@@ -1063,8 +1063,14 @@ function cleanArgs(args: any): Record<string, unknown> {
 // The quiet page line the send route adds to what the agent receives (agent-send.ts pageContextLine): the agent reads
 // it, the person never sees it as part of their message.
 const PAGE_CONTEXT_TAG = /\s*<page-context>[\s\S]*?<\/page-context>/g;
+// The same for the live-call line (agent-send.ts VOICE_CALL_LIVE_TAG): typed during a voice call.
+const VOICE_CALL_LIVE_TAG_RE = /\s*<voice-call-(live|said)>[\s\S]*?<\/voice-call-\1>/g;
+// A request the operator SAID on a voice call, handed to the agent's session (services/arturo/agent_call.py
+// VOICE_SAID_TAG): the call's card holds it, so the chat does not show it as a typed message; the reply stays.
+const VOICE_CALL_SAID = '<voice-call-said>';
 
 export function stripPageContext(text: string): string {
+  if (text.includes('<voice-call-')) text = text.replace(VOICE_CALL_LIVE_TAG_RE, '').trim();
   return text.includes('<page-context>') ? text.replace(PAGE_CONTEXT_TAG, '').trim() : text;
 }
 
@@ -1605,6 +1611,7 @@ export function buildRenderItems(items: any[]): any[] {
       const text = (it.text || '').trim();
       if (!text) continue;
       if (it.role === 'user') {
+        if (it.voice_said) continue;      // said on a voice call: the call's card holds it
         const node: any = { kind: 'user', text };
         if (it.is_system) node.is_system = true;
         if (it.queued) node.queued = true;
@@ -1875,7 +1882,12 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
     items = dedupeQueuedCommands(items);
   }
   // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
-  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string' && it.text.includes('<page-context>')
+  // Kept as the turn's opener (audience/exchange tagging and the interrupted-turn merge need it), flagged, words only;
+  // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && it.text.includes(VOICE_CALL_SAID) ? { ...it, text: stripPageContext(it.text), voice_said: true } : it));
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
     ? { ...it, text: stripPageContext(it.text) } : it));
   // A call handed to the agent (lib/agentCalls.ts handoffMessage): the agent read the transcript, the chat shows the
   // call's card on this line, where the call ended.

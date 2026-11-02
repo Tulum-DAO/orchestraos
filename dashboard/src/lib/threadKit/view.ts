@@ -32,6 +32,8 @@ export interface NodeRow {
   kind: 'node'; key: string; node: GroupedNode; interrupted: boolean;
   /** In the Modern style: the node as a plain message the view draws itself (lib/threadKit/view modernMessage). */
   message?: ThreadMessage;
+  /** The agent's reaction to this message of the operator's (a reply that is only an emoji, e.g. 👍 during a call). */
+  reaction?: string;
 }
 /** One of the agent's approval or decision cards, under the message it belongs to. */
 export interface DecisionRow { kind: 'decision'; key: string; decision: Decision }
@@ -98,7 +100,29 @@ export function agentRows(entries: FeedEntry[], pending: { id: string; display: 
              ...(message ? { message } : {}) };
   });
   for (const p of pending) rows.push({ kind: 'pending', key: `pending-${p.id}`, text: p.display, pending: p.kind });
-  return rows;
+  return withReactions(rows);
+}
+
+/** A reply that is only an emoji or two (no letters or digits): the agent reacting, not writing. */
+export function isReaction(text: unknown): boolean {
+  const t = typeof text === 'string' ? text.trim() : '';
+  return t.length > 0 && t.length <= 8 && !/[\p{L}\p{N}]/u.test(t) && /\p{Extended_Pictographic}/u.test(t);
+}
+
+/** The agent's emoji-only reply right after the operator's message is drawn under that message as a reaction, not as a
+ *  bubble of its own (the agent's call-aware 👍, agent-send.ts VOICE_CALL_LIVE_TAG). */
+export function withReactions(rows: ThreadRow[]): ThreadRow[] {
+  const out: ThreadRow[] = [];
+  for (const r of rows) {
+    const prev = out[out.length - 1];
+    if (r.kind === 'node' && r.node.kind === 'assistant' && isReaction(r.node.text)
+        && prev?.kind === 'node' && prev.node.kind === 'user' && !prev.reaction) {
+      out[out.length - 1] = { ...prev, reaction: r.node.text.trim() };
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
 }
 
 /** The key of the operator's latest turn, call turns included: only that bubble (or a failed one) shows its send

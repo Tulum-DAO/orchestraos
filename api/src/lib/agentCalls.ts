@@ -210,7 +210,8 @@ const handoffsFile = (dataDir: string) => path.join(dataDir, 'state', 'voice-cal
 
 export const HANDOFF_INSTRUCTION = 'This was your own voice call with the person just now. Everything the voice said '
   + 'below was you speaking. Don\'t treat it as outside context, and don\'t mention markers, tags or files. Continue '
-  + 'naturally in text: acknowledge anything left open and act on what they asked.';
+  + 'naturally in text: acknowledge anything left open and act on what they asked. Work already sent to you during '
+  + 'the call (a "[Voice call]:" message) is already in hand: don\'t start it a second time.';
 
 /** The id the browser knows a relay call by: vc_client_<sha1(conversation id)[:12]> (relay_live_bridge.py). The
  *  server's journal carries the conversation id (`conv_id`), so the browser's id is found from it. */

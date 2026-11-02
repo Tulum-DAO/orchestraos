@@ -14,8 +14,8 @@ import { agentScopeParam } from '../lib/agent-scope.js';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { principal } from '../lib/principal.js';
 import { dataDir } from '../lib/config.js';
-import { listAgentCalls, getAgentCall, setCallRating, CALL_ID_RE, CLIENT_CALL_ID_RE, findHandoffCall, handoffMessage,
-  markHandoff, readHandoffs, type Rating } from '../lib/agentCalls.js';
+import { listAgentCalls, callMarkerText, readHandoffs, getAgentCall, setCallRating, CALL_ID_RE, CLIENT_CALL_ID_RE, findHandoffCall, handoffMessage,
+  markHandoff, type Rating } from '../lib/agentCalls.js';
 import { defaultAgentSendDeps, type GatewayInjectResult, type MsgStoreSendResult } from './agent-send.js';
 import { getRegistry } from '../services/state-reader.js';
 import { readSeatNames } from '../lib/agentIdentity.js';
@@ -46,7 +46,10 @@ export function createAgentCallsRouter(deps: AgentCallsDeps): Router {
   router.get('/:id/calls', (req: Request, res: Response) => {
     const id = String(req.params.id);
     if (!isSafeAgentId(id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
-    res.json({ ok: true, agent: id, calls: listAgentCalls(deps.dataDir(), id) });
+    // `marker` and `handed`: the live stream's chat draws each ended call's card from this list
+    // (dashboard lib/callCards.ts), the same marker and the same hand-off rule the poll route merges.
+    const dir = deps.dataDir(), handed = readHandoffs(dir);
+    res.json({ ok: true, agent: id, calls: listAgentCalls(dir, id).map((c) => ({ ...c, marker: callMarkerText(dir, c.call_id), handed: !!handed[c.call_id] })) });
   });
 
   router.get('/:id/calls/:callId', (req: Request, res: Response) => {

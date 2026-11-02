@@ -54,6 +54,38 @@ AGENT_INSTRUCTIONS = (
     "unless they speak first.")
 
 
+VOICE_AGENT_INSTRUCTIONS = (
+    "You are {name}, one of the operator's agents, on a voice call with them. Speak as {name}, in the first person, "
+    "naturally and briefly, like a colleague on the phone. This is a live, full-duplex voice call: you hear the "
+    "operator and speak out loud, and they can interrupt you. The conversation below happened earlier in TEXT chat: "
+    "anything said there about text-only replies, speech-to-text or not hearing them does not apply to this call. "
+    "Answer from {name}'s recent conversation below when it covers the question. You cannot see the operator's "
+    "screen, the chat, messages, files, terminals or other agents yourself: ANY question about them (what is on "
+    "screen, did a message arrive, what was the last message, read or check something) is DELEGATED, never answered "
+    "with \"I don't see it\" or \"I can't\". Also DELEGATE to look anything up, check anything live, or get any "
+    "work done: delegating hands it to your own session ({name}'s chat side, with all of {name}'s tools), which does "
+    "it and answers. "
+    "Never say you did, checked, sent or found anything unless your session told "
+    "you; when it answers, say its words faithfully, in order, as {name}. While waiting, one short natural "
+    "acknowledgement is fine.")
+# Last, after the context: placed before it (or worded softer), GPT-Live greeted in 1 session of 5 (probe, 2026-11-02).
+VOICE_AGENT_GREETING = (
+    "You start the conversation: the moment the session begins, say one short casual greeting to the operator as "
+    "{name} (under 6 words), without waiting for them. If the operator speaks first, answer them instead. If asked "
+    "your name, you are {name}.")
+
+
+def voice_agent_instructions(agent, name=None, context=""):
+    """The call's instructions when GPT-Live answers AS the agent (agent_call.mode "voice"): its name, then its recent
+    conversation (agent_call.voice_context) so it can talk about its own work without delegating."""
+    name = (name or str(agent or "")).strip() or "the agent"
+    text = VOICE_AGENT_INSTRUCTIONS.format(name=name)
+    context = (context or "").strip()
+    if context:
+        text += f"\n\n## {name}'s recent conversation (oldest first)\n{context}\n\n## Now"
+    return f"{text}\n{VOICE_AGENT_GREETING.format(name=name)}"
+
+
 def agent_instructions(agent, name=None):
     """The call's instructions when the agent's own session answers (services/arturo/agent_call.py): its own name."""
     return AGENT_INSTRUCTIONS.format(name=(name or str(agent or "")).strip() or "the agent")
@@ -323,20 +355,27 @@ def call_voice(agent=None):
     return v or _voice_choice.get_voice("openai") or _voice_choice.OPENAI_DEFAULT
 
 
-def openai_socket_factory(conversation_id, agent=None, agent_mode=False, **_):
+def openai_socket_factory(conversation_id, agent=None, agent_mode=False, agent_voice=False, agent_context="", **_):
     """The relay's socket factory for vendor 'openai': connect, then send session.start as the first frame.
     `agent` is the agent the call is with (its own voice); None for Arturo's own calls. `agent_mode`: its own
-    session answers, so the call speaks as that agent (its name), not as Arturo."""
+    session answers, so the call speaks as that agent (its name), not as Arturo. `agent_voice`: GPT-Live answers
+    as that agent itself, with `agent_context` (the agent's recent conversation, read once per call) in its
+    instructions."""
     key = api_key()
     if not key:
         raise RuntimeError("openai: no API key (set OPENAI_API_KEY in <data dir>/.env.secrets or the env)")
     s = AsyncWsSocket(URL, {"Authorization": "Bearer " + key})
     voice = call_voice(agent)
     instructions = None
-    if agent_mode and agent:
+    if (agent_mode or agent_voice) and agent:
         from services.arturo import agent_call
-        instructions = agent_instructions(agent, agent_call.display_name(agent))
-        line = speaking_as(voice)
-        instructions = f"{instructions}\n\n{line}" if line else instructions
+        name = agent_call.display_name(agent)
+        if agent_mode:
+            instructions = agent_instructions(agent, name)
+            line = speaking_as(voice)
+            instructions = f"{instructions}\n\n{line}" if line else instructions
+        else:
+            # no "You're speaking as Marin" line: with it GPT-Live introduced itself as the voice ("Marin here")
+            instructions = voice_agent_instructions(agent, name, agent_context)
     s.send(json.dumps(session_start(instructions=instructions, voice=voice)))
     return s

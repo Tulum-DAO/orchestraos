@@ -98,6 +98,8 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
       const text = it.text?.trim();
       if (!text) continue;
       if (it.role === 'user') {
+        // Said on a voice call and handed to the agent (api chat-transcript voice_said): the call's card holds it.
+        if ((it as { voice_said?: boolean }).voice_said === true) continue;
         // Not the operator's words, so never a blue bubble: what the server already flagged (codex's
         // developer brief and its <environment_context>/<multi_agent_mode> envelopes), the spawn
         // boot line ("You are gm. Read /tmp/agent-init-gm.md ..."), and the first user text of a

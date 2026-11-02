@@ -33,6 +33,13 @@ export function calleeName(agentCalls: boolean, agentName: string, arturoName: s
   return agentCalls ? agentName : arturoName;
 }
 
+/** A call from an agent's own composer is with THAT agent, never handed to Arturo. When the agent's
+ *  calls don't reach it (a terminal seat, its switch off, or the voice engine can't hand it turns), its Call is off, and
+ *  this is why; null when it can take the call. */
+export function agentCallBlock(agentCalls: boolean, agentName: string): string | null {
+  return agentCalls ? null : `${agentName} can't take calls yet`;
+}
+
 /** Who a live call is with, for every surface that names it: Arturo's id when it went through him. */
 export function callPartyId(call: { agentId: string; party?: 'agent' | 'arturo' }, arturoId: string): string {
   return call.party === 'agent' ? call.agentId : arturoId;

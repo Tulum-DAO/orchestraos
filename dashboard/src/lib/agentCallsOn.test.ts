@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { agentCallsFrom, calleeName, callPartyId, fetchAgentCallsOn } from './agentCallsOn.ts';
+import { agentCallBlock, agentCallsFrom, calleeName, callPartyId, fetchAgentCallsOn } from './agentCallsOn.ts';
 
 const answer = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as typeof fetch;
 
@@ -28,4 +28,9 @@ test('the button and every call surface name who answers: the agent when on, Art
   assert.equal(callPartyId({ agentId: 'dev-demo', party: 'agent' }, 'arturo'), 'dev-demo');
   assert.equal(callPartyId({ agentId: 'dev-demo', party: 'arturo' }, 'arturo'), 'arturo');
   assert.equal(callPartyId({ agentId: 'dev-demo' }, 'arturo'), 'arturo', 'unmarked: Arturo, never a claim it reached the agent');
+});
+
+test('a call from an agent composer is that agent or no call: never Arturo', () => {
+  assert.equal(agentCallBlock(true, 'dev-demo'), null);
+  assert.equal(agentCallBlock(false, 'gm'), "gm can't take calls yet");
 });

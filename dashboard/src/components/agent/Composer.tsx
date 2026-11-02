@@ -15,7 +15,7 @@ import { callSupport } from '../../lib/callSupport';
 import { useVoiceReady } from '../../hooks/useVoiceReady';
 import { useCallStore } from '../../stores/callStore';
 import { ARTURO_ID, useAgentRecord } from '../avatar/agentState';
-import { calleeName, callPartyId, useAgentCallsOn } from '../../lib/agentCallsOn';
+import { agentCallBlock, callPartyId, useAgentCallsOn } from '../../lib/agentCallsOn';
 import ChatInput from '../chat/ChatInput';
 import { sendFromComposer } from '../../lib/agentSendFlow';
 import { handOffCall, refreshTranscript } from '../../lib/agentCalls';
@@ -85,10 +85,11 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   // One call at a time: while a call with another agent is live, this composer offers no Call (mic only).
   const otherCall = useCallStore((s) => (s.call && s.call.agentId !== agentId ? callPartyId(s.call, ARTURO_ID) : null));
   const otherName = useAgentRecord(otherCall ?? '').name || otherCall;
-  // "Call <agent>" only once its calls reach it (agent_calls on its settings); until then the call is Arturo's.
+  // The call is always with this agent: "Call <agent>" once its calls reach it (agent_calls on
+  // its settings); until then Call is off and says why, never a call handed to Arturo.
   const agentCalls = useAgentCallsOn(agentId);
-  const callee = calleeName(agentCalls, seatName || agentId, aname);
-  const callBlocked = (otherCall ? `You're on a call with ${otherName}` : null)
+  const callee = seatName || agentId;
+  const callBlocked = (otherCall ? `You're on a call with ${otherName}` : null) ?? agentCallBlock(agentCalls, callee)
     ?? callSupport().reason ?? (ready && !ready.ok ? ready.reason ?? null : null) ?? callFailed;
   // B2 video-upload capability gate: N/A — ChatInput's current attach
   // affordance has no video mime/extension support to gate yet, so
@@ -146,7 +147,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           canStop={canStop}
           onStop={onStop}
           // The round button's call (lib/roundAction.ts): what the phone button started, from the empty box.
-          // The button names who answers: this agent once its calls reach it, else Arturo (lib/agentCallsOn.ts).
+          // The button names who answers: always this agent (lib/agentCallsOn.ts agentCallBlock).
           call={{ inCall, available: !callBlocked, reason: callBlocked ?? undefined, agentName: callee,
                   onToggle: () => { void voiceRef.current?.toggleCall(); } }}
           // Below 480px the model chip and the call button live here, so the text gets the row.

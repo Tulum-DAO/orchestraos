@@ -19,7 +19,7 @@
  * a real CLI, tmux, or the registry.
  */
 import { Router, type Request, type Response } from 'express';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn as spawnChild } from 'node:child_process';
 import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { principal } from '../lib/principal.js';
@@ -65,6 +65,9 @@ export interface NewAgentDeps {
   /** List the shell for the web terminal (lib/loginShells.ts): the proxy attaches only to registered seats and to
    *  shells listed there. Optional so a deps object without it lists nothing. */
   listLoginShell?: (entry: { session: string; provider: string | null; createdBy: string | null }) => void;
+  /** Bring a new Claude seat over to headless once its TUI is idle, with its own calls on (scripts/headless_adopt.py,
+   *  detached). Optional so a deps object without it adopts nothing. */
+  adoptHeadless?: (name: string) => void;
 }
 
 export function normalizeAgentName(raw: unknown): { name: string; error?: string } {
@@ -196,7 +199,11 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     if (!deps.sessionExists(name)) {
       return res.status(502).json({ ok: false, reason: 'session_missing', detail: result.output.slice(-600) });
     }
-    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm, parent });
+    // A new agent takes its own calls, so a Claude worker goes headless once its first turn is done
+    // (a call needs a headless seat). The General Manager stays a terminal seat; other runtimes stay on tmux.
+    const adopting = runtime.id === 'claude' && !gm && !!deps.adoptHeadless;
+    if (adopting) deps.adoptHeadless!(name);
+    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm, parent, headless: adopting ? 'pending' : false });
   });
 
   router.get('/new/parents', async (_req: Request, res: Response) => {
@@ -333,6 +340,14 @@ function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: st
   });
 }
 
+function realAdoptHeadless(name: string): void {
+  // Detached: it waits for the seat's first turn to finish (up to an hour), long after this request has answered.
+  const child = spawnChild('python3', [`${ORCHESTRA_ROOT}/scripts/headless_adopt.py`, name, '--by', 'new-agent'],
+    { cwd: ORCHESTRA_ROOT, env: process.env, detached: true, stdio: 'ignore' });
+  child.on('error', () => { /* no python: the seat stays a TUI, as before */ });
+  child.unref();
+}
+
 function realStartLoginShell({ session, greeting }: { session: string; greeting: string }): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
     // Idempotent: attach-able session either way. `printf` writes the hint into the pane's
@@ -365,6 +380,7 @@ export const productionDeps: NewAgentDeps = {
   sessionExists: realSessionExists,
   startLoginShell: realStartLoginShell,
   listLoginShell: realListLoginShell,
+  adoptHeadless: realAdoptHeadless,
 };
 
 /** The login-shell list's sweep at API start and every 30 s after (lib/loginShells.ts). */
