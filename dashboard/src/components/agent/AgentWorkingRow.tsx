@@ -19,6 +19,7 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { avatarHub, ensureAgent, useAgentRecord } from '../avatar/agentState';
 import { LAYOUT, type AvatarState } from '../avatar/avatarCore';
+import { activityFor, type Activity } from '../avatar/avatarGesture';
 import { avatarStateFor } from '../../lib/avatarStatus';
 import { dotState, rowShown, workingRowFor, type WorkingRowInput } from '../../lib/agentWorkingRow';
 import { isDegraded } from '../../lib/feedLiveness';
@@ -29,11 +30,13 @@ import './agentWorking.css';
 export const TYPING_PHRASE = 'Typing…';
 
 /** The line: the agent's own avatar (still while working, melting into dots while typing) and the shimmering phrase. */
-export function WorkingRowView({ agentId, name, phrase, typing, avatarSize, textSize, avatarId, className }: {
+export function WorkingRowView({ agentId, name, phrase, typing, activity, avatarSize, textSize, avatarId, className }: {
   agentId: string;
   name: string;
   phrase: string;
   typing: boolean;
+  /** What the agent is doing (its live step, avatarGesture activityFor): the working gestures fit it. */
+  activity?: Activity;
   avatarSize?: number;
   textSize?: number;
   /** The avatar instance's id (default: the agent's own, so it shares the sidebar's model). */
@@ -55,7 +58,7 @@ export function WorkingRowView({ agentId, name, phrase, typing, avatarSize, text
          style={vars}>
       <span className="agent-working-face" aria-hidden>
         <AgentAvatar agentId={avatarId ?? agentId} role="activity" size={S} state={avatarState} label={name} provider={null}
-                     shape={rec.shape} color={rec.color} eyeColor={rec.eyeColor} sleepAfterMs={0}
+                     shape={rec.shape} color={rec.color} eyeColor={rec.eyeColor} sleepAfterMs={0} activity={activity ?? 'none'}
                      style={{ position: 'absolute', left: (A - S) / 2, top: (A - S) / 2 }} />
       </span>
       <span className="sr-only">{name}: </span>
@@ -96,5 +99,6 @@ export function AgentWorkingRow({ agentId, name, onResume, avatarSize, textSize,
   const isTyping = typing && busy;
   const shown = isTyping || rowShown(row);
   if (!shown) return null;
-  return <WorkingRowView agentId={agentId} name={name} phrase={row.text} typing={isTyping} avatarSize={avatarSize} textSize={textSize} />;
+  return <WorkingRowView agentId={agentId} name={name} phrase={row.text} typing={isTyping} activity={activityFor(rowInput.step, rowInput.tool)}
+                         avatarSize={avatarSize} textSize={textSize} />;
 }

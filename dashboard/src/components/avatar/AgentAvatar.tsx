@@ -63,6 +63,9 @@ export interface AgentAvatarProps {
   greet?: ReactionName;
   /** No constant motion (breathing, bob): blinks, glances and one-off reactions only. */
   calm?: boolean;
+  /** What the agent is doing (avatarGesture Activity: reading, thinking, editing, running, searching, none): the
+   *  working gestures fit it. */
+  activity?: string;
   /** Each change makes the eyes glance at `glanceAt` for a moment (e.g. on every keystroke in an input). */
   glanceKey?: unknown;
   glanceAt?: { x: number; y: number };
@@ -77,7 +80,7 @@ export function AgentAvatar(props: AgentAvatarProps) {
   const {
     agentId, role = 'sidebar', size = 48, selected, provider, followRadius, followAlways,
     shape: shapeProp, color: colorProp, eyeColor: eyeProp, state: stateProp, sleepAfterMs: sleepProp = 30000,
-    showStatus = true, greet, calm, glanceKey, glanceAt, reducedMotion, label, onClick, className, style,
+    showStatus = true, greet, calm, activity, glanceKey, glanceAt, reducedMotion, label, onClick, className, style,
   } = props;
   const rec = useAgentRecord(agentId);
   const identity = !showStatus && stateProp === undefined;
@@ -121,6 +124,7 @@ export function AgentAvatar(props: AgentAvatarProps) {
   }, [model, size, role, selected, prov, followRadius, followAlways]);
   useEffect(() => { if (model && !shared && state) model.setState(state); }, [shared, state, model]);
   useEffect(() => { if (model && calm !== undefined) model.configure({ calm }); }, [model, calm]);
+  useEffect(() => { if (model && activity !== undefined) model.setActivity(activity); }, [model, activity]);
   const glanceRef = useRef(glanceKey);
   useEffect(() => {
     if (!model || glanceRef.current === glanceKey) return;

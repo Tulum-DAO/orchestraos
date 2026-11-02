@@ -10,6 +10,9 @@
  * 1.0 ~= the body's half height. Angles are radians, -PI/2 is straight up.
  */
 
+import { NEUTRAL, HUB, ACTIVITY_HUB, ACTIVITIES, clipDur, gestureFrame, hubClip, pickGesture, remember, settle, GESTURES, type Activity,
+  type GestureKey, type GestureName, type GesturePose } from './avatarGesture';
+
 export type Pt = [number, number];
 type Vert = [number, number, number];
 
@@ -396,6 +399,9 @@ interface StateDef {
   settleMood?: string; settleAfter?: number; sleeps?: boolean;
   /** The body melts into three dots (thinking; meltFrame); it reforms as the state leaves. */
   melt?: boolean;
+  /** Thinking gestures (avatarGesture.ts): eyes on a sphere, clips picked at random, the body still between them
+   *  (no breathing, no random blinks: the clips carry their own). */
+  gestures?: boolean;
 }
 
 // The melt (thinking, and an agent's "Typing…" row): ONE continuous change of the body itself, matched to the
@@ -471,7 +477,7 @@ export function meltOutline(key: string, round: number): Pt[] {
 // NO BOB in any state (the prototype's bob is gone). The bob fields stay at
 // 0 so the shape of a state is unchanged: breathing, blinks, glances, reactions and the melt are the motion.
 export const STATES: Record<AvatarState, StateDef> = {
-  working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0, bobHz: 0, gaze: 'work' },
+  working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0, bobHz: 0, gaze: 'work', gestures: true },
   needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'viewer',
                  enter: 'nod', repeat: 'nod', repeatEvery: 2.8, pulse: true },
   finished:    { label: 'Finished',    mood: 'happy',     dot: '#22C55E', glyph: 'check',    blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'free',
@@ -518,6 +524,8 @@ export interface Pose {
   meltT: number;
   /** The bob's own share of dy (unit space). Every state's bob is 0 today. */
   bobY: number;
+  /** While working: the head's pose (avatarGesture.ts); the renderer draws the eyes on a sphere from it. */
+  gesture?: GesturePose | null;
 }
 export interface Pointer { dx: number; dy: number }
 export interface ModelOpts {
@@ -525,6 +533,8 @@ export interface ModelOpts {
   sleepAfterMs?: number; followPointer?: boolean; wander?: boolean; reducedMotion?: boolean; state?: string;
   /** No constant motion (no breathing, no bob): blinks, glances and one-off reactions only. */
   calm?: boolean;
+  /** Seeds the gesture picker (tests); by default a fresh random seed per model. */
+  gestureSeed?: number;
 }
 
 export class AvatarModel {
@@ -560,6 +570,16 @@ export class AvatarModel {
   nextRepeat: number;
   /** Seconds into the melt: up while the state melts (thinking), back down to 0 as it reforms. */
   meltT: number;
+  /** The clip playing while working (null otherwise): its poses, when it started and the pose it started from. */
+  gesture: { name: GestureName | 'hub'; keys: GestureKey[]; t0: number; dur: number; from: GesturePose; seed?: number } | null;
+  /** The gestures played so far, most recent last (the picker avoids recent ones; capped). */
+  gestureHistory: GestureName[];
+  /** The gesture track's own random numbers: seeded fresh for each model (each time an avatar appears), so the
+   *  sequence differs every time, while the identity rand (breathing phase, blinks) stays tied to the agent id. */
+  gestureRand: () => number;
+  /** What the agent is doing (setActivity): tilts the gesture picker. A change re-picks at the next still moment. */
+  activity: Activity;
+  repick: boolean;
   version: number;
   // the ticker's per-frame cache for a shared model (one step per frame however many instances show it)
   __frame?: number;
@@ -597,6 +617,11 @@ export class AvatarModel {
     this.nextBlink = this.t + this.rand() * 3;
     this.nextRepeat = Infinity;
     this.meltT = STATES[this.state].melt ? MELT.dur : 0;
+    this.gesture = null;
+    this.gestureHistory = [];
+    this.activity = 'none';
+    this.repick = false;
+    this.gestureRand = mulberry32(opts.gestureSeed ?? Math.floor(Math.random() * 4294967296));
     this.version = 0; // bumps whenever a static (reduced motion) frame must redraw
   }
 
@@ -628,6 +653,15 @@ export class AvatarModel {
     if (def.melt && this.meltT <= 0) this.meltT = -MELT.lag;
     if (this.asleep) { this.wake(); return; }
     if (def.enter) this.react(def.enter);
+  }
+
+  // What the agent is doing now (avatarGesture activityFor). When it changes, the next gesture follows the new activity,
+  // and a long hold is cut short at its next still moment, so the face doesn't stay on the old mood.
+  setActivity(a: string): void {
+    const next: Activity = (ACTIVITIES as string[]).includes(a) ? a as Activity : 'none';
+    if (next === this.activity) return;
+    this.activity = next;
+    this.repick = true;
   }
 
   react(name: string): void {
@@ -725,9 +759,16 @@ export class AvatarModel {
     this.look.x += (this.lookTarget.x - this.look.x) * lk;
     this.look.y += (this.lookTarget.y - this.look.y) * lk;
 
-    // blink
+    // thinking gestures (working): one clip after another, chained from where the last one ended
+    // (not while the melt is still reforming the face: the track then starts with a neutral hold, not the entrance)
+    let gesture: GesturePose | null = null;
+    if (def.gestures && this.meltT <= 0) gesture = this.stepGesture(t);
+    else if (def.gestures) this.gesture = { name: 'hub', keys: hubClip(HUB.min), t0: t, dur: clipDur(hubClip(HUB.min)), from: NEUTRAL };
+    else this.gesture = null;
+
+    // blink (while gesturing the clips carry the blinks)
     let lid = 1;
-    if (!this.asleep) {
+    if (!this.asleep && !def.gestures) {
       if (t >= this.nextBlink) {
         this.blinkAt = t;
         const [a, b] = def.blink;
@@ -738,7 +779,7 @@ export class AvatarModel {
     }
 
     // body motion
-    const breathHz = this.asleep ? 1 / 5 : 1 / 3.6, breathAmp = this.calm ? 0 : this.asleep ? 0.035 : 0.018;
+    const breathHz = this.asleep ? 1 / 5 : 1 / 3.6, breathAmp = this.calm || def.gestures ? 0 : this.asleep ? 0.035 : 0.018;
     const br = Math.sin(2 * Math.PI * breathHz * t + this.phase);
     const pose = {
       dx: 0, dy: 0, rot: 0,
@@ -766,7 +807,38 @@ export class AvatarModel {
     const out = this.decorate(pose, def);
     out.wink = wink;
     out.bobY = bobY;
+    out.gesture = gesture;
     return out;
+  }
+
+  // The gesture track: the clips run back to back from entering work, each from the pose the
+  // last one ended on, with a short neutral hold between them unless a clip chains straight on (HUB).
+  stepGesture(t: number): GesturePose {
+    let g = this.gesture;
+    // entering work: no pose of its own (the canvas grows the avatar in from nothing); the first clip is picked now
+    if (!g) g = this.gesture = { name: 'hub', keys: hubClip(0), t0: t, dur: 0, from: NEUTRAL };
+    // the activity changed: end the current clip now if the face is still (not mid-move), so the new pick comes soon
+    if (this.repick && t - g.t0 < g.dur) {
+      const a = gestureFrame(g.keys, t - g.t0, g.from, g.seed), b = gestureFrame(g.keys, t - g.t0 + 0.05, g.from, g.seed);
+      const still = Math.max(Math.abs(a.yaw - b.yaw), Math.abs(a.pitch - b.pitch), Math.abs(a.roll - b.roll), Math.abs(a.s - b.s), Math.abs(a.ew - b.ew), Math.abs(a.eh - b.eh)) < 1e-4;
+      if (still) g.dur = t - g.t0;
+    }
+    while (t - g.t0 >= g.dur) {
+      const from: GesturePose = settle(gestureFrame(g.keys, g.dur, g.from, g.seed)), t0: number = g.t0 + g.dur;
+      // each clip gets its own seed: which of its pauses wander, and where to (avatarGesture WANDER)
+      const r = this.gestureRand, seed = Math.floor(r() * 4294967296);
+      if (g.name !== 'hub' && !this.repick && r() >= HUB.chain) {
+        const keys = hubClip((HUB.min + r() * (HUB.max - HUB.min)) * ACTIVITY_HUB[this.activity]);
+        g = { name: 'hub', keys, t0, dur: clipDur(keys, from), from, seed };
+      } else {
+        const name = pickGesture(r, this.gestureHistory, this.activity);
+        this.repick = false;
+        this.gestureHistory = remember(this.gestureHistory, name);
+        g = { name, keys: GESTURES[name], t0, dur: clipDur(GESTURES[name], from), from, seed };
+      }
+      this.gesture = g;
+    }
+    return gestureFrame(g.keys, t - g.t0, g.from, g.seed);
   }
 
   // Reduced motion, Live Activities, complications: one still frame per state.
@@ -774,7 +846,10 @@ export class AvatarModel {
     const def = STATES[this.state];
     this.mood = { ...MOODS[def.settleMood || def.mood] };
     this.meltT = def.melt ? MELT.dur : 0;
-    return this.decorate({ dx: 0, dy: 0, rot: 0, sx: 1, sy: 1, lookX: 0, lookY: 0, lid: 1 }, def);
+    this.gesture = null;
+    const pose = this.decorate({ dx: 0, dy: 0, rot: 0, sx: 1, sy: 1, lookX: 0, lookY: 0, lid: 1 }, def);
+    pose.gesture = def.gestures ? NEUTRAL : null;
+    return pose;
   }
 
   // Same still frame without touching the live model (pill role, shared models). `dozing`: an idle agent
@@ -785,6 +860,7 @@ export class AvatarModel {
     const sleeping = dozing && !!def.sleeps;
     pose.mood = { ...MOODS[sleeping ? 'asleep' : def.settleMood || def.mood] };
     pose.phase = 0; pose.pulse = null; pose.asleep = sleeping; pose.zzz = null;
+    pose.gesture = def.gestures ? NEUTRAL : null;
     return pose;
   }
 
@@ -829,13 +905,16 @@ export class AvatarModel {
 //             never a dot, no badge
 //   drawer    large face (drawer, home hero, picker): never a dot; badge;
 //             idle wander + eye-follow when selected
+//   gestures  which instances play the thinking gestures; the rest hold the neutral capsules still. The sidebar plays
+//             them on the selected agent only: people track about five movers, and a working list would be a wall
+//             of them (surfaces/avatar-ref-2/RESEARCH.md #8)
 export type Role = 'sidebar' | 'pill' | 'activity' | 'drawer';
-interface RoleDef { dot: 'always' | 'phone-working' | 'never'; glyph: boolean; badge: boolean; animate: boolean; wander: 'selected' | false; follow: boolean }
+interface RoleDef { dot: 'always' | 'phone-working' | 'never'; glyph: boolean; badge: boolean; animate: boolean; wander: 'selected' | false; follow: boolean; gestures: 'all' | 'selected' }
 export const ROLES: Record<Role, RoleDef> = {
-  sidebar:  { dot: 'always',        glyph: true,  badge: true,  animate: true,  wander: 'selected', follow: true },
-  pill:     { dot: 'phone-working', glyph: false, badge: true,  animate: false, wander: false,      follow: false },
-  activity: { dot: 'never',         glyph: false, badge: false, animate: true,  wander: false,      follow: false },
-  drawer:   { dot: 'never',         glyph: false, badge: true,  animate: true,  wander: 'selected', follow: true },
+  sidebar:  { dot: 'always',        glyph: true,  badge: true,  animate: true,  wander: 'selected', follow: true,  gestures: 'selected' },
+  pill:     { dot: 'phone-working', glyph: false, badge: true,  animate: false, wander: false,      follow: false, gestures: 'selected' },
+  activity: { dot: 'never',         glyph: false, badge: false, animate: true,  wander: false,      follow: false, gestures: 'all' },
+  drawer:   { dot: 'never',         glyph: false, badge: true,  animate: true,  wander: 'selected', follow: true,  gestures: 'all' },
 };
 export const ROLE_KEYS = Object.keys(ROLES) as Role[];
 export const PHONE_MAX = 640;                       // px; phone width = viewport <= this
@@ -859,6 +938,10 @@ export function dotFor({ role = 'sidebar', state = 'idle', size = 48, phone = fa
 export function followAllowed({ role = 'sidebar', selected = false, state = 'idle', dist = Infinity, radius = FOLLOW.radius, asleep = false }: { role?: string; selected?: boolean; state?: string; dist?: number; radius?: number; asleep?: boolean } = {}): boolean {
   const R = roleOf(role);
   return !!(R.follow && selected && state !== 'working' && !asleep && dist <= radius);
+}
+export function gesturesAllowed({ role = 'sidebar', selected = false }: { role?: string; selected?: boolean } = {}): boolean {
+  const g = roleOf(role).gestures;
+  return g === 'all' || (g === 'selected' && !!selected);
 }
 export function wanderAllowed({ role = 'sidebar', selected = false }: { role?: string; selected?: boolean } = {}): boolean {
   return roleOf(role).wander === 'selected' && !!selected;
