@@ -50,10 +50,10 @@ test('no tray or pill above the composer; the jobs live in the slideout History,
   assert.match(block, /dismiss\(j\.id\)/);
 });
 
-test('the working row: no box, the avatar then the phrase; shimmer while it works or types, none for other states', () => {
+test('the working row: no box, the avatar then the phrase; shimmer while it works or types (the only times it shows)', () => {
   const row = src('components/agent/AgentWorkingRow.tsx');
   assert.match(row, /const shown = isTyping \|\| rowShown\(row\);/);
-  assert.match(row, /working \? ' is-shimmer' : /);
+  assert.match(row, /className="agent-working-phrase is-shimmer"/);
   const css = src('components/agent/agentWorking.css');
   assert.match(css, /@keyframes agent-shimmer-win\{ from\{ transform:translateX\(-100%\); \} to\{ transform:translateX\(250%\); \} \}/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)\{\s*\.agent-shimmer-win\{ display:none; \}/);

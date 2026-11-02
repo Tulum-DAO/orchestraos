@@ -57,6 +57,7 @@ import AgentIdentityPill from '../components/avatar/AgentIdentityPill';
 import { applyTextDelta, applyToolCall, applyToolResult, hasToolParts, type TurnPart } from '../lib/turnParts';
 import { Settings, ChevronRight, X } from 'lucide-react';
 import { AgentAvatar } from '../components/avatar/AgentAvatar';
+import { WorkingRowView } from '../components/agent/AgentWorkingRow';
 import { LookPickerPopover } from '../components/avatar/LookPicker';
 import { useAgentRecord, setArturoActivity, setArturoProvider, ARTURO_ID } from '../components/avatar/agentState';
 import { arturoProvider } from '../lib/avatarStatus';
@@ -535,6 +536,11 @@ export default function ArturoHome() {
   useEffect(() => { if (health?.ok) applyAssistantName(health.assistant_name); }, [health]);
   useEffect(() => () => setArturoActivity({ busy: false, inCall: false }), []);
   const empty = turns.length === 0 && !call.inCall;
+  // Writing its reply: the last turn is Arturo's, streaming, with words in it and no tool running after them.
+  const lastTurn = turns[turns.length - 1];
+  const lastPart = lastTurn?.parts?.[lastTurn.parts.length - 1];
+  const arturoTyping = !!lastTurn && lastTurn.role === 'arturo' && !!lastTurn.streaming && lastTurn.text.trim() !== ''
+    && (!lastPart || lastPart.kind === 'text');
   const lookCard = showLookCard ? (
     <div key="lookcard" className="arturo-lookcard la-on-card">
       <button type="button" className="arturo-lookcard-open" onClick={() => setPickerOpen(true)}>
@@ -653,11 +659,9 @@ export default function ArturoHome() {
       <div className="arturo-composer">
         {/* While Arturo works: who, and the step it is on (pushed over the live status stream), just above the
             composer at the left. Its avatar moves in step with the sidebar's: one shared model. */}
-        {arturoRec.status === 'working' && (
-          <div className="arturo-working la-on-card" role="status" aria-live="polite">
-            <AgentAvatar agentId={ARTURO_ID} role="activity" size={24} label={aname} />
-            <span className="arturo-working-name">{aname}</span>
-            <span className="arturo-working-step">{arturoRec.blurb || 'Working…'}</span>
+        {(arturoTyping || arturoRec.status === 'working') && (
+          <div className="arturo-working">
+            <WorkingRowView agentId={ARTURO_ID} name={aname} phrase={arturoRec.blurb || 'Working…'} typing={arturoTyping} />
           </div>
         )}
         {convId.current && <JobTray threadId={convId.current} kick={jobKick} onEnded={() => { void reloadThread(); }} />}

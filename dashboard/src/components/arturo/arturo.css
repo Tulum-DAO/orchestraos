@@ -450,10 +450,11 @@ button.call-label{ cursor:pointer; }
 
 /* The working line: who, and the step it is on, just above the composer at the left. Floats, so the
    conversation never moves when it comes and goes. */
-.arturo-working{ position:absolute; left:0; bottom:calc(100% + 8px); display:flex; align-items:center; gap:8px; max-width:min(100%, 440px);
-  box-sizing:border-box; padding:4px 14px 4px 4px; border-radius:999px; background:var(--card); box-shadow:0 4px 14px var(--shadow); font-size:13px; }
-.arturo-working-name{ font-weight:600; color:var(--text); flex:0 0 auto; }
-.arturo-working-step{ color:var(--grey); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-working{ position:absolute; left:0; bottom:calc(100% + 4px); max-width:min(100%, 440px); box-sizing:border-box; }
+/* It holds the agents' own working row (components/agent/AgentWorkingRow WorkingRowView): the same quiet line, no pill.
+   It floats here, so it needs none of the agent dock's solid ground. */
+.arturo-working .agent-working{ padding-right:0; }
+.arturo-working .agent-working::before, .arturo-working .agent-working::after{ display:none; }
 
 /* "Pick a look for Arturo": a quiet one-line card while no look is saved. */
 .arturo-lookcard{ align-self:center; display:flex; align-items:center; gap:2px; width:min(100%, 440px); box-sizing:border-box;

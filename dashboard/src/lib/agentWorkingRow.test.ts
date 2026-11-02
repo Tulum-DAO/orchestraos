@@ -77,14 +77,13 @@ test('the row reads the same state as the sidebar dot, through the same normaliz
   }
 });
 
-test('the row shows for work and for every state that needs the person; idle and unknown hide it', () => {
-  const shown = (i: WorkingRowInput) => rowShown(workingRowFor({ ...i, now: NOW }));
-  const hidden = TABLE.filter(([, i]) => !shown(i)).map(([n]) => n);
-  assert.deepEqual(hidden, ['live step: idle', 'idle', 'unknown', 'absent', 'the chip decides: external is unknown']);
-  for (const name of ['disconnected', 'stale feed', 'updating', 'live step: tool', 'live step: thinking', 'live step: waiting',
-    'working with elapsed and tool', 'stalled with elapsed', 'waiting', 'stranded', 'queued', 'queued, idle step', 'stopped', 'crashed',
-    'offline', 'retired: no Resume', 'a menu on screen needs you', 'the chip decides, as on the dot: down', 'the chip decides: needs you']) {
-    const row = TABLE.find(([n]) => n === name);
-    assert.ok(row && shown(row[1]), name);
+test('the row shows ONLY while the agent is actively working; every other state hides it', () => {
+  for (const [name, input] of TABLE) {
+    const row = workingRowFor({ ...input, now: NOW });
+    assert.equal(rowShown(row), row.tone === 'working', name);
   }
+  const shown = (name: string) => { const r = TABLE.find(([n]) => n === name); assert.ok(r, name); return rowShown(workingRowFor({ ...r![1], now: NOW })); };
+  for (const name of ['live step: tool', 'working with elapsed and tool']) assert.ok(shown(name), name);
+  for (const name of ['idle', 'unknown', 'waiting', 'queued', 'stopped', 'crashed', 'offline', 'disconnected', 'retired: no Resume',
+    'a menu on screen needs you']) assert.ok(!shown(name), name);
 });

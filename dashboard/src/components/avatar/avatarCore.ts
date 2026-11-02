@@ -468,18 +468,20 @@ export function meltOutline(key: string, round: number): Pt[] {
   const R = outlineMeanRadius(key);
   return pts.map(([x, y]) => { const d = Math.hypot(x, y) || 1; return [x + (x / d * R - x) * round, y + (y / d * R - y) * round] as Pt; });
 }
+// NO BOB in any state (the prototype's bob is gone). The bob fields stay at
+// 0 so the shape of a state is unchanged: breathing, blinks, glances, reactions and the melt are the motion.
 export const STATES: Record<AvatarState, StateDef> = {
-  working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0.025, bobHz: 2.2, gaze: 'work' },
-  needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0.010, bobHz: 1.0, gaze: 'viewer',
+  working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0, bobHz: 0, gaze: 'work' },
+  needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'viewer',
                  enter: 'nod', repeat: 'nod', repeatEvery: 2.8, pulse: true },
   finished:    { label: 'Finished',    mood: 'happy',     dot: '#22C55E', glyph: 'check',    blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'free',
                  enter: 'bounce', settleMood: 'content', settleAfter: 3.5 },
   failed:      { label: 'Failed',      mood: 'worried',   dot: '#EF4444', glyph: 'alert',    blink: [3.0, 6.0], bob: 0, bobHz: 0, gaze: 'down',
                  enter: 'shake' },
   idle:        { label: 'Idle',        mood: 'neutral',   dot: '#85858D', glyph: null,       blink: [2.2, 5.0], bob: 0, bobHz: 0, gaze: 'free', sleeps: true },
-  listening:   { label: 'Listening',   mood: 'attentive', dot: '#22C55E', glyph: null,       blink: [2.5, 5.0], bob: 0.008, bobHz: 0.8, gaze: 'viewer' },
+  listening:   { label: 'Listening',   mood: 'attentive', dot: '#22C55E', glyph: null,       blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'viewer' },
   thinking:    { label: 'Thinking',    mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.4, 3.0], bob: 0, bobHz: 0, gaze: 'work', melt: true },
-  talking:     { label: 'Talking',     mood: 'happy',     dot: '#22C55E', glyph: null,       blink: [2.2, 4.5], bob: 0.022, bobHz: 3.2, gaze: 'viewer' },
+  talking:     { label: 'Talking',     mood: 'happy',     dot: '#22C55E', glyph: null,       blink: [2.2, 4.5], bob: 0, bobHz: 0, gaze: 'viewer' },
 };
 export const STATE_KEYS = Object.keys(STATES) as AvatarState[];
 const isState = (s: unknown): s is AvatarState => typeof s === 'string' && s in STATES;
@@ -514,7 +516,7 @@ export interface Pose {
   melt: number;
   /** Seconds into the melt (meltFrame): it runs on while melted (the dots' wave), and back down as it reforms. */
   meltT: number;
-  /** The bob's own share of dy (unit space), so a renderer can scale it (the working row's larger bob). */
+  /** The bob's own share of dy (unit space). Every state's bob is 0 today. */
   bobY: number;
 }
 export interface Pointer { dx: number; dy: number }

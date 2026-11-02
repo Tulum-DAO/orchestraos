@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { MELT, meltFrame, LAYOUT, SHAPE_KEYS, meltOutline, outlineMeanRadius } from '../components/avatar/avatarCore.ts';
-import { canvasSizeFor, bobScaleFor, ROW_GAP_A, ROW_BOB_A, REPLY_RISE_A, BODY_HALF_UNITS } from './workingRowLook.ts';
+import { canvasSizeFor, ROW_GAP_A, REPLY_RISE_A, BODY_HALF_UNITS } from './workingRowLook.ts';
+import { STATES } from '../components/avatar/avatarCore.ts';
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const A = (units: number) => units / (2 * BODY_HALF_UNITS);           // unit space -> shares of A
@@ -49,15 +50,14 @@ test('the wave: centre peaks ~400 ms after "Typing…" (frame 25), right ~0.38 s
   assert.equal(MELT.dim, 0.53);
 });
 
-test('everything scales from A and the text size: canvas, gap, bob, rise; no px in the melt', () => {
+test('everything scales from A and the text size: canvas, gap, rise; no px in the melt', () => {
   for (const a of [16, 24, 40]) {
     const s = canvasSizeFor(a, LAYOUT.u);
     near(2 * BODY_HALF_UNITS * LAYOUT.u * s, a, 1e-9, 'the body is A across');
     // the trio fits in the canvas at any size
     assert.ok((MELT.gap + MELT.dotR) * LAYOUT.u * s < s / 2);
   }
-  near(ROW_GAP_A, 0.73, 1e-9, 'gap'); near(ROW_BOB_A, 0.14, 1e-9, 'bob'); near(REPLY_RISE_A, 0.39, 1e-9, 'rise');
-  near(bobScaleFor(0.025) * 0.025 * 2 / (2 * BODY_HALF_UNITS), ROW_BOB_A, 1e-9, 'the row bob travels 0.14 A');
+  near(ROW_GAP_A, 0.73, 1e-9, 'gap'); near(REPLY_RISE_A, 0.39, 1e-9, 'rise');
   const core = src('components/avatar/avatarCore.ts');
   const melt = core.slice(core.indexOf('export const MELT'), core.indexOf('export const STATES'));
   assert.doesNotMatch(melt, /px/);
@@ -65,7 +65,7 @@ test('everything scales from A and the text size: canvas, gap, bob, rise; no px 
   assert.match(css, /--shimmer-ms: 700ms;/);
   assert.match(css, /width:var\(--row-a, 24px\); height:var\(--row-a, 24px\);/);
   const row = src('components/agent/AgentWorkingRow.tsx');
-  assert.match(row, /avatarState: AvatarState = isTyping \? 'thinking'/);
+  assert.match(row, /avatarState: AvatarState = typing \? 'thinking' : 'working'/);
   assert.match(row, /shape=\{rec\.shape\} color=\{rec\.color\} eyeColor=\{rec\.eyeColor\}/, "each agent's own look");
   assert.doesNotMatch(row, /elapsed|Loader2|agent-working-name/);
 });
@@ -80,4 +80,11 @@ test('every shape melts: it rounds into a circle of its own size, then ends as a
     near(R * (1 + (MELT.dotR / R - 1) * 1), MELT.dotR, 1e-9, `${key} ends as a dot`);
     assert.equal(meltOutline(key, 0), meltOutline(key, 0), 'no rounding: the shape itself');
   }
+});
+
+test('no avatar bobs, anywhere: every state is still apart from breathing, blinks, glances, reactions and the melt', () => {
+  for (const [name, def] of Object.entries(STATES)) { assert.equal(def.bob, 0, `${name} bob`); assert.equal(def.bobHz, 0, `${name} bobHz`); }
+  const row = src('components/agent/AgentWorkingRow.tsx');
+  assert.doesNotMatch(row, /bob/);
+  assert.doesNotMatch(src('components/avatar/avatarCanvas.ts'), /o\.bob/);
 });
