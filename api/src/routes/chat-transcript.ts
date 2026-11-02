@@ -15,6 +15,8 @@ import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
+import { hasReactionWake, stripReactionWake } from '../lib/reaction-wake-text.js';
+import { refable, partAt } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff } from '../lib/agentCalls.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
@@ -951,6 +953,20 @@ function cursorOf(u: Unit, segs: Segment[]): string {
   return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${u.at}`;
 }
 
+/** A unit's item as a shallow copy (the cache keeps the originals), with the server's message ref
+ *  `cursorOf(u) + '#' + part` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a
+ *  generation with a known session. part is counted from the uuid's first position in that generation's view, NOT
+ *  in the window, so a block has the same ref in the newest window, an older page and every re-read. */
+function withRef(u: Unit, segs: Segment[], views: (SegmentView | null | undefined)[]): any {
+  const copy = { ...u.item };
+  const v = u.at >= 0 ? views[u.seg] : null;
+  if (v && segs[u.seg]?.session && refable(u.item)) {
+    const from = v.firstAt.get(String(u.item.uuid)) ?? 0;
+    copy.ref = `${cursorOf(u, segs)}#${partAt(v.items, u.at, from)}`;
+  }
+  return copy;
+}
+
 /** Where a cursor points: (segment, index), or null for one this chat does not have. A bare uuid
  *  is looked for from the newest generation back. */
 function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[], cursor: string):
@@ -1022,7 +1038,7 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
   }
   units.reverse();
   return {
-    items: units.map((u) => ({ ...u.item })),          // shallow copies: the cache keeps the originals
+    items: units.map((u) => withRef(u, segs, views)),  // shallow copies (the cache keeps the originals), with refs
     has_older: hasOlder,
     oldest_id: units.length ? cursorOf(units[0], segs) : null,
     cursor_ts: cursorTs,
@@ -1070,6 +1086,8 @@ const VOICE_CALL_LIVE_TAG_RE = /\s*<voice-call-(live|said)>[\s\S]*?<\/voice-call
 const VOICE_CALL_SAID = '<voice-call-said>';
 
 export function stripPageContext(text: string): string {
+  // The reaction wake (lib/reaction-wake-text.ts, services/reaction-wake.ts): the agent reads it, nobody said it.
+  if (hasReactionWake(text)) text = stripReactionWake(text);
   if (text.includes('<voice-call-')) text = text.replace(VOICE_CALL_LIVE_TAG_RE, '').trim();
   return text.includes('<page-context>') ? text.replace(PAGE_CONTEXT_TAG, '').trim() : text;
 }
@@ -1886,6 +1904,11 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
   // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
     && it.text.includes(VOICE_CALL_SAID) ? { ...it, text: stripPageContext(it.text), voice_said: true } : it));
+  // A reaction wake turn: kept (it opens the agent's turn), emptied (never drawn: both renderers skip empty user
+  // text) and flagged, so the dashboard does not fold the agent's emoji answer to it into the operator's message
+  // before (dashboard lib/transcript.ts afterReaction, view.ts withReactions).
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && hasReactionWake(it.text) ? { ...it, text: stripPageContext(it.text), reaction_wake: true } : it));
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
     && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
     ? { ...it, text: stripPageContext(it.text) } : it));
@@ -1941,8 +1964,11 @@ export function readInterruptedTurns(agentId: string, root?: string): Interrupte
     const doc = JSON.parse(readFileSync(p, 'utf-8'));
     const items = doc && Array.isArray(doc.items) ? doc.items : [];
     // The supervisor keeps the text as delivered: without the quiet page line, as the chat shows the message.
+    // Filtered after stripping too: a cut reaction wake strips to '' and is no message (an empty text would also
+    // match every user turn in mergeInterruptedTurns' startsWith).
     return items.filter((x: any) => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim())
-      .map((x: any) => ({ ...x, text: stripPageContext(x.text) }));
+      .map((x: any) => ({ ...x, text: stripPageContext(x.text) }))
+      .filter((x: any) => x.text);
   } catch {
     return [];
   }

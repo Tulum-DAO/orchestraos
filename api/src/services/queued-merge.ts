@@ -42,6 +42,7 @@ import { boundQueuedBatches, earliestTurnMs } from './queued-bound.js';
 import Database, { type Database as DB } from 'better-sqlite3';
 import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
+import { hasReactionWake } from '../lib/reaction-wake-text.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 
@@ -78,7 +79,8 @@ function b1QueuedTurns(db: DB, agentId: string): any[] {
           AND delivered_at IS NULL
           AND status IN ('pending', 'processing')
         ORDER BY created_at ASC`).all(agentId) as any[];
-    return rows.map((r) => ({
+    // A reaction wake is the agent's to read, never a bubble (lib/reaction-wake-text.ts).
+    return rows.filter((r) => !hasReactionWake(String(r.body ?? ''))).map((r) => ({
       kind: 'text',
       role: 'user',
       text: String(r.body ?? ''),

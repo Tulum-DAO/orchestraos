@@ -39,6 +39,10 @@ import { usePendingSends } from '../../stores/pendingSends';
 import { foldCardAnswers } from '../../lib/systemMessages';
 import { markResults } from '../../lib/threadKit/results';
 import ThreadView from '../kit/ThreadView';
+import { ReactionNotice } from '../kit/Reactions';
+import { ReactionsContext, type ReactionsCtx } from '../kit/reactionsContext';
+import { useReactions } from '../../lib/useReactions';
+import type { Reactor } from '../../lib/reactionState';
 import { TRANSCRIPT_REFRESH_EVENT } from '../../lib/agentCalls';
 import { useAgentTyping } from '../../stores/agentTyping';
 import { REPLY_RISE_A, WORKING_ROW_AVATAR } from '../../lib/workingRowLook';
@@ -294,7 +298,15 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const agentJobs = useAgentJobs(fixtureItems ? undefined : agentId);
   const liveJobs = useMemo(() => jobsByToolUse(agentJobs), [agentJobs]);
   const callAgentInSkin = useMemo(() => (callAgent ? { ...callAgent, skin: modern ? 'modern' as const : 'bubbles' as const } : null), [callAgent, modern]);
-  const threadRows = useMemo(() => agentRows(entries, loading ? [] : pending, st, { modern }), [entries, pending, loading, st, modern]);
+  // Reactions on this chat's messages (lib/useReactions: read, kept live by the reactions stream, a tap shown at once),
+  // laid onto the rows by the server's message ref (lib/threadKit/view agentRows) and drawn by the kit (kit/Reactions).
+  const reactions = useReactions('agent-chat', agentId);
+  const reactionsCtx = useMemo<ReactionsCtx>(() => ({
+    map: reactions.map, me: reactions.me, error: reactions.error, toggle: reactions.toggle, agentId,
+    nameOf: (r: Reactor) => (r.kind === 'agent' && r.id === agentId ? agentName : r.id),
+  }), [reactions.map, reactions.me, reactions.error, reactions.toggle, agentId, agentName]);
+  const threadRows = useMemo(() => agentRows(entries, loading ? [] : pending, st, { modern, reactions: reactions.map }),
+    [entries, pending, loading, st, modern, reactions.map]);
   // THE HAND-OFF: when the reply lands after "Typing…", it enters where the row was: up from 0.39 of the row's avatar
   // size and from 35% to full in 165 ms, ease-out (transform and opacity only; nothing else moves).
   const lastKey = threadRows.length ? threadRows[threadRows.length - 1].key : null;
@@ -399,12 +411,15 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         ) : null}
         {/* The thread through the kit's thread view (components/kit/ThreadView.tsx), in the agent chat's own skin. */}
         {!loading && (entries.length > 0 || pending.length > 0 || liveText) && (
-          <ThreadView rows={threadRows} skin={modern ? 'modern' : 'bubbles'} times={modern} stick={follow} liveText={liveText}
-            renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} />}
-            onDecisionAnswered={() => void decisionsQ.refetch()} />
+          <ReactionsContext.Provider value={reactionsCtx}>
+            <ThreadView rows={threadRows} skin={modern ? 'modern' : 'bubbles'} times={modern} stick={follow} liveText={liveText}
+              renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} />}
+              onDecisionAnswered={() => void decisionsQ.refetch()} />
+            <ReactionNotice />
+          </ReactionsContext.Provider>
         )}
         {focusNotice && (
-          <div role="status" className="sticky bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-tone-300 px-3 py-1.5 rounded-full border border-tone-700 bg-tone-900/95 shadow">
+          <div role="status" className="sticky z-[5] bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-tone-300 px-3 py-1.5 rounded-full border border-tone-700 bg-tone-900/95 shadow">
             {focusNotice}
           </div>
         )}

@@ -22,7 +22,10 @@ import { isTranscriptLine } from './threadKit/paging';
 
 // The compaction notice (lib/compaction.ts) is a transcript item the generated contract types do not name yet; it
 // joins the union here until they do.
-export type ChatItem = GenChatItem | CompactionItem;
+// `ref`: the server's message id for reactions, `<session>~<uuid>#<part>` (api/src/lib/messageRef.ts), stamped by the
+// API on agent-chat log items (poll route and stream). Synthetic rows have none, and the client never builds one.
+// Not in the generated contract yet (reactions build step 5).
+export type ChatItem = (GenChatItem | CompactionItem) & { ref?: string };
 export type TranscriptResponse = TranscriptEnvelope;
 export { GRAMMAR_VERSION } from './transcript.gen';
 
@@ -48,8 +51,12 @@ export type RenderNode =
       /** The server's tag for a line a machine wrote (a decision answer, another agent's message, ...). */
       machine?: string;
       /** A job notice that arrived while the agent was mid-turn: it does not start a turn. */
-      midTurn?: boolean }
-  | { kind: 'assistant'; text: string; ts?: string; key: string }
+      midTurn?: boolean;
+      /** The server's message ref (ChatItem.ref): what a reaction to it is stored under. */
+      ref?: string }
+  /** afterReaction: the node right after a hidden reaction wake (api chat-transcript reaction_wake), i.e. the agent's
+   *  answer to the operator's reaction; never folded into the message before it (view.ts withReactions). */
+  | { kind: 'assistant'; text: string; ts?: string; key: string; afterReaction?: boolean; ref?: string }
   | { kind: 'thinking'; text: string; ts?: string; key: string }
   | { kind: 'queued_batch'; count: number; entries: BatchEntryNode[]; ts?: string; key: string }
   /** The chat's compaction notice (lib/compaction.ts): one line that changes in place, keyed by the notice's id. */
@@ -78,6 +85,8 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
   // A row's key is its item's own (its uuid, and which of that log line's items it is), never its place in the list:
   // older pages added above, or the live window's top moving down, must not rename (and so redraw) every row.
   const seen = new Map<string, number>();
+  // Where the node after each hidden reaction wake lands (marked at the end when it is the agent's reply).
+  const afterWake: number[] = [];
   for (const it of items) {
     if (it.kind === 'compaction') {
       if (isCompaction(it) && compactionText(it.state, it.trigger)) {
@@ -95,6 +104,7 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
     i++;
     if (it.kind === 'tool_result') continue; // consumed via pairing
     if (it.kind === 'text') {
+      if (it.role === 'user' && (it as { reaction_wake?: boolean }).reaction_wake === true) { afterWake.push(nodes.length); continue; }
       const text = it.text?.trim();
       if (!text) continue;
       if (it.role === 'user') {
@@ -111,9 +121,9 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         const machine = (it as { machine?: string }).machine;
         const midTurn = (it as { mid_turn?: boolean }).mid_turn === true;
         nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}),
-          ...(midTurn ? { midTurn } : {}) });
+          ...(midTurn ? { midTurn } : {}), ...(it.ref ? { ref: it.ref } : {}) });
       } else {
-        nodes.push({ kind: 'assistant', text, ts: it.ts, key });
+        nodes.push({ kind: 'assistant', text, ts: it.ts, key, ...(it.ref ? { ref: it.ref } : {}) });
       }
       continue;
     }
@@ -150,6 +160,10 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
       });
       continue;
     }
+  }
+  for (const at of afterWake) {
+    const n = nodes[at];
+    if (n?.kind === 'assistant') nodes[at] = { ...n, afterReaction: true };
   }
   return nodes;
 }

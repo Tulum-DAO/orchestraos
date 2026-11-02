@@ -128,3 +128,12 @@ test('known and unknown identity headers coexist correctly', () => {
   assert.ok(!line.includes('s3cr3t'), 'the value we do NOT want leaked');
   assert.deepEqual(e.unloggedIdentity, ['x-orchestra-secret']);
 });
+
+test('x-orchestra-agent-token is never logged by value (reactor token header)', () => {
+  const e = describeReq(req({ headers: {
+    'x-orchestra-agent': 'pm-x', 'x-orchestra-agent-token': 'tok-leak-check-123', // pragma: allowlist secret
+  } }))!;
+  const line = format(e);
+  assert.ok(!line.includes('tok-leak-check-123'), 'agent react token leaked into the audit log');
+  assert.ok(e.unloggedIdentity.includes('x-orchestra-agent-token'));
+});

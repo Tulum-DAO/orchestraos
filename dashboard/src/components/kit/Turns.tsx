@@ -4,14 +4,19 @@
  */
 import type { ReactNode } from 'react';
 import { BUBBLES_PARAGRAPH, BUBBLES_USER, PARAGRAPH, assistantTurnClass } from '../../lib/chatSkin';
+import { SlotBadges, SlotBar } from './ReactionBadges';
+import { anchorProps, useReactionSlot } from './reactionsContext';
 
 type TurnSkin = 'bubbles' | 'modern';
 
-/** The person's bubble (its contents: the words with refs, or a live reveal). */
+/** The person's bubble (its contents: the words with refs, or a live reveal). In a message that can be reacted to
+ *  (components/kit/Reactions.tsx) it carries the badges and hover icons; anywhere else it is just the bubble. */
 export function UserWords({ skin, children }: { skin: TurnSkin; children: ReactNode }) {
+  const slot = useReactionSlot();
+  const react = slot && <><SlotBar side="user" /><SlotBadges side="user" /></>;
   return skin === 'bubbles'
-    ? <div className={BUBBLES_USER} style={{ overflowWrap: 'anywhere' }} data-user-words="bubbles">{children}</div>
-    : <div className="bubble-user" style={{ overflowWrap: 'anywhere' }} data-user-words="modern">{children}</div>;
+    ? <div className={BUBBLES_USER} style={{ overflowWrap: 'anywhere' }} data-user-words="bubbles" {...anchorProps(slot, 'user')}>{children}{react}</div>
+    : <div className="bubble-user" style={{ overflowWrap: 'anywhere' }} data-user-words="modern" {...anchorProps(slot, 'user')}>{children}{react}</div>;
 }
 
 /** A person's turn: the bubble at the right, as the thread lines it up. */

@@ -11,6 +11,7 @@
 import type { ReactNode } from 'react';
 import Copy from './Copy';
 import Markdown, { type Skin } from './Markdown';
+import { ReactionAnchor } from './ReactionBadges';
 
 export type { Skin } from './Markdown';
 
@@ -52,7 +53,8 @@ export default function Message({ text, copyText = text, skin, meta }: {
     return (
       <div className="flex justify-start group" data-kit-message="bubbles">
         <div className="w-full min-w-0">
-          <MessageText text={text} skin="bubbles" />
+          {/* In a message that can be reacted to, the words carry its badges and hover icons (ReactionBadges). */}
+          <ReactionAnchor><MessageText text={text} skin="bubbles" /></ReactionAnchor>
           <MessageActions copyText={copyText} skin="bubbles" meta={meta} />
         </div>
       </div>

@@ -90,3 +90,10 @@ test('the chat hides a request said on the call and keeps the reply; a typed one
   assert.equal(reply.audience, 'user');                                 // still the voice turn's own answer, not folded
   assert.ok(env.items.some((i: any) => i.role === 'assistant' && /your test came through/.test(i.text)));
 });
+
+test('the call tag tells the agent to react with orchestra react, not to reply with an emoji; the chat still hides it', () => {
+  assert.ok(VOICE_CALL_LIVE_TAG.includes('react with `orchestra react 👍`'), VOICE_CALL_LIVE_TAG);
+  assert.ok(!/reply with just/.test(VOICE_CALL_LIVE_TAG));
+  assert.ok(!VOICE_CALL_LIVE_TAG.includes('\n'));
+  assert.equal(stripPageContext(`Test ${VOICE_CALL_LIVE_TAG}`), 'Test');
+});

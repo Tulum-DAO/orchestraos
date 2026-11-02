@@ -21,6 +21,7 @@ import { machineKindOf } from '../systemMessages';
 import { isInterrupted, type GroupedNode } from '../toolGroups';
 import type { Decision, FeedEntry } from '../decisions';
 import type { PendingKind } from '../pendingSends';
+import { resolveRef, type ReactionMap, type StoredReaction } from '../reactionState';
 
 export interface CallRow {
   kind: 'call'; key: string; callId: string | null; turns: ArturoTurnLike[]; live: boolean; startTs?: number; endTs?: number;
@@ -32,8 +33,14 @@ export interface NodeRow {
   kind: 'node'; key: string; node: GroupedNode; interrupted: boolean;
   /** In the Modern style: the node as a plain message the view draws itself (lib/threadKit/view modernMessage). */
   message?: ThreadMessage;
-  /** The agent's reaction to this message of the operator's (a reply that is only an emoji, e.g. 👍 during a call). */
+  /** The agent's reaction to this message of the operator's (a reply that is only an emoji, e.g. 👍 during a call): an
+   *  OLD log's workaround, folded only where nothing is stored (withReactions). */
   reaction?: string;
+  /** The message ref a reaction to this row is stored under (lib/reactionState resolveRef): only on a message that can
+   *  be reacted to (reactRef). */
+  ref?: string;
+  /** Its stored reactions (GET /api/reactions and the stream), when it has any. */
+  reactions?: readonly StoredReaction[];
 }
 /** One of the agent's approval or decision cards, under the message it belongs to. */
 export interface DecisionRow { kind: 'decision'; key: string; decision: Decision }
@@ -87,17 +94,32 @@ export function modernMessage(node: GroupedNode): ThreadMessage | null {
   return item.attachments?.some((a) => a.kind !== 'image' || !a.url) ? null : item;
 }
 
+/** The ref a reaction to this node is stored under, or undefined when it cannot be reacted to: only the operator's
+ *  own words and the agent's replies that the server stamped (ChatItem.ref), never a session prompt, a machine line, a
+ *  queued message, a call marker or a paste (their cards have no bubble to carry a badge). */
+export function reactRef(node: GroupedNode): string | undefined {
+  if ((node.kind !== 'user' && node.kind !== 'assistant') || !node.ref) return undefined;
+  if (hasPasteMarkers(node.text) || hasVoiceCallMarker(node.text)) return undefined;
+  if (node.kind === 'user' && (node.isSystem || node.machine || node.queued || machineKindOf(node.text))) return undefined;
+  return node.ref;
+}
+
 /** An agent's chat as rows: its interleaved feed (lib/decisions interleave), then the sends still waiting for their
  *  rows. `state` = the agent's live state, which says whether its last tool run was stopped. `modern`: plain
- *  messages carry the message the Modern style draws (modernMessage). */
+ *  messages carry the message the Modern style draws (modernMessage). `reactions`: the conversation's stored
+ *  reactions (lib/useReactions), laid onto the rows by ref. */
 export function agentRows(entries: FeedEntry[], pending: { id: string; display: string; kind: PendingKind }[], state: string,
-  opts: { modern?: boolean } = {}): ThreadRow[] {
+  opts: { modern?: boolean; reactions?: ReactionMap } = {}): ThreadRow[] {
   const lastNode = entries.reduce((last, e, i) => (e.kind === 'node' ? i : last), -1);
+  const shown = new Set<string>();
+  for (const e of entries) { const ref = e.kind === 'node' ? reactRef(e.node) : undefined; if (ref) shown.add(ref); }
   const rows: ThreadRow[] = entries.map((e, i): ThreadRow => {
     if (e.kind === 'decision') return { kind: 'decision', key: `decision-${e.decision.id}`, decision: e.decision };
     const message = opts.modern ? modernMessage(e.node) : null;
+    const ref = reactRef(e.node);
+    const got = ref ? resolveRef(ref, opts.reactions ?? {}, shown) : null;
     return { kind: 'node', key: e.node.key, node: e.node, interrupted: isInterrupted({ isLast: i === lastNode, state }),
-             ...(message ? { message } : {}) };
+             ...(message ? { message } : {}), ...(got ? { ref: got.ref } : {}), ...(got?.list.length ? { reactions: got.list } : {}) };
   });
   for (const p of pending) rows.push({ kind: 'pending', key: `pending-${p.id}`, text: p.display, pending: p.kind });
   return withReactions(rows);
@@ -110,19 +132,28 @@ export function isReaction(text: unknown): boolean {
 }
 
 /** The agent's emoji-only reply right after the operator's message is drawn under that message as a reaction, not as a
- *  bubble of its own (the agent's call-aware 👍, agent-send.ts VOICE_CALL_LIVE_TAG). */
+ *  bubble of its own (OLD logs: the call-aware 👍 that `orchestra react` replaced). Never a reply to a hidden reaction
+ *  wake (afterReaction): that answers the reaction, not the message drawn before it. Read-only, for OLD logs: a message
+ *  that already has a stored reaction (the reactions store) is never folded into. */
 export function withReactions(rows: ThreadRow[]): ThreadRow[] {
   const out: ThreadRow[] = [];
   for (const r of rows) {
     const prev = out[out.length - 1];
-    if (r.kind === 'node' && r.node.kind === 'assistant' && isReaction(r.node.text)
-        && prev?.kind === 'node' && prev.node.kind === 'user' && !prev.reaction) {
+    if (r.kind === 'node' && r.node.kind === 'assistant' && !r.node.afterReaction && isReaction(r.node.text)
+        && prev?.kind === 'node' && prev.node.kind === 'user' && !prev.reaction && !prev.reactions?.length) {
       out[out.length - 1] = { ...prev, reaction: r.node.text.trim() };
       continue;
     }
     out.push(r);
   }
   return out;
+}
+
+/** The reactions a node row's badges show: the stored ones, else an old log's folded emoji reply as the agent's own
+ *  (`agentId`), else none. */
+export function rowReactions(r: NodeRow, agentId: string): readonly StoredReaction[] {
+  if (r.reactions?.length) return r.reactions;
+  return r.reaction ? [{ emoji: r.reaction, reactor: { kind: 'agent', id: agentId }, at: '' }] : [];
 }
 
 /** The key of the operator's latest turn, call turns included: only that bubble (or a failed one) shows its send

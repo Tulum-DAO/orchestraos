@@ -977,7 +977,8 @@ spawn_agent() {
     # approval.py against the default data dir and load hooks from the default config dir.
     # Carry the data dir, checkout, config and (when set) the Claude config dir explicitly.
     local _orch_prefix
-    _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR")"
+    # ORCHESTRA_AGENT_ID: the seat's own id, for `orchestra react` and any tool that must know who it runs as.
+    _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q ORCHESTRA_AGENT_ID=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR" "$agent_id")"
     [[ -n "${ORCHESTRA_CONFIG:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'ORCHESTRA_CONFIG=%q' "$ORCHESTRA_CONFIG")"
     [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CLAUDE_CONFIG_DIR=%q' "$CLAUDE_CONFIG_DIR")"
     launch_cmd="$_orch_prefix $launch_cmd"

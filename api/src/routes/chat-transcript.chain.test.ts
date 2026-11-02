@@ -124,10 +124,34 @@ test('without before: exactly the old envelope (keys and count), and the live wi
     assert.deepEqual(Object.keys(env), ['agent_id', 'session_id', 'grammar_version', 'items', 'render_items']);
     assert.equal(env.items.length, 5);
     assert.deepEqual(env.items.map((i: any) => i.uuid), ALL.slice(-5));
-    // a seat whose current log fills the window: the same as the one-log builder gives
+    // a seat whose current log fills the window: the same as the one-log builder gives, plus the server's message
+    // ref on each log item (reactions build step 1; normalizeTranscript, the contract's builder, stays ref-free)
     const two = await get('?limit=2');
     const lines = readFileSync(join(projects, `${G3}.jsonl`), 'utf-8').split('\n');
-    assert.deepEqual(two, normalizeTranscript(lines, SEAT, G3, 2, false, true));
+    assert.deepEqual(two.items.map((i: any) => i.ref), [`${G3}~c1#0`, `${G3}~c2#0`]);
+    const withoutRefs = { ...two, items: two.items.map(({ ref: _ref, ...it }: any) => it) };
+    assert.deepEqual(withoutRefs, normalizeTranscript(lines, SEAT, G3, 2, false, true));
+  });
+});
+
+test('every log item carries <session>~<uuid>#<part>: per generation, the same in any window, page or re-read', async () => {
+  await withServer(async (get) => {
+    const env = await get('');
+    const refs = env.items.map((i: any) => i.ref ?? null);
+    assert.deepEqual(refs, [
+      `${G1}~a1#0`, `${G1}~a2#0`, `${G1}~a3#0`, `${G1}~a4#0`, null,
+      `${G2}~b1#0`, `${G2}~b2#0`, `${G2}~b2#1`, `${G2}~b3#0`, null,
+      `${G3}~c1#0`, `${G3}~c2#0`,
+    ], 'markers have none; the two blocks of one line are #0 and #1');
+    const cut = await get('?limit=5');
+    assert.equal(cut.items[0].uuid, 'b2', 'precondition: this window starts inside b2\'s line');
+    assert.equal(cut.items[0].ref, `${G2}~b2#1`, 'numbered from the line, not from the window');
+    const again = await get('');
+    assert.deepEqual(again.items.map((i: any) => i.ref ?? null), refs, 're-read: the same refs');
+    for (const limit of [1, 2, 3]) {
+      const { items } = await walkBack(get, 'c1', limit);
+      assert.deepEqual(items.map((i: any) => i.ref ?? null), refs.slice(0, 10), `pages of ${limit}: the same refs`);
+    }
   });
 });
 
