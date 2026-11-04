@@ -33,6 +33,7 @@ import AgentMessage from './AgentMessage';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/threadKit/calls';
 import CallCard from '../kit/CallCard';
 import CompactionRow from '../kit/CompactionRow';
+import { pendingLabel } from '../../lib/pendingSends';
 import { type ToolDensity } from '../../lib/toolCardDetail';
 
 /**
@@ -250,9 +251,9 @@ export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'qu
         waiting ? 'bg-blue-600/25 text-white/70' : 'bg-blue-600/50 text-white/85')}>
         {withRefs(text)}
       </div>
-      {kind !== 'sent' && (
+      {pendingLabel(kind) && (
         <span className="mt-0.5 text-px9 uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
-          {kind === 'queuedInTurn' ? 'queued' : kind === 'held' ? 'held for its next turn' : 'saved to its inbox'}
+          {pendingLabel(kind)}
         </span>
       )}
     </div>

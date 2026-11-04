@@ -26,7 +26,7 @@ export function DisplayPreview() {
       {/* The agent chat column's own classes: the row gap, and Modern's colour variables. */}
       <div key={`${skin}:${steps}`} className={`ui-feed-gap${modern ? ' kit-modern' : ''}`} data-preview-thread>
         <ThreadView rows={rows} skin={skin} times={modern}
-          renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} look={modern ? 'card' : 'lines'} />} />
+          renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} look="lines" />} />
       </div>
       <div className="mt-3 flex items-center gap-2 px-2 py-[calc(6px*var(--ui-gap,1))] min-h-8 rounded bg-neutral-100 dark:bg-neutral-900 text-sm">
         <AgentAvatar agentId={ARTURO_ID} role="sidebar" size={rowFace} label="Agent" />

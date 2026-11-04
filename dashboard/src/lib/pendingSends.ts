@@ -33,6 +33,14 @@ export interface PendingSend extends Echo {
 /** Agent states, as the gateway reports them, in which a delivered message waits in the CLI's queue. */
 const MID_TURN = new Set(['working', 'thinking', 'stalled']);
 
+/** The chip under a just-sent message, in either chat style: where it is waiting (none once delivered). */
+export function pendingLabel(kind: PendingKind): string | null {
+  if (kind === 'queuedInTurn') return 'queued';
+  if (kind === 'held') return 'held for its next turn';
+  if (kind === 'queued') return 'saved to its inbox';
+  return null;
+}
+
 export function kindFor(state: 'delivered' | 'held' | 'queued', agentState?: string | null): PendingKind {
   if (state === 'held') return 'held';
   if (state === 'queued') return 'queued';

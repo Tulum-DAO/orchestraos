@@ -64,7 +64,8 @@ import { assistantTurnClass } from '../../lib/chatSkin';
 import type { GroupedNode } from '../../lib/toolGroups';
 import { sendStateLabel, type SendState } from '../../lib/arturo';
 import { hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
-import { rowReactions, showLive, type LiveText, type NodeRow, type ThreadRow } from '../../lib/threadKit/view';
+import { modernUserParts, rowReactions, showLive, type LiveText, type NodeRow, type ThreadRow } from '../../lib/threadKit/view';
+import { pendingLabel, type PendingKind } from '../../lib/pendingSends';
 import type { LiveBlock } from '../../lib/threadKit/liveBlocks';
 import type { MessagePart, ThreadMessage } from '../../lib/threadKit/thread';
 import { revealReady } from '../../lib/threadKit/streamMarkdown';
@@ -111,7 +112,7 @@ function Parts({ parts, skin, revealKey, streaming = false }: { parts: MessagePa
   return (
     <div className="turn-parts">
       {parts.map((p, i) => {
-        if (p.kind === 'tools') return <ToolCard key={i} calls={p.calls} skin={skin} look={skin === 'bubbles' ? 'lines' : 'card'} />;
+        if (p.kind === 'tools') return <ToolCard key={i} calls={p.calls} skin={skin} look="lines" />;
         const done = !streaming || i < parts.length - 1;
         if (streaming && !revealReady(p.text, done)) return null;
         return <MessageText key={i} text={p.text} skin={skin} reveal={revealKey ? { key: `${revealKey}:p${i}`, done, live: streaming } : undefined} />;
@@ -203,6 +204,18 @@ function Reaction({ emoji }: { emoji: string }) {
   );
 }
 
+/** A message just sent, in Modern (lib/pendingSends): the Modern words, faded until its own row lands, and where it is
+ *  waiting under it. Bubbles draws the chat's PendingBubble. */
+function ModernPending({ text, kind }: { text: string; kind: PendingKind }) {
+  const label = pendingLabel(kind);
+  return (
+    <div className="turn-user opacity-70" data-testid="pending-bubble" data-pending-kind={kind}>
+      <UserWords skin="modern">{withRefs(text, 'modern')}</UserWords>
+      {label && <div className="turn-state">{label}</div>}
+    </div>
+  );
+}
+
 function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin; latest: boolean; times?: boolean }) {
   const images = (m.attachments ?? []).filter((a) => a.kind === 'image' && a.url);
   const state = m.sendState as SendState | undefined;
@@ -235,6 +248,24 @@ function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin;
         <UserWords skin="bubbles">{withRefs(m.text, skin)}</UserWords>
         {(state === 'failed' || (state && latest)) && <div className={`turn-state ${state}`}>{sendStateLabel(state)}</div>}
         {times && <MessageTime ts={m.at} align="right" />}
+      </div>
+    );
+  }
+  // A line with a call marker (an ended call's summary, words said on a call): its words in Modern, and each call as
+  // the call card where its marker sat, centred in the thread like any call.
+  if (hasVoiceCallMarker(m.text)) {
+    const parts = modernUserParts(m.text);
+    const last = parts.reduce((at, p, i) => (p.kind === 'words' ? i : at), -1);
+    return (
+      <div className="flex flex-col items-stretch gap-1" data-thread-key={m.key}>
+        {parts.map((p, i) => p.kind === 'call'
+          ? <CallCard key={i} skin="modern" callId={p.callId} />
+          : (
+            <div key={i} className="turn-user">
+              <UserWords skin="modern">{withRefs(p.text, skin)}</UserWords>
+              {times && i === last && <MessageTime ts={m.at} align="right" />}
+            </div>
+          ))}
       </div>
     );
   }
@@ -336,7 +367,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         // Never the scroll anchor: a card is placed by its time, so one filed before the oldest message loaded moves down
         // into place when an older page brings that moment in; what the reader is looking at is held by the text.
         if (r.kind === 'decision') return <div key={r.key} data-anchor-skip><DecisionBubble decision={r.decision} onAnswered={() => onDecisionAnswered?.()} /></div>;
-        if (r.kind === 'pending') return <PendingBubble key={r.key} text={r.text} kind={r.pending} />;
+        if (r.kind === 'pending') return skin === 'modern' ? <ModernPending key={r.key} text={r.text} kind={r.pending} /> : <PendingBubble key={r.key} text={r.text} kind={r.pending} />;
         if (r.kind !== 'message') return null;
         if (r.note) {
           return <div key={r.key} className="row note"><div className="meta">{noteText ? noteText(r) : r.text}</div></div>;

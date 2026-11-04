@@ -69,11 +69,11 @@ test('the preview skin is the Chat style row: Modern draws Modern, anything else
 test('the preview is the real thread: ThreadView in that skin, the chat\'s own node view, times as the chat has them', () => {
   const p = preview();
   assert.match(p, /<ThreadView rows=\{rows\} skin=\{skin\} times=\{modern\}/);
-  assert.match(p, /<GroupedNodeView node=\{node\} interrupted=\{interrupted\} look=\{modern \? 'card' : 'lines'\} \/>/);
+  assert.match(p, /<GroupedNodeView node=\{node\} interrupted=\{interrupted\} look="lines" \/>/);
   // the same as the agent chat draws (TranscriptChatView)
   const chat = read('components/chat/TranscriptChatView.tsx');
   assert.match(chat, /<ThreadView rows=\{threadRows\} skin=\{modern \? 'modern' : 'bubbles'\} times=\{modern\}/);
-  assert.match(chat, /<GroupedNodeView node=\{node\} interrupted=\{interrupted\} look=\{modern \? 'card' : 'lines'\} \/>/);
+  assert.match(chat, /<GroupedNodeView node=\{node\} interrupted=\{interrupted\} look="lines" \/>/);
   assert.match(p, /className=\{`ui-feed-gap\$\{modern \? ' kit-modern' : ''\}`\}/);
   assert.doesNotMatch(p, /BUBBLES_USER|BUBBLES_AGENT/, 'no hand-built bubbles');
 });
