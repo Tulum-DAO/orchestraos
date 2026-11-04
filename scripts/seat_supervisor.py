@@ -2,8 +2,8 @@
 """seat_supervisor.py: one warm headless Claude process per switched-on seat.
 
 The supervisor owns ONE `claude -p` stream-json process resumed on the seat's session, with the
-flags spawn gives the TUI (bypass, --model, --settings /tmp/agent-perms-<seat>.settings.json, the
-same environment) plus the three the stream needs:
+flags spawn gives the TUI (bypass, --model, --effort, --settings /tmp/agent-perms-<seat>.settings.json,
+the same environment) plus the three the stream needs:
   --replay-user-messages        every message written to stdin is echoed back when the CLI starts
                                 its turn on it: the "delivered" (answering) witness;
   --permission-prompt-tool stdio  AskUserQuestion and whatever bypass still asks arrive as
@@ -64,6 +64,12 @@ from the seat name with no port to allocate. Commands:
   {"cmd":"send","id":..,"text":..,"allow_waiting":false}   {"cmd":"message","id":..}
   {"cmd":"interrupt"}   {"cmd":"pending"}   {"cmd":"answer","request_id":..,"response":{..}}
   {"cmd":"status"}      {"cmd":"stop","tui":false}          {"cmd":"restart"}
+Effort (scripts/agent_effort.py): every start (a restart, a rotation's new conversation, Dev's TUI) passes
+`--effort <level>`, the level kept for the seat's lineage, read at that start; none kept, none passed.
+{"cmd":"set_effort","effort":L} changes a running seat between turns: the CLI's own `apply_flag_settings`
+control request ({"effortLevel": L}, session-only: the host's settings file is never written), read back
+with `get_settings` (its applied.effort); a CLI that refuses it is restarted on --effort (the session
+resumed), as set_model does. Only the CLI's own levels pass, checked here (the CLI accepts any string).
 `status` also carries what agent-status reads instead of the pane: how long ago the last stdout
 event came, how long the turn has run, the tools still in flight, the held requests in summary,
 the model, and the context in use (the main chain's last usage over the window from the last
@@ -220,6 +226,71 @@ def tui_argv(bin_: str, *, session_id: str, model: str | None, settings: str | N
     if settings:
         argv += ["--settings", settings]
     return argv
+
+
+_EFFORT_LEVELS = None
+
+
+def effort_levels() -> tuple:
+    """Claude's effort levels (scripts/agent_effort.py, the one table); () when it cannot be read."""
+    global _EFFORT_LEVELS
+    if _EFFORT_LEVELS is None:
+        try:
+            import agent_effort
+            _EFFORT_LEVELS = tuple(agent_effort.LEVELS["claude"])
+        except Exception:  # noqa: BLE001 — no table, no --effort: the CLI's own default
+            _EFFORT_LEVELS = ()
+    return _EFFORT_LEVELS
+
+
+def valid_effort(level) -> bool:
+    return isinstance(level, str) and level in effort_levels()
+
+
+def with_effort(argv: list, level) -> list:
+    """`argv` with `--effort <level>` (one, replacing any already there), placed before --resume/--session-id.
+    A level the CLI does not have is never passed: argv comes back without a new one."""
+    if not valid_effort(level):
+        return list(argv)
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a == "--effort":
+            skip = True
+            continue
+        out.append(a)
+    at = next((i for i, a in enumerate(out) if a in ("--resume", "--session-id")), len(out))
+    return out[:at] + ["--effort", level] + out[at:]
+
+
+def argv_effort(argv) -> str | None:
+    """The level a command line passes (--effort <level>), or None."""
+    argv = list(argv or ())
+    try:
+        return argv[argv.index("--effort") + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def seat_effort_reader(seat: str, orch_dir):
+    """A callable giving the level kept for the seat's lineage (scripts/agent_effort.py), read at each call;
+    None when none, unreadable, or not a Claude level. The lineage root is resolved once."""
+    try:
+        import agent_effort as AE
+        root = AE.root_of(seat, AE._registry(str(orch_dir)))
+        path = AE.store_path(str(orch_dir))
+    except Exception:  # noqa: BLE001
+        return lambda: None
+
+    def read():
+        try:
+            lv = AE.get(path, root)
+        except Exception:  # noqa: BLE001
+            return None
+        return lv if valid_effort(lv) else None
+    return read
 
 
 def synthetic_pane_id(seat: str) -> str:
@@ -478,7 +549,7 @@ class Supervisor:
                  backoff_base: float = 1.0, message_uuid: bool = True,
                  session_name: str | None = None, cards=None, model_arg: str | None = None,
                  orch_dir=None, rotation_steps=None, warm_timeout: float | None = None,
-                 runtime: str = "claude", store=None, guard_card_fn=None):
+                 runtime: str = "claude", store=None, guard_card_fn=None, effort_for=None):
         self.seat = seat
         self.argv_for = argv_for            # session_id -> argv
         self.tui_argv_for = tui_argv_for
@@ -516,6 +587,8 @@ class Supervisor:
         self.cards = cards
         self.resolved: dict = {}            # request_id -> card_id it was answered from
         self.model_arg = model_arg          # the --model each (re)start passes; set_model changes it
+        self.effort_for = effort_for        # () -> the level kept for the seat, read at each start
+        self.effort_arg = None              # a level set_effort applied: wins over the kept one from then on
         self.dev = False                    # the TUI owns the pane's terminal
         self.tui = None
         self._dev_exit = asyncio.Event()    # set when the TUI is gone (the headless process may start)
@@ -733,6 +806,9 @@ class Supervisor:
                 self.session_id = adopted.sid
                 self._save_seat()
             argv = await self._start_argv()
+            delay = HR._num(self.env_os.get("HEADLESS_TEST_SPAWN_DELAY_S"), 0.0)   # TEST ONLY: the review-1 race
+            if delay > 0:
+                await asyncio.sleep(delay)
             self.proc = await asyncio.create_subprocess_exec(
                 *argv, cwd=self.cwd, env=self._proc_env(), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -755,6 +831,7 @@ class Supervisor:
         if self._register_task is None or self._register_task.done():
             self._register_task = asyncio.ensure_future(self._ensure_registered())
         self._start_boot(adopted is not None)
+        self._effort_after_start(argv)
         # Words taken while no process ran, then the ones a dead process may never have read.
         for m in list(self.messages.values()):
             if m.get("state") == "accepted":
@@ -1326,7 +1403,39 @@ class Supervisor:
                     return argv
             except Exception as e:  # noqa: BLE001 — resume as usual
                 self.log("err", text=f"fresh start not possible: {e!r}")
-        return self.argv_for(self.session_id, self.model_arg)
+        return self._argv_with_effort(self.session_id, self.model_arg)
+
+    def effort_level(self):
+        """The level a start passes: one set_effort applied (the gateway keeps it only after that answer, and a
+        restart can come first), else the one kept for the seat; None for the CLI's default."""
+        if valid_effort(self.effort_arg):
+            return self.effort_arg
+        try:
+            lv = self.effort_for() if self.effort_for else None
+        except Exception:  # noqa: BLE001
+            return None
+        return lv if valid_effort(lv) else None
+
+    def _effort_after_start(self, argv):
+        """A level picked while this start was being made (set_effort answered "next start" after the command line
+        was built) is not on that command line: it goes to the new process as the control request instead."""
+        want = self.effort_level()
+        if want is None or argv_effort(argv) == want:
+            return
+        proc = self.proc
+
+        async def send():
+            resp = await self.control({"subtype": "apply_flag_settings", "settings": {"effortLevel": want}})
+            ok = isinstance(resp, dict) and resp.get("subtype") == "success"
+            self.log("sup", sync=True, what="effort", effort=want, how="after-start", ok=ok,
+                     pid=getattr(proc, "pid", None))
+        asyncio.ensure_future(send())
+
+    def _argv_with_effort(self, sid, model=None):
+        return with_effort(self.argv_for(sid, model), self.effort_level())
+
+    def _tui_argv(self):
+        return with_effort(self.tui_argv_for(self.session_id, self.model_arg), self.effort_level())
 
     def _compact_too_late(self) -> bool:
         if not self._compact_requested or self._compact_asked_at is None:
@@ -1481,7 +1590,7 @@ class Supervisor:
 
     def _adapter(self):
         from rotation_adapters import adapter_for
-        return adapter_for(self.runtime, argv_for=self.argv_for, env=self._proc_env(), cwd=self.cwd,
+        return adapter_for(self.runtime, argv_for=self._argv_with_effort, env=self._proc_env(), cwd=self.cwd,
                            model_arg=self.model_arg, session_id=self.session_id)
 
     async def _run(self, f, *a, **k):
@@ -1957,6 +2066,8 @@ class Supervisor:
             return await self.cmd_chat(req)
         if cmd == "set_model":
             return await self.cmd_set_model(req)
+        if cmd == "set_effort":
+            return await self.cmd_set_effort(req)
         if cmd == "rotate":
             return self._person_compact(str(req.get("id") or f"rotate-{uuid.uuid4().hex[:8]}"))
         if cmd == "stop":
@@ -2042,7 +2153,7 @@ class Supervisor:
                 os.set_blocking(fd, True)      # the TUI reads and writes this terminal itself
             except OSError:
                 pass
-        argv = self.tui_argv_for(self.session_id, self.model_arg)
+        argv = self._tui_argv()
         try:
             self.tui = await asyncio.create_subprocess_exec(*argv, cwd=self.cwd, env=self.env,
                                                             stdin=None, stdout=None, stderr=None,
@@ -2158,6 +2269,10 @@ class Supervisor:
             self.log("sup", sync=True, what="model", model=model, how="set_model")
             return {"ok": True, "model": model, "how": "set_model"}
         why = (resp or {}).get("error") if isinstance(resp, dict) else ("no answer" if resp is None else "not written")
+        if self.state == "working" or self.state == "waiting":
+            # A turn began while the CLI was asked: never restarted mid-turn; the next start uses the model.
+            self.log("sup", sync=True, what="model", model=model, how="next-start", why="a turn began")
+            return {"ok": True, "model": model, "how": "next-start", "why": "a turn began"}
         if self.on_call():
             # No restart during a live call: the new model is kept for the next start.
             self.log("sup", sync=True, what="model", model=model, how="next-start", why="on a call")
@@ -2166,6 +2281,51 @@ class Supervisor:
         self._restart_requested = True
         await self.stop_proc_for_restart()
         return {"ok": True, "model": model, "how": "restart", "why": str(why)[:200]}
+
+    async def cmd_set_effort(self, req: dict) -> dict:
+        """Set the seat's effort, between turns only (busy answers busy: the gateway defers it to the turn's end, as
+        for a model). The CLI's apply_flag_settings control request (session-only; nothing is written to the host's
+        settings), then get_settings to read the level it is really on: one it capped answers "another level". A CLI
+        that refuses or does not answer is restarted on --effort (a cold start once, the session resumed); on a
+        live call, the level waits for the next start. Every later start passes it too."""
+        level = req.get("effort")
+        if not valid_effort(level):
+            return {"ok": False, "reason": "bad effort level"}
+        if self.state == "restarting":
+            # No process to ask (a restart a model switch asked for, a crash's backoff): the start that is coming
+            # passes it, so the caller has nothing to wait for.
+            self.effort_arg = level
+            self.log("sup", sync=True, what="effort", effort=level, how="next-start", why="no process running")
+            return {"ok": True, "effort": level, "how": "next-start", "why": "no process running"}
+        if self.state != "idle":
+            return {"ok": False, "reason": "busy", "state": self.state}
+        resp = await self.control({"subtype": "apply_flag_settings", "settings": {"effortLevel": level}})
+        if isinstance(resp, dict) and resp.get("subtype") == "success":
+            got = await self.control({"subtype": "get_settings"}, timeout=5.0)
+            applied = (((got or {}).get("response") or {}).get("applied") or {}) if isinstance(got, dict) else {}
+            now = applied.get("effort") if isinstance(applied, dict) else None
+            if now is not None and now != level:
+                if valid_effort(now):
+                    self.effort_arg = now          # what the session is on: a restart keeps it, not the refused one
+                self.log("sup", sync=True, what="effort", effort=level, how="apply_flag_settings", now=now)
+                return {"ok": False, "reason": "another level", "now": now}
+            self.effort_arg = level
+            self.log("sup", sync=True, what="effort", effort=level, how="apply_flag_settings",
+                     confirmed=now == level)
+            return {"ok": True, "effort": level, "how": "apply_flag_settings"}
+        self.effort_arg = level
+        why = (resp or {}).get("error") if isinstance(resp, dict) else ("no answer" if resp is None else "not written")
+        if self.state == "working" or self.state == "waiting":
+            # A turn began while the CLI was asked: never restarted mid-turn; the next start passes the level.
+            self.log("sup", sync=True, what="effort", effort=level, how="next-start", why="a turn began")
+            return {"ok": True, "effort": level, "how": "next-start", "why": "a turn began"}
+        if self.on_call():
+            self.log("sup", sync=True, what="effort", effort=level, how="next-start", why="on a call")
+            return {"ok": True, "effort": level, "how": "next-start", "why": "on a call"}
+        self.log("sup", sync=True, what="effort", effort=level, how="restart", why=str(why)[:200])
+        self._restart_requested = True
+        await self.stop_proc_for_restart()
+        return {"ok": True, "effort": level, "how": "restart", "why": str(why)[:200]}
 
     async def cmd_resolve(self, req: dict) -> dict:
         """A card's answer for a held request: the control response is written once. The same card
@@ -2247,6 +2407,8 @@ class Supervisor:
                 "held": len(self.held),
                 "held_requests": [held_summary(h) for h in self.held.values()],
                 "model": self.model, "model_arg": self.model_arg, "message_uuid": self.message_uuid,
+                # effort_control: this supervisor takes set_effort (the gateway shows the control only then).
+                "effort": self.effort_level(), "effort_control": bool(effort_levels()),
                 "pane_id": self.env.get("TMUX_PANE"),
                 "dev": self.dev, "tui_pid": self.tui.pid if self.tui is not None else None,
                 "echo_matches": dict(self.echo_matches),
@@ -2382,7 +2544,7 @@ class Supervisor:
         """Replace this process with the pane's TUI on the same session and environment. Called
         after the event loop has closed; the pane's stdin goes back to blocking first (the
         loop's reader made it non-blocking, which the TUI would trip on)."""
-        argv = self.tui_argv_for(self.session_id, self.model_arg)
+        argv = self._tui_argv()
         for fd in (0, 1, 2):
             try:
                 os.set_blocking(fd, True)
@@ -2429,7 +2591,7 @@ def cmd_run(a) -> int:
     sup = Supervisor(a.seat, env=env, cwd=cwd, home=home, session_id=sid, interactive=interactive,
                      message_uuid=lambda: message_uuid_setting(a.seat, orch, a.no_message_uuid),
                      session_name=session, cards=cards_setting(a.seat, orch), model_arg=model, orch_dir=orch,
-                     runtime=runtime,
+                     runtime=runtime, effort_for=seat_effort_reader(a.seat, orch),
                      argv_for=lambda s, m=None: headless_argv(bin_, session_id=s, model=m or model,
                                                               settings=settings),
                      tui_argv_for=lambda s, m=None: tui_argv(bin_, session_id=s, model=m or model,

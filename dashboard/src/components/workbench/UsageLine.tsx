@@ -6,20 +6,11 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { usageLines } from '../../lib/usageLine';
-
-class Hidden extends Error {}
-
-async function fetchUsage(): Promise<unknown> {
-  const res = await fetch('/api/usage');
-  if (res.status === 404) throw new Hidden();
-  if (!res.ok) throw new Error(`/usage: ${res.status}`);
-  return (await res.json())?.usage;
-}
+import { fetchUsage, usageLines, USAGE_QUERY_KEY, UsageHidden as Hidden } from '../../lib/usageLine';
 
 export default function UsageLine() {
   const { data, error } = useQuery({
-    queryKey: ['usage'], queryFn: fetchUsage, refetchInterval: 60_000, staleTime: 55_000,
+    queryKey: USAGE_QUERY_KEY, queryFn: fetchUsage, refetchInterval: 60_000, staleTime: 55_000,
     retry: (n, e) => !(e instanceof Hidden) && n < 2,
   });
   if (error instanceof Hidden) return null;

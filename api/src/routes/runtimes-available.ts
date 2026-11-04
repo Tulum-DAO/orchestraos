@@ -21,8 +21,8 @@
  * positively confirm a state reports `authed: 'unverified'` with a populated
  * `auth_reason` — never silently coerced to true or false.
  */
-import { Router, type Request, type Response } from 'express';
-import { execFileSync } from 'node:child_process';
+import { Router, type NextFunction, type Request, type Response } from 'express';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
@@ -130,6 +130,9 @@ export interface ProviderResult {
   model_catalog_valid_ids: string[];
   /** The model an empty model runs for this login, when the CLI says (see CatalogResult). */
   model_catalog_default?: string;
+  /** The installed CLI's version ("2.1.295"), from `<cli> --version` (VersionCache below); absent when the CLI is not
+   *  installed or printed no version. Added when the response is served, never stored in the response cache. */
+  version?: string;
 }
 
 export interface RuntimesAvailableResponse {
@@ -157,6 +160,75 @@ export function defaultLoadProviders(path: string = DEFAULT_PROVIDERS_PATH): Pro
   const raw = readFileSync(path, 'utf-8');
   const parsed = JSON.parse(raw) as { providers: ProviderConfig[] };
   return parsed.providers;
+}
+
+/** The version in a CLI's `--version` answer: only from a run that exited 0, and only from the FIRST line, either at
+ *  its start ("2.1.295 (Claude Code)") or right after one word naming the CLI ("codex-cli 0.98.1", "grok version 4.7").
+ *  Anything else is no version: an error such as "requires Node.js 18.0.0" must never show as one. */
+export function parseCliVersion(stdout: string, exitCode: number | null = 0): string | null {
+  if (exitCode !== 0) return null;
+  const first = (stdout || '').split(/\r?\n/).find((l) => l.trim()) ?? '';
+  const m = first.match(/^\s*(?:[A-Za-z][\w.-]*\s+)?(?:version\s+)?v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)(?=$|[\s(,])/i);
+  return m ? m[1] : null;
+}
+
+/** Runs `<cli> --version` without blocking: its exit code and stdout. A failure to start or a timeout is a non-zero
+ *  code. Each run is bounded at 3 s. */
+export type VersionRunner = (cli: string) => Promise<{ code: number | null; stdout: string }>;
+
+export const defaultVersionRunner: VersionRunner = (cli) => new Promise((resolve) => {
+  execFile(cli, ['--version'], { timeout: 3000, encoding: 'utf-8', windowsHide: true }, (err, stdout) => {
+    const c = err ? (err as { code?: unknown }).code : 0;
+    const code = typeof c === 'number' ? c : 1;   // a spawn error ('ENOENT') or a kill on timeout is a failure
+    resolve({ code, stdout: String(stdout ?? '') });
+  });
+});
+
+/** How long a CLI's version is kept: versions change on an upgrade, not between two probes. */
+export const VERSION_TTL_MS = 60 * 60 * 1000;
+
+export interface VersionCache {
+  /** {provider id: version} for these installed CLIs: the cached answer while it is fresh and covers them, else every
+   *  `--version` run at once (Promise.all; one batch in flight at a time). Never throws. */
+  get: (clis: { id: string; cli: string }[]) => Promise<Record<string, string>>;
+}
+
+export function createVersionCache(run: VersionRunner = defaultVersionRunner, now: () => number = Date.now,
+  ttlMs: number = VERSION_TTL_MS): VersionCache {
+  let entry: { at: number; key: string; versions: Record<string, string> } | null = null;
+  let inflight: { key: string; p: Promise<Record<string, string>> } | null = null;
+  return {
+    get: async (clis) => {
+      const key = clis.map((c) => `${c.id}=${c.cli}`).sort().join(',');
+      if (entry && entry.key === key && now() - entry.at < ttlMs) return entry.versions;
+      if (inflight && inflight.key === key) return inflight.p;
+      const p = Promise.all(clis.map(async (c) => {
+        try {
+          const r = await run(c.cli);
+          return [c.id, parseCliVersion(r.stdout, r.code)] as const;
+        } catch {
+          return [c.id, null] as const;
+        }
+      })).then((pairs) => {
+        const versions: Record<string, string> = {};
+        for (const [id, v] of pairs) if (v) versions[id] = v;
+        entry = { at: now(), key, versions };
+        return versions;
+      }).finally(() => { inflight = null; });
+      inflight = { key, p };
+      return p;
+    },
+  };
+}
+
+/** The response with each installed CLI's version added (configs give the CLI names the response leaves out). */
+export async function withVersions(resp: RuntimesAvailableResponse, configs: ProviderConfig[], cache: VersionCache | null): Promise<RuntimesAvailableResponse> {
+  if (!cache) return resp;
+  const installed = resp.providers.filter((p) => p.installed);
+  const clis = installed.map((p) => ({ id: p.id, cli: configs.find((c) => c.id === p.id)?.cli ?? '' })).filter((c) => c.cli);
+  if (!clis.length) return resp;
+  const versions = await cache.get(clis);
+  return { ...resp, providers: resp.providers.map((p) => (p.installed && versions[p.id] ? { ...p, version: versions[p.id] } : p)) };
 }
 
 export function defaultIsInstalled(provider: ProviderConfig): boolean {
@@ -485,6 +557,8 @@ interface CacheEntry {
 export function createRuntimesAvailableRouter(
   deps: ProbeDeps = makeDefaultDeps(),
   io: CacheIO = defaultCacheIO(),
+  /** Adds each CLI's version to what is served. Null (tests' default): no versions, no CLI runs. */
+  versions: VersionCache | null = null,
 ): {
   router: Router;
   invalidate: () => void;
@@ -554,15 +628,20 @@ export function createRuntimesAvailableRouter(
     return getFresh();
   };
 
-  router.get('/available', (_req: Request, res: Response) => {
-    res.json(getCachedOrFresh());
+  const configs = (): ProviderConfig[] => { try { return deps.loadProviders(); } catch { return []; } };
+  const serve = async (res: Response, value: RuntimesAvailableResponse) => {
+    res.json(await withVersions(value, versions ? configs() : [], versions));
+  };
+
+  router.get('/available', (_req: Request, res: Response, next: NextFunction) => {
+    try { serve(res, getCachedOrFresh()).catch(next); } catch (e) { next(e); }
   });
 
   // Self-heal: force a full re-probe, discarding whatever the cache held. This one STAYS
   // blocking on purpose — an explicit refresh is a request for fresh truth, not for speed.
-  router.post('/available/refresh', (_req: Request, res: Response) => {
+  router.post('/available/refresh', (_req: Request, res: Response, next: NextFunction) => {
     invalidate();
-    res.json(getFresh());
+    try { serve(res, getFresh()).catch(next); } catch (e) { next(e); }
   });
 
   const peek = () => (cache && deps.now() < cache.expiresAt ? cache.value : null);
@@ -575,7 +654,7 @@ export function createRuntimesAvailableRouter(
   return { router, invalidate, getCached: getCachedOrFresh, forceRefresh, peek };
 }
 
-const production = createRuntimesAvailableRouter();
+const production = createRuntimesAvailableRouter(makeDefaultDeps(), defaultCacheIO(), createVersionCache());
 
 /**
  * The same probe the route serves, through the SAME cache.

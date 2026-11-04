@@ -5459,9 +5459,10 @@ def _is_person_surface(request):
 async def handle_agent_model(request):
     """GET /agent-model?session= -> which models this agent can switch to (the Arturo engine
     picker's shape: every row, available or not with a reason). PUT /agent-model {session,
-    model} -> switch it: Claude live (`/model` typed into the idle pane, confirmed by the CLI's
+    model, effort?} -> switch it: Claude live (`/model` typed into the idle pane, confirmed by the CLI's
     own "Set model to" line, the host's default model put back), every other runtime at its
-    next rotation. scripts/agent_model.py has the why."""
+    next rotation. scripts/agent_model.py has the why. `effort` (a level id) is applied too: Claude
+    by `/effort <level>`, Codex in its picker (scripts/agent_effort.py), and kept for the next spawn."""
     import asyncio
     from scripts import agent_model as AM
     if not _authorized(request):
@@ -5477,6 +5478,9 @@ async def handle_agent_model(request):
         model = str(data.get("model", "")).strip()
         if not session or not model:
             return _json({"ok": False, "error": "session and model required"}, status=400)
+        effort = data.get("effort")
+        if effort is not None and not (isinstance(effort, str) and re.fullmatch(r"[a-z]{1,16}", effort)):
+            return _json({"ok": False, "error": "effort must be a level id"}, status=400)
     else:
         session = request.query.get("session", "").strip()
         if not session:
@@ -5495,9 +5499,10 @@ async def handle_agent_model(request):
         f = AMP.state_path(ORCH_DIR)
         def _read():       # file I/O: off the event loop
             try:
-                return {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
+                out = {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
             except AMP.StateUnreadable as e:
-                return {"pending": None, "last_switch": None, "pending_error": str(e)}
+                out = {"pending": None, "last_switch": None, "pending_error": str(e)}
+            return {**out, **_effort_view(session, root, runtime, desc)}
         extra = await loop.run_in_executor(None, _read)
         return _json({"ok": True, "session": session, **desc, **extra})
 
@@ -5510,11 +5515,15 @@ async def handle_agent_model(request):
     if model not in desc["allowed"]:
         why = desc["unavailable"].get(model) or "not offered for this agent"
         return _json({"ok": False, "error": why}, status=422)
+    if effort is not None:
+        why = await loop.run_in_executor(None, _effort_refusal, session, runtime, desc, effort)
+        if why:
+            return _json({"ok": False, "error": why, "effort": effort}, status=422)
     by = _parse_actor(request)[1] or ((_resolved_principal(request)[1] or {}).get("label")) or "?"
     from scripts import agent_model_pending as AMP
     try:
         status, body = await loop.run_in_executor(
-            None, lambda: _put_model(session, model, catalog, by))
+            None, lambda: _put_model(session, model, catalog, by, effort))
     except AMP.StateUnreadable as e:
         log.error(f"agent-model: {e}")
         return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
@@ -5524,6 +5533,66 @@ async def handle_agent_model(request):
         return _json({"ok": False, "error": "another model switch for this agent is still in "
                       "progress; nothing changed, try again", "detail": str(e)}, status=503)
     return _json(body, status=status)
+
+
+def _effort_how(session, runtime, desc):
+    """'live' when a level picked for this agent is applied now (Claude by `/effort`, Codex in its
+    picker, a headless seat through its supervisor's set_effort; kept for its next spawn), None when
+    it cannot be applied at all: a runtime with no effort setting, one that cannot switch here, or a
+    headless seat whose supervisor does not take set_effort (one started before effort support, until
+    it restarts) or is not answering."""
+    from scripts import agent_effort as AE
+    if not AE.levels(runtime) or desc.get("how") != "live":
+        return None
+    hl_seat = _headless_seat_for(session)
+    if hl_seat and not _headless_effort_control(hl_seat):
+        return None
+    return "live"
+
+
+def _headless_effort_control(seat) -> bool:
+    """Whether this headless seat's supervisor takes set_effort: its status says effort_control. An
+    older supervisor (its status has no such field) or one not answering reads as no."""
+    import headless_switch
+    try:
+        st = headless_switch.request(seat, {"cmd": "status"}, timeout=3.0)
+    except Exception:  # noqa: BLE001 — SupervisorDown, a timeout: no control shown, nothing sent
+        return False
+    return isinstance(st, dict) and st.get("effort_control") is True
+
+
+def _effort_view(session, root, runtime, desc):
+    """GET /agent-model's effort fields: the level kept for this agent (None: the CLI's default), the
+    runtime's levels, and whether a pick applies (_effort_how)."""
+    from scripts import agent_effort as AE
+    return {"effort": AE.get(AE.store_path(ORCH_DIR), AE.root_of(root or session)),
+            "effort_levels": AE.levels(runtime), "effort_how": _effort_how(session, runtime, desc)}
+
+
+def _effort_now(session, meta, runtime, root):
+    """The level this agent's session is on, when the session itself says so: a Codex rollout's
+    latest turn. None otherwise (Claude): the kept level is not proof of the session's (a reapply
+    may have failed), and typing /effort again is cheap, so a re-pick is always applied."""
+    if (runtime or "").lower() == "codex":
+        from scripts import agent_model_codex as AMC
+        roll = _seat_codex_rollout(session, meta)
+        return AMC.current_effort(roll) if roll else None
+    return None
+
+
+def _effort_refusal(session, runtime, desc, effort):
+    """Why `effort` cannot be applied to this agent, or None."""
+    from scripts import agent_effort as AE
+    rt = (runtime or "").lower()
+    if not AE.levels(rt):
+        return "this agent's runtime has no effort setting"
+    if not AE.valid(rt, effort):
+        return f"{rt} has no effort level {effort!r}"
+    if _effort_how(session, runtime, desc) is None:
+        return ("a headless seat cannot change its effort until its supervisor restarts (or while it is not "
+                "running)" if desc.get("how") == "live"
+                else next(iter(desc.get("unavailable", {}).values()), None) or "this agent cannot switch now")
+    return None
 
 
 #: Bounded waits for the per-agent switch lock (codex R13 on #475): a PUT waits for a switch in
@@ -5544,9 +5613,12 @@ def _model_switch_lock(session, timeout):
     return AMP.session_lock(AMP.state_path(ORCH_DIR), session, timeout=timeout)
 
 
-def _put_model(session, model, catalog, by):
+def _put_model(session, model, catalog, by, effort=None):
     """PUT /agent-model's decision, under the session's switch lock, on a fresh read of the seat
-    (an apply that finished while this waited has changed its model). (status, body)."""
+    (an apply that finished while this waited has changed its model). (status, body). `effort`: a
+    level already checked against the runtime (_effort_refusal); a level the agent already has is
+    no change."""
+    from scripts import agent_effort as AE
     from scripts import agent_model as AM
     from scripts import agent_model_pending as AMP
     pend_file = AMP.state_path(ORCH_DIR)
@@ -5560,7 +5632,21 @@ def _put_model(session, model, catalog, by):
         desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
         if model not in desc["allowed"]:
             return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
-        if model == current:
+        waiting = AMP.get(pend_file, session)
+        if waiting:
+            # A pick never drops the other half of one still waiting: a pick of ANOTHER model keeps
+            # the waiting effort, and an effort pick sent with the model it is on keeps the waiting
+            # model. The model it is on with no effort stays the explicit cancel of everything waiting.
+            if effort is not None:
+                if model == current and waiting.get("model") not in (None, current):
+                    model = waiting["model"]
+            elif model != current:
+                effort = waiting.get("effort")
+            if model not in desc["allowed"]:
+                return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
+        if effort is not None and model == current and effort == _effort_now(session, meta, runtime, root):
+            effort = None                  # the level it is on already: nothing to type
+        if model == current and effort is None:
             # Picking the model it is already on cancels a switch still waiting for the turn to end.
             dropped = AMP.cancel(pend_file, session)
             body = {"ok": True, "model": model, "changed": False,
@@ -5578,32 +5664,37 @@ def _put_model(session, model, catalog, by):
             # tell that it is still the same agent (a rotation reuses the tmux name).
             st = (_agent_status().get_agent_status(session) or {}).get("state")
             if st in MID_TURN_STATES | STALLED_STATES and sids:
-                return 202, _defer_model_switch(session, model, current, sids, by)
+                return 202, _defer_model_switch(session, model, current, sids, by, effort)
         # A newer pick replaces an older one still waiting (as a deferred pick does), dropped BEFORE
         # the switch: a record that cannot be written now (LockBusy) is then a 503 with nothing
         # typed, never a switch whose older pick survives to undo it later (codex R14 on #475).
         dropped = AMP.cancel(pend_file, session) if AMP.get(pend_file, session) else None
         if dropped:
             log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by {model} ({by})")
-        status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by)
+        status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by,
+                                         effort=effort)
         if (desc["how"] == "live" and status == 409 and sids
                 and body.get("state") in MID_TURN_STATES | STALLED_STATES):
-            return 202, _defer_model_switch(session, model, current, sids, by)
+            if body.get("model_switched"):
+                # The model switched and a turn began before the effort: the effort waits, and the
+                # agent is on the NEW model now.
+                return 202, _defer_model_switch(session, model, model, sids, by, body.get("effort") or effort)
+            return 202, _defer_model_switch(session, model, current, sids, by, effort)
         return status, body
 
 
-def _defer_model_switch(session, model, current, sids, by):
-    """Record a busy agent's switch (a newer pick replaces an older one); the 202 body. Called
-    under the session's switch lock."""
+def _defer_model_switch(session, model, current, sids, by, effort=None):
+    """Record a busy agent's switch, effort included (a newer pick replaces an older one); the 202
+    body. Called under the session's switch lock."""
     from scripts import agent_model_pending as AMP
     f = AMP.state_path(ORCH_DIR)
     old = AMP.get(f, session)
     if old:
         log.info(f"AGENT-MODEL {session} pending -> {old.get('model')} REPLACED by {model} ({by})")
-    entry = AMP.put(f, session, model, current=current, sids=sids, by=by)
-    log.info(f"AGENT-MODEL {session} {current} -> {model} PENDING (busy) by {by}")
+    entry = AMP.put(f, session, model, current=current, sids=sids, by=by, effort=effort)
+    log.info(f"AGENT-MODEL {session} {current} -> {model}{f' effort {effort}' if effort else ''} PENDING (busy) by {by}")
     return {"ok": True, "status": "pending", "applies": "at turn end", "model": model,
-            "current": current, "pending_since": entry["since"]}
+            "current": current, "pending_since": entry["since"], **({"effort": effort} if effort else {})}
 
 
 def _headless_switch_model(seat, model):
@@ -5623,17 +5714,63 @@ def _headless_switch_model(seat, model):
     return 502, {"ok": False, "error": out.get("reason") or "refused"}
 
 
-def _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by):
+def _headless_set_effort(seat, effort):
+    """(status, body) for a headless seat's effort, through its supervisor (seat_supervisor.py
+    set_effort: the CLI's apply_flag_settings, read back; a restart on --effort when the CLI refuses).
+    `effort` was checked against the runtime's levels; the supervisor checks it again. 409 with the
+    seat's state when it is mid-turn (the caller defers it to the turn's end, as for a pane)."""
+    import headless_switch
+    try:
+        out = headless_switch.request(seat, {"cmd": "set_effort", "effort": effort}, timeout=30.0)
+    except headless_switch.SupervisorDown as e:
+        return 503, {"ok": False, "error": "headless supervisor not running", "detail": str(e)}
+    if out.get("ok"):
+        how = out.get("how")
+        return 200, {"ok": True, "effort": effort, "headless": True, "how": how,
+                     "switching": "next_start" if how == "next-start" else "switched"}
+    if out.get("reason") == "busy":
+        return 409, {"ok": False, "error": "busy",
+                     "state": {"working": "working", "waiting": "waiting_permission"}.get(
+                         out.get("state"), out.get("state"))}
+    if out.get("reason") == "another level":
+        return 502, {"ok": False, "error": f"the agent is on {out.get('now')} effort, not {effort}",
+                     "detail": out.get("now")}
+    return 502, {"ok": False, "error": out.get("reason") or "refused"}
+
+
+def _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by, effort=None):
     """Switch now: Claude and Codex live (typed only into an IDLE pane), every other runtime at its
-    next rotation; then the seat's stored model. (status, body). Blocking: run in an executor."""
+    next rotation; then the seat's stored model. (status, body). Blocking: run in an executor.
+
+    `effort` (a level, already checked by _effort_refusal; None leaves the effort alone): Codex picks
+    it in the same picker pass; Claude gets `/effort <level>` after any model switch. A model equal
+    to `current` with an effort is an effort-only switch. The level is kept for the agent
+    (scripts/agent_effort.py) once it applied, so its next spawn passes it too."""
+    from scripts import agent_effort as AE
     from scripts import agent_model as AM
+    model_changes = model != current
     hl_seat = _headless_seat_for(session) if desc["how"] == "live" else None
+    capture = lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout  # noqa: E731
+    send = lambda text: verified_inject(session, text, False, idle_only=True)  # noqa: E731
+    eff_result = None
     if hl_seat:
         # A headless seat switches through its supervisor (the CLI's set_model control request, or a
-        # restart on --model): nothing is typed, and the host's settings file is never touched.
-        status, body = _headless_switch_model(hl_seat, model)
-        if status != 200:
-            return status, {**body, "model": model, "current": current}
+        # restart on --model): nothing is typed, and the host's settings file is never touched. Its
+        # effort likewise (set_effort), after the model; a model-only pick sends none: the supervisor's
+        # level is a session flag the CLI keeps across set_model, and every restart passes --effort.
+        if model_changes:
+            status, body = _headless_switch_model(hl_seat, model)
+            if status != 200:
+                return status, {**body, "model": model, "current": current}
+        else:
+            body = {"ok": True, "model": model, "switching": "switched", "headless": True}
+        if effort:
+            est, ebody = _headless_set_effort(hl_seat, effort)
+            eff_result = (est, effort if est == 200 else ebody)
+            if est == 200:
+                body.update(effort=effort, effort_switching=ebody["switching"])
+            elif not model_changes:
+                return est, {**ebody, "model": model, "current": current, "effort": effort}
     elif desc["how"] == "live" and (runtime or "").lower() == "codex":
         from scripts import agent_model_codex as AMC
 
@@ -5643,27 +5780,66 @@ def _switch_model_now(session, model, root, meta, runtime, current, catalog, des
             else:
                 _tmux("send-keys", "-t", _st(session), "-l", str(k))
         status, body = AMC.switch_live(
-            model=model, config_path=AMC.codex_home() / "config.toml",
+            model=model, effort=effort, config_path=AMC.codex_home() / "config.toml",
             lock_path=AM.claude_settings_path(),
-            send=lambda text: verified_inject(session, text, False, idle_only=True), keys=_keys,
-            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
+            send=send, keys=_keys, capture=capture,
             rollout=_seat_codex_rollout(session, meta))
         if status != 200:
             return status, {**body, "model": model, "current": current}
+        if effort:
+            body.update(effort=effort, effort_switching="switched")
+            eff_result = (200, effort)
     elif desc["how"] == "live":
-        status, body = AM.switch_live(
-            model=model, settings_path=AM.claude_settings_path(),
-            title=next((r["title"] for r in catalog if r["id"] == model), None),
-            # Claude asks to confirm a switch on a seat with history; the switch answers it.
-            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
-            keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
-            send=lambda text: verified_inject(session, text, False, idle_only=True),
-            find_jsonl=lambda: _seat_transcript_path(session, meta))
-        if status != 200:
-            # Name the models, so a client's words say which one the agent is on (ios-watch-dev).
-            return status, {**body, "model": model, "current": current}
+        reapply = False
+        if model_changes and effort is None:
+            # Claude keeps a level per model (modelSettings.<model>.effortLevel): after /model the
+            # session may be on another level than the one kept for this agent, so it is set again.
+            effort = AE.get(AE.store_path(ORCH_DIR), AE.root_of(root or session))
+            reapply = effort is not None
+        if model_changes:
+            status, body = AM.switch_live(
+                model=model, settings_path=AM.claude_settings_path(),
+                title=next((r["title"] for r in catalog if r["id"] == model), None),
+                # Claude asks to confirm a switch on a seat with history; the switch answers it.
+                capture=capture,
+                keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
+                send=send, find_jsonl=lambda: _seat_transcript_path(session, meta))
+            if status != 200:
+                # Name the models, so a client's words say which one the agent is on.
+                return status, {**body, "model": model, "current": current}
+        else:
+            body = {"ok": True, "model": model, "switching": "switched"}
+        if effort:
+            # After the model: Claude keeps a level per model, so it is set on the model now in use.
+            est, ebody = AE.switch_effort_live(
+                effort=effort, settings_path=AM.claude_settings_path(), capture=capture,
+                keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
+                send=send, find_jsonl=lambda: _seat_transcript_path(session, meta))
+            eff_result = (est, effort if est == 200 else ebody)
+            if est == 200:
+                body.update(effort=effort, effort_switching="switched")
+            elif reapply:
+                # Not asked for: the model switch stands, and the response says the level did not.
+                # A turn that began (409) is no different: nothing is left waiting that a later pass
+                # would close as switched without typing; picking the level again sets it.
+                eff_result = None
+                body["effort_not_set"] = effort
+                body["effort_warning"] = (f"switched, but the agent's {effort} effort could not be set again "
+                                          f"on the new model: {ebody.get('error') or est}")
+            elif not model_changes:
+                return est, {**ebody, "model": model, "current": current, "effort": effort}
     else:
         body = {"ok": True, "model": model, "switching": "next_rotation"}
+
+    if eff_result and eff_result[0] == 200:
+        try:
+            AE.put(AE.store_path(ORCH_DIR), AE.root_of(root or session), effort)
+        except Exception as e:  # noqa: BLE001 — it applied; only the next spawn would miss it
+            log.error(f"agent-model: effort store write failed for {root}: {e!r}")
+            body["effort_warning"] = "set now, but not kept: the agent's next spawn starts on its old effort"
+        log.info(f"AGENT-MODEL {session} ({root}) effort -> {effort} by {by}")
+    if not model_changes:
+        return 200, body
 
     # The seat's stored model: what its next spawn passes as --model, and what rotation
     # thresholds read. For a next-rotation switch it IS the switch, so a failed write is an
@@ -5683,6 +5859,10 @@ def _switch_model_now(session, model, root, meta, runtime, current, catalog, des
                          "detail": "the seat's model could not be written; nothing changed"}
         body["warning"] = ("switched now, but the seat did not keep the new model: its next "
                            "spawn will start on the old one")
+    if eff_result and eff_result[0] != 200:
+        # The model switched (and is kept); the effort did not. Said as the failure it is.
+        return eff_result[0], {**eff_result[1], "ok": False, "model": model, "current": model,
+                               "effort": effort, "model_switched": True, "stored": stored}
     return 200, body
 
 
@@ -5791,16 +5971,25 @@ def _apply_pending_one(f, session, now):
         return close("failed", "the agent moved to a new session before its turn ended")
     if st not in INJECTABLE_STATES:
         return wait()
-    if e.get("model") == current:
+    from scripts import agent_effort as AE
+    effort = e.get("effort")
+    if effort and e.get("model") == current and effort == _effort_now(session, meta, runtime, root):
+        effort = None                  # it is on that level already
+    if e.get("model") == current and not effort:
         return close("switched")
     orch_root = _orchestra_root()
     catalog = AM.load_catalog((runtime or "").lower(), orch_root / "config" / "providers.json",
                               orch_root / "state")
     desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+    if effort:
+        # Checked again now: the seat may have gone headless (or the runtime away) since it was asked.
+        why = _effort_refusal(session, runtime, desc, effort)
+        if why:
+            return close("failed", why)
     if e.get("model") not in desc["allowed"] or desc["how"] != "live":
         return close("failed", desc["unavailable"].get(e.get("model")) or "no longer offered for this agent")
     status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
-                                     desc, e.get("by") or "deferred")
+                                     desc, e.get("by") or "deferred", effort=effort)
     if status == 200:
         # Residual, accepted (codex R18 on #475): a gateway that DIES between these keystrokes and
         # the record below (and whose registry write also failed) leaves the pick pending, and the

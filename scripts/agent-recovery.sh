@@ -166,6 +166,12 @@ record_attempt_or_quarantine() {
     return 0
 }
 
+# Effort to resume with: the level kept for the agent's lineage (scripts/agent_effort.py), as spawn passes
+# it. Empty = no --effort flag (the CLI's default). Never fails a recovery.
+resume_effort() {
+    python3 "$CODE_DIR/scripts/agent_effort.py" resolve "$1" --runtime claude --orchestra-dir "$SCRIPT_DIR" 2>/dev/null || true
+}
+
 # Model to resume with: registry 'model' field (explicit intent, e.g.
 # orchestra-builder is always opus-4-8[1m]) wins over index 'model' (observed
 # in transcript). Empty = no --model flag (default). Without this, post-reboot
@@ -558,6 +564,8 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
             MODEL_FLAG=""
             RESUME_MODEL=$(resume_model "$agent_id")
             [ -n "$RESUME_MODEL" ] && MODEL_FLAG=" --model '$RESUME_MODEL'"
+            RESUME_EFFORT=$(resume_effort "$agent_id")
+            [ -n "$RESUME_EFFORT" ] && MODEL_FLAG="$MODEL_FLAG --effort $RESUME_EFFORT"
             tmux send-keys -t "$tmux_name" "${SEAT_NICE}$CLAUDE_BIN --resume $session_id$MODEL_FLAG --dangerously-skip-permissions" Enter
         fi
         RECOVERED=$((RECOVERED + 1))
@@ -641,6 +649,8 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         MODEL_FLAG=""
         RESUME_MODEL=$(resume_model "$agent_id")
         [ -n "$RESUME_MODEL" ] && MODEL_FLAG=" --model '$RESUME_MODEL'"
+        RESUME_EFFORT=$(resume_effort "$agent_id")
+        [ -n "$RESUME_EFFORT" ] && MODEL_FLAG="$MODEL_FLAG --effort $RESUME_EFFORT"
         tmux send-keys -t "$tmux_name" "${SEAT_NICE}$CLAUDE_BIN --resume $session_id$MODEL_FLAG --dangerously-skip-permissions" Enter
     fi
 

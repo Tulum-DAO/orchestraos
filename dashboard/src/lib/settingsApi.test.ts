@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseSettings, saveServerSetting, applyChange, formatChangedBy, whoName, timeZoneOptions, revertRow, mergeDefaultModel, type SettingRow } from './settingsApi.ts';
+import { parseSettings, saveServerSetting, applyChange, formatChangedBy, whoName, timeZoneOptions, revertRow, mergeDefaultModel, mergeDefaultEffort, type SettingRow } from './settingsApi.ts';
 
 const answer = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as typeof fetch;
 const ROW: SettingRow = { key: 'general.timeZone', section: 'general', scope: 'everyone', value: 'UTC', editable: true, readOnly: false,
@@ -64,4 +64,13 @@ test('picking a default model shows at once as the whole map with that runtime c
   assert.deepEqual(mergeDefaultModel(null, 'claude', 'x'), { claude: 'x' });
   const a = readFileSync(new URL('../components/settings/sections/AgentsSection.tsx', import.meta.url), 'utf8');
   assert.match(a, /save\(\{ runtime: p\.providerId, model: p\.modelId \}, mergeDefaultModel\(models, p\.providerId, p\.modelId\)\)/);
+});
+
+test('picking a default effort shows at once as the whole map; Default (null) takes the runtime out', () => {
+  assert.deepEqual(mergeDefaultEffort({ claude: 'max' }, 'codex', 'high'), { claude: 'max', codex: 'high' });
+  assert.deepEqual(mergeDefaultEffort({ claude: 'max', codex: 'high' }, 'codex', null), { claude: 'max' });
+  assert.deepEqual(mergeDefaultEffort(null, 'claude', 'low'), { claude: 'low' });
+  const a = readFileSync(new URL('../components/settings/sections/AgentsSection.tsx', import.meta.url), 'utf8');
+  assert.match(a, /useServerSetting\('agents\.defaultEffort'\)/);
+  assert.match(a, /onEffortChange=/);
 });

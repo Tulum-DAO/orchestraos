@@ -199,7 +199,7 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
     monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [SID])
     monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [
         {"id": OPUS, "title": "Opus 5.5"}, {"id": SONNET, "title": "Sonnet 5.5"}])
-    monkeypatch.setattr(G, "_switch_model_now", lambda session, model, *a: (
+    monkeypatch.setattr(G, "_switch_model_now", lambda session, model, *a, **kw: (
         typed.append((session, model)) or (200, {"ok": True, "model": model})))
     f = AMP.state_path(G.ORCH_DIR)
     AMP.put(f, "dev", SONNET, current=OPUS, sids=[SID])

@@ -138,10 +138,13 @@ def test_the_model_switcher_never_types_into_a_working_agent(monkeypatch):
 
 def test_the_agent_model_handler_sends_idle_only():
     src = (Path(__file__).resolve().parent / "watch_gateway.py").read_text()
-    # Every model switch's send, Claude's and Codex's (#460): no bare verified_inject(session, text,
-    # False) call may remain in the handler, and both runtimes' sends carry idle_only.
-    assert src.count("send=lambda text: verified_inject(session, text, False, idle_only=True)") == 2
-    assert "send=lambda text: verified_inject(session, text, False)" not in src
+    # Every model switch's send, Claude's and Codex's (#460), and Claude's /effort: no bare
+    # verified_inject(session, text, False) call may remain in the handler. One idle-only send is
+    # defined in _switch_model_now and handed to all three switches.
+    body = src[src.index("def _switch_model_now("):src.index("def _report_stale_model_switch(")]
+    assert body.count("send = lambda text: verified_inject(session, text, False, idle_only=True)") == 1
+    assert body.count("send=send") == 3
+    assert "verified_inject(session, text, False)" not in src
 
 
 # ─────────────────────────────── codex R2 on #471

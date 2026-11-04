@@ -36,8 +36,16 @@ with open(os.path.join(state, "start-%d.json" % os.getpid()), "w") as fh:
                ("TMUX_PANE", "ORCHESTRA_DIR", "ORCH_DIR", "CLAUDECODE", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
                 "AQD_TMUX_SESSION")},
                "cwd": os.getcwd()}, fh)
+import threading
+_out_lock = threading.Lock()
 def out(o):
-    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+    with _out_lock:
+        sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+def slow_error(o, what):
+    # Refused, but only after FAKE_SLOW_S, while stdin keeps being read (a turn can begin meanwhile).
+    threading.Timer(float(os.environ.get("FAKE_SLOW_S") or 1.0), lambda: out({"type": "control_response",
+        "response": {"subtype": "error", "request_id": o["request_id"],
+                     "error": "Unsupported control request subtype: " + what}})).start()
 def record(line):
     with open(rec, "a") as fh:
         fh.write(json.dumps({"pid": os.getpid(), "line": json.loads(line)}) + "\n")
@@ -76,6 +84,7 @@ def mcp_now():
             for n, t in (x.split(":") for x in spec.split(",") if x)]
 pending = {}
 hanging = []
+effort = {"now": args[args.index("--effort") + 1] if "--effort" in args else None}
 ECHO_OURS = os.environ.get("FAKE_ECHO_UUID") == "1"
 cur = {"uuid": None}
 def echo_uuid():
@@ -103,11 +112,33 @@ for line in sys.stdin:
     record(line)
     o = json.loads(line)
     if o.get("type") == "control_request" and o["request"].get("subtype") == "set_model":
+        if os.environ.get("FAKE_SET_MODEL") == "slow-error":
+            slow_error(o, "set_model")
+            continue
         if os.environ.get("FAKE_SET_MODEL") == "ok":
             out({"type": "control_response", "response": {"subtype": "success", "request_id": o["request_id"]}})
         else:
             out({"type": "control_response", "response": {"subtype": "error", "request_id": o["request_id"],
                  "error": "Unsupported control request subtype: set_model"}})
+        continue
+    if o.get("type") == "control_request" and o["request"].get("subtype") == "apply_flag_settings":
+        # The CLI's own session-only flag layer (2.1.295 applies {"effortLevel"} and answers success; it does not
+        # check the level, so the caller must). FAKE_APPLY_FLAG=error refuses it; FAKE_EFFORT_CAP caps the level.
+        if os.environ.get("FAKE_APPLY_FLAG") == "slow-error":
+            slow_error(o, "apply_flag_settings")
+            continue
+        if os.environ.get("FAKE_APPLY_FLAG") == "error":
+            out({"type": "control_response", "response": {"subtype": "error", "request_id": o["request_id"],
+                 "error": "Unsupported control request subtype: apply_flag_settings"}})
+            continue
+        lv = (o["request"].get("settings") or {}).get("effortLevel")
+        effort["now"] = os.environ.get("FAKE_EFFORT_CAP") or lv
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": o["request_id"]}})
+        continue
+    if o.get("type") == "control_request" and o["request"].get("subtype") == "get_settings":
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": o["request_id"],
+             "response": {"effective": {}, "sources": [], "applied": {"model": "sample-model",
+                          "effort": effort["now"]}}}})
         continue
     if o.get("type") == "control_request" and o["request"].get("subtype") == "initialize":
         if os.environ.get("FAKE_INITIALIZE") == "silent":
@@ -200,7 +231,9 @@ def rig():
     rec = root / "stdin.jsonl"
     env = {**os.environ, "ORCHESTRA_DIR": str(orch), "ORCH_DIR": str(orch), "TMUX_PANE": "%99",
            "HEADLESS_CARDS": "0", "HEADLESS_CARDS_NOTIFY": "0",
-           "CLAUDECODE": "1", "FAKE_RECORD": str(rec), "FAKE_STATE": str(state)}
+           "CLAUDECODE": "1", "FAKE_RECORD": str(rec), "FAKE_STATE": str(state),
+           # The seat's kept effort, in this data dir (the repo's conftest fences the default elsewhere).
+           "AGENT_EFFORT_FILE": str(orch / "state" / "agent-efforts.json")}
     procs = []
 
     def start():
@@ -692,6 +725,199 @@ def test_set_model_waits_for_the_turn_to_end(rig):
     wait_for(lambda: HS.status("qa-demo", orch_dir=rig.orch)["state"] == "working", what="working")
     out = HS.request("qa-demo", {"cmd": "set_model", "model": "sample-model-2"}, orch_dir=rig.orch)
     assert out == {"ok": False, "reason": "busy", "state": "working"}
+
+
+# --- effort (scripts/agent_effort.py): --effort at every start, apply_flag_settings live ----------------------
+
+def _keep_effort(rig, level):
+    (rig.orch / "state" / "agent-efforts.json").write_text(json.dumps({"efforts": {"qa-demo": level}}))
+
+
+def test_the_level_kept_for_the_seat_is_passed_at_every_start(rig):
+    _keep_effort(rig, "high")
+    rig.start()
+    a = _starts(rig)[0]["argv"]
+    assert a[a.index("--effort") + 1] == "high" and a.count("--effort") == 1
+    assert a.index("--effort") < a.index("--resume")
+    assert HS.status("qa-demo", orch_dir=rig.orch)["effort"] == "high"
+    # A level kept while it runs (the gateway's store) reaches the next start too.
+    _keep_effort(rig, "low")
+    HS.request("qa-demo", {"cmd": "restart"}, orch_dir=rig.orch)
+    a = _starts(rig, 2)[-1]["argv"]
+    assert a[a.index("--effort") + 1] == "low"
+
+
+def test_no_kept_level_passes_no_effort(rig):
+    rig.start()
+    assert "--effort" not in _starts(rig)[0]["argv"]
+    st = HS.status("qa-demo", orch_dir=rig.orch)
+    assert st["effort"] is None and st["effort_control"] is True
+
+
+def test_a_kept_level_the_cli_does_not_have_is_never_passed(rig):
+    _keep_effort(rig, "ultra; touch /tmp/x")
+    rig.start()
+    assert "--effort" not in _starts(rig)[0]["argv"]
+
+
+def test_set_effort_applies_live_and_keeps_the_process(rig):
+    rig.start()
+    pid = HS.status("qa-demo", orch_dir=rig.orch)["pid"]
+    out = HS.request("qa-demo", {"cmd": "set_effort", "effort": "xhigh"}, orch_dir=rig.orch)
+    assert out == {"ok": True, "effort": "xhigh", "how": "apply_flag_settings"}
+    st = HS.status("qa-demo", orch_dir=rig.orch)
+    assert st["pid"] == pid and st["restarts"] == 0 and st["effort"] == "xhigh"
+    reqs = [w["line"]["request"] for w in rig.writes() if w["line"].get("type") == "control_request"]
+    assert {"subtype": "apply_flag_settings", "settings": {"effortLevel": "xhigh"}} in reqs
+    assert any(r["subtype"] == "get_settings" for r in reqs)          # read back, not assumed
+    # The picked level wins over the store at the next start (the gateway keeps it only after this answer).
+    _keep_effort(rig, "low")
+    HS.request("qa-demo", {"cmd": "restart"}, orch_dir=rig.orch)
+    a = _starts(rig, 2)[-1]["argv"]
+    assert a[a.index("--effort") + 1] == "xhigh"
+
+
+def test_set_effort_falls_back_to_a_restart_on_effort_when_the_cli_refuses(rig):
+    rig.env["FAKE_APPLY_FLAG"] = "error"
+    rig.start()
+    out = HS.request("qa-demo", {"cmd": "set_effort", "effort": "medium"}, orch_dir=rig.orch)
+    assert out["ok"] and out["how"] == "restart" and "Unsupported" in out["why"]
+    wait_for(lambda: HS.status("qa-demo", orch_dir=rig.orch)["generation"] == 2
+             and HS.status("qa-demo", orch_dir=rig.orch)["state"] == "idle", what="restarted on the new effort")
+    a = _starts(rig, 2)[-1]["argv"]
+    assert a[a.index("--effort") + 1] == "medium"
+    assert a[a.index("--resume") + 1] == SID                         # the same session, resumed
+
+
+def test_set_effort_refuses_a_level_the_cli_does_not_have_and_writes_nothing(rig):
+    rig.start()
+    for bad in ("ultra", "high --model x", "", None, 3):
+        out = HS.request("qa-demo", {"cmd": "set_effort", "effort": bad}, orch_dir=rig.orch)
+        assert out["ok"] is False and out["reason"] == "bad effort level"
+    assert not [w for w in rig.writes() if w["line"].get("type") == "control_request"
+                and w["line"]["request"].get("subtype") == "apply_flag_settings"]
+
+
+def test_set_effort_waits_for_the_turn_to_end(rig):
+    rig.start()
+    HS.send("qa-demo", "Sample HANG", "he1", orch_dir=rig.orch)
+    wait_for(lambda: HS.status("qa-demo", orch_dir=rig.orch)["state"] == "working", what="working")
+    out = HS.request("qa-demo", {"cmd": "set_effort", "effort": "high"}, orch_dir=rig.orch)
+    assert out == {"ok": False, "reason": "busy", "state": "working"}
+
+
+def test_set_effort_between_processes_is_taken_by_the_next_start(tmp_path):
+    """A model switch that restarted the CLI, or a crash's backoff: no process to ask, so the level rides on the
+    start that is coming (never a busy answer the gateway cannot defer)."""
+    import asyncio as _a
+    sup = SS.Supervisor("qa-demo", env={}, cwd=str(tmp_path), home=tmp_path / "h", session_id=SID,
+                        orch_dir=tmp_path, store=types.SimpleNamespace(), argv_for=lambda s, m=None: ["x"])
+    sup._log_fh = open(tmp_path / "events.jsonl", "a")
+    sup.state = "restarting"
+    out = _a.run(sup.cmd_set_effort({"effort": "low"}))
+    assert out == {"ok": True, "effort": "low", "how": "next-start", "why": "no process running"}
+    assert sup.effort_level() == "low"
+
+
+def test_a_level_set_while_a_start_is_being_made_reaches_that_new_process(rig):
+    """Review 1: set_effort answered "next start" after the command line was built and before the spawn; the new
+    process must still get it (a control request right after the spawn), not run the old level."""
+    rig.env["HEADLESS_TEST_SPAWN_DELAY_S"] = "1.5"
+    rig.start()
+    wait_for(lambda: HS.status("qa-demo", orch_dir=rig.orch)["state"] == "idle", what="idle")
+    HS.request("qa-demo", {"cmd": "restart"}, orch_dir=rig.orch)
+    wait_for(lambda: HS.status("qa-demo", orch_dir=rig.orch)["state"] == "restarting", what="between processes")
+    out = HS.request("qa-demo", {"cmd": "set_effort", "effort": "high"}, orch_dir=rig.orch)
+    assert out["ok"] and out["how"] == "next-start"
+    wait_for(lambda: HS.status("qa-demo", orch_dir=rig.orch)["generation"] == 2, what="the new process")
+    a = _starts(rig, 2)[-1]["argv"]
+    assert "--effort" not in a                       # built before the pick: the race this closes
+    new_pid = HS.status("qa-demo", orch_dir=rig.orch)["pid"]
+    wait_for(lambda: any(w["pid"] == new_pid and w["line"].get("type") == "control_request"
+                         and w["line"]["request"] == {"subtype": "apply_flag_settings",
+                                                      "settings": {"effortLevel": "high"}}
+                         for w in rig.writes()), what="the level sent to the new process")
+
+
+def _in_thread(fn):
+    import threading
+    box = {}
+    t = threading.Thread(target=lambda: box.setdefault("out", fn()))
+    t.start()
+    return t, box
+
+
+def test_set_effort_refused_after_a_turn_began_keeps_the_level_for_the_next_start(rig):
+    """Review 2: the CLI's refusal came back after a turn began: no restart mid-turn; the level waits."""
+    rig.env.update(FAKE_APPLY_FLAG="slow-error", FAKE_SLOW_S="1.5")
+    rig.start()
+    pid = HS.status("qa-demo", orch_dir=rig.orch)["pid"]
+    t, box = _in_thread(lambda: HS.request("qa-demo", {"cmd": "set_effort", "effort": "low"}, orch_dir=rig.orch,
+                                           timeout=30))
+    time.sleep(0.3)
+    HS.send("qa-demo", "Sample HANG", "he2", orch_dir=rig.orch)
+    t.join(30)
+    assert box["out"] == {"ok": True, "effort": "low", "how": "next-start", "why": "a turn began"}
+    st = HS.status("qa-demo", orch_dir=rig.orch)
+    assert st["pid"] == pid and st["restarts"] == 0 and st["state"] == "working" and st["effort"] == "low"
+
+
+def test_set_model_refused_after_a_turn_began_keeps_the_model_for_the_next_start(rig):
+    rig.env.update(FAKE_SET_MODEL="slow-error", FAKE_SLOW_S="1.5")
+    rig.start()
+    pid = HS.status("qa-demo", orch_dir=rig.orch)["pid"]
+    t, box = _in_thread(lambda: HS.request("qa-demo", {"cmd": "set_model", "model": "sample-model-2"},
+                                           orch_dir=rig.orch, timeout=30))
+    time.sleep(0.3)
+    HS.send("qa-demo", "Sample HANG", "hm2", orch_dir=rig.orch)
+    t.join(30)
+    assert box["out"] == {"ok": True, "model": "sample-model-2", "how": "next-start", "why": "a turn began"}
+    st = HS.status("qa-demo", orch_dir=rig.orch)
+    assert st["pid"] == pid and st["restarts"] == 0 and st["model_arg"] == "sample-model-2"
+
+
+def test_effort_control_is_only_claimed_with_a_level_table(tmp_path, monkeypatch):
+    """Review 4: a supervisor that could not read agent_effort's levels refuses every level, so it says so."""
+    sup = SS.Supervisor("qa-demo", env={}, cwd=str(tmp_path), home=tmp_path / "h", session_id=SID,
+                        orch_dir=tmp_path, store=types.SimpleNamespace(), argv_for=lambda s, m=None: ["x"])
+    assert sup.status()["effort_control"] is True
+    monkeypatch.setattr(SS, "_EFFORT_LEVELS", ())
+    assert sup.status()["effort_control"] is False
+
+
+def test_set_effort_says_so_when_the_cli_set_another_level(rig):
+    rig.env["FAKE_EFFORT_CAP"] = "high"
+    rig.start()
+    out = HS.request("qa-demo", {"cmd": "set_effort", "effort": "max"}, orch_dir=rig.orch)
+    assert out["ok"] is False and out["reason"] == "another level" and out["now"] == "high"
+
+
+def test_with_effort_places_one_checked_flag():
+    a = ["claude", "-p", "--model", "m", "--resume", SID]
+    assert SS.with_effort(a, "high") == ["claude", "-p", "--model", "m", "--effort", "high", "--resume", SID]
+    assert SS.with_effort(a, None) == a and SS.with_effort(a, "bogus") == a
+    assert SS.with_effort(["claude", "-p"], "low") == ["claude", "-p", "--effort", "low"]
+    b = SS.with_effort(a, "high")
+    c = SS.with_effort(b, "low")
+    assert c.count("--effort") == 1 and c[c.index("--effort") + 1] == "low"
+
+
+def test_a_rotations_new_conversation_and_devs_tui_start_on_the_level_too(tmp_path):
+    """Every command line the supervisor starts carries the level: the resume, a rotation's new conversation (the
+    adapter's command line) and Dev's TUI."""
+    kept = {"lv": "medium"}
+    sup = SS.Supervisor("qa-demo", env={"TMUX_PANE": "%99"}, cwd=str(tmp_path), home=tmp_path / "h",
+                        session_id=SID, orch_dir=tmp_path, store=types.SimpleNamespace(),
+                        argv_for=lambda s, m=None: ["claude", "-p", "--model", m or "sample-model", "--resume", s],
+                        tui_argv_for=lambda s, m=None: ["claude", "--resume", s],
+                        effort_for=lambda: kept["lv"])
+    fresh = sup._adapter().command_line()
+    assert fresh[fresh.index("--effort") + 1] == "medium" and "--resume" not in fresh
+    assert sup._tui_argv() == ["claude", "--effort", "medium", "--resume", SID]
+    kept["lv"] = "bogus"
+    assert "--effort" not in sup._tui_argv() and sup.effort_level() is None
+    sup.effort_arg = "max"
+    assert sup._tui_argv() == ["claude", "--effort", "max", "--resume", SID]
 
 
 def test_status_names_the_pane_id_and_the_child_has_the_digest_session(rig):

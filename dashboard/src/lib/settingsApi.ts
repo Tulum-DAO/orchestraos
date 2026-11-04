@@ -54,6 +54,14 @@ export function mergeDefaultModel(held: unknown, runtime: string, model: string)
   return { ...(held && typeof held === 'object' ? held as Record<string, string> : {}), [runtime]: model };
 }
 
+/** agents.defaultEffort: a save sends {runtime, effort}; the row shows at once the held map with that runtime changed
+ *  (null: taken out, new agents start on the CLI's default). */
+export function mergeDefaultEffort(held: unknown, runtime: string, effort: string | null): Record<string, string> {
+  const out = { ...(held && typeof held === 'object' ? held as Record<string, string> : {}) };
+  if (effort === null) delete out[runtime]; else out[runtime] = effort;
+  return out;
+}
+
 /** "sam@example.com" -> "Sam". */
 export function whoName(by: string): string {
   const local = by.split('@')[0] || by;

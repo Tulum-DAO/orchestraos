@@ -1,32 +1,49 @@
 /**
- * ModelPicker — choose the model an agent (or Arturo) runs: a compact chip, then a popover (a bottom sheet on a
- * phone) with a search box and the models grouped by provider. Rules (names, search, nicknames, grouping, recent)
- * in lib/modelPicker.ts.
+ * ModelPicker — choose the model an agent (or Arturo, or the defaults for new agents) runs on.
  *
- * Availability comes from GET /api/runtimes/available, asked again every time it opens, so a provider signed in
- * a moment ago shows. Providers that are not installed or not signed in sit greyed at the bottom with the probe's
- * reason and a Connect action (the same connect modal the old sheet used); "Add a provider" shows what it takes
- * and opens an install terminal where the deployment allows it.
+ * The trigger is a pill: the runtime's mark, the model's short name and, when the model has one, its effort
+ * ("Opus 5 · Medium"). It opens a panel (ModelPickerPanel.tsx): a rail of providers on the left (each with a usage
+ * ring from GET /api/usage and a status dot), the selected provider's header (status, usage, CLI version), a search
+ * box that searches EVERY provider at once (flat, every concrete model), one row per model FAMILY named by its newest
+ * version with a few words of purpose (lib/modelPurpose.ts) and the runtime's "default", the older versions under
+ * "Older versions" (open by itself when the model in use is one), a Context size control (Standard | 1M) when the
+ * family in use comes in more than one size, the effort control where a level would really be applied
+ * (lib/modelEffort.ts), and when a pick takes effect. A family row picks its newest version in the size in use when
+ * it has it, else its default / standard size; a Context choice switches size at once and leaves the panel open. On a phone (narrow or a coarse pointer) it is a bottom sheet with the rail as tabs on top.
  *
- * Keyboard: the search box keeps focus; arrows move through the models, Enter picks, Esc closes, Tab stays inside.
- * Logos are the proven brand marks only (components/avatar/brandMarks.ts), drawn unmodified; a provider without
- * one gets a neutral letter.
+ * The context rule (lib/modelPickerPanel.ts): an existing agent's picker (`agentModels` given) offers only that
+ * agent's runtime; the other providers say why and offer "Start a new agent with …" (the Agents page's New Agent
+ * form, opened on that runtime). Settings, a new agent and Arturo's brain may pick any provider.
  *
- * `variant="inline"` draws the same list in place, always open (a settings page), with no chip.
+ * Availability comes from GET /api/runtimes/available, asked again every time it opens. A provider that is not
+ * installed or not signed in stays in the rail, dimmed, with its reason and Sign in (the existing Connect sheet).
+ * "+" opens the add-a-provider panel where the deployment allows it.
+ *
+ * Keyboard: the search box keeps focus; ↑/↓ move through the rows and "Older versions" (Enter opens it), ←/→ change the provider (Tab reaches the rail,
+ * where the arrows move along it), Enter picks, Esc closes; Tab stays inside the popover.
+ *
+ * `variant="inline"` draws the same panel in place, always open (a settings page), with no pill.
  */
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ChevronLeft, Copy, Plus, Search, Terminal, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronLeft, Copy, Terminal } from 'lucide-react';
 import WebTerminal from '../WebTerminal';
 import { ProviderConnectModal } from '../agent/ProviderConnectModal';
 import { brandUrl, providerMark } from '../avatar/brandMarks';
 import { installCommand, installNote, cliFor } from '../../lib/providerConnect';
-import { providerTileAction, showAddProvider } from '../../lib/features';
+import { providerTileAction, showAddProvider, showNewAgent } from '../../lib/features';
 import { buildProviderRows, type ProviderAvailability, type ProviderCapabilities, type ProviderModel, type ProviderRow } from '../../lib/modelSelectorFilter';
+import { buildPickerModels, findCurrent, isCurrent, modelTitle, letterMark, type PickerModel, type PickerValue } from '../../lib/modelPicker';
 import {
-  buildPickerModels, groupModels, flatten, findCurrent, isCurrent, modelTitle, moveActive,
-  letterMark, type PickerModel, type PickerValue,
-} from '../../lib/modelPicker';
+  browseRows, canPick, contextControl, contextModel, initialTab, navKey, pickableKeys, pillName, pillText, railEntries, railKey,
+  scopeFor, visibleRows,
+} from '../../lib/modelPickerPanel';
+import { effortChoices, effortFromChoice, effortLabel, effortLevels } from '../../lib/modelEffort';
+import { fetchUsage, USAGE_QUERY_KEY, UsageHidden } from '../../lib/usageLine';
+import { newAgentHref } from '../../lib/newAgent';
+import ModelPickerPanel from './ModelPickerPanel';
 
 export interface ModelPick { providerId: string; modelId: string; modelLabel: string; capabilities: ProviderCapabilities }
 
@@ -34,23 +51,38 @@ export interface ModelPickerProps {
   /** The model in use. A short id ("opus", "fable") matches the model it stands for. */
   value: PickerValue | null;
   onValueChange: (pick: ModelPick) => void;
-  /** On an agent's page: the models that agent can switch to (the gateway's list), shown for its own provider. */
+  /** On an agent's page: the models that agent can switch to (the gateway's list). Its presence makes this an
+   *  existing agent's picker: only its runtime can be picked. */
   agentModels?: { providerId: string; models: (ProviderModel & { subtitle?: string })[] } | null;
   /** Offer "Use the default brain" first (Arturo). */
   onPickDefault?: () => void;
   /** Whose model this chooses: an agent's (every model it may use, 1M versions included) or Arturo's brain (models
    *  only agents can use are listed dimmed). Default: an agent's. */
   chooser?: 'agent' | 'arturo';
-  /** 'popover' (a chip that opens it) or 'inline' (always open, in place). */
+  /** 'popover' (a pill that opens it) or 'inline' (always open, in place). */
   variant?: 'popover' | 'inline';
   /** Controlled open state (a menu item can open it); uncontrolled when left out. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /** False: no chip (opened only through `open`). */
+  /** False: no pill (opened only through `open`). */
   trigger?: boolean;
-  /** The chip's words while the current model is not in the list yet. */
+  /** The pill's words while the current model is not in the list yet. */
   label?: string;
   triggerClassName?: string;
+  /** The effort in use (a level id) and how to change it. The control shows only where lib/modelEffort.ts says a level
+   *  is really applied (Claude, Codex). null from onEffortChange: "CLI default", offered only with effortClearable. */
+  effort?: string | null;
+  onEffortChange?: (level: string | null) => void;
+  /** Offer "CLI default" first (a default effort can be taken out again: Settings › Agents). */
+  effortClearable?: boolean;
+  /** When a pick takes effect, under the list ("Applies from your next message"). */
+  note?: string | null;
+  /** The provider tab chosen (Settings › Agents marks each runtime's own stored default on its tab). */
+  onTabChange?: (providerId: string) => void;
+  /** Before "Start a new agent with …" leaves the page (the Arturo pane closes itself first). */
+  onBeforeNewAgent?: () => void;
+  /** Where focus goes on close when the pill is not shown (below 480px the composer's overflow menu button). */
+  returnFocus?: () => HTMLElement | null;
 }
 
 interface RuntimesAvailableResponse { providers: ProviderAvailability[] }
@@ -58,6 +90,7 @@ interface RuntimesAvailableResponse { providers: ProviderAvailability[] }
 const DEFAULT_KEY = '__default__';
 // Above the Arturo pane (z 76), as the old sheet was; the connect modal sits above this (z 85).
 const Z = 80;
+const POPOVER_W = 440;
 
 /** The page's theme as drawn (the `dark` class on <html>), followed live. */
 function useDarkMode(): boolean {
@@ -71,16 +104,17 @@ function useDarkMode(): boolean {
   return dark;
 }
 
-function useNarrow(): boolean {
-  const q = '(max-width: 639px)';
-  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches);
+/** A phone: a narrow window or a coarse pointer (touch). The picker is a bottom sheet there. */
+function usePhone(): boolean {
+  const q = '(max-width: 639px), (pointer: coarse)';
+  const [phone, setPhone] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches);
   useEffect(() => {
     const mq = window.matchMedia(q);
-    const on = () => setNarrow(mq.matches);
+    const on = () => setPhone(mq.matches);
     mq.addEventListener('change', on);
     return () => mq.removeEventListener('change', on);
   }, []);
-  return narrow;
+  return phone;
 }
 
 /** A provider's badge: its proven brand mark, unmodified, or a neutral letter. Greyed providers are dimmed, never
@@ -163,25 +197,30 @@ function AddProviderPanel({ rows, onInstalled }: { rows: ProviderRow[]; onInstal
 }
 
 export default function ModelPicker({
-  value, onValueChange, agentModels, onPickDefault, chooser = 'agent', variant = 'popover', open: openProp, onOpenChange, trigger = true, label, triggerClassName,
+  value, onValueChange, agentModels, onPickDefault, chooser = 'agent', variant = 'popover', open: openProp, onOpenChange, trigger = true, label,
+  triggerClassName, effort = null, onEffortChange, effortClearable = false, note = null, onTabChange, onBeforeNewAgent, returnFocus,
 }: ModelPickerProps) {
   const inline = variant === 'inline';
   const [openState, setOpenState] = useState(false);
   const open = inline || (openProp ?? openState);
   const setOpen = useCallback((o: boolean) => { if (openProp === undefined) setOpenState(o); onOpenChange?.(o); }, [openProp, onOpenChange]);
   const dark = useDarkMode();
-  const narrow = useNarrow();
+  const phone = usePhone();
+  const navigate = useNavigate();
   const [rows, setRows] = useState<ProviderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState<string | null>(null);
+  const [tab, setTab] = useState<string | null>(null);
+  /** "Older versions" opened or closed by hand, per provider; untouched, it follows the model in use. */
+  const [olderOpen, setOlderOpen] = useState<Record<string, boolean>>({});
   const [adding, setAdding] = useState(false);
   const [connectRow, setConnectRow] = useState<ProviderRow | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listId = useId();
+  const idBase = useId().replace(/:/g, '');
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
 
   const probe = useCallback(async (fresh = false) => {
@@ -197,22 +236,38 @@ export default function ModelPicker({
     } finally { setLoading(false); }
   }, []);
 
-  // Asked again every time it opens: no stale list across a sign-in.
+  // The usage rings: the sidebar's own reading (one query key), only while the picker is open. A caller the API
+  // hides usage from (404) gets no rings, never a guess.
+  const { data: usage } = useQuery({
+    queryKey: USAGE_QUERY_KEY, queryFn: fetchUsage, enabled: open, staleTime: 55_000,
+    retry: (n, e) => !(e instanceof UsageHidden) && n < 2,
+  });
+
+  // Asked again every time it opens: no stale list across a sign-in. Opens on the provider in use.
   useEffect(() => {
     if (!open) return;
-    setQuery(''); setAdding(false);
+    setQuery(''); setAdding(false); setTab(null); setOlderOpen({});
     void probe();
   }, [open, probe]);
 
+  const scope = useMemo(() => scopeFor(agentModels), [agentModels]);
   const models = useMemo(() => buildPickerModels(rows, agentModels, { forArturo: chooser === 'arturo' }), [rows, agentModels, chooser]);
+  const entries = useMemo(() => railEntries(rows, usage, scope), [rows, usage, scope]);
   const current = findCurrent(models, value);
-  // One order in every picker: by provider, newest first (lib/modelPicker.ts newestFirst); no Recent group above it.
-  const groups = useMemo(() => groupModels(models, { query }), [models, query]);
-  const showDefault = !!onPickDefault && !query.trim();
-  // The arrows move through what can be picked; a dimmed entry is shown, not chosen.
-  const keys = useMemo(() => [...(showDefault ? [DEFAULT_KEY] : []), ...flatten(groups).filter((m) => !m.unavailable).map((m) => m.key)], [groups, showDefault]);
+  const tabs = useMemo(() => entries.map((e) => e.id), [entries]);
+  const shownTab = tab && tabs.includes(tab) ? tab : initialTab(entries, scope, value?.providerId);
+  const searching = !!query.trim();
+  const shown = useMemo(() => visibleRows(models, query, shownTab), [models, query, shownTab]);
+  const defaultId = entries.find((e) => e.id === shownTab)?.defaultModel ?? null;
+  const browse = useMemo(() => browseRows(models, shownTab, {
+    value, scope, defaultId, olderOpen: shownTab ? olderOpen[shownTab] ?? null : null,
+  }), [models, shownTab, value, scope, defaultId, olderOpen]);
+  const defaultRow = !!onPickDefault && !searching;
+  const keys = useMemo(() => [...(defaultRow ? [DEFAULT_KEY] : []),
+    ...(searching ? shown.filter((m) => canPick(m, scope)).map((m) => m.key) : pickableKeys(browse.rows, scope))],
+  [shown, browse, scope, defaultRow, searching]);
 
-  // The row the arrows start from: the model in use, else the first.
+  // The row the arrows start from: the model in use, else the first that can be picked.
   useEffect(() => {
     if (!open) return;
     setActive((a) => (a && keys.includes(a) ? a : (current && keys.includes(current.key) ? current.key : keys[0] ?? null)));
@@ -224,24 +279,29 @@ export default function ModelPicker({
     return () => clearTimeout(t);
   }, [open, inline]);
 
-  // Desktop: under the chip (above it when there is no room below); with no chip, near the top, centred.
+  // Desktop: under the pill (above it when there is no room below); with no pill, near the top, centred.
   useLayoutEffect(() => {
-    if (!open || inline || narrow) { setPos(null); return; }
+    if (!open || inline || phone) { setPos(null); return; }
     const r = triggerRef.current?.getBoundingClientRect();
-    const w = 360;
+    const w = Math.min(POPOVER_W, window.innerWidth - 16);
     if (!r) { setPos({ left: Math.max(8, (window.innerWidth - w) / 2), top: Math.round(window.innerHeight * 0.12) }); return; }
     const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
     const below = window.innerHeight - r.bottom;
-    setPos(below >= 360 || below >= r.top ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
-  }, [open, inline, narrow]);
+    setPos(below >= 460 || below >= r.top ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
+  }, [open, inline, phone]);
 
   const close = useCallback(() => {
     if (inline) return;
     setOpen(false);
-    setTimeout(() => triggerRef.current?.focus(), 0);
-  }, [inline, setOpen]);
+    // Back to the pill, or, when the pill is hidden (display: none below 480px) or absent, to where it was opened from.
+    setTimeout(() => {
+      const t = triggerRef.current;
+      if (t && t.getClientRects().length > 0) t.focus();
+      else returnFocus?.()?.focus();
+    }, 0);
+  }, [inline, setOpen, returnFocus]);
 
-  /** Connect: the picker closes first, then the Connect sheet opens as the top layer (never under the picker). */
+  /** Sign in: the picker closes first, then the Connect sheet opens as the top layer (never under the picker). */
   const connect = useCallback((row: ProviderRow) => {
     if (!inline) setOpen(false);
     setConnectRow(row);
@@ -249,7 +309,7 @@ export default function ModelPicker({
 
   // A click outside the popover closes it (the phone sheet has its own backdrop).
   useEffect(() => {
-    if (!open || inline || narrow || connectRow) return;
+    if (!open || inline || phone || connectRow) return;
     const down = (e: MouseEvent) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || triggerRef.current?.contains(t)) return;
@@ -257,9 +317,9 @@ export default function ModelPicker({
     };
     document.addEventListener('mousedown', down);
     return () => document.removeEventListener('mousedown', down);
-  }, [open, inline, narrow, connectRow, setOpen]);
+  }, [open, inline, phone, connectRow, setOpen]);
 
-  // The view under the search box changes (models / add a provider): keep focus inside, where Esc and Tab work.
+  // The add-a-provider view replaces the list: keep focus inside, where Esc and Tab work.
   const backRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open || inline) return;
@@ -268,158 +328,120 @@ export default function ModelPicker({
 
   useEffect(() => {
     if (!active) return;
-    document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: 'nearest' });
-  }, [active, listId]);
+    document.getElementById(`${idBase}-opt-${active}`)?.scrollIntoView({ block: 'nearest' });
+  }, [active, idBase]);
 
   const pick = (m: PickerModel) => {
+    if (!canPick(m, scope)) return;
     onValueChange({ providerId: m.providerId, modelId: m.id, modelLabel: modelTitle(m), capabilities: m.capabilities });
     close();
   };
-  const pickKey = (k: string | null) => {
-    if (!k) return;
+  const toggleOlder = (providerId: string) => setOlderOpen((o) => ({
+    ...o, [providerId]: !(o[providerId] ?? (providerId === shownTab ? browse.olderOpen : false)),
+  }));
+  const pickKey = (k: string) => {
     if (k === DEFAULT_KEY) { onPickDefault?.(); close(); return; }
-    const m = flatten(groups).find((x) => x.key === k);
+    if (k.startsWith('older:')) { toggleOlder(k.slice('older:'.length)); return; }
+    const m = searching ? shown.find((x) => x.key === k) : browse.rows.flatMap((r) => (r.kind === 'older' || r.key !== k ? [] : [r.model]))[0];
     if (m) pick(m);
   };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActive((a) => moveActive(keys, a, e.key === 'ArrowDown' ? 1 : -1));
-    } else if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') {
-      e.preventDefault(); pickKey(active);
-    } else if (e.key === 'Escape' && !inline) {
-      e.preventDefault(); e.stopPropagation(); close();
-    } else if (e.key === 'Tab' && !inline) {
-      // Tab stays inside: from the last control back to the first, and the other way.
-      const f = [...(panelRef.current?.querySelectorAll<HTMLElement>('input, button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])') ?? [])];
-      if (!f.length) return;
-      const i = f.indexOf(document.activeElement as HTMLElement);
-      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-      else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+  // Context: switch the model in use to its family's newest version in that size, at once; the panel stays open
+  // (Settings, a new agent, Arturo), or closes in an agent's picker.
+  const ctl = !searching && !adding ? contextControl(browse, value, scope) : null;
+  const pickSize = (id: string) => {
+    const m = contextModel(browse, id);
+    if (m && canPick(m, scope) && !isCurrent(m, value)) {
+      onValueChange({ providerId: m.providerId, modelId: m.id, modelLabel: modelTitle(m), capabilities: m.capabilities });
+      // An agent's model reads back only after its switch: close rather than show the old size as in use.
+      if (scope.kind === 'agent') close();
     }
   };
+  const chooseTab = (id: string) => { setTab(id); setAdding(false); setQuery(''); onTabChange?.(id); };
 
-  const optionClass = (k: string) => `w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm rounded-lg ${k === active ? 'bg-tone-800 text-tone-white' : 'text-tone-200'}`;
-  const anyModel = groups.length > 0;
-  const firstLoad = loading && rows.length === 0;
+  const focusTrap = (e: KeyboardEvent<HTMLElement>) => {
+    const f = [...(panelRef.current?.querySelectorAll<HTMLElement>('input, button:not([disabled]):not([tabindex="-1"]), [href], [tabindex]:not([tabindex="-1"])') ?? [])];
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement as HTMLElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+  };
 
-  const list: ReactNode = adding ? (
-    <div>
-      <button ref={backRef} type="button" onClick={() => setAdding(false)} className="flex items-center gap-1 px-3 py-2 text-xs text-tone-400 hover:text-tone-200">
-        <ChevronLeft size={14} /> Models
-      </button>
-      <AddProviderPanel rows={rows} onInstalled={() => { void probe(true); }} />
-    </div>
-  ) : (
-    <div id={listId} role="listbox" aria-label="Models" className="flex flex-col gap-0.5 p-1.5">
-      {showDefault && (
-        <div id={`${listId}-${DEFAULT_KEY}`} role="option" aria-selected={!value} data-model-option={DEFAULT_KEY}
-             className={`${optionClass(DEFAULT_KEY)} cursor-pointer`} onMouseEnter={() => setActive(DEFAULT_KEY)} onClick={() => pickKey(DEFAULT_KEY)}>
-          <span className="flex-1 min-w-0">Use the default brain <span className="text-px11 text-tone-500">whatever this install is set up with</span></span>
-          {!value && <Check size={15} className="shrink-0 text-tone-white" aria-hidden />}
-        </div>
-      )}
-      {groups.map((g) => {
-        // A provider that can't be used yet: its heading says why and offers Connect; its models are listed dimmed.
-        const row = rows.find((r) => r.provider.id === g.id);
-        const off = row && !row.selectable ? row : null;
-        return (
-        <div key={g.id} role="group" aria-label={g.label} data-model-group={g.id}>
-          <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-px11 font-medium text-tone-500 uppercase tracking-wide">
-            {g.id !== 'recent' && <ProviderMark providerId={g.id} label={g.label} dark={dark} size={12} dim={!!off} />}
-            <span className="flex-1 min-w-0 truncate">{g.label}{off && <span className="normal-case tracking-normal font-normal"> · {off.greyReason}</span>}</span>
-            {off && providerTileAction(false) === 'connect' && (
-              <button type="button" onClick={() => connect(off)} data-model-connect={g.id}
-                      className="shrink-0 normal-case tracking-normal px-2 py-0.5 rounded-md border border-tone-700 text-px12 font-normal text-tone-300 hover:bg-tone-800 hover:text-tone-white">
-                Connect
-              </button>
-            )}
-          </div>
-          {g.models.map((m) => {
-            const on = isCurrent(m, value);
-            if (m.unavailable) {
-              return (
-                <div key={m.key} role="option" aria-selected={on} aria-disabled data-model-option={m.key} data-model-unavailable
-                     title={m.unavailable} className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm rounded-lg text-tone-500 cursor-default">
-                  <ProviderMark providerId={m.providerId} label={m.providerLabel} dark={dark} size={16} dim />
-                  {/* The name first, whole; the reason under it (a long reason never squeezes the name away). */}
-                  <span className="flex-1 min-w-0">
-                    <span className="block truncate">{m.name}{m.tag && <span className="text-px11 tabular-nums"> · {m.tag}</span>}</span>
-                    {!off && <span className="block text-px11 leading-snug">{m.unavailable}</span>}
-                  </span>
-                  <span className="w-4 shrink-0">{on && <Check size={15} className="text-tone-400" aria-label="In use" />}</span>
-                </div>
-              );
-            }
-            return (
-              <div key={m.key} id={`${listId}-${m.key}`} role="option" aria-selected={on} data-model-option={m.key}
-                   className={`${optionClass(m.key)} cursor-pointer`} onMouseEnter={() => setActive(m.key)} onClick={() => pick(m)}>
-                <ProviderMark providerId={m.providerId} label={m.providerLabel} dark={dark} size={16} />
-                <span className="flex-1 min-w-0 truncate">{m.name}</span>
-                {m.tag && <span className="shrink-0 text-px11 text-tone-500 tabular-nums">{m.tag}</span>}
-                {m.capabilities.video && <span className="shrink-0 text-px10 text-tone-500">video</span>}
-                <span className="w-4 shrink-0">{on && <Check size={15} className="text-tone-white" aria-label="In use" />}</span>
-              </div>
-            );
-          })}
-        </div>
-        );
-      })}
-      {!firstLoad && !error && !anyModel && query.trim() && <p className="px-3 py-6 text-center text-sm text-tone-500" data-model-picker-empty>No matching models.</p>}
-      {showAddProvider() && !query.trim() && (
-        <button type="button" onClick={() => setAdding(true)} data-model-picker-add-provider
-                className="flex items-center gap-2.5 px-3 py-2 text-sm text-tone-400 hover:text-tone-200 hover:bg-tone-800 rounded-lg text-left">
-          <span className="w-4 h-4 shrink-0 inline-flex items-center justify-center"><Plus size={15} /></span> Add a provider
-        </button>
-      )}
-    </div>
-  );
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key === 'Tab') { if (!inline) focusTrap(e); return; }
+    if (e.key === 'Escape' && inline) return;
+    const el = e.target as HTMLElement;
+    // Only from the search box (or the panel itself): a focused button keeps its own Enter and arrows.
+    if (e.key !== 'Escape' && el.tagName !== 'INPUT') return;
+    const r = navKey(e.key, { tabs, tab: shownTab, keys, active, query });
+    if (!r) return;
+    e.preventDefault();
+    if (r.kind === 'active') setActive(r.active);
+    else if (r.kind === 'tab') chooseTab(r.tab);
+    else if (r.kind === 'pick') pickKey(r.key);
+    else { e.stopPropagation(); close(); }
+  };
 
+  const onRailKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    const next = railKey(e.key, tabs, shownTab);
+    if (!next) return;
+    e.preventDefault(); e.stopPropagation();
+    chooseTab(next);
+    setTimeout(() => document.getElementById(`${idBase}-tab-${next}`)?.focus(), 0);
+  };
+
+  // Effort: the model in use, on the provider shown, where a level is really applied (lib/modelEffort.ts).
+  const where = scope.kind === 'agent' ? 'agent' : 'defaults';
+  const levels = onEffortChange && current && current.providerId === shownTab ? effortLevels(current.providerId, where) : null;
+  const effortWord = effortLevels(value?.providerId, where) ? effortLabel(value?.providerId, effort) : null;
+
+  const layout = inline ? 'inline' : phone ? 'sheet' : 'popover';
   const panel = (
-    <div ref={panelRef} role="dialog" aria-modal={!inline} aria-label="Choose a model" onKeyDown={onKeyDown} data-model-picker={inline ? 'inline' : narrow ? 'sheet' : 'popover'}
-         className={inline ? 'flex flex-col min-w-0'
-           : narrow ? 'fixed inset-x-0 bottom-0 flex flex-col max-h-[85dvh] rounded-t-2xl border-t border-tone-800 bg-popover text-popover-foreground shadow-2xl pb-[env(safe-area-inset-bottom)]'
-             : 'fixed flex flex-col w-[360px] max-h-[min(480px,80vh)] rounded-xl border border-tone-800 bg-popover text-popover-foreground shadow-2xl'}
-         style={inline ? undefined : { zIndex: Z, ...(pos ?? {}) }}>
-      {narrow && !inline && (
-        <div className="flex items-center justify-between px-4 pt-3 pb-1">
-          <h2 className="text-sm font-medium text-tone-100">Choose a model</h2>
-          <button type="button" onClick={close} aria-label="Close" className="p-1 rounded hover:bg-tone-800 text-tone-400"><X size={18} /></button>
+    <ModelPickerPanel
+      layout={layout} idBase={idBase} rows={rows} entries={entries} shown={adding ? [] : shown} scope={scope} value={value}
+      browse={adding ? null : browse} onToggleOlder={toggleOlder}
+      context={ctl ? { ...ctl, onChange: pickSize } : null}
+      tab={shownTab} onTab={chooseTab} query={query} onQuery={setQuery} active={active} onActive={setActive} onPick={pick}
+      renderMark={(id, l, size, dim) => <ProviderMark providerId={id} label={l} dark={dark} size={size} dim={dim} />}
+      defaultRow={defaultRow ? { key: DEFAULT_KEY, selected: !value, onPick: () => pickKey(DEFAULT_KEY) } : null}
+      effort={levels ? { levels: effortChoices(levels, effortClearable), value: effort ?? (effortClearable ? '' : null),
+        onChange: (id) => onEffortChange?.(effortFromChoice(id)) } : null}
+      note={note}
+      onSignIn={providerTileAction(false) === 'connect' ? (id) => { const r = rows.find((x) => x.provider.id === id); if (r) connect(r); } : null}
+      onNewAgent={scope.kind === 'agent' && showNewAgent() ? (id) => { if (!inline) setOpen(false); onBeforeNewAgent?.(); navigate(newAgentHref(id)); } : null}
+      onAddProvider={showAddProvider() ? () => setAdding(true) : null}
+      replaceBody={adding ? (
+        <div>
+          <button ref={backRef} type="button" onClick={() => setAdding(false)} className="flex items-center gap-1 px-3 py-2 text-xs text-tone-400 hover:text-tone-200">
+            <ChevronLeft size={14} /> Models
+          </button>
+          <AddProviderPanel rows={rows} onInstalled={() => { void probe(true); }} />
         </div>
-      )}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-tone-800">
-        <Search size={15} className="shrink-0 text-tone-500" aria-hidden />
-        <input ref={inputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models" aria-label="Search models"
-               role="combobox" aria-expanded aria-controls={listId} aria-activedescendant={active ? `${listId}-${active}` : undefined} autoComplete="off" spellCheck={false}
-               className="flex-1 min-w-0 bg-transparent text-sm text-tone-100 placeholder:text-tone-500 outline-none py-1" />
-        {loading && rows.length > 0 && <span className="text-px10 text-tone-500 shrink-0">checking…</span>}
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-        {firstLoad && <p className="px-4 py-4 text-xs text-tone-500">Checking providers…</p>}
-        {error && <p className="px-4 py-3 text-xs text-tone-red-400" role="alert">Could not load providers: {error}</p>}
-        {(!firstLoad || rows.length > 0) && !error && list}
-      </div>
-    </div>
+      ) : undefined}
+      loading={loading} error={error}
+      onKeyDown={onKeyDown} onRailKeyDown={onRailKeyDown} onClose={close}
+      inputRef={inputRef} panelRef={panelRef}
+      style={inline ? undefined : { zIndex: Z, ...(pos ?? {}) }}
+    />
   );
 
   const markId = value?.providerId ?? current?.providerId ?? null;
-  const chipText = current ? modelTitle(current) : label ?? 'Choose a model';
+  const fullTitle = current ? modelTitle(current) : label ?? 'Choose a model';
+  const pill = pillText(pillName(current, models) ?? label ?? null, effortWord);
 
   return (
     <>
       {!inline && trigger && (
         <button ref={triggerRef} type="button" onClick={() => setOpen(!open)} aria-haspopup="dialog" aria-expanded={open}
-                aria-label={`Model: ${chipText}. Change`} title={`Model: ${chipText}`} data-model-picker-trigger
-                className={`inline-flex items-center gap-1.5 max-w-[220px] h-8 pl-2 pr-1.5 rounded-full border border-tone-800 bg-tone-900 text-px12 text-tone-200 hover:bg-tone-800 hover:text-tone-white transition-colors ${triggerClassName ?? ''}`}>
+                aria-label={`Model: ${fullTitle}${effortWord ? `, ${effortWord} effort` : ''}. Change`} title={`Model: ${fullTitle}`} data-model-picker-trigger
+                className={`inline-flex items-center gap-1.5 max-w-[240px] h-8 pl-2 pr-1.5 rounded-full border border-tone-800 bg-tone-900 text-px12 text-tone-200 hover:bg-tone-800 hover:text-tone-white transition-colors ${triggerClassName ?? ''}`}>
           {markId && <ProviderMark providerId={markId} label={current?.providerLabel ?? markId} dark={dark} size={14} />}
-          <span className="truncate">{chipText}</span>
-          <ChevronDown size={13} className="shrink-0 text-tone-500" aria-hidden />
+          <span className="truncate">{pill}</span>
+          <ChevronDown size={13} className={`shrink-0 text-tone-500 transition-transform${open ? ' rotate-180' : ''}`} aria-hidden />
         </button>
       )}
       {inline ? panel : open && createPortal(
         <>
-          {narrow && <div className="fixed inset-0 bg-black/40" style={{ zIndex: Z }} onClick={close} aria-hidden />}
+          {phone && <div className="fixed inset-0 bg-black/40" style={{ zIndex: Z }} onClick={close} aria-hidden />}
           {panel}
         </>, document.body)}
       {/* The Connect sheet is the top layer, in the page's body: the picker has closed under it (connect), so nothing

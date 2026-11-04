@@ -31,7 +31,7 @@ export interface UsagePart {
 const NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok' };
 const WINDOWS: Record<string, string> = { '5h': '5 h', weekly: 'weekly' };
 
-function clock(epochS: number, now: Date): string {
+export function clock(epochS: number, now: Date): string {
   const d = new Date(epochS * 1000);
   const sameDay = d.toDateString() === now.toDateString();
   const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -89,4 +89,17 @@ export function usageLines(rows: unknown, now: Date = new Date()): UsageLineRow[
       ? { ...p, text: p.text.slice(p.who.length).trimStart() } : p)) });
   }
   return lines;
+}
+
+/** GET /api/usage's rows. A caller the API will not show usage to gets a 404: UsageHidden, so a surface can show
+ *  nothing at all rather than "no usage". Shared by the sidebar line and the model picker's rings (one query key). */
+export class UsageHidden extends Error {}
+
+export const USAGE_QUERY_KEY = ['usage'] as const;
+
+export async function fetchUsage(): Promise<unknown> {
+  const res = await fetch('/api/usage');
+  if (res.status === 404) throw new UsageHidden();
+  if (!res.ok) throw new Error(`/usage: ${res.status}`);
+  return (await res.json())?.usage;
 }

@@ -106,6 +106,21 @@ test('default model: one per runtime, the rest built in', async () => {
   assert.equal(v.claude, 'claude-opus-5-5[1m]');
 });
 
+test('default effort: per runtime, only where the runtime has levels; none set means the CLI default', async () => {
+  const { ctx } = makeCtx();
+  const e = settingEntry('agents.defaultEffort')!;
+  assert.equal(e.section, 'agents');
+  assert.ok(e.validate({ runtime: 'gemini', effort: 'high' }), 'Gemini picks its level with the model');
+  assert.ok(e.validate({ runtime: 'codex', effort: 'max' }), 'Codex has no max');
+  assert.equal(e.validate({ runtime: 'claude', effort: 'max' }), null);
+  assert.equal(e.validate({ runtime: 'codex', effort: null }), null, 'null clears it');
+  assert.deepEqual(await e.read(ctx), { value: {}, source: 'builtin' });
+  await e.write!(ctx, { runtime: 'codex', effort: 'high' });
+  assert.deepEqual((await e.read(ctx)).value, { codex: 'high' });
+  await e.write!(ctx, { runtime: 'codex', effort: null });
+  assert.deepEqual((await e.read(ctx)).value, {});
+});
+
 test('voice provider and default voice go through the gateway; a refusal comes back as its reason', async () => {
   const { ctx, calls } = makeCtx();
   const p = settingEntry('voice.provider')!;

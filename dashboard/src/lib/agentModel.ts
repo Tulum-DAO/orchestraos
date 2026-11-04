@@ -15,16 +15,25 @@ export interface AgentModelInfo {
   allowed: string[];
   /** The gateway names each model in `title` (the Arturo engine picker's shape); `label` is accepted too. */
   models: { id: string; title?: string; label?: string; subtitle?: string; available?: boolean; reason?: string }[];
-  pending?: { model?: string } | null;
+  pending?: { model?: string; effort?: string } | null;
+  /** The effort level kept for this agent (null: the CLI's default), its runtime's levels, and 'live' when a picked
+   *  level is applied (scripts/agent_effort.py); null where it cannot be (no levels, a headless seat whose supervisor
+   *  predates effort or is not running). Absent from an older gateway: then no effort control. */
+  effort?: string | null;
+  effort_levels?: string[];
+  effort_how?: string | null;
 }
 
 import type { ProviderModel } from './modelSelectorFilter';
+import { EFFORT, effortLevels, type EffortLevel } from './modelEffort';
 
 export interface SwitchNotice { tone: 'ok' | 'wait' | 'error'; text: string }
 
 /** The parts of the gateway's PUT answer the picker reads. */
 export interface SwitchBody {
   ok?: boolean; error?: string; changed?: boolean; cancelled?: boolean; switching?: string; warning?: string;
+  status?: string; applies?: string; effort?: string; effort_switching?: string; model_switched?: boolean;
+  effort_warning?: string; effort_not_set?: string;
 }
 
 export async function fetchAgentModel(agentId: string): Promise<AgentModelInfo | null> {
@@ -38,12 +47,13 @@ export async function fetchAgentModel(agentId: string): Promise<AgentModelInfo |
   }
 }
 
-export async function switchAgentModel(agentId: string, model: string): Promise<{ status: number; body: SwitchBody }> {
+/** `effort`: a level id to apply too (the model may be the one it is on: an effort-only change). */
+export async function switchAgentModel(agentId: string, model: string, effort?: string): Promise<{ status: number; body: SwitchBody }> {
   try {
     const r = await fetch(`/api/agents/${encodeURIComponent(agentId)}/model`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(effort ? { model, effort } : { model }),
     });
     return { status: r.status, body: await r.json().catch(() => ({})) };
   } catch {
@@ -98,6 +108,11 @@ export function switchNotice(status: number, body: SwitchBody, label: string): S
     }
     if (body.switching === 'next_rotation') return { tone: 'wait', text: `${label} will be used from this agent's next rotation.` };
     if (body.warning) return { tone: 'wait', text: `Switched to ${label}, but its next restart will be on the old model.` };
+    if (body.effort_warning && body.effort_not_set) {
+      // A Claude switch sets the agent's kept level again on the new model; this time it did not take.
+      const lv = EFFORT.claude.levels.find((l) => l.id === body.effort_not_set)?.label ?? body.effort_not_set;
+      return { tone: 'wait', text: `Switched to ${label}, but its ${lv} effort could not be set again.` };
+    }
     return { tone: 'ok', text: `Switched to ${label}.` };
   }
   if (status === 202 && body?.ok) return { tone: 'wait', text: `${label} will apply when the agent finishes its current turn.` };
@@ -107,4 +122,32 @@ export function switchNotice(status: number, body: SwitchBody, label: string): S
   }
   const why = typeof body?.error === 'string' && body.error ? body.error : `error ${status}`;
   return { tone: 'error', text: `Couldn't switch to ${label}: ${why}.` };
+}
+
+/** When a pick takes effect, said under the picker in an agent's composer. A live switch (Claude, Codex) lands before
+ *  the next message, or as soon as a busy agent finishes its turn, so it is the next message either way; anything
+ *  else waits for the agent's next rotation (scripts/agent_model.py). Null when this agent can't switch. */
+export function applyNote(info: AgentModelInfo | null): string | null {
+  if (!info?.how) return null;
+  return info.how === 'next_rotation' ? "Applies from this agent's next rotation" : 'Applies from your next message';
+}
+
+/** The effort levels to offer for this agent: its runtime's own (lib/modelEffort.ts), only where the gateway says a
+ *  picked level reaches it (effort_how). Null: no effort control for this agent. */
+export function agentEffortLevels(info: AgentModelInfo | null): EffortLevel[] | null {
+  if (!info?.runtime || !info.how || !info.effort_how) return null;
+  return effortLevels(info.runtime, 'agent');
+}
+
+/** What the gateway's answer to an effort pick means, in plain words. `label` is the level's name ("High"). */
+export function effortNotice(status: number, body: SwitchBody, label: string): SwitchNotice {
+  if (status === 200 && body?.ok) {
+    if (body.changed === false) return { tone: 'ok', text: `Already on ${label} effort.` };
+    if (body.effort_switching === 'next_start') return { tone: 'ok', text: `${label} effort applies when the agent next restarts.` };
+    return { tone: 'ok', text: `Effort set to ${label}.` };
+  }
+  if (status === 202 && body?.ok) return { tone: 'wait', text: `${label} effort will apply when the agent finishes its current turn.` };
+  if (status === 0) return { tone: 'error', text: "Couldn't reach OrchestraOS. The effort wasn't changed." };
+  const why = typeof body?.error === 'string' && body.error ? body.error : `error ${status}`;
+  return { tone: 'error', text: `Couldn't set ${label} effort: ${why}.` };
 }

@@ -93,7 +93,8 @@ export function newestFirst(a: Pick<PickerModel, 'name' | 'tag'>, b: Pick<Picker
   return size(a.tag) - size(b.tag);
 }
 
-const PROVIDER_WORDS: Record<string, string[]> = {
+/** The words that name a provider (search; family detection drops them: "claude-opus-5" is the Opus family). */
+export const PROVIDER_WORDS: Record<string, string[]> = {
   claude: ['claude', 'anthropic'],
   codex: ['codex', 'openai', 'gpt', 'chatgpt'],
   gemini: ['gemini', 'google'],
@@ -111,11 +112,12 @@ const NICKNAMES: { word: string; matches: RegExp }[] = [
   { word: 'gpt', matches: /\bgpt\b/i },
 ];
 
-/** A model's name without its context size, and that size: "Opus 5.5 (1M)" → "Opus 5.5", "1M". */
+/** A model's name without its context size, and that size: "Opus 5.5 (1M)", "Opus 5.5 (1M context)" and
+ *  "Opus 5.5 with 1M context" → "Opus 5.5", "1M". */
 export function nameAndTag(id: string, label: string, subtitle?: string, contextWindow?: number | null): { name: string; tag?: string } {
-  const m = label.match(/^(.*?)\s*\((\d+(?:\.\d+)?\s*[KkMm])\)\s*$/);
-  const name = (m ? m[1] : label).trim() || id;
-  let tag = m ? m[2].replace(/\s+/g, '').toUpperCase() : undefined;
+  const m = label.match(/\s*\((\d+(?:\.\d+)?\s*[KkMm])(?:\s+context)?\)/i) ?? label.match(/\s+with\s+(\d+(?:\.\d+)?\s*[KkMm])\s+context\b/i);
+  const name = (m ? label.replace(m[0], '') : label).replace(/\s+/g, ' ').trim() || id;
+  let tag = m ? m[1].replace(/\s+/g, '').toUpperCase() : undefined;
   if (!tag && /\[1m\]$/i.test(id)) tag = '1M';
   if (!tag && subtitle) { const s = subtitle.match(/(\d+(?:\.\d+)?\s*[KkMm])\s*context/i); if (s) tag = s[1].replace(/\s+/g, '').toUpperCase(); }
   if (!tag && contextWindow) tag = contextWindow >= 1_000_000 ? `${+(contextWindow / 1_000_000).toFixed(1)}M` : `${Math.round(contextWindow / 1000)}K`;

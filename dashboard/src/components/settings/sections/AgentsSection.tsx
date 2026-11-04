@@ -18,7 +18,7 @@ import { Card, ConfirmButton, PageIntro, SettingRow } from '../SettingsKit';
 import { ServerNumberRow, ServerSwitchRow } from '../ServerRows';
 import { useServerSetting } from '../useServerSetting';
 import { useInstallTimeZone, useServerSettings } from '../../../stores/serverSettings';
-import { mergeDefaultModel } from '../../../lib/settingsApi';
+import { mergeDefaultEffort, mergeDefaultModel } from '../../../lib/settingsApi';
 import { useAgents } from '../../../hooks/useAgents';
 import { agentChoices } from '../../../lib/notificationsPage';
 import { matchesQuery } from '../../../lib/settingsRoute';
@@ -86,14 +86,20 @@ function OverrideCount({ k, data }: { k: string; data: Overrides | undefined }) 
 function DefaultModelRow() {
   const { row, status, save, locked, loadError } = useServerSetting('agents.defaultModel');
   const models = (row?.value && typeof row.value === 'object' ? row.value : {}) as Record<string, string>;
+  // The effort a new agent starts on, per runtime that has levels (lib/modelEffort.ts); none = the CLI's default.
+  const eff = useServerSetting('agents.defaultEffort');
+  const efforts = (eff.row?.value && typeof eff.row.value === 'object' ? eff.row.value : {}) as Record<string, string>;
+  const effortEditable = !!eff.row?.editable;
   const [runtime, setRuntime] = useState('claude');
-  return <SettingRow id="agents.defaultModel" label="Default model" keywords={['model', 'runtime', 'claude', 'codex', 'gemini', 'grok', 'new agents']}
-    description={`The model a new agent starts on, for each runtime. An agent keeps the model it was made with. ${INSTALL_WIDE}`}
-    stacked status={status} locked={locked} note={row?.note} detail={row?.detail ?? (loadError ? `Couldn't load settings: ${loadError}` : null)}
+  return <SettingRow id="agents.defaultModel" label="Default model" keywords={['model', 'effort', 'runtime', 'claude', 'codex', 'gemini', 'grok', 'new agents']}
+    description={`The model a new agent starts on, for each runtime, and for Claude and Codex its effort. An agent keeps the model and effort it was made with. ${INSTALL_WIDE}`}
+    stacked status={eff.status.kind !== 'idle' ? eff.status : status} locked={locked} note={row?.note} detail={row?.detail ?? (loadError ? `Couldn't load settings: ${loadError}` : null)}
     changedBy={row?.changedBy} changedAt={row?.changedAt}
     control={row?.editable
-      ? <ModelPicker variant="inline" value={{ providerId: runtime, modelId: models[runtime] ?? '' }}
-          onValueChange={(p) => { if (!(p.providerId in models)) return; setRuntime(p.providerId); void save({ runtime: p.providerId, model: p.modelId }, mergeDefaultModel(models, p.providerId, p.modelId)); }} />
+      ? <ModelPicker variant="inline" value={{ providerId: runtime, modelId: models[runtime] ?? '' }} onTabChange={setRuntime}
+          onValueChange={(p) => { if (!(p.providerId in models)) return; setRuntime(p.providerId); void save({ runtime: p.providerId, model: p.modelId }, mergeDefaultModel(models, p.providerId, p.modelId)); }}
+          effort={effortEditable ? efforts[runtime] ?? null : null} effortClearable
+          onEffortChange={effortEditable ? (level) => { void eff.save({ runtime, effort: level }, mergeDefaultEffort(efforts, runtime, level)); } : undefined} />
       : <span className="arturo-panel-rowvalue">{Object.entries(models).map(([r, m]) => `${r}: ${m}`).join(' · ') || '…'}</span>} />;
 }
 

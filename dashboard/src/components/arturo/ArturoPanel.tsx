@@ -32,7 +32,7 @@ import { HeadlessDevNote } from './HeadlessDevNote';
 import { Row, Info, LinkRow } from './PanelRows';
 import { TakesCalls } from './TakesCalls';
 import { useOpenSettings } from '../settings/useOpenSettings';
-import { fetchAgentModel, switchAgentModel, switchableModels, switchNotice, pickRefusal,
+import { applyNote, fetchAgentModel, switchAgentModel, switchableModels, switchNotice, pickRefusal,
          type AgentModelInfo, type SwitchNotice } from '../../lib/agentModel';
 import ModelPicker from '../kit/ModelPicker';
 import { agentModelTitle } from '../../lib/modelTitle';
@@ -305,7 +305,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           : page === 'memory' ? <MemoryPage />
           : page === 'activity' ? (isArturo ? <ActivityPage /> : <SubagentsPage running={agent?.subagents} name={aname} />)
           : page === 'style' ? <StylePage agentId={agentId} />
-          : page === 'model' ? <ModelPage agentId={agentId} onChanged={setModel} />
+          : page === 'model' ? <ModelPage agentId={agentId} onChanged={setModel} onClose={onClose} />
           : page === 'settings' ? (
             <div className="arturo-panel-list">
               <Row id="name" label="Name" value={aname} onOpen={push} />
@@ -614,7 +614,7 @@ function StylePage({ agentId }: { agentId: string }) {
 
 /** The model this agent runs, and the ones it can switch to (lib/agentModel.ts: live where its CLI allows, at its
  *  next rotation otherwise; a busy agent switches when its turn ends). */
-function ModelPage({ agentId, onChanged }: { agentId: string; onChanged: (m: AgentModelInfo | null) => void }) {
+function ModelPage({ agentId, onChanged, onClose }: { agentId: string; onChanged: (m: AgentModelInfo | null) => void; onClose: () => void }) {
   const [info, setInfo] = useState<AgentModelInfo | null | undefined>(undefined);
   const [notice, setNotice] = useState<SwitchNotice | null>(null);
   const [busy, setBusy] = useState(false);
@@ -643,7 +643,7 @@ function ModelPage({ agentId, onChanged }: { agentId: string; onChanged: (m: Age
     <>
       {why ? <p className="arturo-panel-note">{why}</p> : (
         <ModelPicker variant="inline" value={{ providerId: info.runtime ?? '', modelId: info.model ?? '' }}
-          agentModels={{ providerId: info.runtime ?? '', models: switchableModels(info) }}
+          agentModels={{ providerId: info.runtime ?? '', models: switchableModels(info) }} note={applyNote(info)} onBeforeNewAgent={onClose}
           onValueChange={(p) => pick(p.modelId, p.modelLabel)} />
       )}
       {notice && <p className={notice.tone === 'error' ? 'arturo-panel-error' : 'arturo-panel-note'} role="status">{notice.text}</p>}
