@@ -9209,9 +9209,10 @@ def _validate_qnr_delta(questions, answers, allow_skip=False):
     """Validate every provided answer against its question. Error str/None.
 
     At submit (allow_skip) a question may be sent as {"skipped": true}: the person chose to leave it
-    unanswered. Only an optional question can be skipped (a required one would block the submit
-    anyway) and a skip carries no answer. "At least one question answered" is checked by the store,
-    against the draft merged with this delta."""
+    unanswered. Any question can be skipped, required or not (a questionnaire is
+    accepted without every question answered; `required` only blocks a question simply LEFT OUT by
+    an app that sends no skips), and a skip carries no answer. What counts as answered enough is
+    checked by the store, against the draft merged with this delta."""
     qbyn = {q["n"]: q for q in questions}
     for n, a in (answers or {}).items():
         try:
@@ -9229,8 +9230,6 @@ def _validate_qnr_delta(questions, answers, allow_skip=False):
                 return f"q{n}: skipped must be true"
             if a.get("option_n") is not None or (a.get("answer_text") or "").strip():
                 return f"q{n}: a skipped question cannot carry an answer"
-            if q.get("required", 1):
-                return f"q{n}: this question needs an answer and cannot be skipped"
             continue
         opt = a.get("option_n")
         txt = a.get("answer_text")

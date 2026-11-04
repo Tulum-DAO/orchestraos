@@ -160,6 +160,11 @@ test('an answer from Arturo takes the same step the taps would, on the part on s
   if ('error' in c) throw new Error(c.error);
   assert.equal(c.submit, true);                      // the last part sends, as the last tap does
   assert.equal(c.state.answers[2].text, 'that is all');
+  // A pick on the last part: Arturo's answer sends too (a tap there only selects; his answer is tap + Submit).
+  const withPick = parts.map((p, i) => (i === 2 ? { ...p, options: [{ n: '1', label: 'Done' }] } : p));
+  const pickLast = answerStep(withPick, b.state, { picks: ['A'] });
+  if ('error' in pickLast) throw new Error(pickLast.error);
+  assert.equal(pickLast.submit, true);
 });
 
 test('an answer that the card cannot take is refused with why', () => {

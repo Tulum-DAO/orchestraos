@@ -341,13 +341,15 @@ class QuestionnaireStore:
     # ---- submit (all-or-nothing, once) ----
     def submit(self, qid, answers=None, surface=None):
         """Merge the final delta into the draft, then require EVERY required question to
-        hold a valid answer and at least one question to be answered -> atomic freeze
+        hold a valid answer or an explicit skip, and at least one question to be answered
+        unless EVERY question was explicitly skipped -> atomic freeze
         (answers->final) + guarded flip (pending->submitted, once). Returns
         {applied:True} | {applied:False, missing} | {applied:False, nothing_answered:True}
         | {applied:False, status} | None.
 
-        A question sent as {"skipped": true} (optional questions only; the gateway
-        validates) is recorded with no answer and state 'skipped', which the freeze
+        A question sent as {"skipped": true} (any question, required or not;
+        partial questionnaires are accepted) is recorded with no answer and
+        state 'skipped', which the freeze
         keeps, so the stored answer says the person chose to skip it rather than
         never reaching it."""
         c = self._conn()
@@ -382,8 +384,9 @@ class QuestionnaireStore:
                         "state, updated_at, surface) VALUES (?,?,?,?,?,?,?)",
                         [qid, n, opt, txt, state, now, surface])
             have = {r["n"]: r for r in c.execute(
-                "SELECT n, option_n, answer_text FROM questionnaire_answers WHERE qnr_id=?",
+                "SELECT n, option_n, answer_text, state FROM questionnaire_answers WHERE qnr_id=?",
                 [qid]).fetchall()}
+            skipped = {n for n, r in have.items() if r["state"] == "skipped"}
             # Optional questions (required=0 — stored by create() since day one
             # but previously IGNORED here) never block submission. the operator field
             # bug 2026-08-16: an optional free-text question wedged the watch
@@ -391,13 +394,20 @@ class QuestionnaireStore:
             req = {r["n"]: r["required"] for r in c.execute(
                 "SELECT n, required FROM questionnaire_questions WHERE qnr_id=?",
                 [qid]).fetchall()}
+            # A required question blocks only when it is LEFT OUT (an app that sends no skips);
+            # one the person skipped explicitly is settled.
             missing = [n for n in range(1, q["question_count"] + 1)
-                       if req.get(n, 1) and not _answered(have.get(n))]
+                       if req.get(n, 1) and n not in skipped and not _answered(have.get(n))]
             if missing:
                 c.commit()   # the delta persists as draft; caller jumps to first missing
                 return {"applied": False, "missing": missing}
-            if not any(_answered(have.get(n)) for n in range(1, q["question_count"] + 1)):
-                c.rollback()  # every question skipped or empty: nothing to send, nothing kept
+            every = range(1, q["question_count"] + 1)
+            if (not any(_answered(have.get(n)) for n in every)
+                    and not all(n in skipped for n in every)):
+                # Nothing answered and not every question skipped on purpose (an empty send):
+                # nothing to send, nothing kept. Every question skipped explicitly is an answer
+                # in itself (the card asks once first) and goes through.
+                c.rollback()
                 return {"applied": False, "nothing_answered": True}
             res = c.execute(
                 "UPDATE questionnaires SET status='submitted', submitted_at=? "
