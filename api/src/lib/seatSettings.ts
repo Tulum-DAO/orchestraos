@@ -79,6 +79,21 @@ export function cleanSettingsChange(body: unknown): { change: Partial<Record<Set
   return { change };
 }
 
+/** Each seat's own valid values (the fields readSeatSettings reads as source 'seat'), by seat id. Settings › Agents
+ *  counts these as "uses its own" (lib/agentOverrides.ts). */
+export function readSeatOverrides(dataDir: string): Record<string, Partial<Record<SettingField, boolean | number>>> {
+  const seats = readJson(settingsFile(dataDir)).seats;
+  const out: Record<string, Partial<Record<SettingField, boolean | number>>> = {};
+  if (!seats || typeof seats !== 'object' || Array.isArray(seats)) return out;
+  for (const [id, row] of Object.entries(seats as Record<string, unknown>)) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const own: Partial<Record<SettingField, boolean | number>> = {};
+    for (const f of FIELDS) if (f in row && validSetting(f, (row as Record<string, unknown>)[f])) own[f] = (row as Record<string, boolean | number>)[f];
+    if (Object.keys(own).length) out[id] = own;
+  }
+  return out;
+}
+
 /** Apply a checked change for one seat: one history row per field whose value changes, by the person who changed it. */
 export function writeSeatSettings(dataDir: string, seat: string, change: Partial<Record<SettingField, boolean | number>>,
                                   by: string | null, now: () => Date = () => new Date()): SeatSettings {

@@ -293,7 +293,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
         <Row id="settings" label="Settings" onOpen={push} />
         {!isArturo && <TakesCalls agentId={agentId} />}
         <RotationSettings key={agentId} agentId={agentId} isArturo={isArturo} />
-        <LinkRow label="Server settings" data="server-settings" onClick={() => toSettings(() => openSettings('general'))} />
+        <LinkRow label="Server settings" data="server-settings" onClick={() => toSettings(() => openSettings('server'))} />
       </div>
     );
 
@@ -301,7 +301,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
     <>
       {bar}
       <div className="arturo-panel-body" key={page ?? 'root'}>
-        {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} agentId={isArturo ? undefined : agentId} onProvider={() => toSettings(() => openSettings('voice'))} />
+        {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} agentId={isArturo ? undefined : agentId} onProvider={() => toSettings(() => openSettings('server-voice'))} />
           : page === 'memory' ? <MemoryPage />
           : page === 'activity' ? (isArturo ? <ActivityPage /> : <SubagentsPage running={agent?.subagents} name={aname} />)
           : page === 'style' ? <StylePage agentId={agentId} />
@@ -319,7 +319,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
                       onDone={() => void editDone()} onAvatar={() => push('avatar')}
                       provider={voiceProviderValue(vendor, health ? handsFreeReady(health) : null)}
                       voice={(() => { const n = voiceNameValue(vendor, voice, health ? handsFreeReady(health) : null); return n && !isArturo && voice?.scope === 'install' ? `${n} (default)` : n; })()}
-                      onVoice={() => push('voice')} onProvider={() => toSettings(() => openSettings('voice'))} />
+                      onVoice={() => push('voice')} onProvider={() => toSettings(() => openSettings('server-voice'))} />
           )
           : page === 'avatar' ? <LookPicker agentId={agentId} heroSize={160} canSave={canSaveLook} />
           : page === 'library' || page === 'history' || page === 'setup' ? sectionBody(page)
@@ -459,7 +459,7 @@ function InlineName({ name: aname, save }: { name: string; save: SaveName }) {
 function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, provider, voice, onVoice, onProvider }: {
   agentId: string; name: string;
   draft: string; onDraft: (v: string) => void; error: string | null; canName: boolean; onDone: () => void; onAvatar: () => void;
-  /** The voice provider ("GPT-Live"): set for the whole install, so its row opens Settings › Voice & calls. */
+  /** The voice provider ("GPT-Live"): set for the whole install, so its row opens Settings › Server › Voice & calls. */
   provider: string;
   voice: string; onVoice: () => void; onProvider: () => void;
 }) {
@@ -480,7 +480,7 @@ function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone
       <h3 className="arturo-panel-section">Appearance</h3>
       <div className="arturo-panel-list">
         <Row id="avatar" label="Avatar" value={`${shapeName(rec.shape)} · ${colorName(rec.color)}`} onOpen={onAvatar} />
-        {/* The server's provider: set for the whole install in Settings › Voice & calls, so this row opens it there.
+        {/* The server's provider: set for the whole install in Settings › Server › Voice & calls, so this row opens it there.
             The voice is this agent's own, tappable as ever. Two short lines, never cut off. */}
         <button type="button" className="arturo-panel-row" data-voice-provider onClick={onProvider}>
           <span>Provider</span>
@@ -504,7 +504,7 @@ function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone
  *  admin may change it, so for everyone else the list is read-only and says why. */
 function VoicePage({ health, onPicked, agentId, onProvider }: {
   health: ArturoHealth | null; onPicked: (v: CurrentVoice) => void;
-  /** The provider is the install's: its row opens Settings › Voice & calls. */
+  /** The provider is the install's: its row opens Settings › Server › Voice & calls. */
   onProvider: () => void;
   /** Any agent but Arturo: its own voice, else the install's (Arturo's voice IS the install's). */
   agentId?: string;

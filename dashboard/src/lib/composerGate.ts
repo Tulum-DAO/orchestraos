@@ -18,6 +18,7 @@
  */
 import { normalizeAgentState } from './agentStatus';
 import { STATE_COPY } from './stateCopy.ts';
+import type { SendShortcut } from './displaySettings.ts';
 
 export { STATE_COPY };
 
@@ -153,19 +154,68 @@ export function canStopTurn(args: { state?: string; pendingMenu?: unknown }): bo
   return MID_TURN.has((args.state || '').trim().toLowerCase());
 }
 
-/** What a keydown in the composer's textarea does. Pure, so the keymap is testable.
- *  - Enter sends; Shift+Enter is a newline. Cmd/Ctrl+Enter always sends.
- *  - On a touch device (pointer: coarse) plain Enter stays a newline: the round button sends.
- *  - Enter during IME composition never sends (it is confirming a character).
+export type { SendShortcut };
+
+/** Every composer that sends a chat message (Settings › General › Send shortcut), and its keys while this device has
+ *  not chosen any, i.e. what it did before the setting existed:
+ *  - unset: 'enter' (Enter sends, Shift+Enter is a new line) or 'mod-enter' (only Cmd/Ctrl+Enter sends);
+ *  - touchEnter: what plain Enter does on a touch screen (pointer: coarse) where the setting does not apply: the agent
+ *    chat keeps Enter as a new line (its round button sends); Arturo's composers send on Enter, as they always have.
+ *  - file: where it lives (lib/sendShortcut.test.ts checks every textarea that sends on a key is listed here). */
+export const COMPOSERS = {
+  agentChat: { unset: 'enter', touchEnter: 'newline', file: 'components/chat/ChatInput.tsx' },     // agent page, QA harness
+  arturoPill: { unset: 'enter', touchEnter: 'send', file: 'components/arturo/ArturoPill.tsx' },
+  arturoHome: { unset: 'enter', touchEnter: 'send', file: 'pages/ArturoHome.tsx' },
+  agentCard: { unset: 'mod-enter', touchEnter: 'newline', file: 'components/AgentCard.tsx' },      // Agents page, "Message this agent"
+  assistant: { unset: 'mod-enter', touchEnter: 'newline', file: 'components/assistant/AssistantInput.tsx' }, // /assistant
+} as const satisfies Record<string, { unset: SendShortcut; touchEnter: 'send' | 'newline'; file: string }>;
+export type ComposerId = keyof typeof COMPOSERS;
+
+/** The keymap a composer passes to composerKeyAction, from this device's setting (null: not chosen). */
+export function composerKeys(id: ComposerId, setting: SendShortcut | null): { shortcut: SendShortcut; touchEnter: 'send' | 'newline'; chosen: boolean } {
+  return { shortcut: setting ?? COMPOSERS[id].unset, touchEnter: COMPOSERS[id].touchEnter, chosen: setting !== null };
+}
+
+/** What the Send shortcut row says under it: until a choice is made each message box keeps its own keys. */
+export function sendShortcutNote(value: SendShortcut | null): string {
+  return value === null ? 'Each message box keeps its own keys until you choose.'
+    : value === 'enter' ? 'Shift+Enter starts a new line.' : 'Enter starts a new line.';
+}
+
+/** The one test of "this device has a keyboard-class pointer somewhere" (a mouse or trackpad, e.g. an iPad with a
+ *  Magic Keyboard): the Send shortcut row shows, and a chosen shortcut applies, only then. Never read at import. */
+export const FINE_POINTER_QUERY = '(any-pointer: fine)';
+export function hasFinePointer(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.(FINE_POINTER_QUERY).matches;
+}
+function primaryCoarse(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+}
+
+/** A composer's keydown as composerKeyAction reads it, with this device's pointers (read at the keydown). */
+export function keyArgs(e: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; keyCode?: number; nativeEvent: { isComposing?: boolean } }) {
+  return { key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, keyCode: e.keyCode,
+    isComposing: e.nativeEvent.isComposing, coarse: primaryCoarse(), anyFine: hasFinePointer() };
+}
+
+/** What a keydown in a composer's textarea does. Pure, so the keymap is testable.
+ *  - shortcut 'enter' (the default): Enter sends, Shift+Enter is a newline; 'mod-enter': Enter is a newline too.
+ *    Cmd/Ctrl+Enter always sends.
+ *  - On a touch device (pointer: coarse) plain Enter does `touchEnter` (default: it stays a newline, the round button
+ *    sends), as before the setting, unless this device also has a fine pointer (anyFine) and chose a shortcut.
+ *    Shift+Enter is a newline.
+ *  - Enter during IME composition never sends: isComposing everywhere; keyCode 229 (Safari's tell) only off a touch
+ *    screen, since some Android keyboards send a plain Enter as 229 and touch keeps exactly today's Enter.
  *  - Esc stops only when canStop; otherwise it does nothing to the seat. */
 export function composerKeyAction(e: {
-  key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; isComposing?: boolean;
-  coarse?: boolean; canStop?: boolean;
+  key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; isComposing?: boolean; keyCode?: number;
+  coarse?: boolean; anyFine?: boolean; canStop?: boolean; shortcut?: SendShortcut; touchEnter?: 'send' | 'newline'; chosen?: boolean;
 }): 'send' | 'stop' | 'none' {
-  if (e.isComposing) return 'none';
+  if (e.isComposing || (e.keyCode === 229 && !e.coarse)) return 'none';
   if (e.key === 'Escape') return e.canStop ? 'stop' : 'none';
   if (e.key !== 'Enter') return 'none';
   if (e.metaKey || e.ctrlKey) return 'send';
-  if (e.shiftKey || e.coarse) return 'none';
-  return 'send';
+  if (e.shiftKey) return 'none';
+  if (e.coarse && !(e.anyFine && e.chosen)) return e.touchEnter === 'send' ? 'send' : 'none';
+  return e.shortcut === 'mod-enter' ? 'none' : 'send';
 }

@@ -48,6 +48,8 @@ import type { FinishedResult } from '../lib/threadKit/results';
 import { cardAnswer, isCardEcho, storedAnswerText } from '../lib/choiceCard';
 import PairCodeCard from '../components/arturo/PairCodeCard';
 import JobTray from '../components/arturo/JobTray';
+import { composerKeyAction, composerKeys, keyArgs } from '../lib/composerGate';
+import { useDeviceSetting } from '../lib/deviceSettings';
 import { useStickToBottom } from '../lib/useStickToBottom';
 import { useArturoThreadPages } from '../lib/useArturoThreadPages';
 import { useNearTop } from '../lib/threadKit/useOlderPages';
@@ -119,6 +121,7 @@ export default function ArturoHome() {
   const [step, setStep] = useState<Step>(firstStep(ls(LS_ONBOARDED) === '1'));
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState('');
+  const [sendShortcut] = useDeviceSetting('sendShortcut');   // Settings › General › Send shortcut
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<ArturoHealth | null>(null);
   const [starting, setStarting] = useState(false);   // G15: proxy not up yet (orchestra up boot window)
@@ -523,7 +526,8 @@ export default function ArturoHome() {
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as KeyboardEvent).isComposing) { e.preventDefault(); void send(); }
+    const action = composerKeyAction({ ...keyArgs(e), ...composerKeys('arturoHome', sendShortcut) });
+    if (action === 'send') { e.preventDefault(); void send(); }
   };
   const grow = () => { const el = taRef.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; };
   useEffect(() => { if (dictating) grow(); }, [draft, dictating]);   // live text grows the box

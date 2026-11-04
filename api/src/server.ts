@@ -58,6 +58,7 @@ import factsRouter from './routes/facts.js';
 import chatHistoryRouter from './routes/chat-history.js';
 import reactionsRouter from './routes/reactions.js';
 import settingsRouter from './routes/settings.js';
+import settingsAgentsRouter from './routes/settings-agents.js';
 import { ensureAgentReactToken } from './lib/agent-react-token.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
@@ -239,6 +240,7 @@ app.use('/api/runtimes', runtimesAvailableRouter);
 app.use('/api/facts', factsRouter);
 app.use('/api/chat-history', chatHistoryRouter); // the /chat-history page's list + thread reads (router existed, was never mounted)
 app.use('/api/reactions', reactionsRouter); // message reactions: GET/PUT/DELETE + /stream SSE (routes/reactions.ts)
+app.use('/api/settings/agents', settingsAgentsRouter); // Settings › Agents: override counts, background programs + Stop (routes/settings-agents.ts)
 app.use('/api/settings', settingsRouter); // Settings: the registry's rows; PUT one (routes/settings.ts)
 
 const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || loadConfig().dataDir;

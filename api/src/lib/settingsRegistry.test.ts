@@ -14,7 +14,8 @@ function fakeGateway() {
     get: async (p) => {
       calls.push({ method: 'GET', path: p });
       if (p === '/arturo/ptt/vendor') return { status: 200, body: { ok: true, vendor, vendors: [
-        { id: 'openai', title: 'GPT-Live', available: true }, { id: 'hume', title: 'Hume', available: false, reason: 'no key' }] } };
+        { id: 'openai', title: 'GPT-Live', subtitle: "OpenAI's live voice: listens while it talks", available: true },
+        { id: 'hume', title: 'Hume', subtitle: '  ', available: false, reason: 'no key' }] } };
       if (p.startsWith('/arturo/ptt/voice?')) return { status: 200, body: { ok: true, voice_id: voice, title: voice } };
       return { status: 404, body: { ok: false, error: 'nope' } };
     },
@@ -45,7 +46,7 @@ test('every key is unique, in a phase-1 section, names its store; every Everyone
   const keys = SETTINGS.map((e) => e.key);
   assert.equal(new Set(keys).size, keys.length);
   for (const e of SETTINGS) {
-    assert.ok(['general', 'voice', 'agents'].includes(e.section), e.key);
+    assert.ok(['general', 'voice', 'agents', 'notifications'].includes(e.section), e.key);
     assert.ok(e.store.length > 0, `${e.key} names its store`);
     if (e.readOnly) continue;
     assert.equal(typeof e.write, 'function', `${e.key} has a writer`);
@@ -60,6 +61,9 @@ test('with nothing stored, each row reads its built-in default', async () => {
   assert.deepEqual(await v('voice.newAgentsTakeCalls'), { value: true, source: 'builtin' });
   assert.deepEqual(await v('agents.compactAt'), { value: 65, source: 'builtin' });
   assert.deepEqual(await v('general.defaultChatStyle'), { value: 'bubbles', source: 'builtin' });
+  assert.deepEqual([(await v('notifications.level')).value, (await v('notifications.level')).source], ['all', 'builtin']);
+  assert.deepEqual(await v('notifications.agentOverrides'), { value: {}, source: 'builtin' });
+  assert.deepEqual([(await v('notifications.quietHours')).value, (await v('notifications.quietHours')).source], [null, 'builtin']);
   assert.equal((await v('general.timeZone')).value, 'America/New_York');
 });
 
@@ -71,6 +75,9 @@ const CASES: [string, unknown, unknown, string][] = [
   ['agents.autoCompact', true, 1, 'state/seat-settings-default.json'],
   ['agents.compactAt', 50, 90, 'state/seat-settings-default.json'],
   ['agents.showCompaction', false, 'x', 'state/seat-settings-default.json'],
+  ['notifications.level', 'nothing', 'quiet', 'state/users/operator/prefs.json'],
+  ['notifications.agentOverrides', { 'dev-a': 'needs_me', gm: 'nothing' }, { 'dev a': 'all' }, 'state/users/operator/prefs.json'],
+  ['notifications.quietHours', { from: '22:00', to: '07:00' }, { from: '22:00', to: '7:00' }, 'state/users/operator/prefs.json'],
 ];
 
 test('local stores: validators reject bad input; good values round-trip into the store the entry names', async () => {
@@ -105,7 +112,7 @@ test('voice provider and default voice go through the gateway; a refusal comes b
   const r = await p.read(ctx);
   assert.equal(r.value, 'openai');
   assert.deepEqual(r.choices, [
-    { value: 'openai', label: 'GPT-Live', available: true },
+    { value: 'openai', label: 'GPT-Live', available: true, description: "OpenAI's live voice: listens while it talks" },
     { value: 'hume', label: 'Hume', available: false, reason: 'Not available on this install' }]);
   await assert.rejects(p.write!(ctx, 'hume'), /hume is not set up/);
   await p.write!(ctx, 'openai');
@@ -152,4 +159,72 @@ test('the provider change names the person who made it (their Tailscale login), 
   const { ctx, calls } = makeCtx();
   await settingEntry('voice.provider')!.write!({ ...ctx, by: 'sam@example.com' }, 'openai');
   assert.deepEqual(calls.at(-1), { method: 'PUT', path: '/arturo/ptt/vendor', body: { vendor: 'openai', by: 'sam@example.com' } });
+});
+
+test('Notifications: the level row says honestly where it applies; the server push path reads the same keys', async () => {
+  const { ctx } = makeCtx();
+  const level = settingEntry('notifications.level')!;
+  const saved = process.env.NTFY_TOKEN_FILE;
+  try {
+    process.env.NTFY_TOKEN_FILE = join(ctx.dataDir, 'no-such-token');
+    assert.match(String((await level.read(ctx)).detail), /doesn't send pushes yet, so for now this changes nothing/);
+    writeFileSync(join(ctx.dataDir, 'ntfy-token'), 'tk\n');
+    process.env.NTFY_TOKEN_FILE = join(ctx.dataDir, 'ntfy-token');
+    assert.match(String((await level.read(ctx)).detail), /^The watch app still alerts for every card itself/);
+  } finally { if (saved === undefined) delete process.env.NTFY_TOKEN_FILE; else process.env.NTFY_TOKEN_FILE = saved; }
+  assert.match(level.note!, /All and Needs me act the same for now/);
+  const py = readFileSync(new URL('../../../scripts/notify_policy.py', import.meta.url), 'utf-8');
+  for (const k of ['notify_level', 'notify_agents', 'quiet_hours']) {
+    assert.ok(settingEntry(k === 'notify_level' ? 'notifications.level' : k === 'notify_agents' ? 'notifications.agentOverrides' : 'notifications.quietHours')!.store.endsWith(k));
+    assert.match(py, new RegExp(`prefs\\.get\\("${k}"\\)`), `notify_policy.py reads ${k}`);
+  }
+});
+
+test('Notifications: a stored but malformed value reads back clean; quiet hours say when they are on now', async () => {
+  const { ctx } = makeCtx();
+  mkdirSync(join(ctx.dataDir, 'state', 'users', 'operator'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'state', 'users', 'operator', 'prefs.json'), JSON.stringify({
+    notify_level: 'loud', notify_agents: { 'dev-a': 'nothing', 'bad id': 'all', gm: 'loud' }, quiet_hours: { from: '25:00', to: '07:00' } }));
+  assert.equal((await settingEntry('notifications.level')!.read(ctx)).value, 'all');
+  assert.deepEqual((await settingEntry('notifications.agentOverrides')!.read(ctx)).value, { 'dev-a': 'nothing' });
+  assert.equal((await settingEntry('notifications.quietHours')!.read(ctx)).value, null);
+  const q = settingEntry('notifications.quietHours')!;
+  await q.write!(ctx, { from: '00:00', to: '23:59' });
+  const r = await q.read(ctx);
+  const nyMinutes = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .format(new Date()).split(':').reduce((h, m) => String(Number(h) * 60 + Number(m))));
+  assert.equal(String(r.detail).startsWith('Quiet now. '), nyMinutes < 23 * 60 + 59);
+});
+
+test('Notifications: both rows name every path on this install they do not reach (watch app, Telegram, operator pushes)', async () => {
+  const { ctx } = makeCtx();
+  const saved = { tok: process.env.NTFY_TOKEN_FILE, trust: process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS };
+  const detail = async (k: string, c: SettingsCtx = ctx) => String((await settingEntry(k)!.read(c)).detail);
+  try {
+    process.env.NTFY_TOKEN_FILE = join(ctx.dataDir, 'none');
+    delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+    for (const k of ['notifications.level', 'notifications.quietHours']) {
+      const d = await detail(k);
+      assert.match(d, /The watch app alerts for every card itself/);
+      assert.doesNotMatch(d, /Telegram|choices, not yours/);
+    }
+    writeFileSync(ctx.configPath, readFileSync(ctx.configPath, 'utf-8') + '\n[notify]\nchannel = "telegram"\n');
+    for (const k of ['notifications.level', 'notifications.quietHours']) assert.match(await detail(k), /Telegram messages go to the install's chat for every card and don't follow this\./);
+    process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
+    assert.doesNotMatch(await detail('notifications.level'), /choices, not yours/, 'the operator themself');
+    const sam = { ...ctx, user: 'sam@example.com' };
+    for (const k of ['notifications.level', 'notifications.quietHours']) assert.match(await detail(k, sam), /This server's pushes follow operator's choices, not yours\./);
+  } finally {
+    if (saved.tok === undefined) delete process.env.NTFY_TOKEN_FILE; else process.env.NTFY_TOKEN_FILE = saved.tok;
+    if (saved.trust === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS; else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = saved.trust;
+  }
+});
+
+test('Notifications: Telegram is named when the sender can send (.env.telegram in the data dir), even with channel none', async () => {
+  const { ctx } = makeCtx();
+  writeFileSync(ctx.configPath, readFileSync(ctx.configPath, 'utf-8') + '\n[notify]\nchannel = "none"\n');
+  const detail = async (k: string) => String((await settingEntry(k)!.read(ctx)).detail);
+  for (const k of ['notifications.level', 'notifications.quietHours']) assert.doesNotMatch(await detail(k), /Telegram/);
+  writeFileSync(join(ctx.dataDir, '.env.telegram'), 'TELEGRAM_BOT_TOKEN=x\n');
+  for (const k of ['notifications.level', 'notifications.quietHours']) assert.match(await detail(k), /Telegram messages go to the install's chat for every card/);
 });

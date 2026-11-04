@@ -4,21 +4,32 @@
  * (settingsBg) and every section opened adds one entry (settingsDepth), so browser Back steps back through sections
  * and then closes Settings; Esc / X / Done go back past them all at once.
  */
-export type SectionId = 'general' | 'display' | 'voice' | 'agents' | 'models' | 'keys' | 'notifications' | 'people' | 'system';
-export interface SettingsSection { id: SectionId; label: string; visible: boolean }
+export type SectionId = 'general' | 'display' | 'voice' | 'agents' | 'models' | 'keys' | 'notifications' | 'people' | 'system' | 'server-voice' | 'server';
+/** `group`: listed under a small label at the bottom of the list (the install's own settings, admin). */
+export interface SettingsSection { id: SectionId; label: string; visible: boolean; group?: 'server' }
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'general', label: 'General', visible: true },
   { id: 'display', label: 'Display', visible: true },
-  { id: 'voice', label: 'Voice & calls', visible: true },
+  // Yours, on this device: the mic and its colour. The install's voice rows are under Server.
+  { id: 'voice', label: 'Voice', visible: true },
   { id: 'agents', label: 'Agents', visible: true },
+  { id: 'notifications', label: 'Notifications', visible: true },
   // Phases 2–4 (spec §7): listed so their routes and order are fixed, shown once they are built.
   { id: 'models', label: 'Models & providers', visible: false },
   { id: 'keys', label: 'Keys', visible: false },
-  { id: 'notifications', label: 'Notifications', visible: false },
   { id: 'people', label: 'Devices & people', visible: false },
   { id: 'system', label: 'System', visible: false },
+  // The install's own categories, until a Server settings window exists: last, under the install's name. Its voice
+  // provider, default voice, new agents take calls and daily limit (Everyone, admin); then its time zone.
+  { id: 'server-voice', label: 'Voice & calls', visible: true, group: 'server' },
+  { id: 'server', label: 'Time zone', visible: true, group: 'server' },
 ];
+
+/** The label above the install's own categories: the install's name, or "Server" while there is none to show. */
+export function serverGroupLabel(installName?: string | null): string {
+  return installName?.trim() || 'Server';
+}
 
 export function visibleSections(): SettingsSection[] { return SETTINGS_SECTIONS.filter((s) => s.visible); }
 export function sectionLabel(id: SectionId): string { return SETTINGS_SECTIONS.find((s) => s.id === id)?.label ?? 'Settings'; }

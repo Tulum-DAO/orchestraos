@@ -1,11 +1,11 @@
 /** The agent panel's "Takes calls" (Setup): whether a call to this agent is with the agent itself. It affects everyone
- *  who calls it, so only an admin may change it; others see it locked. Saves on change, ✓ Saved, reverts with the reason. */
+ *  who calls it, so only an admin may change it; others see it locked. Saves on change, ✓ Saved (in its fixed slot, so nothing moves), reverts with the reason. */
 import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
 import { fetchTakesCalls, refreshAgentCallsOn, saveTakesCalls } from '../../lib/agentCallsOn';
 import { ADMIN_LOCK_NOTE, useInstallAdmin } from '../../lib/myRole';
 import { useSavedFlash } from '../settings/settingsState';
 import { Switch } from './PanelRows';
+import { SavedSlot } from '../settings/SavedSlot';
 
 export function TakesCalls({ agentId }: { agentId: string }) {
   const [on, setOn] = useState<boolean | null>(null);
@@ -27,9 +27,8 @@ export function TakesCalls({ agentId }: { agentId: string }) {
   return (
     <div data-takes-calls>
       <div className="arturo-panel-field">
-        <span id={`takes-calls-${agentId}`}>Takes calls</span>
+        <span className="settings-row-titleline"><span id={`takes-calls-${agentId}`}>Takes calls</span><SavedSlot on={status.kind === 'saved'} /></span>
         <span className="settings-control">
-          {status.kind === 'saved' && <span className="settings-saved" role="status"><Check size={14} aria-hidden /> Saved</span>}
           <Switch on={on === true} labelledBy={`takes-calls-${agentId}`} disabled={on === null || !admin} onToggle={() => void toggle()} data="takes-calls" />
         </span>
       </div>

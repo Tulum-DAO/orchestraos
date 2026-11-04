@@ -9,19 +9,39 @@
  *   sidebar width desktop: 240 × text, capped at 300; a drag (200–360) overrides it (orchestra.sidebar.width)
  *   drawer width  phone: ~80% of the screen at 100% text, ~90% at 125–150%
  *   avatars       beside text: 1 + (text − 1) / 2, clamped [0.9, 1.25], never under 16 px; controls never scale
+ *   timestamps    data-timestamps on <html>: always / hover (only where something can hover) / off
+ *   send keys     Settings › General › Send shortcut (lib/composerGate.ts composerKeys); null = not chosen
  */
 export const TEXT_SCALES = [0.87, 1, 1.12, 1.25, 1.5] as const;
 export type TextScale = (typeof TEXT_SCALES)[number];
+const DEFAULT_TEXT_SCALE: TextScale = 1;
+/** Text size's stops by name (Settings › General shows a slider and the name, never a percentage). */
+export const TEXT_SCALE_NAMES: Record<TextScale, string> = { 0.87: 'Small', 1: 'Default', 1.12: 'Large', 1.25: 'Larger', 1.5: 'Largest' };
+/** The slider stop (0–4) of a value; an unknown value is the Default stop. */
+export function textScaleIndex(t: number): number {
+  const i = (TEXT_SCALES as readonly number[]).indexOf(t);
+  return i < 0 ? TEXT_SCALES.indexOf(DEFAULT_TEXT_SCALE) : i;
+}
+/** The value at a slider stop, snapped to the nearest stop and clamped to the ends. */
+export function textScaleAt(i: number): TextScale {
+  if (!Number.isFinite(i)) return DEFAULT_TEXT_SCALE;
+  return TEXT_SCALES[Math.min(TEXT_SCALES.length - 1, Math.max(0, Math.round(i)))];
+}
+export function textScaleName(t: number): string {
+  return TEXT_SCALE_NAMES[TEXT_SCALES[textScaleIndex(t)]];
+}
 export const SPACINGS = ['compact', 'comfortable', 'roomy'] as const;
 export type Spacing = (typeof SPACINGS)[number];
 export const MESSAGE_WIDTHS = ['narrow', 'default', 'wide'] as const;
 export type MessageWidth = (typeof MESSAGE_WIDTHS)[number];
 export const TOOL_DETAILS = ['summary', 'normal', 'verbose'] as const;
 export type ToolDetail = (typeof TOOL_DETAILS)[number];
-export const TIMESTAMPS = ['always', 'hover'] as const;
+export const TIMESTAMPS = ['always', 'hover', 'off'] as const;
 export type Timestamps = (typeof TIMESTAMPS)[number];
 export const MOTIONS = ['system', 'reduced', 'full'] as const;
 export type Motion = (typeof MOTIONS)[number];
+export const SEND_SHORTCUTS = ['enter', 'mod-enter'] as const;
+export type SendShortcut = (typeof SEND_SHORTCUTS)[number];
 
 export interface Display {
   textScale: TextScale;
@@ -32,6 +52,8 @@ export interface Display {
   motion: Motion;
   /** A dragged width (desktop), or null for the text-driven default. */
   sidebarWidth: number | null;
+  /** The keys that send a message; null until chosen (each composer then keeps its own, lib/composerGate.ts). */
+  sendShortcut: SendShortcut | null;
 }
 
 export const DISPLAY_KEYS: Record<keyof Display, string> = {
@@ -42,11 +64,16 @@ export const DISPLAY_KEYS: Record<keyof Display, string> = {
   timestamps: 'orchestra.display.timestamps',
   motion: 'orchestra.display.motion',
   sidebarWidth: 'orchestra.sidebar.width',
+  sendShortcut: 'orchestra.composer.sendShortcut',
 };
 
 export const DISPLAY_DEFAULTS: Display = {
-  textScale: 1, spacing: 'comfortable', messageWidth: 'default', toolDetail: 'normal', timestamps: 'always', motion: 'system', sidebarWidth: null,
+  textScale: 1, spacing: 'comfortable', messageWidth: 'default', toolDetail: 'normal', timestamps: 'always', motion: 'system', sidebarWidth: null, sendShortcut: null,
 };
+
+/** What Settings › Display "Reset display settings" puts back: only the rows shown on Display. Text size, agent steps
+ *  (toolDetail) and timestamps live on General and are not reset from Display; nor are the send keys. */
+export const DISPLAY_RESET_KEYS: readonly (keyof Display)[] = ['spacing', 'messageWidth', 'sidebarWidth', 'motion'];
 
 export const SIDEBAR_MIN = 200;
 export const SIDEBAR_MAX = 360;
@@ -93,6 +120,7 @@ export function readDisplay(s: Reader): Display {
     timestamps: pick(TIMESTAMPS, get('timestamps'), DISPLAY_DEFAULTS.timestamps),
     motion: pick(MOTIONS, get('motion'), DISPLAY_DEFAULTS.motion),
     sidebarWidth: wRaw !== null && wRaw.trim() !== '' && Number.isFinite(w) ? clampSidebarWidth(w) : null,
+    sendShortcut: (SEND_SHORTCUTS as readonly string[]).includes(get('sendShortcut') ?? '') ? (get('sendShortcut') as SendShortcut) : null,
   };
 }
 

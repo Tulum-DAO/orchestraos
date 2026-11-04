@@ -42,3 +42,104 @@
 .settings-search-title { font-weight: 600; margin: 4px 0 8px; font-size: calc(15px * var(--ui-text-scale, 1)); }
 .settings-preview { border: 1px solid var(--hair); border-radius: 12px; padding: 12px; margin-bottom: 16px; background: var(--canvas); }
 @media (max-width: 47.99rem) { .settings-choice-opt { min-height: 44px; } }
+
+/* The category list's label above the install's own categories (the install's name, or "Server"). */
+.settings-nav-group { margin: 14px 10px 2px; font-size: calc(11px * var(--ui-text-scale, 1)); font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--grey); }
+.arturo-panel-list .settings-nav-group { margin: 20px 2px 6px; }
+
+/* A page in the OpenBot layout (General): a one-line intro, then a label above a rounded card; each row is its title
+   and one grey description on the left, the control on the right, with hairlines between rows. */
+.agent-panel-host { --settings-card: var(--canvas); }
+.dark .agent-panel-host { --settings-card: var(--card); }
+.settings-page-intro { margin: 0 2px 16px; color: var(--grey); font-size: calc(14px * var(--ui-text-scale, 1)); line-height: 1.45; }
+.settings-search-section .settings-page-intro { display: none; }
+.settings-card-label { margin: 0 4px 8px; font-size: calc(13px * var(--ui-text-scale, 1)); font-weight: 600; color: var(--text); }
+.settings-card { background: var(--settings-card); border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; }
+.settings-card > .settings-row { padding: 12px 14px; }
+.settings-card > .settings-row + .settings-row { border-top: 1px solid var(--hair); }
+.settings-card .arturo-panel-field { border-bottom: 0; min-height: 0; padding: 0; gap: 16px; flex-wrap: nowrap; }
+.settings-card .arturo-panel-field.settings-stacked { gap: 10px; }
+.settings-card .settings-control { flex: none; max-width: 60%; }
+.settings-card .settings-stacked .settings-control { max-width: none; justify-content: flex-start; }
+.settings-card .arturo-panel-note { margin: 8px 0 0; }
+.settings-card .arturo-panel-error { margin: 8px 0 0; }
+.settings-card .settings-choice-opt:not(.is-on) { background: var(--panel); }
+.settings-card .settings-preview { margin: 12px 0 0; }
+.settings-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.settings-row-title { font-size: calc(15px * var(--ui-text-scale, 1)); color: var(--text); }
+.settings-row-desc { font-size: calc(13px * var(--ui-text-scale, 1)); line-height: 1.4; color: var(--grey); }
+/* A phone (and a narrow window): the control goes under the text, so neither is squeezed. */
+@media (max-width: 47.99rem) {
+  .settings-card .arturo-panel-field { flex-direction: column; align-items: stretch; gap: 10px; }
+  .settings-card .settings-control { max-width: none; justify-content: flex-start; }
+}
+
+/* Text size (General, TextSizeSlider.tsx): a small A, a five-stop track with tick dots, a large A, the stop's name under
+   it. The native range draws only the thumb; the line and dots sit behind it, inset by half a thumb so each dot is where
+   the thumb's centre stops. The A's and the name scale with text; the A's boxes are fixed (they fit 150%), so the track
+   keeps its width when a stop changes the text size mid-drag and the thumb stays under the finger. */
+.settings-textsize { --thumb: 24px; --track-h: 32px; flex: 1 1 auto; width: 100%; max-width: 480px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 2px; }
+.settings-textsize-a { color: var(--text); line-height: 1; font-weight: 500; text-align: center; user-select: none; }
+.settings-textsize-a.is-small { width: 20px; font-size: calc(13px * var(--ui-text-scale, 1)); }
+.settings-textsize-a.is-large { width: 34px; font-size: calc(22px * var(--ui-text-scale, 1)); }
+.settings-textsize-track { position: relative; display: block; height: var(--track-h); min-width: 0; }
+.settings-textsize-line { position: absolute; left: calc(var(--thumb) / 2); right: calc(var(--thumb) / 2); top: 50%; height: 4px;
+  margin-top: -2px; border-radius: 2px; background: rgba(var(--ink), 0.16); pointer-events: none; }
+.settings-textsize-tick { position: absolute; top: 50%; left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--tick));
+  width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(var(--ink), 0.34); pointer-events: none; }
+.settings-textsize-input { position: relative; z-index: 1; display: block; width: 100%; height: 100%; margin: 0; padding: 0;
+  background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.settings-textsize-input:focus { outline: none; }
+.settings-textsize-input::-webkit-slider-runnable-track { height: var(--track-h); background: transparent; border: 0; }
+.settings-textsize-input::-moz-range-track { height: var(--track-h); background: transparent; border: 0; }
+.settings-textsize-input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: var(--thumb); height: var(--thumb);
+  margin-top: calc((var(--track-h) - var(--thumb)) / 2); border-radius: 50%; background: #fff; border: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.settings-textsize-input::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #fff;
+  border: 0.5px solid rgba(0, 0, 0, 0.12); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.settings-textsize-input:focus-visible::-webkit-slider-thumb { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 3px var(--settings-card), 0 0 0 5px var(--text); }
+.settings-textsize-input:focus-visible::-moz-range-thumb { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 3px var(--settings-card), 0 0 0 5px var(--text); }
+.settings-textsize-foot { grid-column: 1 / -1; position: relative; display: block; text-align: center; }
+.settings-textsize-name { font-size: calc(13px * var(--ui-text-scale, 1)); font-weight: 500; color: var(--grey); }
+@media (max-width: 47.99rem) { .settings-textsize { --track-h: 44px; max-width: none; } }
+
+/* The ✓ Saved slot (SavedSlot.tsx) beside a row's title: always there, only shown or hidden, so a save never moves a
+   control, a label or the row's height. */
+.settings-row-titleline { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-row-titleline > :first-child { min-width: 0; }
+.settings-saved-slot { flex: none; display: inline-flex; align-items: center; }
+.settings-saved.is-idle { visibility: hidden; }
+/* A phone: the slot takes no width in the title's line (it sits just after the title, out of the flow), so a row whose
+   control shares that line never wraps it; showing it still moves nothing. */
+@media (max-width: 47.99rem) {
+  .settings-row-titleline { position: relative; }
+  .settings-saved-slot { position: absolute; left: 100%; top: 50%; margin-left: 8px; transform: translateY(-50%); white-space: nowrap; pointer-events: none; }
+}
+/* The preview is inert (nothing hovers it), so with Timestamps "On hover" it shows its times dimmed, as a hint of
+   where they appear, instead of none at all. */
+@media (hover: hover) { html[data-timestamps="hover"] [data-display-preview] [data-msg-time] { opacity: 0.5; } }
+
+/* Display's quiet "Reset display settings" under its cards. */
+.settings-page-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 4px 8px; }
+.settings-page-action .settings-control { justify-content: flex-start; }
+
+/* Notifications › Quiet hours: the From and To times under the row, left-aligned. */
+.settings-quiet-times { display: flex; justify-content: flex-start; gap: 16px; margin: 10px 0 0; }
+.settings-quiet-times input[type="time"] { width: auto; }
+
+/* ChoiceList (Server › Voice & calls › Voice provider): one option per line, its name and one grey line, a check on
+   the one in use; an option the install can't run is greyed and says why in its line. */
+.settings-choicelist { display: flex; flex-direction: column; width: 100%; border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; }
+.settings-choicelist-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; min-height: 44px;
+  text-align: left; background: var(--card); color: var(--text); }
+.settings-choicelist-opt + .settings-choicelist-opt { border-top: 1px solid var(--hair); }
+.settings-choicelist-opt:disabled { opacity: 0.55; }
+.settings-choicelist-opt:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.settings-choicelist-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-choicelist-label { font-size: calc(15px * var(--ui-text-scale, 1)); }
+.settings-choicelist-check { flex: none; width: 18px; display: inline-flex; }
+
+/* A link inside a line of text (Settings › Voice's pointer to Server › Voice & calls). */
+.settings-inline-link { display: inline; padding: 0; min-height: 0; font: inherit; text-decoration: underline; }

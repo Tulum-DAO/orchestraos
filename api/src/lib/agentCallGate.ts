@@ -72,7 +72,7 @@ export async function liveEngine(waitMs = 1500, now = Date.now(), fetcher: () =>
 /** Tests: forget the cached engine. */
 export function forgetLiveEngine(): void { engineCache = null; inflight = null; }
 
-// ── Writes (Settings › Voice & calls "New agents take calls"; the agent panel's "Takes calls") ─────────────────────
+// ── Writes (Settings › Server › Voice & calls "New agents take calls"; the agent panel's "Takes calls") ─────────────────────
 // Same file and shape the voice side and scripts/headless_adopt.py read; every other key and option is kept.
 const callsFile = (dataDir: string) => path.join(dataDir, 'state', 'agent-calls.json');
 type CallsDoc = Record<string, unknown> & { seats: Record<string, Record<string, unknown>>; default?: Record<string, unknown> };

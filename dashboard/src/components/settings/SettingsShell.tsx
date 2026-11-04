@@ -4,16 +4,19 @@
  * full-screen sheet, the category list first, then a category with a back chevron and Done. Esc, X, Done or the scrim
  * close it (back past every Settings history entry); Tab stays inside; focus goes back to what opened it.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { closeSettingsTarget, nextSettingsState, sectionLabel, settingsPath, settingsStateOf, visibleSections, type SectionId } from '../../lib/settingsRoute';
+import { closeSettingsTarget, nextSettingsState, sectionLabel, serverGroupLabel, settingsPath, settingsStateOf, visibleSections, type SectionId, type SettingsSection } from '../../lib/settingsRoute';
 import { loadServerSettings } from '../../stores/serverSettings';
 import { SettingsQuery } from './settingsState';
 import { GeneralSection } from './sections/GeneralSection';
 import { DisplaySection } from './sections/DisplaySection';
 import { VoiceSection } from './sections/VoiceSection';
+import { ServerVoiceSection } from './sections/ServerVoiceSection';
 import { AgentsSection } from './sections/AgentsSection';
+import { NotificationsSection } from './sections/NotificationsSection';
+import { ServerSection } from './sections/ServerSection';
 import '../arturo/arturo.css';
 import './settings.css';
 
@@ -30,8 +33,24 @@ function view(id: SectionId, desktop: boolean): ReactNode {
     case 'display': return <DisplaySection desktop={desktop} />;
     case 'voice': return <VoiceSection />;
     case 'agents': return <AgentsSection />;
+    case 'notifications': return <NotificationsSection />;
+    case 'server-voice': return <ServerVoiceSection />;
+    case 'server': return <ServerSection />;
     default: return null;
   }
+}
+
+/** The category list with the install's own categories last, under their label (the install's name, or "Server"). */
+function CategoryList({ render }: { render: (s: SettingsSection) => ReactNode }) {
+  const all = visibleSections();
+  return <>
+    {all.map((s, i) => (
+      <Fragment key={s.id}>
+        {s.group && all[i - 1]?.group !== s.group && <div className="settings-nav-group" data-settings-nav-group={s.group}>{serverGroupLabel()}</div>}
+        {render(s)}
+      </Fragment>
+    ))}
+  </>;
 }
 
 /** A close that goes back to a deep link's own entry, then replaces it: the page to put there once Back has landed. */
@@ -68,7 +87,7 @@ function SearchResults({ query, desktop }: { query: string; desktop: boolean }) 
     <SettingsQuery.Provider value={query}>
       {visibleSections().map((s) => (
         <section key={s.id} className="settings-search-section" data-settings-section={s.id}>
-          <h2 className="settings-search-title">{s.label}</h2>
+          <h2 className="settings-search-title">{s.group ? `${serverGroupLabel()} › ${s.label}` : s.label}</h2>
           {view(s.id, desktop)}
         </section>
       ))}
@@ -150,12 +169,12 @@ export function SettingsShell({ section }: { section: SectionId | null }) {
                 <SearchBox value={query} onChange={setQuery} />
                 {searching ? <SearchResults query={query} desktop={false} /> : (
                   <div className="arturo-panel-list mt-3">
-                    {visibleSections().map((s) => (
-                      <button key={s.id} type="button" className="arturo-panel-row" data-settings-nav={s.id} onClick={() => go(s.id)}>
+                    <CategoryList render={(s) => (
+                      <button type="button" className="arturo-panel-row" data-settings-nav={s.id} onClick={() => go(s.id)}>
                         <span>{s.label}</span>
                         <ChevronRight size={18} />
                       </button>
-                    ))}
+                    )} />
                   </div>
                 )}
               </>
@@ -173,13 +192,13 @@ export function SettingsShell({ section }: { section: SectionId | null }) {
         <div className="settings-nav">
           <SearchBox value={query} onChange={setQuery} />
           <nav aria-label="Settings categories" className="flex flex-col gap-0.5">
-            {visibleSections().map((s) => (
-              <button key={s.id} type="button" className="settings-nav-item" data-settings-nav={s.id}
+            <CategoryList render={(s) => (
+              <button type="button" className="settings-nav-item" data-settings-nav={s.id}
                       aria-current={!searching && s.id === current ? 'page' : undefined}
                       onClick={() => { setQuery(''); if (s.id !== current) go(s.id); }}>
                 {s.label}
               </button>
-            ))}
+            )} />
           </nav>
         </div>
         <div className="settings-main">

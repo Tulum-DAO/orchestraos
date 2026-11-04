@@ -2,7 +2,8 @@
  * settingsApi.ts — the server's Settings rows (GET /api/settings, PUT /api/settings/:key; api routes/settings.ts) and
  * the words a row shows about its last change. The live store is stores/serverSettings.ts.
  */
-export interface SettingChoice { value: string; label: string; available: boolean; reason?: string }
+/** `description`: a one-line word on the option (the voice provider's trade-off), when the server has one. */
+export interface SettingChoice { value: string; label: string; available: boolean; reason?: string; description?: string }
 export interface SettingRow {
   key: string; section: string; scope: 'user' | 'everyone'; value: unknown;
   editable: boolean; readOnly: boolean; source: string;
