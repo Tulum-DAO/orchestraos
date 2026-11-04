@@ -133,7 +133,7 @@ export default function NotificationBell() {
           {totalPending > 0 && (
             // Absolutely positioned over the button's corner: it never takes layout space, so
             // a count appearing or growing cannot move the bell.
-            <span className="pointer-events-none absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold leading-none rounded-full bg-red-500 text-white border-2 border-background px-1">
+            <span className="pointer-events-none absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-px10 font-bold leading-none rounded-full bg-red-500 text-white border-2 border-background px-1">
               {totalPending}
             </span>
           )}
@@ -167,7 +167,7 @@ export default function NotificationBell() {
                     <p className="text-sm text-foreground">{pendingApprovals} pending approval{pendingApprovals !== 1 ? 's' : ''}</p>
                     <p className="text-xs text-muted-foreground">Review in Inbox</p>
                   </div>
-                  <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{pendingApprovals}</span>
+                  <span className="bg-red-600 text-white text-px10 font-bold px-1.5 py-0.5 rounded-full">{pendingApprovals}</span>
                 </button>
               )}
 
@@ -176,7 +176,7 @@ export default function NotificationBell() {
                 <button key={agent} onClick={() => void openAgentAt(agent)} disabled={jumping === agent}
                   className="flex w-full items-center gap-3 px-4 py-2 pl-12 text-left transition-colors hover:bg-muted">
                   <p className="flex-1 truncate text-xs text-foreground">{agent}</p>
-                  <span className="text-[11px] text-muted-foreground">{count} waiting</span>
+                  <span className="text-px11 text-muted-foreground">{count} waiting</span>
                 </button>
               ))}
 
@@ -196,7 +196,7 @@ export default function NotificationBell() {
                     <p className="text-sm text-foreground">{pendingQuestionnaires} questionnaire{pendingQuestionnaires !== 1 ? 's' : ''}</p>
                     <p className="text-xs text-muted-foreground">Needs your input</p>
                   </div>
-                  <span className="bg-amber-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{pendingQuestionnaires}</span>
+                  <span className="bg-amber-600 text-white text-px10 font-bold px-1.5 py-0.5 rounded-full">{pendingQuestionnaires}</span>
                 </button>
               )}
 

@@ -167,7 +167,7 @@ function ProjectCard({ project, maxCommits }: { project: Project; maxCommits: nu
               <div
                 key={agent.id}
                 title={`${agent.name} (${agent.tier}) — ${agent.alive ? 'online' : 'stopped'}`}
-                className="relative w-7 h-7 rounded-full bg-tone-800 flex items-center justify-center text-[10px] font-bold text-tone-300 cursor-default"
+                className="relative w-7 h-7 rounded-full bg-tone-800 flex items-center justify-center text-px10 font-bold text-tone-300 cursor-default"
               >
                 {agent.name.charAt(0).toUpperCase()}
                 <span

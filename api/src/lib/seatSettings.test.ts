@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readSeatSettings, writeSeatSettings, cleanSettingsChange, seatHistory, seatRotates, seatCanCompactNow, readCompactGate, COMPACT_GATE_FILE } from './seatSettings.js';
+import { readSeatSettings, writeSeatSettings, cleanSettingsChange, seatHistory, seatRotates, seatCanCompactNow, readCompactGate, COMPACT_GATE_FILE, readInstallDefault, writeInstallDefault } from './seatSettings.js';
 
 const box = () => { const d = mkdtempSync(join(tmpdir(), 'seatset-')); mkdirSync(join(d, 'state')); return d; };
 
@@ -111,4 +111,25 @@ test('the flags are read, not assumed: turning one off widens the gate', () => {
   assert.equal(seatCanCompactNow('dev-demo', reg, headless, () => false, { needs_headless: true, needs_test_seat: false }), true);
   assert.equal(seatCanCompactNow('dev-demo', reg, new Set(), () => false, { needs_headless: false, needs_test_seat: false }), true);
   assert.equal(seatCanCompactNow('dev-demo', reg, headless, () => true, { needs_headless: true, needs_test_seat: false }), false, 'Dev still is not headless');
+});
+
+test('the install default is written to seat-settings-default.json and every seat without its own value follows it', () => {
+  const d = mkdtempSync(join(tmpdir(), 'install-default-'));
+  assert.deepEqual(readInstallDefault(d), {});
+  writeInstallDefault(d, { compact_at: 50 });
+  writeInstallDefault(d, { auto_compact: true });
+  assert.deepEqual(readInstallDefault(d), { compact_at: 50, auto_compact: true });
+  const s = readSeatSettings(d, 'any-seat');
+  assert.equal(s.compact_at, 50); assert.equal(s.source.compact_at, 'default');
+  assert.equal(s.auto_compact, true);
+  assert.throws(() => writeInstallDefault(d, { compact_at: 99 }));
+});
+
+test('changing the install default keeps keys under "default" it does not know (a newer field, a hand-made note)', () => {
+  const d = mkdtempSync(join(tmpdir(), 'install-default-keep-'));
+  mkdirSync(join(d, 'state'), { recursive: true });
+  const f = join(d, 'state', 'seat-settings-default.json');
+  writeFileSync(f, JSON.stringify({ other: 1, default: { future_field: 'x', compact_at: 60 } }));
+  writeInstallDefault(d, { auto_compact: false });
+  assert.deepEqual(JSON.parse(readFileSync(f, 'utf-8')), { other: 1, default: { future_field: 'x', compact_at: 60, auto_compact: false } });
 });

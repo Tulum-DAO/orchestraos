@@ -45,7 +45,7 @@ export function FleetTicker({ messages, freshIds, onSelectConnection }: FleetTic
           </>
         );
         const cls = clsx(
-          'flex items-center gap-1.5 shrink-0 text-[11px] px-2 py-1 rounded-lg border transition-colors',
+          'flex items-center gap-1.5 shrink-0 text-px11 px-2 py-1 rounded-lg border transition-colors',
           fresh
             ? 'border-tone-sky-800 bg-tone-sky-950/40 text-tone-200'
             : 'border-tone-800 bg-tone-900 text-tone-400',

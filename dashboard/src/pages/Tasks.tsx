@@ -338,7 +338,7 @@ export default function Tasks() {
         >
           Needs Me
           <span className={clsx(
-            'px-1.5 py-0.5 rounded-full text-[10px] font-bold',
+            'px-1.5 py-0.5 rounded-full text-px10 font-bold',
             needsMeCount > 0 ? 'bg-amber-500/30 text-tone-amber-300' : 'bg-tone-700 text-tone-500'
           )}>
             {needsMeCount}
@@ -496,7 +496,7 @@ export default function Tasks() {
                   <FolderOpen size={14} className="text-tone-violet-400 shrink-0" />
                   <span className="text-sm font-semibold text-tone-200 flex-1 truncate">{projectName}</span>
                   {hasBlocked && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-tone-amber-400 font-medium mr-1">blocked</span>
+                    <span className="text-px10 px-1.5 py-0.5 rounded bg-amber-500/20 text-tone-amber-400 font-medium mr-1">blocked</span>
                   )}
                   <span className="text-xs text-tone-500 shrink-0 mr-2">{total} task{total !== 1 ? 's' : ''}</span>
                   {/* Progress bar */}
@@ -507,7 +507,7 @@ export default function Tasks() {
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-tone-500 w-7 text-right">{pct}%</span>
+                    <span className="text-px10 text-tone-500 w-7 text-right">{pct}%</span>
                   </div>
                 </button>
 
@@ -545,7 +545,7 @@ function AgentBadge({ assignedTo, agentStatusMap }: { assignedTo: string; agentS
   const initials = agentInitials(assignedTo);
 
   return (
-    <span className="inline-flex items-center gap-1 bg-tone-800 border border-tone-700 rounded px-1.5 py-0.5 text-[10px] text-tone-400 font-medium max-w-[100px]">
+    <span className="inline-flex items-center gap-1 bg-tone-800 border border-tone-700 rounded px-1.5 py-0.5 text-px10 text-tone-400 font-medium max-w-[100px]">
       <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', dotColor)} />
       <span className="truncate" title={assignedTo}>{initials || assignedTo}</span>
     </span>
@@ -600,7 +600,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
       </div>
 
       {/* Tags */}
-      <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-[10px]">
+      <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-px10">
         {task.type && task.type !== 'agent' && (
           <span className={clsx('px-1.5 py-0.5 rounded font-semibold uppercase tracking-wider',
             task.type === 'human' ? 'bg-cyan-500/15 text-tone-cyan-400' :
@@ -621,7 +621,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
 
       {/* Footer: timestamp + agent badge */}
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-[10px] text-tone-600">
+        <span className="text-px10 text-tone-600">
           {relativeTime(task.created_at)} ago
         </span>
         {task.assigned_to && (
@@ -687,7 +687,7 @@ function TaskCard({ task, isExpanded, onToggle, onAdvance, onPatch, agentStatusM
           )}
 
           {/* Metadata */}
-          <div className="text-[10px] text-tone-600 space-y-0.5">
+          <div className="text-px10 text-tone-600 space-y-0.5">
             {task.source && <p>Source: {task.source}</p>}
             {task.created_by && <p>Created by: {task.created_by}</p>}
             {task.routed_to && <p>Routed to: {task.routed_to}</p>}
@@ -747,7 +747,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
         {/* Right side: type chip, agent badge, time, chevron */}
         <div className="flex items-center gap-2 shrink-0">
           {task.type && task.type !== 'agent' && (
-            <span className={clsx('hidden sm:inline px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider',
+            <span className={clsx('hidden sm:inline px-1.5 py-0.5 rounded text-px10 font-semibold uppercase tracking-wider',
               task.type === 'human' ? 'bg-cyan-500/15 text-tone-cyan-400' :
               task.type === 'call' ? 'bg-pink-500/15 text-tone-pink-400' :
               task.type === 'external' ? 'bg-amber-500/15 text-tone-amber-400' :
@@ -759,7 +759,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
           {task.assigned_to && (
             <AgentBadge assignedTo={task.assigned_to} agentStatusMap={agentStatusMap} />
           )}
-          <span className="text-[10px] text-tone-600 hidden sm:inline">{relativeTime(task.created_at)}</span>
+          <span className="text-px10 text-tone-600 hidden sm:inline">{relativeTime(task.created_at)}</span>
           {isExpanded
             ? <ChevronDown size={13} className="text-tone-600" />
             : <ChevronRight size={13} className="text-tone-600" />
@@ -813,7 +813,7 @@ function ProjectTaskRow({ task, isExpanded, onToggle, onAdvance, onPatch, agentS
             </button>
           )}
 
-          <div className="text-[10px] text-tone-600 space-y-0.5">
+          <div className="text-px10 text-tone-600 space-y-0.5">
             {task.source && <p>Source: {task.source}</p>}
             {task.created_by && <p>Created by: {task.created_by}</p>}
             {task.routed_to && <p>Routed to: {task.routed_to}</p>}

@@ -97,52 +97,52 @@ export default function AssistantToolCall({ item }: Props) {
             ) : (
               <ChevronRight size={12} className="text-tone-500 shrink-0" />
             ))}
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-tone-800 text-tone-300 font-mono shrink-0">
+          <span className="text-px10 px-1.5 py-0.5 rounded bg-tone-800 text-tone-300 font-mono shrink-0">
             {item.tool}
           </span>
-          <span className={clsx('text-[10px] px-1.5 py-0.5 rounded shrink-0 inline-flex items-center gap-1', TONE[meta.tone])}>
+          <span className={clsx('text-px10 px-1.5 py-0.5 rounded shrink-0 inline-flex items-center gap-1', TONE[meta.tone])}>
             {meta.icon}
             {meta.label}
           </span>
-          <span className="text-[11px] text-tone-500 truncate font-mono hidden sm:inline">{cmd}</span>
+          <span className="text-px11 text-tone-500 truncate font-mono hidden sm:inline">{cmd}</span>
         </button>
 
         {/* Always-visible gate badges: quadrant + taint */}
         <div className="flex flex-wrap items-center gap-1 px-2.5 pb-1.5">
-          <span className="text-[9px] px-1 py-0.5 rounded bg-tone-800/80 text-tone-500 font-mono">
+          <span className="text-px9 px-1 py-0.5 rounded bg-tone-800/80 text-tone-500 font-mono">
             {QUADRANT_LABEL[item.quadrant] ?? item.quadrant}
           </span>
           <span
             className={clsx(
-              'text-[9px] px-1 py-0.5 rounded font-mono',
+              'text-px9 px-1 py-0.5 rounded font-mono',
               item.taint === 'untrusted' ? 'bg-tone-amber-900/40 text-amber-500' : 'bg-tone-800/80 text-tone-500',
             )}
           >
             {item.taint}
           </span>
           {item.mode && (
-            <span className="text-[9px] px-1 py-0.5 rounded bg-tone-800/80 text-tone-500 font-mono">{item.mode}</span>
+            <span className="text-px9 px-1 py-0.5 rounded bg-tone-800/80 text-tone-500 font-mono">{item.mode}</span>
           )}
         </div>
 
         {isLethalBlock && (
-          <div className="px-2.5 pb-1.5 text-[10px] text-tone-red-400/90">
+          <div className="px-2.5 pb-1.5 text-px10 text-tone-red-400/90">
             blocked: untrusted-context write (lethal quadrant) — not executable, no override (D8)
           </div>
         )}
 
         {open && hasDetails && (
           <div className="border-t border-tone-800 px-2.5 py-1.5 space-y-0.5">
-            <div className="text-[11px] text-tone-500 font-mono break-all whitespace-pre-wrap">{cmd}</div>
-            {item.rationale && <div className="text-[11px] text-tone-500 italic pl-2">{item.rationale}</div>}
-            {item.reason && <div className="text-[10px] text-tone-600 font-mono pl-2">reason: {item.reason}</div>}
+            <div className="text-px11 text-tone-500 font-mono break-all whitespace-pre-wrap">{cmd}</div>
+            {item.rationale && <div className="text-px11 text-tone-500 italic pl-2">{item.rationale}</div>}
+            {item.reason && <div className="text-px10 text-tone-600 font-mono pl-2">reason: {item.reason}</div>}
             {results.map((r, idx) => (
               <div
                 key={idx}
                 className={
                   /^Error|^Exit code|^FAIL/i.test(r)
-                    ? 'text-[11px] font-mono text-tone-red-400/80 pl-2 break-all'
-                    : 'text-[11px] font-mono text-tone-400 pl-2 break-all'
+                    ? 'text-px11 font-mono text-tone-red-400/80 pl-2 break-all'
+                    : 'text-px11 font-mono text-tone-400 pl-2 break-all'
                 }
               >
                 <span className="text-tone-600 mr-1">└</span>

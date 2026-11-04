@@ -46,7 +46,7 @@ export default function QuestionnaireForm({ id, onAnswered }: { id: string; /** 
 
   const parts = questionnaireParts(data.questions);
   const summary = questionnaireSummary(data);
-  const context = summary ? <div className="text-[13px] leading-relaxed text-card-foreground/85" data-testid="qnr-summary"><Markdown text={summary} /></div> : null;
+  const context = summary ? <div className="text-px13 leading-relaxed text-card-foreground/85" data-testid="qnr-summary"><Markdown text={summary} /></div> : null;
   const title = data.title || 'Questionnaire';
   const meta = data.from_agent ? <>· {data.from_agent}</> : null;
   const report: CardReport = { id: data.id, kind: 'questionnaire', from: data.from_agent ?? null, question: title, summary: summary || null };

@@ -24,6 +24,7 @@ import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { principal } from '../lib/principal.js';
 import { dataDir } from '../lib/config.js';
+import { BUILTIN_MODELS, readDefaultModels } from '../lib/agentDefaults.js';
 import { recordLoginShell, sweepLoginShells } from '../lib/loginShells.js';
 
 /** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
@@ -47,12 +48,7 @@ const RESERVED = new Set(['all', 'none', 'new', 'arturo', 'self', 'system']);
 // refuses it (spawn-agent.sh R4 invariant). Same table Arturo's commission path uses.
 // A new Claude seat starts on Opus 5.5 with the 1M context (product decision 2026-10-22);
 // claude-sonnet-5 was an old default.
-export const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
-  claude: 'claude-opus-5-5[1m]',
-  gemini: 'gemini-3.1-pro',
-  codex: 'gpt-5.6-terra',
-  grok: 'grok-4.7',
-};
+export const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = BUILTIN_MODELS;
 
 export interface NewAgentDeps {
   probeRuntimes: () => RuntimeRow[];
@@ -318,11 +314,14 @@ export function spawnArgv({ name, task, runtime, gm }: { name: string; task: str
 
 /** The environment a New Agent spawn runs with: the API's own, plus the runtime and its default
  *  model (what spawn-agent.sh hands the CLI as --model), with the parent set only when given. */
-export function spawnEnv(base: NodeJS.ProcessEnv, runtime: string, parent: string | null): NodeJS.ProcessEnv {
+const installModels = (): Record<string, string> => { try { return readDefaultModels(dataDir()); } catch { return {}; } };
+
+export function spawnEnv(base: NodeJS.ProcessEnv, runtime: string, parent: string | null,
+                         models: Record<string, string> = installModels()): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...base,
     AGENT_RUNTIME: runtime,
-    AGENT_MODEL: DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
+    AGENT_MODEL: models[runtime] || DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
   };
   // Unset, not inherited, when there is no parent: the API's own env must never pick one.
   delete env.PARENT_AGENT_ID;

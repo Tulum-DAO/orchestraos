@@ -74,9 +74,9 @@ export default function AssistantView({ channel = 'page' }: Props) {
           <PanelLeft size={16} />
         </button>
         <span className="text-sm font-semibold text-tone-white">Assistant</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-tone-emerald-400">V2 · live · read-only</span>
+        <span className="text-px10 px-1.5 py-0.5 rounded bg-emerald-500/10 text-tone-emerald-400">V2 · live · read-only</span>
         {!isEmpty && <ActivityPill activity={activity} className="ml-1" />}
-        <span className="ml-auto text-[10px] text-tone-600 font-mono">
+        <span className="ml-auto text-px10 text-tone-600 font-mono">
           {user}/{thread} · {channel}
         </span>
       </div>
@@ -126,7 +126,7 @@ export default function AssistantView({ channel = 'page' }: Props) {
                 <button
                   key={s}
                   onClick={() => submitHero(s)}
-                  className="text-[11px] px-2.5 py-1 rounded-full bg-tone-900 border border-tone-800 text-tone-400 hover:text-tone-200 hover:border-tone-700 transition-colors"
+                  className="text-px11 px-2.5 py-1 rounded-full bg-tone-900 border border-tone-800 text-tone-400 hover:text-tone-200 hover:border-tone-700 transition-colors"
                 >
                   {s}
                 </button>

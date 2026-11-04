@@ -78,10 +78,10 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
   const phaseWords = call.muted ? 'Muted' : PHASE_WORDS[call.phase];
   // Only for the agent's own call: a call that went to Arturo does not wait on the seat's chat.
   const devLine = onBackToChat && call.party === 'agent' && (
-    <div className="flex items-center justify-center gap-2 px-3 pb-1.5 text-[12px] text-muted-foreground" data-call-dev>
+    <div className="flex items-center justify-center gap-2 px-3 pb-1.5 text-px12 text-muted-foreground" data-call-dev>
       <span>{seatName} is in Dev</span>
       <button type="button" onClick={onBackToChat} data-call-back-to-chat
-              className="min-h-0 rounded-full border border-border px-2.5 py-0.5 text-[12px] font-medium text-foreground hover:bg-muted">Back to chat</button>
+              className="min-h-0 rounded-full border border-border px-2.5 py-0.5 text-px12 font-medium text-foreground hover:bg-muted">Back to chat</button>
     </div>
   );
 
@@ -95,7 +95,7 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
                          shape={rec.shape} color={rec.color} eyeColor={rec.eyeColor} />
           </div>
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex items-baseline gap-2 text-[11px] leading-4 text-muted-foreground">
+            <div className="flex items-baseline gap-2 text-px11 leading-[calc(1rem*var(--ui-text-scale,1))] text-muted-foreground">
               <span className="truncate font-medium text-foreground">{name}</span>
               <span className="tabular-nums">{clock(now - call.startedAt)}</span>
               <span className="truncate" role="status" data-call-phase={call.phase}>{phaseWords}</span>

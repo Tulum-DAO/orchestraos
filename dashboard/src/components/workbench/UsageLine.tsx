@@ -23,11 +23,11 @@ export default function UsageLine() {
     retry: (n, e) => !(e instanceof Hidden) && n < 2,
   });
   if (error instanceof Hidden) return null;
-  if (error) return <p className="mx-2 px-2 text-[11px] text-neutral-500 dark:text-neutral-600" role="status">Usage unavailable</p>;
+  if (error) return <p className="mx-2 px-2 text-px11 text-neutral-500 dark:text-neutral-600" role="status">Usage unavailable</p>;
   const lines = usageLines(data);
   if (lines.length === 0) return null;
   return (
-    <div className="mx-2 px-2 flex flex-col gap-0.5 text-[11px] text-muted-foreground" aria-label="Plan usage">
+    <div className="mx-2 px-2 flex flex-col gap-0.5 text-px11 text-muted-foreground" aria-label="Plan usage">
       {/* One provider per line, never wrapped: a long line is cut with an ellipsis (its full text is on hover). */}
       {lines.map((line) => (
         <p key={line.provider} className="whitespace-nowrap overflow-hidden text-ellipsis"

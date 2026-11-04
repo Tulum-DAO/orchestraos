@@ -36,7 +36,7 @@ export function SearchResults({ results, highlightedIndex, onPick }: SearchResul
         const startIndex = startIndexByGroup[key];
         return (
           <div key={key} className="border-b border-tone-800 last:border-b-0">
-            <div className="px-3 py-1.5 text-[11px] uppercase tracking-wider text-tone-500 bg-tone-950/50">
+            <div className="px-3 py-1.5 text-px11 uppercase tracking-wider text-tone-500 bg-tone-950/50">
               {heading}
             </div>
             {hits.length === 0 ? (
@@ -57,7 +57,7 @@ export function SearchResults({ results, highlightedIndex, onPick }: SearchResul
                       >
                         <span className="text-sm text-tone-200 break-words">{hit.label}</span>
                         {hit.sublabel && (
-                          <span className="text-[11px] text-tone-500 shrink-0">{hit.sublabel}</span>
+                          <span className="text-px11 text-tone-500 shrink-0">{hit.sublabel}</span>
                         )}
                       </button>
                     </li>

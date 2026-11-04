@@ -71,7 +71,7 @@ export function ConversationPanel({
             <span className="text-tone-600">⇄</span>
             <button onClick={() => onOpenAgent(b)} className="text-tone-100 hover:underline break-words">{b}</button>
           </div>
-          <p className="text-[11px] text-tone-500 mt-0.5">
+          <p className="text-px11 text-tone-500 mt-0.5">
             {totalInWindow} message{totalInWindow === 1 ? '' : 's'} in the last {windowHours}h{totalAllTime > totalInWindow ? ` · ${totalAllTime} total` : ''}
           </p>
         </div>
@@ -118,7 +118,7 @@ export function ConversationPanel({
           const expanded = expandedIds.has(m.id);
           return (
             <div key={m.id} className="rounded-lg border border-tone-800 bg-tone-950 p-3">
-              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+              <div className="flex items-center gap-2 flex-wrap text-px11">
                 <span className={clsx('px-1.5 py-0.5 rounded font-medium', typeBadgeClass(m.type))}>{m.type || '—'}</span>
                 <span className="text-tone-500">{m.created_at ? new Date(m.created_at).toLocaleString() : '—'}</span>
               </div>
@@ -131,7 +131,7 @@ export function ConversationPanel({
                   {expanded ? 'collapse' : 'expand'}
                 </button>
               )}
-              <p className="text-[11px] text-tone-600 mt-1.5">{m.from_agent} → {m.to_agent} · {m.status || '—'}</p>
+              <p className="text-px11 text-tone-600 mt-1.5">{m.from_agent} → {m.to_agent} · {m.status || '—'}</p>
             </div>
           );
         })}

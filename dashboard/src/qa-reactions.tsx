@@ -31,9 +31,12 @@ import { MemoryRouter } from 'react-router-dom';
 import { useAgentTyping } from './stores/agentTyping';
 import { createRoot } from 'react-dom/client';
 import './index.css';
+import { applyStoredDisplay } from './lib/deviceSettings';
 import type { ChatItem } from './lib/transcript';
 import type { ReactionChange, StoredReaction } from './lib/reactionState';
 import type { LiveText } from './lib/threadKit/view';
+
+applyStoredDisplay();
 
 const q = new URLSearchParams(location.search);
 const AGENT = 'qa-agent';

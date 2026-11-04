@@ -523,3 +523,9 @@ test('POST /new brings a Claude worker over to headless (its own calls); never t
   assert.equal(rc.json.headless, false);
   assert.deepEqual(adopted, ['caller']);
 });
+
+test('spawnEnv uses the install default model for the runtime when one is set', async () => {
+  const { spawnEnv } = await import('./agents-new.js');
+  assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'claude', null, { claude: 'claude-sonnet-5' }).AGENT_MODEL, 'claude-sonnet-5');
+  assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'codex', null, { claude: 'claude-sonnet-5' }).AGENT_MODEL, 'gpt-5.6-terra');
+});

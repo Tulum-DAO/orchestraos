@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { agentCallBlock, agentCallsFrom, calleeName, callPartyId, fetchAgentCallsOn } from './agentCallsOn.ts';
+import { readFileSync } from 'node:fs';
+import { agentCallBlock, agentCallsFrom, calleeName, callPartyId, fetchAgentCallsOn, takesCallsFrom, fetchTakesCalls, saveTakesCalls, refreshAgentCallsOn, useAgentCallsStore } from './agentCallsOn.ts';
 
 const answer = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as typeof fetch;
 
@@ -33,4 +34,24 @@ test('the button and every call surface name who answers: the agent when on, Art
 test('a call from an agent composer is that agent or no call: never Arturo', () => {
   assert.equal(agentCallBlock(true, 'dev-demo'), null);
   assert.equal(agentCallBlock(false, 'gm'), "gm can't take calls yet");
+});
+
+test('takes_calls: the agent\'s own switch as stored; an older API has none', async () => {
+  assert.equal(takesCallsFrom({ ok: true, takes_calls: true }), true);
+  assert.equal(takesCallsFrom({ ok: true, settings: { takes_calls: false } }), false);
+  assert.equal(takesCallsFrom({ ok: true }), null);
+  assert.equal(await fetchTakesCalls('dev', answer(200, { ok: true, takes_calls: true })), true);
+  assert.deepEqual(await saveTakesCalls('dev', true, answer(200, { ok: true, agent: 'dev', takes_calls: true })), { ok: true });
+  assert.deepEqual(await saveTakesCalls('dev', true, answer(403, { ok: false, error: 'Only an admin can change this' })), { ok: false, error: 'Only an admin can change this' });
+});
+
+test('after the switch saves, the Call button\'s flag is read again at once (the effective agent_calls, not the switch)', async () => {
+  const answer = (agent_calls: boolean) => (async () => new Response(JSON.stringify({ ok: true, takes_calls: agent_calls, agent_calls }), { status: 200 })) as typeof fetch;
+  useAgentCallsStore.getState().set('qa-x', false);
+  await refreshAgentCallsOn('qa-x', answer(true));
+  assert.equal(useAgentCallsStore.getState().on['qa-x'], true);
+  await refreshAgentCallsOn('qa-x', answer(false));
+  assert.equal(useAgentCallsStore.getState().on['qa-x'], false);
+  const tc = readFileSync(new URL('../components/arturo/TakesCalls.tsx', import.meta.url), 'utf8');
+  assert.match(tc, /if \(r\.ok\) \{ flash\(\{ kind: 'saved' \}\); void refreshAgentCallsOn\(agentId\); \}/);
 });

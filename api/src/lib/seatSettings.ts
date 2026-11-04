@@ -155,3 +155,27 @@ export function seatRotates(agentId: string, registry: { agents?: Record<string,
   const rt = typeof row.runtime === 'string' && row.runtime ? row.runtime.toLowerCase() : 'claude';
   return ROTATING_RUNTIMES.has(rt);
 }
+
+/** The install default's valid fields (seat-settings-default.json {"default": {...}}). */
+export function readInstallDefault(dataDir: string): Partial<Record<SettingField, boolean | number>> {
+  const raw = readJson(defaultFile(dataDir)).default;
+  const out: Partial<Record<SettingField, boolean | number>> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const f of FIELDS) if (f in raw && validSetting(f, raw[f])) out[f] = raw[f];
+  return out;
+}
+
+/** Settings › Agents: change the install default (seats with their own value keep it). Atomic, owner-only. */
+export function writeInstallDefault(dataDir: string, change: Partial<Record<SettingField, boolean | number>>): void {
+  for (const [k, v] of Object.entries(change)) if (!validSetting(k, v)) throw new Error(`${k}: not a valid value`);
+  const f = defaultFile(dataDir);
+  const doc = readJson(f);
+  // Keys under "default" this version doesn't know (a newer field, a note) are kept: spread what is there first.
+  const prev = doc.default && typeof doc.default === 'object' && !Array.isArray(doc.default) ? doc.default : {};
+  const next = { ...doc, default: { ...prev, ...change } };
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = `${f}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, f);
+}

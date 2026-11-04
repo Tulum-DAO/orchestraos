@@ -282,7 +282,7 @@ function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSin
                     <ToolCard calls={g.tools.map(fromPart)} skin={skin} />
                     {/* Arturo handed work to a job: a chip that opens his job drawer (JobTray) */}
                     {g.tools.some((x) => JOB_TOOLS.has(x.name)) && (
-                      <button type="button" className="call-job-chip mt-1 inline-flex items-center gap-1.5 rounded-full border border-line bg-field px-2.5 py-0.5 text-[12px] text-ink-2 hover:text-ink"
+                      <button type="button" className="call-job-chip mt-1 inline-flex items-center gap-1.5 rounded-full border border-line bg-field px-2.5 py-0.5 text-px12 text-ink-2 hover:text-ink"
                               onClick={openJobs} data-job-chip>
                         Background job · open
                       </button>

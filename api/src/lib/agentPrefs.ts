@@ -11,6 +11,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { readUserPrefs } from './userPrefs.js';
 
 export type ChatStyle = 'modern' | 'bubbles' | 'dev';
 export const CHAT_STYLES: readonly ChatStyle[] = ['modern', 'bubbles', 'dev'];
@@ -57,21 +58,27 @@ export function cleanPrefsChange(raw: unknown): { change: Partial<Record<ChangeF
   return { change };
 }
 
-const defaultStyle = (agentId: string): ChatStyle => DEFAULT_STYLE[agentId] ?? 'bubbles';
+// The person's own default for agents they have not styled (Settings › General, "You"); Arturo keeps his own.
+const userDefaultStyle = (orchestraDir: string, username: string): ChatStyle | undefined => {
+  const v = readUserPrefs(orchestraDir, username).default_chat_style;
+  return v === 'modern' || v === 'bubbles' ? v : undefined;
+};
+const defaultStyle = (agentId: string, userDefault?: ChatStyle): ChatStyle => DEFAULT_STYLE[agentId] ?? userDefault ?? 'bubbles';
 const validStyle = (s: unknown): ChatStyle | null => (CHAT_STYLES.includes(s as ChatStyle) ? (s as ChatStyle) : null);
 
 /** What this person sees for this agent, with the defaults filled in, and which fields they chose themselves.
  *  `style_before_dev` is never 'dev': with nothing recorded it is the agent's default. */
 export function readPrefs(orchestraDir: string, username: string, agentId: string):
     { style: ChatStyle; accent: string | null; style_before_dev: ChatStyle; chosen: ChangeField[] } {
+  const ud = userDefaultStyle(orchestraDir, username);
   const own = (readAll(orchestraDir).users[username] || {})[agentId] || {};
   const style = validStyle(own.style);
   const accent = typeof own.accent === 'string' && ACCENT_RE.test(own.accent) ? own.accent : null;
   const before = validStyle(own.style_before_dev);
   return {
-    style: style ?? defaultStyle(agentId),
+    style: style ?? defaultStyle(agentId, ud),
     accent,
-    style_before_dev: before && before !== 'dev' ? before : defaultStyle(agentId),
+    style_before_dev: before && before !== 'dev' ? before : defaultStyle(agentId, ud),
     chosen: [...(style ? ['style' as const] : []), ...(accent ? ['accent' as const] : [])],
   };
 }
@@ -83,7 +90,7 @@ export function writePrefs(orchestraDir: string, username: string, agentId: stri
   const rec: Record<string, unknown> = { ...(mine[agentId] || {}) };
   // Entering Dev: keep the style it leaves for Back to chat. Already in Dev, the earlier record stands.
   if (change.style === 'dev') {
-    const leaving = validStyle(rec.style) ?? defaultStyle(agentId);
+    const leaving = validStyle(rec.style) ?? defaultStyle(agentId, userDefaultStyle(orchestraDir, username));
     if (leaving !== 'dev') rec.style_before_dev = leaving;
   }
   for (const [k, v] of Object.entries(change)) {

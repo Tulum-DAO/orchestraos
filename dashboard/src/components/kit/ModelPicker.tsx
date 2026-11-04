@@ -135,7 +135,7 @@ function AddProviderPanel({ rows, onInstalled }: { rows: ProviderRow[]; onInstal
                               setCopied(r.provider.id);
                               setTimeout(() => setCopied((c) => (c === r.provider.id ? null : c)), 1500);
                             }}>
-                      {copied === r.provider.id ? <span className="text-[10px]">copied</span> : <Copy size={14} />}
+                      {copied === r.provider.id ? <span className="text-px10">copied</span> : <Copy size={14} />}
                     </button>
                   </div>
                 ) : <span className="text-tone-500">{installNote(r.provider.id)}</span>}
@@ -316,7 +316,7 @@ export default function ModelPicker({
       {showDefault && (
         <div id={`${listId}-${DEFAULT_KEY}`} role="option" aria-selected={!value} data-model-option={DEFAULT_KEY}
              className={`${optionClass(DEFAULT_KEY)} cursor-pointer`} onMouseEnter={() => setActive(DEFAULT_KEY)} onClick={() => pickKey(DEFAULT_KEY)}>
-          <span className="flex-1 min-w-0">Use the default brain <span className="text-[11px] text-tone-500">whatever this install is set up with</span></span>
+          <span className="flex-1 min-w-0">Use the default brain <span className="text-px11 text-tone-500">whatever this install is set up with</span></span>
           {!value && <Check size={15} className="shrink-0 text-tone-white" aria-hidden />}
         </div>
       )}
@@ -326,12 +326,12 @@ export default function ModelPicker({
         const off = row && !row.selectable ? row : null;
         return (
         <div key={g.id} role="group" aria-label={g.label} data-model-group={g.id}>
-          <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[11px] font-medium text-tone-500 uppercase tracking-wide">
+          <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-px11 font-medium text-tone-500 uppercase tracking-wide">
             {g.id !== 'recent' && <ProviderMark providerId={g.id} label={g.label} dark={dark} size={12} dim={!!off} />}
             <span className="flex-1 min-w-0 truncate">{g.label}{off && <span className="normal-case tracking-normal font-normal"> · {off.greyReason}</span>}</span>
             {off && providerTileAction(false) === 'connect' && (
               <button type="button" onClick={() => connect(off)} data-model-connect={g.id}
-                      className="shrink-0 normal-case tracking-normal px-2 py-0.5 rounded-md border border-tone-700 text-[12px] font-normal text-tone-300 hover:bg-tone-800 hover:text-tone-white">
+                      className="shrink-0 normal-case tracking-normal px-2 py-0.5 rounded-md border border-tone-700 text-px12 font-normal text-tone-300 hover:bg-tone-800 hover:text-tone-white">
                 Connect
               </button>
             )}
@@ -345,8 +345,8 @@ export default function ModelPicker({
                   <ProviderMark providerId={m.providerId} label={m.providerLabel} dark={dark} size={16} dim />
                   {/* The name first, whole; the reason under it (a long reason never squeezes the name away). */}
                   <span className="flex-1 min-w-0">
-                    <span className="block truncate">{m.name}{m.tag && <span className="text-[11px] tabular-nums"> · {m.tag}</span>}</span>
-                    {!off && <span className="block text-[11px] leading-snug">{m.unavailable}</span>}
+                    <span className="block truncate">{m.name}{m.tag && <span className="text-px11 tabular-nums"> · {m.tag}</span>}</span>
+                    {!off && <span className="block text-px11 leading-snug">{m.unavailable}</span>}
                   </span>
                   <span className="w-4 shrink-0">{on && <Check size={15} className="text-tone-400" aria-label="In use" />}</span>
                 </div>
@@ -357,8 +357,8 @@ export default function ModelPicker({
                    className={`${optionClass(m.key)} cursor-pointer`} onMouseEnter={() => setActive(m.key)} onClick={() => pick(m)}>
                 <ProviderMark providerId={m.providerId} label={m.providerLabel} dark={dark} size={16} />
                 <span className="flex-1 min-w-0 truncate">{m.name}</span>
-                {m.tag && <span className="shrink-0 text-[11px] text-tone-500 tabular-nums">{m.tag}</span>}
-                {m.capabilities.video && <span className="shrink-0 text-[10px] text-tone-500">video</span>}
+                {m.tag && <span className="shrink-0 text-px11 text-tone-500 tabular-nums">{m.tag}</span>}
+                {m.capabilities.video && <span className="shrink-0 text-px10 text-tone-500">video</span>}
                 <span className="w-4 shrink-0">{on && <Check size={15} className="text-tone-white" aria-label="In use" />}</span>
               </div>
             );
@@ -393,7 +393,7 @@ export default function ModelPicker({
         <input ref={inputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models" aria-label="Search models"
                role="combobox" aria-expanded aria-controls={listId} aria-activedescendant={active ? `${listId}-${active}` : undefined} autoComplete="off" spellCheck={false}
                className="flex-1 min-w-0 bg-transparent text-sm text-tone-100 placeholder:text-tone-500 outline-none py-1" />
-        {loading && rows.length > 0 && <span className="text-[10px] text-tone-500 shrink-0">checking…</span>}
+        {loading && rows.length > 0 && <span className="text-px10 text-tone-500 shrink-0">checking…</span>}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         {firstLoad && <p className="px-4 py-4 text-xs text-tone-500">Checking providers…</p>}
@@ -411,7 +411,7 @@ export default function ModelPicker({
       {!inline && trigger && (
         <button ref={triggerRef} type="button" onClick={() => setOpen(!open)} aria-haspopup="dialog" aria-expanded={open}
                 aria-label={`Model: ${chipText}. Change`} title={`Model: ${chipText}`} data-model-picker-trigger
-                className={`inline-flex items-center gap-1.5 max-w-[220px] h-8 pl-2 pr-1.5 rounded-full border border-tone-800 bg-tone-900 text-[12px] text-tone-200 hover:bg-tone-800 hover:text-tone-white transition-colors ${triggerClassName ?? ''}`}>
+                className={`inline-flex items-center gap-1.5 max-w-[220px] h-8 pl-2 pr-1.5 rounded-full border border-tone-800 bg-tone-900 text-px12 text-tone-200 hover:bg-tone-800 hover:text-tone-white transition-colors ${triggerClassName ?? ''}`}>
           {markId && <ProviderMark providerId={markId} label={current?.providerLabel ?? markId} dark={dark} size={14} />}
           <span className="truncate">{chipText}</span>
           <ChevronDown size={13} className="shrink-0 text-tone-500" aria-hidden />

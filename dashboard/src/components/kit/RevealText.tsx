@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { RevealQueue } from '../../lib/reveal';
+import { motionReduced } from '../../lib/motion';
 import './reveal.css';
 
 /** Each reveal frame's own work, kept in window.__orchestraReveal so a performance check can read it. */
@@ -16,7 +17,7 @@ function revealStats(): RevealStats {
   return (w.__orchestraReveal ||= { frames: 0, maxMs: 0, over16: 0 });
 }
 
-const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const reducedMotion = () => motionReduced();
 
 export default function RevealText({ text, done = false, className }: { text: string; done?: boolean; className?: string }) {
   // The queue lives with this text's drawing; its words are read in render (append-only, so nothing shown changes).

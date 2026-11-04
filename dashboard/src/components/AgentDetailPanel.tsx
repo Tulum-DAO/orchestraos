@@ -166,9 +166,9 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
-        <h3 className="text-[11px] uppercase tracking-wider text-tone-500">Live feed</h3>
+        <h3 className="text-px11 uppercase tracking-wider text-tone-500">Live feed</h3>
         {!live && (
-          <span className="flex items-center gap-1 text-[11px] text-tone-amber-400">
+          <span className="flex items-center gap-1 text-px11 text-tone-amber-400">
             <WifiOff size={11} />
             Reconnecting — showing last poll
           </span>
@@ -188,7 +188,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
                 {node.kind === 'tool' ? (
                   <div>
                     <span className={clsx(
-                      'inline-block px-1.5 py-0.5 rounded text-[10px] font-medium',
+                      'inline-block px-1.5 py-0.5 rounded text-px10 font-medium',
                       node.isError ? 'bg-tone-red-900/40 text-tone-red-300' : 'bg-tone-800 text-tone-300'
                     )}>
                       {node.tool}
@@ -220,7 +220,7 @@ function DetailLiveFeed({ agentId }: { agentId: string }) {
         {!following && (
           <button
             onClick={jumpToLatest}
-            className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1 rounded-full text-[11px] bg-tone-800 text-tone-200 border border-tone-700 hover:bg-tone-700 shadow"
+            className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1 rounded-full text-px11 bg-tone-800 text-tone-200 border border-tone-700 hover:bg-tone-700 shadow"
           >
             <ArrowDown size={11} />
             Jump to latest
@@ -265,7 +265,7 @@ function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boo
 
   return (
     <div>
-      <h3 className="text-[11px] uppercase tracking-wider text-tone-500 mb-1.5">Message</h3>
+      <h3 className="text-px11 uppercase tracking-wider text-tone-500 mb-1.5">Message</h3>
       {/* Spec §5 asks for the box "disabled with a note when the agent is down". It used to
           swap the whole control out for the note, which review's DOM probe measured as an
           ABSENT input rather than a disabled one. The note alone reads as a rendering gap —
@@ -294,12 +294,12 @@ function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boo
           />
         </div>
         {disabled && (
-          <p id={`msg-disabled-${agentId}`} className="text-[11px] text-tone-500">
+          <p id={`msg-disabled-${agentId}`} className="text-px11 text-tone-500">
             Agent is down — messaging disabled.
           </p>
         )}
         {!disabled && status !== 'idle' && (
-          <p className={clsx('text-[11px]', SEND_STATUS_STYLE[status] || 'text-tone-500')}>
+          <p className={clsx('text-px11', SEND_STATUS_STYLE[status] || 'text-tone-500')}>
             {status === 'sending' ? 'sending…' : (detail || status)}
           </p>
         )}
@@ -357,13 +357,13 @@ export function AgentDetailPanel({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-tone-100 font-semibold break-words">{agent.id}</span>
             {agent.tier && <TierBadge tier={agent.tier} />}
-            <span className={clsx('flex items-center gap-1 text-[11px] font-medium', LIVENESS_STYLE[liveness].text)}>
+            <span className={clsx('flex items-center gap-1 text-px11 font-medium', LIVENESS_STYLE[liveness].text)}>
               <span className={clsx('w-1.5 h-1.5 rounded-full', LIVENESS_STYLE[liveness].dot)} />
               {LIVENESS_LABEL[liveness]}
             </span>
           </div>
           {isDown && lastSeen && (
-            <p className="text-[11px] text-tone-red-400/80 mt-0.5">last seen {lastSeen}</p>
+            <p className="text-px11 text-tone-red-400/80 mt-0.5">last seen {lastSeen}</p>
           )}
         </div>
         <button onClick={onClose} className="p-1.5 text-tone-500 hover:text-tone-200 hover:bg-tone-800 rounded-lg transition-colors shrink-0" aria-label="Close panel">
@@ -427,7 +427,7 @@ export function AgentDetailPanel({
                         ? `Open ${agent.id} ⇄ ${peer.id}`
                         : `Open ${agent.id} ⇄ ${peer.id} — not a node in the graph`}
                       className={clsx(
-                        'px-1.5 py-0.5 rounded text-[11px] focus:outline-none focus:ring-1 focus:ring-sky-500 break-words',
+                        'px-1.5 py-0.5 rounded text-px11 focus:outline-none focus:ring-1 focus:ring-sky-500 break-words',
                         peer.onGraph
                           ? 'bg-tone-800 text-tone-300 hover:bg-tone-700 hover:text-tone-100'
                           : 'bg-tone-900 text-tone-500 border border-dashed border-tone-700 hover:text-tone-300',
@@ -455,7 +455,7 @@ export function AgentDetailPanel({
 
         {/* Recent problems */}
         <div>
-          <h3 className="text-[11px] uppercase tracking-wider text-tone-500 mb-1.5">Recent problems</h3>
+          <h3 className="text-px11 uppercase tracking-wider text-tone-500 mb-1.5">Recent problems</h3>
           {!recentErrors || recentErrors.length === 0 ? (
             <p className="text-sm text-tone-600">No recent errors</p>
           ) : (
@@ -465,7 +465,7 @@ export function AgentDetailPanel({
                   <AlertTriangle size={13} className="text-tone-red-400 shrink-0 mt-0.5" />
                   <div className="min-w-0">
                     <p className="text-tone-300 break-words">{err.text}</p>
-                    <p className="text-[11px] text-tone-600">{err.at}</p>
+                    <p className="text-px11 text-tone-600">{err.at}</p>
                   </div>
                 </li>
               ))}

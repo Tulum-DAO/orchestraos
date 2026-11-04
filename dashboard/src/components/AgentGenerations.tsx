@@ -46,7 +46,7 @@ export function AgentGenerations({ agentId, total }: { agentId: string; total?: 
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-left text-[11px] uppercase tracking-wider text-tone-500 hover:text-tone-300 transition-colors"
+        className="flex w-full items-center gap-1.5 text-left text-px11 uppercase tracking-wider text-tone-500 hover:text-tone-300 transition-colors"
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         Generations

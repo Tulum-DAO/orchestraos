@@ -62,8 +62,8 @@
 /* Inline code in a cell wraps with the words. */
 .kit-table code { white-space: normal; }
 
-.kit-skin-bubbles .kit-table { font-size: 12.5px; }
-.kit-skin-pane .kit-table { font-size: 13px; }
+.kit-skin-bubbles .kit-table { font-size: calc(12.5px * var(--ui-text-scale, 1)); }
+.kit-skin-pane .kit-table { font-size: calc(13px * var(--ui-text-scale, 1)); }
 
 /* A code block's scroller keeps its drags to itself, like a table's. */
 .kit-code-scroll { overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
@@ -131,14 +131,14 @@
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px color-mix(in srgb, currentColor 10%, transparent);
   color: var(--color-foreground);
 }
-.kit-card-pop-bar { display: flex; align-items: center; gap: 8px; padding: 2px 6px 0; font-size: 12px; }
+.kit-card-pop-bar { display: flex; align-items: center; gap: 8px; padding: 2px 6px 0; font-size: calc(12px * var(--ui-text-scale, 1)); }
 .kit-card-pop-bar .grow { flex: 1; }
 .kit-card-pop-btn {
-  font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px;
+  font-size: calc(12px * var(--ui-text-scale, 1)); font-weight: 500; padding: 4px 10px; border-radius: 999px;
   border: 1px solid color-mix(in srgb, currentColor 20%, transparent); color: inherit;
 }
 .kit-card-pop-btn:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
-.kit-card-pop-note { padding: 10px 12px; font-size: 13px; opacity: 0.8; }
+.kit-card-pop-note { padding: 10px 12px; font-size: calc(13px * var(--ui-text-scale, 1)); opacity: 0.8; }
 @media (max-width: 640px) {
   .kit-card-pop { left: 16px !important; right: 16px; top: auto !important; bottom: 16px !important; width: auto; max-height: 80dvh !important; }
 }
@@ -147,4 +147,4 @@
    border) even in a bubble widened for fenced code or a table (chatSkin BUBBLES_WIDE), so a reply still streaming
    never re-wraps the words already shown when its first fence or table row arrives and the bubble widens. Code and
    tables take the wider room. On a phone 85% is narrower anyway: nothing changes there. */
-[data-agent-bubble] > .kit-md > :not(.kit-table-box):not([data-code-frame]) { max-width: 530px; }
+[data-agent-bubble] > .kit-md > :not(.kit-table-box):not([data-code-frame]) { max-width: calc(var(--ui-msg-width, 560px) - 30px); }

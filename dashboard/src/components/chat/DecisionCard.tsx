@@ -92,9 +92,9 @@ export default function DecisionCard(p: DecisionCardProps) {
         <div className="flex items-start gap-2.5">
           <ListChecks size={16} className={clsx('mt-0.5 shrink-0', p.open ? 'text-foreground' : 'text-muted-foreground')} aria-hidden />
           <div className="min-w-0 flex-1">
-            <div className={clsx('text-[15px] font-semibold leading-snug', !p.open && 'text-muted-foreground')}>{withRefs(p.question)}</div>
+            <div className={clsx('text-px15 font-semibold leading-snug', !p.open && 'text-muted-foreground')}>{withRefs(p.question)}</div>
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
-              <span className={clsx('text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded', CHIP_CLASS[p.kind])}>
+              <span className={clsx('text-px10 font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded', CHIP_CLASS[p.kind])}>
                 {CHIP_LABEL[p.kind]}
               </span>
               {p.agent && <span className="font-mono">{p.agent}</span>}
@@ -163,7 +163,7 @@ export function DismissButton({ onDismiss }: { onDismiss: () => Promise<string |
           <X size={15} />
         </button>
       )}
-      {error && <div className="text-[11px] text-warning mt-1 max-w-[220px] text-right">{error}</div>}
+      {error && <div className="text-px11 text-warning mt-1 max-w-[220px] text-right">{error}</div>}
     </div>
   );
 }
@@ -218,8 +218,8 @@ export function ApprovalAnswer({ onApprove, onDeny, sending, error }: {
              placeholder="Reason, if you deny (the agent sees it)"
              className={clsx('w-full rounded-xl border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-info',
                needReason ? 'border-destructive/60' : 'border-border')} />
-      {needReason && <div className="text-[11px] text-destructive">Add a reason to deny.</div>}
-      {error && <div className="text-[11px] text-warning">{error}</div>}
+      {needReason && <div className="text-px11 text-destructive">Add a reason to deny.</div>}
+      {error && <div className="text-px11 text-warning">{error}</div>}
     </div>
   );
 }

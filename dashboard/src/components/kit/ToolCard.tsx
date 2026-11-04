@@ -38,7 +38,9 @@ import {
   callCode, callDetail, callLabel, callLine, hasDetail, iconKey, liveCall, runSummary, runTimes, type IconKey, type ToolCallView,
 } from '../../lib/toolCalls';
 import { MESSAGE_TIME_TONE, messageTimeLabel } from '../../lib/messageTime';
+import { useInstallTimeZone } from '../../stores/serverSettings';
 import type { ToolDensity } from '../../lib/toolCardDetail';
+import { useDeviceSetting } from '../../lib/deviceSettings';
 
 const ICONS: Record<IconKey, ReactNode> = {
   terminal: <Terminal size={13} />, read: <FileText size={13} />, edit: <Pencil size={13} />, search: <Search size={13} />,
@@ -69,7 +71,7 @@ function JobLive({ job }: { job: AgentJob }) {
   if (running) {
     return (
       <span className="flex shrink-0 items-center gap-1.5" data-job-live="running">
-        <span className="text-[11.5px] tabular-nums text-ink-3">{jobElapsed(job, now)}</span>
+        <span className="text-px11h tabular-nums text-ink-3">{jobElapsed(job, now)}</span>
         <LoaderCircle size={13} className="animate-spin text-orange-500" aria-label="running in the background" />
       </span>
     );
@@ -77,14 +79,14 @@ function JobLive({ job }: { job: AgentJob }) {
   if (job.status === 'failed') {
     return (
       <span className="flex min-w-0 shrink items-center gap-1.5" data-job-live="failed">
-        <span className="truncate text-[11.5px] text-red">{failedLabel(job)}</span>
+        <span className="truncate text-px11h text-red">{failedLabel(job)}</span>
         <X size={13} className="shrink-0 text-red" aria-label="failed" />
       </span>
     );
   }
   return (
     <span className="flex shrink-0 items-center gap-1.5" data-job-live="done">
-      <span className="text-[11.5px] tabular-nums text-ink-3">{jobElapsed(job, now)}</span>
+      <span className="text-px11h tabular-nums text-ink-3">{jobElapsed(job, now)}</span>
       <Check size={13} className="text-green" aria-label="done" />
     </span>
   );
@@ -106,7 +108,7 @@ function PathChip({ path }: { path: string }) {
         navigator.clipboard?.writeText(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }, () => {});
       }}
       onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLElement).click(); }}
-      className="inline-flex h-5.5 min-w-0 flex-1 items-center gap-1 truncate rounded-chip bg-field px-1.5 font-mono text-[11.5px] text-ink-2 shadow-hairline hover:text-ink">
+      className="inline-flex h-5.5 min-w-0 flex-1 items-center gap-1 truncate rounded-chip bg-field px-1.5 font-mono text-px11h text-ink-2 shadow-hairline hover:text-ink">
       {copied ? <Check size={11} className="shrink-0 text-green" /> : <FileText size={11} className="shrink-0" />}
       <span className="truncate">{copied ? 'Copied' : shortPath(path)}</span>
     </span>
@@ -133,10 +135,10 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
               style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
           )}
         </span>
-        <span className="shrink-0 text-[12.5px] font-medium text-ink">{callLabel(call.name)}</span>
+        <span className="shrink-0 text-px12h font-medium text-ink">{callLabel(call.name)}</span>
         {call.filePath ? <PathChip path={call.filePath} />
           : call.chip ? (
-            <span className="inline-flex h-5.5 min-w-0 flex-1 items-center truncate rounded-chip bg-field px-1.5 font-mono text-[11.5px] text-ink-2 shadow-hairline">
+            <span className="inline-flex h-5.5 min-w-0 flex-1 items-center truncate rounded-chip bg-field px-1.5 font-mono text-px11h text-ink-2 shadow-hairline">
               {withRefs(call.chip, skin, 'chip', true)}
             </span>
           ) : <span className="flex-1" />}
@@ -150,7 +152,7 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
               {d.todos.length > 0 && (
                 <div className="flex flex-col gap-0.5" data-todos>
                   {d.todos.map((t, i) => (
-                    <div key={i} className={`flex items-start gap-2 text-[12px] ${t.status === 'completed' ? 'text-ink-3 line-through' : 'text-ink'}`}>
+                    <div key={i} className={`flex items-start gap-2 text-px12 ${t.status === 'completed' ? 'text-ink-3 line-through' : 'text-ink'}`}>
                       <span role="img" aria-label={t.status} className={t.status === 'completed' ? 'text-green' : t.status === 'in_progress' ? 'text-amber-500' : 'text-ink-3'}>
                         {t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : '○'}
                       </span>
@@ -160,12 +162,12 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
                 </div>
               )}
               {d.input && (
-                <pre className="max-h-60 overflow-auto rounded-control bg-field px-2 py-1 font-mono text-[11px] text-ink-2 whitespace-pre">{withRefs(d.input, skin, 'in')}</pre>
+                <pre className="max-h-60 overflow-auto rounded-control bg-field px-2 py-1 font-mono text-px11 text-ink-2 whitespace-pre">{withRefs(d.input, skin, 'in')}</pre>
               )}
               {d.resultLines ? d.resultLines.map((line, i) => (
-                <span key={i} className={`truncate font-mono text-[11.5px] leading-[1.6] ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`}>{withRefs(line, skin, `l${i}`)}</span>
+                <span key={i} className={`truncate font-mono text-px11h leading-[1.6] ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`}>{withRefs(line, skin, `l${i}`)}</span>
               )) : d.resultText && (
-                <pre className={`overflow-auto font-mono text-[11.5px] leading-[1.6] whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'} ${d.resultText.length > RESULT_TALL ? 'max-h-72' : ''}`}>
+                <pre className={`overflow-auto font-mono text-px11h leading-[1.6] whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'} ${d.resultText.length > RESULT_TALL ? 'max-h-72' : ''}`}>
                   {withRefs(d.resultText, skin, 'out')}
                 </pre>
               )}
@@ -180,7 +182,7 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
 /** What a folded run lists when opened: its calls, and anything said between them (an agent's thinking), in order. */
 export type ToolRunEntry = { kind: 'call'; call: ToolCallView } | { kind: 'note'; key: string; node: ReactNode };
 
-export default function ToolCard({ calls, entries, interrupted = false, density = 'normal', className, skin = 'bubbles', look = 'card' }: {
+export default function ToolCard({ calls, entries, interrupted = false, density: densityProp, className, skin = 'bubbles', look = 'card' }: {
   calls: ToolCallView[];
   skin?: Skin;
   /** 'card' (above) or Bubbles' thin 'lines' (ToolLines, below). */
@@ -192,6 +194,8 @@ export default function ToolCard({ calls, entries, interrupted = false, density 
   density?: ToolDensity;
   className?: string;
 }) {
+  const [deviceDensity] = useDeviceSetting('toolDetail');   // Settings › Display › Tool call detail
+  const density = densityProp ?? deviceDensity;
   // Folded by default (the header is the turn's tool story); 'verbose' starts it open.
   const [open, setOpen] = useState(density === 'verbose');
   // Background work this run launched, said on the folded header too (each row shows its own).
@@ -209,7 +213,7 @@ export default function ToolCard({ calls, entries, interrupted = false, density 
   return (
     <div className={`${card} ${s.tone === 'failed' ? 'border-red/40' : ''}`} data-testid="tool-calls" data-skin={skin}>
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
-        className="-mx-1.5 flex w-[calc(100%+12px)] items-start gap-1.5 rounded-control px-1.5 py-1 text-left text-[12.5px] transition-colors duration-100 hover:bg-hover-2">
+        className="-mx-1.5 flex w-[calc(100%+12px)] items-start gap-1.5 rounded-control px-1.5 py-1 text-left text-px12h transition-colors duration-100 hover:bg-hover-2">
         <ChevronDown size={12} strokeWidth={2.2} className="mt-[3px] shrink-0 text-ink-3 transition-transform duration-200"
           style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
         {/* Wraps rather than truncating: on a phone the clipped tail was the "(1 failed)". */}
@@ -262,7 +266,7 @@ function LineButton({ open, canOpen, onToggle, lead, tail, time, wrap = false, c
   );
   return (
     <button type="button" aria-expanded={canOpen ? open : undefined} disabled={!canOpen} onClick={onToggle}
-      className="relative flex w-full min-w-0 items-center gap-1.5 rounded-control py-0.5 text-left text-[11.5px] leading-5 text-muted-foreground transition-colors duration-200 motion-reduce:transition-none enabled:hover:text-foreground disabled:cursor-default">
+      className="relative flex w-full min-w-0 items-center gap-1.5 rounded-control py-0.5 text-left text-px11h leading-[calc(1.25rem*var(--ui-text-scale,1))] text-muted-foreground transition-colors duration-200 motion-reduce:transition-none enabled:hover:text-foreground disabled:cursor-default">
       {lead}
       {/* a line that wraps carries its time inline, so it follows the chevron on whichever row that ends up */}
       {wrap ? <span className="min-w-0 break-words">{children}{chevron}{time && <span className="ml-2 inline-block">{time}</span>}</span>
@@ -278,11 +282,12 @@ function LineButton({ open, canOpen, onToggle, lead, tail, time, wrap = false, c
  *  look): one time, or "10:12–10:17" for a run over a minute. A screen reader hears ", at 10:12" or
  *  ", from 10:12 to 10:17" after the line's words. No time: nothing. */
 function LineTime({ start, end }: { start?: string; end?: string }) {
-  const a = messageTimeLabel(start);
+  const tz = useInstallTimeZone();
+  const a = messageTimeLabel(start, undefined, tz);
   if (!a) return null;
-  const b = end ? messageTimeLabel(end) : null;
+  const b = end ? messageTimeLabel(end, undefined, tz) : null;
   return (
-    <time dateTime={start} title={b ? `${a.title} – ${b.title}` : a.title} className={`${MESSAGE_TIME_TONE} tabular-nums whitespace-nowrap`}>
+    <time data-msg-time dateTime={start} title={b ? `${a.title} – ${b.title}` : a.title} className={`${MESSAGE_TIME_TONE} tabular-nums whitespace-nowrap`}>
       <span className="sr-only">{end ? ', from ' : ', at '}</span>{a.label}
       {b && <><span aria-hidden>–</span><span className="sr-only"> to </span>{b.label}</>}
     </time>
@@ -298,12 +303,12 @@ function CallCode({ call, skin }: { call: ToolCallView; skin: Skin }) {
   return (
     <CodeFrame className="mt-0.5 mb-1.5" label={callLabel(call.name)} copyText={code.copy} copyLabel="Copy call">
       {code.input && (
-        <pre className="kit-code-scroll max-h-48 overflow-auto px-3 py-2 font-mono text-[11.5px] leading-relaxed text-ink whitespace-pre" {...keep}>
+        <pre className="kit-code-scroll max-h-48 overflow-auto px-3 py-2 font-mono text-px11h leading-relaxed text-ink whitespace-pre" {...keep}>
           {withRefs(code.input, skin, 'in')}
         </pre>
       )}
       {code.output && (
-        <pre className={`kit-code-scroll max-h-72 overflow-auto border-t border-line-strong px-3 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`} {...keep}>
+        <pre className={`kit-code-scroll max-h-72 overflow-auto border-t border-line-strong px-3 py-2 font-mono text-px11h leading-relaxed whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`} {...keep}>
           {withRefs(code.output, skin, 'out')}
         </pre>
       )}

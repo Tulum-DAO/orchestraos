@@ -30,7 +30,7 @@ class Boundary extends Component<BoundaryProps, State> {
 
   render() {
     if (!this.state.error) return this.props.children;
-    return (
+    const alert = (
       <div role="alert" className="m-6 rounded-lg border border-tone-red-900/60 bg-tone-red-950/30 p-5 text-sm text-tone-200">
         <p className="font-semibold text-tone-red-300">This page hit an error and could not be shown.</p>
         <p className="mt-2 text-tone-400">
@@ -49,6 +49,8 @@ class Boundary extends Component<BoundaryProps, State> {
         </button>
       </div>
     );
+    // Settings is drawn over the page (a fixed layer): its error is too, so it is seen and Back still closes it.
+    return this.props.label === 'settings' ? <div className="settings-host overflow-auto bg-black/60">{alert}</div> : alert;
   }
 }
 

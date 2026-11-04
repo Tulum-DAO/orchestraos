@@ -64,7 +64,7 @@ function CopyLine({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex items-center gap-2">
-      <code className="flex-1 min-w-0 px-2 py-1.5 rounded-control bg-field text-ink-2 font-mono text-[11.5px] overflow-x-auto whitespace-nowrap">{text}</code>
+      <code className="flex-1 min-w-0 px-2 py-1.5 rounded-control bg-field text-ink-2 font-mono text-px11h overflow-x-auto whitespace-nowrap">{text}</code>
       <button type="button" aria-label={label} title={copied ? 'Copied' : 'Copy'}
               onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }, () => {}); }}
               className="p-1.5 rounded-control border border-line text-ink-2 hover:bg-hover-2">
@@ -139,21 +139,21 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
               <ChevronLeft size={18} /><span className="text-xs">Providers</span>
             </button>
           )}
-          <h2 className="text-[15px] font-semibold flex-1 truncate">Connect {provider.label}</h2>
+          <h2 className="text-px15 font-semibold flex-1 truncate">Connect {provider.label}</h2>
           <button onClick={onClose} aria-label="Close" className="p-1 rounded-control hover:bg-hover-2 text-ink-2"><X size={18} /></button>
         </div>
 
         {/* The plain top: the steps, and where it stands. */}
         <ol className="rounded-lg border border-line divide-y divide-line mb-2" data-testid="connect-steps-plain">
           {o.steps.map((s) => (
-            <li key={s.label} className="flex items-center gap-3 px-3 py-2.5 text-[13.5px]">
+            <li key={s.label} className="flex items-center gap-3 px-3 py-2.5 text-px13h">
               <StepMark state={s.state} />
               <span className={`flex-1 ${s.state === 'done' ? 'text-ink-2' : 'text-ink font-medium'}`}>{s.label}</span>
-              <span className="text-[12px] text-ink-3">{s.state === 'done' ? 'Done' : s.state === 'unknown' ? 'Not checked' : 'To do'}</span>
+              <span className="text-px12 text-ink-3">{s.state === 'done' ? 'Done' : s.state === 'unknown' ? 'Not checked' : 'To do'}</span>
             </li>
           ))}
         </ol>
-        <p className={`text-[12.5px] mb-3 flex items-center gap-2 ${o.connected ? 'text-green' : 'text-ink-2'}`} data-testid="connect-reason" role="status">
+        <p className={`text-px12h mb-3 flex items-center gap-2 ${o.connected ? 'text-green' : 'text-ink-2'}`} data-testid="connect-reason" role="status">
           <span>Status: <span className={o.connected ? '' : 'text-red font-medium'}>{o.status}</span></span>
           {onRecheck && (
             <button className="underline underline-offset-2 text-ink-3 hover:text-ink" disabled={rechecking}
@@ -163,7 +163,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
           )}
         </p>
 
-        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2 text-[12.5px] text-ink-2 leading-relaxed">
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2 text-px12h text-ink-2 leading-relaxed">
           {!o.connected && !session && (
             <button onClick={() => void openTerminal()} disabled={busy} data-testid="connect-open-terminal"
                     className="self-start px-3.5 py-2 rounded-full bg-foreground text-background font-medium hover:opacity-90 disabled:opacity-50">

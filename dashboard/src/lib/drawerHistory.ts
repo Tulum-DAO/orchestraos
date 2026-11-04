@@ -16,6 +16,7 @@ import { operatorUserId } from './runtimeConfig.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 import type { ThreadTurn } from './arturoThreads.ts';
 import { storedAnswerText } from './choiceCard.ts';
+import { clockWhen } from './messageTime.ts';
 
 /** What a card is: a decision (a question card an agent posted), an approval (Approve / Deny), a menu answered in
  *  the agent's own terminal (a one-line record), a multi-part question (several parts on one card), or one of
@@ -273,19 +274,10 @@ export function pageOf<T>(items: T[], limit: number): { shown: T[]; more: number
 
 // ---- Words for the card -------------------------------------------------------------------------------------------
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-
-/** When, in local time: "14:05" today, "Yesterday 14:05", "Oct 28, 14:05" this year, "Oct 28 2025" before. */
-export function whenText(at: number | null, now = Date.now()): string {
-  if (!at) return '';
-  const d = new Date(at), n = new Date(now);
-  if (sameDay(d, n)) return hhmm(d);
-  const y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
-  if (sameDay(d, y)) return `Yesterday ${hhmm(d)}`;
-  if (d.getFullYear() === n.getFullYear()) return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hhmm(d)}`;
-  return `${MONTHS[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}`;
+/** When, in the install's time zone (this device's when none is set), the chat's formatter (lib/messageTime clockWhen):
+ *  "14:05" today, "Yesterday 14:05", "Oct 28, 14:05" this year, "Oct 28 2025" before. */
+export function whenText(at: number | null, now = Date.now(), timeZone = ''): string {
+  return clockWhen(at, now, timeZone);
 }
 
 /** How long it has waited: "just now", "12m", "3h", "2d". */
@@ -304,8 +296,8 @@ export function waitingLine(i: HistoryItem, now = Date.now()): string {
 }
 
 /** A resolved card's line: who, where, when (and how fast it reached the agent): "you · the dashboard · 14:05". */
-export function resolvedLine(i: HistoryItem, now = Date.now()): string {
-  const bits = [i.by, i.where, whenText(i.answeredAt ?? i.createdAt, now), i.delivery].filter(Boolean);
+export function resolvedLine(i: HistoryItem, now = Date.now(), timeZone = ''): string {
+  const bits = [i.by, i.where, whenText(i.answeredAt ?? i.createdAt, now, timeZone), i.delivery].filter(Boolean);
   return bits.join(' · ');
 }
 

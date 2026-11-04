@@ -40,7 +40,7 @@ const CTRL_KEYS = [
 // Keys that interrupt the agent get an "Are you sure?" (operator, RED ALERT 2026-09-17).
 const CONFIRM_KEYS = new Set(['ctrl-c']);
 
-const KEY_BASE = "text-[11px] px-2 py-1 min-h-[36px] rounded-md font-mono shrink-0 transition-all duration-75";
+const KEY_BASE = "text-px11 px-2 py-1 min-h-[36px] rounded-md font-mono shrink-0 transition-all duration-75";
 const KEY_IDLE = "bg-tone-800 text-tone-500 hover:text-tone-300";
 const KEY_PRESSED = "bg-tone-600 text-tone-white scale-90";
 
@@ -159,7 +159,7 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
         >
           <span className="shrink-0">🔑</span>
           <span>Open Auth Link</span>
-          <span className="ml-auto text-amber-500/60 text-[10px]">↗</span>
+          <span className="ml-auto text-amber-500/60 text-px10">↗</span>
         </a>
       )}
 

@@ -24,6 +24,7 @@ function makeDeps(over: Partial<ArturoDeps> = {}): ArturoDeps & { urls: string[]
     token: () => 'test-token',
     fetchJson: async (url: string) => { urls.push(url); return { status: 200, body: { ok: true, threads: [] } }; },
     forwardStream: async (url: string) => { urls.push(url); return { status: 200, body: { ok: true, text: '' } }; },
+    installRole: () => 'admin',
     ...over,
   };
   deps.urls = urls;
@@ -411,16 +412,24 @@ test('PUT /ptt/voice without a vendor and voice id is refused before the gateway
   assert.deepEqual(deps.urls, []);
 });
 
-test('PUT /ptt/voice: an admin may change the voice', async () => {
-  const deps = makeDeps({ isAdmin: () => true });
+test('PUT /ptt/voice: an admin may change the install\'s voice', async () => {
+  const deps = makeDeps({ installRole: () => 'admin' });
   const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' });
   assert.equal(r.status, 200);
   assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/ptt/voice`]);
 });
 
-test('PUT /ptt/voice: anyone may change it for now, not only an admin', async () => {
-  const deps = makeDeps({ isAdmin: () => false });
+test('PUT /ptt/voice: a member may not change the install\'s voice (403, with the reason), and the gateway is not asked', async () => {
+  const deps = makeDeps({ installRole: () => 'member' });
   const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' });
+  assert.equal(r.status, 403);
+  assert.deepEqual(r.json, { ok: false, error: "Only an admin can change the install's voice" });
+  assert.deepEqual(deps.urls, []);
+});
+
+test("PUT /ptt/voice: a member may still change an agent's own voice", async () => {
+  const deps = makeDeps({ installRole: () => 'member' });
+  const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: 'dev-demo' });
   assert.equal(r.status, 200);
   assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/ptt/voice`]);
 });
@@ -452,21 +461,33 @@ test('the voice reads stay open to a non-admin', async () => {
   assert.equal(deps.urls.length, 3);
 });
 
-test('whatever role an authenticating proxy names, the voice can be changed', async () => {
+test('behind an authenticating proxy, only its admin changes the install\'s voice; anyone changes an agent\'s', async () => {
   const before = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
   try {
-    const deps = makeDeps();                                    // no injected check: the real one
-    const callers: Record<string, string>[] = [{ 'x-orchestra-user': 'demo-user', 'x-orchestra-role': 'viewer' },
-      { 'x-orchestra-user': 'demo-user' }, { 'x-orchestra-user': 'demo-admin', 'x-orchestra-role': 'admin' }];
-    for (const headers of callers) {
-      assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' }, headers)).status, 200);
+    const deps = makeDeps({ installRole: undefined });          // no injected check: the real one
+    const viewer = { 'x-orchestra-user': 'demo-user', 'x-orchestra-role': 'viewer' };
+    const noRole = { 'x-orchestra-user': 'demo-user' };
+    const admin = { 'x-orchestra-user': 'demo-admin', 'x-orchestra-role': 'admin' };
+    const install = { vendor: 'openai', voice_id: 'cedar' };
+    assert.equal((await put(deps, '/api/arturo/ptt/voice', install, viewer)).status, 403);
+    assert.equal((await put(deps, '/api/arturo/ptt/voice', install, noRole)).status, 403);
+    assert.equal((await put(deps, '/api/arturo/ptt/voice', install, admin)).status, 200);
+    for (const headers of [viewer, noRole, admin]) {
+      assert.equal((await put(deps, '/api/arturo/ptt/voice', { ...install, agent: 'dev-demo' }, headers)).status, 200);
     }
-    assert.equal(deps.urls.length, 3);
+    assert.equal(deps.urls.length, 4);
   } finally {
     if (before === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
     else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = before;
   }
+});
+
+test('with no Tailscale login (a local caller), the install\'s voice is refused: no login is a member', async () => {
+  delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  const deps = makeDeps({ installRole: undefined });
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' })).status, 403);
+  assert.deepEqual(deps.urls, []);
 });
 
 // --- avatar looks: GET /avatars, GET/PUT/DELETE /avatar ---

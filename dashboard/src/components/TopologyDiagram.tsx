@@ -240,12 +240,12 @@ function AgentNode({
       </div>
       <TierBadge tier={agent.tier} />
       {subtitle && (
-        <span className="text-[10px] text-tone-sky-300/90 truncate max-w-[100px]" title={subtitle}>
+        <span className="text-px10 text-tone-sky-300/90 truncate max-w-[100px]" title={subtitle}>
           {subtitle}
         </span>
       )}
       {!working && agent.machine && (
-        <span className="text-[10px] text-tone-500">{agent.machine}</span>
+        <span className="text-px10 text-tone-500">{agent.machine}</span>
       )}
     </Clickable>
   );
@@ -283,7 +283,7 @@ function Connection({
       title={tip}
       aria-label={tip}
       className={clsx(
-        'text-[10px] bg-tone-950 px-1.5 py-0.5 rounded z-10 relative transition-colors',
+        'text-px10 bg-tone-950 px-1.5 py-0.5 rounded z-10 relative transition-colors',
         'hover:text-tone-100 hover:bg-tone-800 focus:outline-none focus:ring-1 focus:ring-sky-500',
         count ? 'text-tone-400' : 'text-tone-600',
       )}
@@ -293,7 +293,7 @@ function Connection({
   ) : (
     <span
       title={tip}
-      className={clsx('text-[10px] bg-tone-950 px-1.5 py-0.5 rounded z-10 relative',
+      className={clsx('text-px10 bg-tone-950 px-1.5 py-0.5 rounded z-10 relative',
         count ? 'text-tone-400' : 'text-tone-600')}
     >
       {count || '—'}

@@ -27,6 +27,8 @@
  */
 import type { Request } from 'express';
 import { loadConfig } from './config.js';
+import { isLoopback, tailscaleRole, tailscaleUsers, type InstallRole, type TailscaleUser } from './tailscale-identity.js';
+export type { InstallRole };
 
 export interface Principal {
   username: string;
@@ -105,4 +107,31 @@ export function tenantScope(req: Request): { isAdmin: boolean; clientScope: stri
 export function actingAgent(req: Request): string | null {
   const p = principal(req);
   return p ? p.username : null;
+}
+
+/** The Tailscale login Serve stamped on this request, only when it came through the local proxy (loopback). */
+export function tailscaleLogin(req: Request): string | null {
+  if (!isLoopback(req.socket?.remoteAddress)) return null;
+  return header(req, 'tailscale-user-login').toLowerCase() || null;
+}
+
+/**
+ * The caller's role on this INSTALL (Settings: Everyone rows are admin-only). Separate from `role` above, which
+ * drives tenant scoping: a member must keep seeing every agent, only the install-wide settings are locked.
+ *   trusted proxy  -> its asserted role ('admin' or not; absent is never admin)
+ *   otherwise      -> the Tailscale login's role in tailscale-users (a listed login with no role = admin); a login
+ *                     not in the file, or a request with no login at all, is a member ("Always
+ *                     member"). No exception for local callers: nothing in this repo calls an admin-gated route
+ *                     (PUT /api/settings/*, PUT /api/agents/:id/takes-calls, PUT /api/arturo/ptt/voice without an
+ *                     agent) except the dashboard, which always arrives through Serve with a login.
+ */
+export function installRole(req: Request, users?: TailscaleUser[]): InstallRole {
+  if (trustsIdentityHeaders()) return principal(req)?.role === 'admin' ? 'admin' : 'member';
+  const login = tailscaleLogin(req);
+  return login ? tailscaleRole(login, users ?? tailscaleUsers()) : 'member';
+}
+
+/** Who to name in "Changed by …": the Tailscale login when there is one, else the principal. */
+export function changedBy(req: Request): string {
+  return tailscaleLogin(req) ?? principal(req)?.username ?? 'unknown';
 }

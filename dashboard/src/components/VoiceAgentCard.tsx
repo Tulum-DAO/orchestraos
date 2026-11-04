@@ -31,14 +31,14 @@ export function VoiceAgentCard({ pmId, name, agentId, voice, updatedAt, isInCall
           {label !== pmId && <p className="text-sm text-tone-500 mt-0.5">{pmId}</p>}
         </div>
         {voice && (
-          <span className="text-[10px] uppercase tracking-wider bg-tone-800 text-tone-400 px-2 py-0.5 rounded-full whitespace-nowrap">
+          <span className="text-px10 uppercase tracking-wider bg-tone-800 text-tone-400 px-2 py-0.5 rounded-full whitespace-nowrap">
             {voice}
           </span>
         )}
       </div>
 
       <div className="flex items-center justify-between mt-auto pt-2">
-        <span className="text-[11px] text-tone-600">Synced {synced}</span>
+        <span className="text-px11 text-tone-600">Synced {synced}</span>
         <button
           onClick={onCall}
           disabled={isInCall || isPending}

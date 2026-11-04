@@ -136,7 +136,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
           <KeyRound size={16} className="text-tone-amber-400" />
           <span className="text-sm font-semibold text-tone-100">GM Auth</span>
           <span className={clsx(
-            'text-[10px] px-1.5 py-0.5 rounded font-medium',
+            'text-px10 px-1.5 py-0.5 rounded font-medium',
             gmState === 'authenticated' || gmState === 'idle' || gmState === 'login_success' ? 'bg-green-500/15 text-tone-green-400' :
             gmState === 'not_running' ? 'bg-red-500/15 text-tone-red-400' :
             'bg-amber-500/15 text-tone-amber-400'
@@ -152,7 +152,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
       {/* Live GM output */}
       <pre
         ref={outputRef}
-        className="bg-black rounded-lg p-2.5 text-[10px] text-green-400/80 font-mono leading-relaxed flex-1 min-h-[120px] max-h-[200px] overflow-y-auto whitespace-pre-wrap border border-neutral-800"
+        className="bg-black rounded-lg p-2.5 text-px10 text-green-400/80 font-mono leading-relaxed flex-1 min-h-[120px] max-h-[200px] overflow-y-auto whitespace-pre-wrap border border-neutral-800"
       >
         {output || 'Loading...'}
       </pre>
@@ -263,7 +263,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
 
       {/* Error */}
       {error && (
-        <p className="text-[11px] text-tone-red-400 shrink-0">{error}</p>
+        <p className="text-px11 text-tone-red-400 shrink-0">{error}</p>
       )}
     </div>
   );

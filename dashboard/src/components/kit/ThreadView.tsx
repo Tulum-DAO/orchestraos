@@ -198,7 +198,7 @@ function Choice({ m, choice }: { m: ThreadMessage; choice: ThreadViewChoice }) {
 function Reaction({ emoji }: { emoji: string }) {
   return (
     <div className="flex justify-end !-mt-1.5 pr-3" data-anchor-skip data-reaction>
-      <span className="rounded-full border border-border bg-muted px-1.5 text-sm leading-6 shadow-sm" aria-label={`Reacted ${emoji}`}>{emoji}</span>
+      <span className="rounded-full border border-border bg-muted px-1.5 text-sm leading-[calc(1.5rem*var(--ui-text-scale,1))] shadow-sm" aria-label={`Reacted ${emoji}`}>{emoji}</span>
     </div>
   );
 }

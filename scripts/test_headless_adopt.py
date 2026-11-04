@@ -90,3 +90,13 @@ def test_existing_options_are_kept(monkeypatch, tmp_path):
     (tmp_path / "state" / "agent-calls.json").write_text(json.dumps({"seats": {"s": {"ack_after_s": 5}, "o": {"on": True}}}))
     assert HA.adopt("s", 60, "new-agent") == 0
     assert calls(tmp_path) == {"s": {"on": True, "ack_after_s": 5}, "o": {"on": True}}
+
+
+def test_the_install_default_off_leaves_a_new_seat_s_calls_off(monkeypatch, tmp_path):
+    pane = Pane()
+    setup(monkeypatch, tmp_path, pane)
+    (tmp_path / "state" / "agent-calls.json").write_text(json.dumps({"default": {"on": False}, "seats": {}}))
+    assert HA.adopt("new-seat", 60, "new-agent") == 0
+    doc = json.loads((tmp_path / "state" / "agent-calls.json").read_text())
+    assert doc["seats"]["new-seat"] == {"on": False, "ack_after_s": 3}
+    assert doc["default"] == {"on": False}

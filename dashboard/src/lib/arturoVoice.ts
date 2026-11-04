@@ -5,6 +5,8 @@
  *
  * Only GPT-Live (OpenAI) is offered here for now; other providers come with bring-your-own-key.
  */
+import { isInstallAdmin } from './myRole.ts';
+
 export const OPENAI = 'openai';
 
 export interface VoiceVendor { id: string; title: string; available: boolean; reason?: string }
@@ -69,9 +71,9 @@ export async function clearVoice(agent: string): Promise<{ ok: boolean; error?: 
   }
 }
 
-/** Anyone may change any agent's voice for now (no per-agent ownership yet): the one place that will decide it. */
+/** Only an admin changes a voice (the install's role, lib/myRole.ts): the one place that decides it. */
 export function canChangeVoice(): boolean {
-  return true;
+  return isInstallAdmin();
 }
 export const ADMIN_ONLY_NOTE = "Only an admin can change Arturo's voice";
 

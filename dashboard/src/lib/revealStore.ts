@@ -14,6 +14,7 @@
  */
 import { FADE_MS, RevealPacer } from './reveal';
 import { StreamPlan } from './threadKit/streamMarkdown';
+import { motionReduced } from './motion.ts';
 
 /** Each reveal frame's own work, kept in window.__orchestraReveal so a performance check can read it (shared with
  *  components/kit/RevealText.tsx). */
@@ -23,7 +24,7 @@ export function revealStats(): RevealStats {
   return (w.__orchestraReveal ||= { frames: 0, maxMs: 0, over16: 0 });
 }
 
-export const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+export const reducedMotion = () => motionReduced();
 
 const ON = 'is-on';
 const SHOWN = 'is-shown';

@@ -17,18 +17,21 @@
  *
  * Only what the dashboard can already read is shown: /api/arturo/health (status, brain), /api/arturo/ptt/*
  * (the live voice: providers set up, the voices, the current pick), /api/facts
- * (Memory), a thread's ?jobs=1 (Activity), the assistant settings store (On this device). Rows with
- * nothing behind them yet are shown disabled, marked "Coming soon".
+ * (Memory), a thread's ?jobs=1 (Activity). Settings for the whole install or for this device live in Settings
+ * (components/settings): "Server settings" and the voice provider rows open it.
  */
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from 'lucide-react';
 import { arturoHealth, ARTURO_DISABLED_TEXT, handsFreeReady, isArturoDisabled, type ArturoHealth } from '../../lib/arturo';
 import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
          type PanelPage, type DrawerSection } from '../../lib/arturoPanel';
-import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceProviderValue, voiceNameValue, PROVIDER_SCOPE_NOTE, canChangeVoice, ADMIN_ONLY_NOTE, GPT_LIVE,
+import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceProviderValue, voiceNameValue, PROVIDER_SCOPE_NOTE, ADMIN_ONLY_NOTE, GPT_LIVE,
          type VoiceVendor, type VoiceRow, type CurrentVoice } from '../../lib/arturoVoice';
 import { styleOptions, styleLabel, chooseStyle, loadPrefs, useChatStyle, useAgentPrefsStore } from '../../lib/agentPrefs';
 import { HeadlessDevNote } from './HeadlessDevNote';
+import { Row, Info, LinkRow } from './PanelRows';
+import { TakesCalls } from './TakesCalls';
+import { useOpenSettings } from '../settings/useOpenSettings';
 import { fetchAgentModel, switchAgentModel, switchableModels, switchNotice, pickRefusal,
          type AgentModelInfo, type SwitchNotice } from '../../lib/agentModel';
 import ModelPicker from '../kit/ModelPicker';
@@ -39,7 +42,6 @@ import { fetchJobs, elapsed, type ArturoJob } from '../../lib/arturoJobs';
 import { currentThread } from '../../lib/arturoCurrent';
 import { DrawerHistory } from './DrawerHistory';
 import { factsApi, type Fact } from '../../lib/factsApi';
-import { useAgentSettings } from '../../stores/agentSettings';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { LookPicker } from '../avatar/LookPicker';
 import { DrawerLibrary } from './DrawerLibrary';
@@ -48,11 +50,12 @@ import { ExportChatButton } from '../agent/ExportChatButton';
 import { useAgentRecord, ARTURO_ID } from '../avatar/agentState';
 import { PROVIDER_LABEL } from '../../lib/agentRail';
 import { providerMark } from '../avatar/brandMarks';
-import { canChangeLook, shapeName, colorName } from '../../lib/avatarLooks';
-import { useAssistantName, named, saveAssistantName, resetAssistantName, canRename, DEFAULT_ASSISTANT_NAME, NAME_MAX } from '../../lib/assistantName';
+import { shapeName, colorName } from '../../lib/avatarLooks';
+import { useInstallAdmin } from '../../lib/myRole';
+import { useAssistantName, named, saveAssistantName, resetAssistantName, DEFAULT_ASSISTANT_NAME, NAME_MAX } from '../../lib/assistantName';
 
 const TITLES: Record<PanelPage, string> = {
-  voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain', device: 'On this device',
+  voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain',
   avatar: 'Avatar', name: 'Name', edit: 'Edit', style: 'Chat style', model: 'Model',
   library: 'Library', history: 'History', setup: 'Setup',
 };
@@ -114,7 +117,8 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   const aname = isArturo ? assistantName : agent!.name;
   const saveName: SaveName = isArturo ? saveAssistantName : (n) => renameAgent(agentId, n);
   const style = useChatStyle(agentId);
-  const canSaveLook = canChangeLook();
+  const admin = useInstallAdmin();   // subscribed: an admin answer after the first render unlocks the look and the name
+  const canSaveLook = admin;
   // Mounted while open or sliding out; `shown` drives the slide, a frame after mount so it animates in.
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
@@ -124,7 +128,10 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   const [editDraft, setEditDraft] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
-  const canEditName = canRename();
+  const canEditName = admin;
+  const openSettings = useOpenSettings();
+  // Leaving the panel for Settings: focus goes to the gear first, so Settings returns it there when it closes.
+  const toSettings = (go: () => void) => { onClose(); returnFocusTo.current?.focus({ preventScroll: true }); go(); };
   const [health, setHealth] = useState<ArturoHealth | null>(null);
   const [factCount, setFactCount] = useState<number | null>(null);
   const [jobs, setJobs] = useState<ArturoJob[] | null>(null);
@@ -283,9 +290,10 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
           : <Row id="model" label="Model" value={agentModelTitle(model) ?? ''} onOpen={push} />}
         <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
-        <Row label="Notifications" soon />
         <Row id="settings" label="Settings" onOpen={push} />
+        {!isArturo && <TakesCalls agentId={agentId} />}
         <RotationSettings key={agentId} agentId={agentId} isArturo={isArturo} />
+        <LinkRow label="Server settings" data="server-settings" onClick={() => toSettings(() => openSettings('general'))} />
       </div>
     );
 
@@ -293,7 +301,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
     <>
       {bar}
       <div className="arturo-panel-body" key={page ?? 'root'}>
-        {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} agentId={isArturo ? undefined : agentId} />
+        {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} agentId={isArturo ? undefined : agentId} onProvider={() => toSettings(() => openSettings('voice'))} />
           : page === 'memory' ? <MemoryPage />
           : page === 'activity' ? (isArturo ? <ActivityPage /> : <SubagentsPage running={agent?.subagents} name={aname} />)
           : page === 'style' ? <StylePage agentId={agentId} />
@@ -302,21 +310,16 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
             <div className="arturo-panel-list">
               <Row id="name" label="Name" value={aname} onOpen={push} />
               {isArturo && <Row id="brain" label="Brain" value={brain} onOpen={push} />}
-              {isArturo && <Row label="Keys" soon />}
-              <Row label="Notifications" soon />
-              <Row id="device" label="On this device" onOpen={push} />
-              {isArturo && <Row label="About" soon />}
             </div>
           )
           : page === 'brain' ? <BrainPage health={health} brain={brain} />
-          : page === 'device' ? <DevicePage />
           : page === 'name' ? (isArturo ? <NamePage /> : <AgentNamePage agentId={agentId} name={aname} save={saveName} />)
           : page === 'edit' ? (
             <EditPage agentId={agentId} name={aname} draft={editDraft} onDraft={setEditDraft} error={editError} canName={canEditName}
                       onDone={() => void editDone()} onAvatar={() => push('avatar')}
                       provider={voiceProviderValue(vendor, health ? handsFreeReady(health) : null)}
                       voice={(() => { const n = voiceNameValue(vendor, voice, health ? handsFreeReady(health) : null); return n && !isArturo && voice?.scope === 'install' ? `${n} (default)` : n; })()}
-                      onVoice={() => push('voice')} />
+                      onVoice={() => push('voice')} onProvider={() => toSettings(() => openSettings('voice'))} />
           )
           : page === 'avatar' ? <LookPicker agentId={agentId} heroSize={160} canSave={canSaveLook} />
           : page === 'library' || page === 'history' || page === 'setup' ? sectionBody(page)
@@ -380,8 +383,6 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   );
 }
 
-/** One 52px row: the label, its current value in grey, a chevron. A row with nothing behind it yet is
- *  disabled and says so, rather than opening an empty page. */
 /** Arturo's face at the top of the drawer: its picture, not its status (only the sidebar avatar shows
  *  that), with the badge of the brain that runs it; under it the name, that brain and the voice it calls
  *  with (a different vendor, so labelled as the voice). Tapping it opens the look picker; until a look is
@@ -455,12 +456,12 @@ function InlineName({ name: aname, save }: { name: string; save: SaveName }) {
 
 /** Phone: the Edit screen (like a chat app's): the avatar with a pencil badge, the Name field, then Appearance with
  *  the Avatar row that opens the look picker. Done in the bar saves the name; the back arrow leaves it. */
-function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, provider, voice, onVoice }: {
+function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, provider, voice, onVoice, onProvider }: {
   agentId: string; name: string;
   draft: string; onDraft: (v: string) => void; error: string | null; canName: boolean; onDone: () => void; onAvatar: () => void;
-  /** The voice provider ("GPT-Live"): set for the whole server, so shown greyed and not tappable. */
+  /** The voice provider ("GPT-Live"): set for the whole install, so its row opens Settings › Voice & calls. */
   provider: string;
-  voice: string; onVoice: () => void;
+  voice: string; onVoice: () => void; onProvider: () => void;
 }) {
   const rec = useAgentRecord(agentId);
   return (
@@ -479,50 +480,20 @@ function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone
       <h3 className="arturo-panel-section">Appearance</h3>
       <div className="arturo-panel-list">
         <Row id="avatar" label="Avatar" value={`${shapeName(rec.shape)} · ${colorName(rec.color)}`} onOpen={onAvatar} />
-        {/* The provider is the server's, not this agent's: greyed, not tappable, and it says so. The voice is this
-            agent's own, tappable as ever. */}
-        <div className="arturo-panel-field is-disabled" data-voice-provider aria-disabled>
+        {/* The server's provider: set for the whole install in Settings › Voice & calls, so this row opens it there.
+            The voice is this agent's own, tappable as ever. Two short lines, never cut off. */}
+        <button type="button" className="arturo-panel-row" data-voice-provider onClick={onProvider}>
           <span>Provider</span>
-          {/* Two short lines, never cut off: the provider, and that it is the server's. */}
-          <span className="arturo-panel-rowvalue" style={{ whiteSpace: 'normal', textAlign: 'right', padding: '6px 0' }}>
-            <span style={{ display: 'block' }}>{provider}</span>
-            {provider && provider !== 'Not set up' ? <span style={{ display: 'block', fontSize: 12 }}>{PROVIDER_SCOPE_NOTE}</span> : null}
+          <span className="arturo-panel-rowend">
+            <span className="arturo-panel-rowvalue" style={{ whiteSpace: 'normal', textAlign: 'right', padding: '6px 0' }}>
+              <span style={{ display: 'block' }}>{provider}</span>
+              {provider && provider !== 'Not set up' ? <span style={{ display: 'block', fontSize: 'calc(12px * var(--ui-text-scale, 1))' }}>{PROVIDER_SCOPE_NOTE}</span> : null}
+            </span>
+            <ChevronRight size={18} />
           </span>
-        </div>
+        </button>
         <Row id="voice" label="Voice" value={voice} onOpen={onVoice} />
       </div>
-    </div>
-  );
-}
-
-function Row({ id, label, value, onOpen, soon }: {
-  id?: PanelPage; label: string; value?: string; onOpen?: (p: PanelPage) => void; soon?: boolean;
-}) {
-  if (soon || !id || !onOpen) {
-    return (
-      <button type="button" className="arturo-panel-row" disabled>
-        <span>{label}</span>
-        <span className="arturo-panel-rowvalue">Coming soon</span>
-      </button>
-    );
-  }
-  return (
-    <button type="button" data-panel-row={id} className="arturo-panel-row" onClick={() => onOpen(id)}>
-      <span>{label}</span>
-      <span className="arturo-panel-rowend">
-        {value ? <span className="arturo-panel-rowvalue">{value}</span> : null}
-        <ChevronRight size={18} />
-      </span>
-    </button>
-  );
-}
-
-/** A read-only row: a label and its value, no chevron. */
-function Info({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="arturo-panel-field">
-      <span>{label}</span>
-      <span className="arturo-panel-rowvalue">{children}</span>
     </div>
   );
 }
@@ -531,8 +502,10 @@ function Info({ label, children }: { label: string; children: ReactNode }) {
  *  the one the next call uses. A pick shows at once and is put back, with the server's reason, if refused.
  *  Fast replies and captions are always on, so there is nothing to switch here. Anyone may look; only an
  *  admin may change it, so for everyone else the list is read-only and says why. */
-function VoicePage({ health, onPicked, agentId }: {
+function VoicePage({ health, onPicked, agentId, onProvider }: {
   health: ArturoHealth | null; onPicked: (v: CurrentVoice) => void;
+  /** The provider is the install's: its row opens Settings › Voice & calls. */
+  onProvider: () => void;
   /** Any agent but Arturo: its own voice, else the install's (Arturo's voice IS the install's). */
   agentId?: string;
 }) {
@@ -541,7 +514,7 @@ function VoicePage({ health, onPicked, agentId }: {
   const [current, setCurrent] = useState<string | null>(null);
   const [scope, setScope] = useState<CurrentVoice['scope']>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const editable = canChangeVoice();
+  const editable = useInstallAdmin();
   const aname = useAssistantName();
   useEffect(() => {
     let alive = true;
@@ -574,10 +547,13 @@ function VoicePage({ health, onPicked, agentId }: {
     <>
       <h3 className="arturo-panel-section">Provider</h3>
       <div className="arturo-panel-list arturo-panel-list-tight">
-        <div className="arturo-panel-field is-disabled" data-voice-provider aria-disabled>
+        <button type="button" className="arturo-panel-row" data-voice-provider onClick={onProvider}>
           <span>{GPT_LIVE} (OpenAI)</span>
-          <span className="arturo-panel-rowvalue">{PROVIDER_SCOPE_NOTE}</span>
-        </div>
+          <span className="arturo-panel-rowend">
+            <span className="arturo-panel-rowvalue">{PROVIDER_SCOPE_NOTE}</span>
+            <ChevronRight size={18} />
+          </span>
+        </button>
       </div>
       {available === false && <p className="arturo-panel-note">Add an OpenAI key to use {GPT_LIVE}.</p>}
       {available && (
@@ -743,7 +719,7 @@ function BrainPage({ health, brain }: { health: ArturoHealth | null; brain: stri
  *  so a half-typed name never reaches the assistant. */
 function NamePage() {
   const aname = useAssistantName();
-  const editable = canRename();
+  const editable = useInstallAdmin();
   const [text, setText] = useState(aname);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -882,33 +858,6 @@ function ActivityPage() {
       {running.length ? list(running) : <p className="arturo-panel-empty">Nothing running in this conversation.</p>}
       <h3 className="arturo-panel-section">Recent</h3>
       {recent.length ? list(recent) : <p className="arturo-panel-empty">No background jobs yet.</p>}
-    </div>
-  );
-}
-
-/** Settings kept in this browser only (they are not synced), one row each, saved as they change. */
-function DevicePage() {
-  const s = useAgentSettings();
-  return (
-    <div className="arturo-panel-list">
-      <label className="arturo-panel-field">
-        <span>Voice colour</span>
-        <input type="color" value={s.accentVoice} onChange={(e) => s.setAccentVoice(e.target.value)} className="arturo-panel-swatch" />
-      </label>
-      <label className="arturo-panel-field">
-        <span>Transcript</span>
-        <select value={s.transcriptMode} onChange={(e) => s.setTranscriptMode(e.target.value === 'as-spoken' ? 'as-spoken' : 'all-at-once')} className="arturo-panel-value">
-          <option value="all-at-once">All at once</option>
-          <option value="as-spoken">As spoken</option>
-        </select>
-      </label>
-      <label className="arturo-panel-field">
-        <span>Microphone</span>
-        <select value={s.micMode} onChange={(e) => s.setMicMode(e.target.value === 'toggle' ? 'toggle' : 'hold')} className="arturo-panel-value">
-          <option value="hold">Hold to talk</option>
-          <option value="toggle">Tap to talk</option>
-        </select>
-      </label>
     </div>
   );
 }

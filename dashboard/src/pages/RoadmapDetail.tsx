@@ -50,7 +50,7 @@ function StatusBadge({ status, onChange }: { status: TaskStatus; onChange?: (s: 
 
   if (!onChange) {
     return (
-      <span className={clsx('text-[11px] px-2 py-0.5 rounded-full font-medium', cfg.badge)}>
+      <span className={clsx('text-px11 px-2 py-0.5 rounded-full font-medium', cfg.badge)}>
         {cfg.label}
       </span>
     );
@@ -60,7 +60,7 @@ function StatusBadge({ status, onChange }: { status: TaskStatus; onChange?: (s: 
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(v => !v)}
-        className={clsx('text-[11px] px-2 py-0.5 rounded-full font-medium hover:opacity-80 transition-opacity cursor-pointer', cfg.badge)}
+        className={clsx('text-px11 px-2 py-0.5 rounded-full font-medium hover:opacity-80 transition-opacity cursor-pointer', cfg.badge)}
       >
         {cfg.label}
       </button>

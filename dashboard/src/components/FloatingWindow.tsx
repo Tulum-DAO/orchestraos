@@ -46,7 +46,7 @@ export default function FloatingWindow({ title, subtitle, x, y, z, onFocus, onCl
            onPointerDown={(e) => { if (!narrow) drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; }}>
         <div className="min-w-0 flex-1">
           <div className="text-sm text-card-foreground font-medium truncate">{title}</div>
-          {subtitle && <div className="text-[11px] text-muted-foreground font-mono truncate">{subtitle}</div>}
+          {subtitle && <div className="text-px11 text-muted-foreground font-mono truncate">{subtitle}</div>}
         </div>
         {actions}
         <button aria-label={`Close ${title}`} onPointerDown={(e) => e.stopPropagation()} onClick={onClose}

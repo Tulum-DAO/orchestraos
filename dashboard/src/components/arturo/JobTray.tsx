@@ -76,7 +76,7 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
     <div ref={trayRef} className="arturo-jobtray w-full rounded-control border border-line bg-field px-2.5 py-1.5 mb-1.5"
          data-testid="job-tray">
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
-              className="flex w-full items-center gap-1.5 text-left text-[12.5px] text-ink-2">
+              className="flex w-full items-center gap-1.5 text-left text-px12h text-ink-2">
         {running ? <LoaderCircle size={13} className="shrink-0 animate-spin text-ink-3" aria-label="working" />
                  : <X size={13} className="shrink-0 text-red" aria-label="didn't finish" />}
         <span className="min-w-0 flex-1 truncate tabular-nums">{trayHeader(shown)}</span>
@@ -87,7 +87,7 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
         <div className="mt-1.5 flex max-h-64 flex-col gap-2 overflow-y-auto">
           {shown.map((j) => (
             <div key={j.id} className="flex flex-col">
-              <div className="flex items-center gap-2 text-[12.5px]">
+              <div className="flex items-center gap-2 text-px12h">
                 <span className="min-w-0 flex-1 truncate font-medium text-ink">{j.title}</span>
                 <span className="shrink-0 tabular-nums text-ink-3">
                   {j.status === 'running' ? elapsed(j) : j.status === 'lost' ? 'lost' : 'failed'}
@@ -102,7 +102,7 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
                           onClick={() => setDismissed((d) => new Set(d).add(j.id))}>Dismiss</button>
                 )}
               </div>
-              {j.error && j.status !== 'running' && <span className="text-[11.5px] text-red">{j.error}</span>}
+              {j.error && j.status !== 'running' && <span className="text-px11h text-red">{j.error}</span>}
               {j.steps.length > 0 && <ToolCalls calls={jobToolParts(j).map(fromPart)} />}
             </div>
           ))}

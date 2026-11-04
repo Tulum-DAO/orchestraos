@@ -70,7 +70,7 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onSettings, settingsOp
             Bubbles or Dev) chosen in the agent's panel, behind the gear. */}
         {seat && mode === 'dev' && onBackToChat && (
           <button type="button" onClick={onBackToChat} data-back-to-chat
-                  className="mr-1 inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[13px] font-medium text-foreground hover:bg-muted">
+                  className="mr-1 inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-px13 font-medium text-foreground hover:bg-muted">
             <MessageSquare size={15} aria-hidden /> Back to chat
           </button>
         )}

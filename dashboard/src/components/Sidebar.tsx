@@ -45,6 +45,9 @@ import { loadSavedLooksOnce } from '../lib/avatarLooks';
 import { appearanceRows } from '../lib/theme';
 import { useCallStore } from '../stores/callStore';
 import CallPill from './call/CallPill';
+import { useTextAvatar } from '../lib/deviceSettings';
+import { useOpenSettings } from './settings/useOpenSettings';
+import { isMacPlatform, settingsShortcutLabel } from '../lib/settingsRoute';
 
 // The agents are the work; the pages are where you go occasionally. "More" remembers whether you
 // opened it, so anyone who lives in Tasks or Analytics keeps them visible after one click and the
@@ -220,11 +223,9 @@ function agentsHeaderClass(active: boolean): string {
   );
 }
 
-interface SidebarProps {
-  onNavigate?: () => void;
-}
+interface SidebarProps { onNavigate?: () => void; variant?: 'desktop' | 'drawer' }
 
-export function Sidebar({ onNavigate }: SidebarProps = {}) {
+export function Sidebar({ onNavigate, variant = 'desktop' }: SidebarProps = {}) {
   const { data: user } = useUser();
   const navigate = useNavigate();
   const agentMatch = useMatch('/agent/:id');
@@ -239,6 +240,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
   // Arturo's badge from its actual brain, on every page (its own page also updates it as health changes).
   const brainChoice = useArturoBrain((s) => s.choice);
   const aname = useAssistantName();
+  const arturoFace = useTextAvatar(32);
   const arturoOnCall = useCallStore((st) => st.call?.party === 'arturo');
   useEffect(() => {
     let live = true;
@@ -251,7 +253,10 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
   }, [brainChoice]);
 
   return (
-    <aside className="w-60 border-r border-neutral-200 dark:border-neutral-800 h-full max-h-screen flex flex-col bg-background overflow-hidden" onClick={onNavigate}>
+    <aside data-sidebar={variant}
+           className={clsx(variant === 'drawer' ? 'w-[var(--drawer-w,80vw)] max-w-[min(100vw,360px)]' : 'w-[var(--sidebar-w,240px)]',
+             'border-r border-neutral-200 dark:border-neutral-800 h-full max-h-screen flex flex-col bg-background overflow-hidden')}
+           onClick={onNavigate}>
       {/* As tall as the page's top bar beside it (53px: a 40px row, 6px above and below, its border), so the two
           bottom borders read as one line across the screen. */}
       <div className="px-5 py-1.5 min-h-[53px] flex flex-col justify-center border-b border-neutral-200 dark:border-neutral-800 shrink-0">
@@ -286,7 +291,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
             <>
               {/* 32px in a 16px slot (the negative margins): the row and its label keep their place. */}
               <span className={clsx('-mx-2 -my-1.5 shrink-0', isActive ? 'la-on-selected' : 'la-on-sidebar')}>
-                <AgentAvatar agentId={ARTURO_ID} role="sidebar" size={32} selected={isActive} label={aname} />
+                <AgentAvatar agentId={ARTURO_ID} role="sidebar" size={arturoFace} selected={isActive} label={aname} />
               </span>
               <span className="min-w-0 flex-1 truncate">{aname}</span>
               {/* a call from an agent's page that still goes through Arturo: its pill is on his row */}
@@ -370,10 +375,9 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
         </nav>
       </div>
 
-      {/* User card. Its name and role open the operator menu (Appearance, per device); the logout icon is
-          its own button beside it, as before. */}
+      {/* User card. Its name and role open the operator menu (Settings, Appearance, Log out); the logout icon stays beside it. */}
       <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 shrink-0">
-        <OperatorCard username={username} role={isAdmin ? 'admin' : user?.role || 'user'} />
+        <OperatorCard username={username} role={isAdmin ? 'admin' : user?.role || 'user'} onNavigate={onNavigate} />
         <div className="pt-2">
           <UsageLine />
         </div>
@@ -385,8 +389,9 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
 /** The operator card and its menu. The menu opens above the card, inside the sidebar, so it stays on screen
  *  in the phone drawer too; its rows are 44px there. Clicks inside never reach the sidebar's own handler,
  *  which would close the phone drawer. */
-function OperatorCard({ username, role }: { username: string; role: string }) {
+function OperatorCard({ username, role, onNavigate }: { username: string; role: string; onNavigate?: () => void }) {
   const { theme, setTheme } = useTheme();
+  const openSettings = useOpenSettings();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -405,7 +410,14 @@ function OperatorCard({ username, role }: { username: string; role: string }) {
       {open && (
         <div role="menu" aria-label="Operator" data-operator-menu
              className="absolute bottom-full left-0 right-0 mb-2 z-10 rounded-xl border border-border bg-popover text-popover-foreground shadow-lg py-1">
-          <p className="px-3 pt-1.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Appearance</p>
+          <button type="button" role="menuitem" data-operator-settings
+                  onClick={() => { setOpen(false); buttonRef.current?.focus(); onNavigate?.(); openSettings('general'); }}
+                  className="w-full min-h-9 max-md:min-h-11 flex items-center justify-between gap-2 px-3 text-sm text-left hover:bg-muted transition-colors">
+            <span>Settings</span>
+            <span className="text-xs text-muted-foreground">{settingsShortcutLabel(isMacPlatform(navigator.platform || ''))}</span>
+          </button>
+          <div role="separator" className="my-1 border-t border-border" />
+          <p className="px-3 pt-1.5 pb-1 text-px11 font-medium uppercase tracking-wider text-muted-foreground">Appearance</p>
           {appearanceRows(theme).map((o) => (
             <button key={o.id} type="button" role="menuitemradio" aria-checked={o.checked}
                     onClick={() => { setTheme(o.id); setOpen(false); buttonRef.current?.focus(); }}
@@ -414,6 +426,12 @@ function OperatorCard({ username, role }: { username: string; role: string }) {
               {o.checked && <Check size={16} className="text-foreground" aria-hidden />}
             </button>
           ))}
+          <div role="separator" className="my-1 border-t border-border" />
+          <button type="button" role="menuitem" data-operator-logout onClick={() => { window.location.href = '/logout'; }}
+                  className="w-full min-h-9 max-md:min-h-11 flex items-center justify-between gap-2 px-3 text-sm text-left text-red-600 dark:text-red-400 hover:bg-muted transition-colors">
+            <span>Log out</span>
+            <LogOut size={14} aria-hidden />
+          </button>
         </div>
       )}
       <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-neutral-100 dark:bg-neutral-900">
@@ -427,7 +445,7 @@ function OperatorCard({ username, role }: { username: string; role: string }) {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate">{username}</p>
-            <p className="text-[10px] text-neutral-600 dark:text-neutral-500">{role}</p>
+            <p className="text-px10 text-neutral-600 dark:text-neutral-500">{role}</p>
           </div>
         </button>
         <button

@@ -19,7 +19,7 @@ export default function CompactionRow({ state, trigger }: { state: CompactionIte
       <div className="w-full max-w-[min(92%,34rem)] rounded-lg border border-line px-2.5 py-1" data-testid="tool-calls" data-compaction={state} role="status">
         <div className="-mx-[3px] flex h-7 min-w-0 items-center gap-2 px-[3px]" data-tool-row="compaction">
           <span className="flex size-4 shrink-0 items-center justify-center text-ink-3"><Shrink size={13} /></span>
-          <span className={`min-w-0 flex-1 truncate text-[12.5px] font-medium ${state === 'failed' ? 'text-ink-2' : 'text-ink'}`}>{text}</span>
+          <span className={`min-w-0 flex-1 truncate text-px12h font-medium ${state === 'failed' ? 'text-ink-2' : 'text-ink'}`}>{text}</span>
           {state === 'compacting' ? <LoaderCircle size={13} className="shrink-0 animate-spin text-ink-3" aria-label="running" />
             : state === 'failed' ? <X size={13} className="shrink-0 text-red" aria-label="failed" />
             : <Check size={13} className="shrink-0 text-green" aria-label="done" />}

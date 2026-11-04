@@ -509,17 +509,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           under the operator's thumb when one appears. */}
       {busy && (
         <div className="mb-1.5 mx-2 rounded-xl border border-amber-700/50 bg-card px-2.5 py-1.5 shadow-sm">
-          <div className="text-[11px] text-tone-amber-300">
+          <div className="text-px11 text-tone-amber-300">
             {sendPanelHeadline(busy)}
             {busy.state ? <span className="text-tone-500"> ({busy.state})</span> : null}
           </div>
           {busy.composer_text && (
-            <div className="text-[10px] text-tone-500 mt-0.5 truncate">
+            <div className="text-px10 text-tone-500 mt-0.5 truncate">
               the agent's box already holds: "{busy.composer_text}" — sending now submits it together with yours
             </div>
           )}
           {busy.stranded?.text && (
-            <div className="text-[10px] text-tone-500 mt-0.5 truncate">
+            <div className="text-px10 text-tone-500 mt-0.5 truncate">
               agent has an unsent draft: "{busy.stranded.text}"
             </div>
           )}
@@ -530,17 +530,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               <button
                 onClick={() => handleSend(true)}
                 disabled={sending}
-                className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-tone-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
+                className="text-px10 px-2 py-0.5 rounded bg-amber-500/20 text-tone-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
               >
                 {/* the gateway's force APPENDS to the box and submits; it never clears it (review of #198) */}
                 {busy.composer_text ? 'Send together with the draft' : 'Send anyway'}
               </button>
             ) : (
-              <span className="text-[10px] text-tone-600">retry when the agent finishes its turn</span>
+              <span className="text-px10 text-tone-600">retry when the agent finishes its turn</span>
             )}
             <button
               onClick={() => { setBusy(null); setResult(null); }}
-              className="text-[10px] px-2 py-0.5 rounded text-tone-500 hover:text-tone-300"
+              className="text-px10 px-2 py-0.5 rounded text-tone-500 hover:text-tone-300"
             >
               Dismiss
             </button>
@@ -548,7 +548,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         </div>
       )}
       {result && (
-        <span className={clsx('text-[10px] mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-tone-red-400')}>
+        <span className={clsx('text-px10 mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-tone-red-400')}>
           {result}
         </span>
       )}
@@ -631,7 +631,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             rows={1}
             disabled={disabled}
             aria-label="Message"
-            className="flex-1 min-w-0 self-center bg-transparent pl-0.5 pr-1.5 py-2 text-sm leading-5 text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
+            className="flex-1 min-w-0 self-center bg-transparent pl-0.5 pr-1.5 py-2 text-sm leading-[calc(1.25rem*var(--ui-text-scale,1))] text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
             onKeyDown={(e) => {
               // BEHAVIOUR CHANGE (2026-10-09): Enter sends, Shift+Enter is a newline. It used to be
               // Cmd/Ctrl+Enter only, which still sends. Touch keyboards keep Enter as a newline.

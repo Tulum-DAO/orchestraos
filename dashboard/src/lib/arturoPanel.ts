@@ -6,12 +6,12 @@ import { isArturoDisabled, isStarting, handsFreeReady, type ArturoHealth } from 
 import { DEFAULT_ASSISTANT_NAME } from './assistantName.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 
-export type PanelPage = 'voice' | 'memory' | 'activity' | 'settings' | 'brain' | 'device' | 'avatar' | 'name' | 'edit'
+export type PanelPage = 'voice' | 'memory' | 'activity' | 'settings' | 'brain' | 'avatar' | 'name' | 'edit'
   | 'style' | 'model' | 'library' | 'history' | 'setup';
 
 /** The levels to a page from the root, so a jump lands with the right back arrow: Brain sits under Settings. */
 export function pathTo(page: PanelPage): PanelPage[] {
-  return page === 'brain' || page === 'device' || page === 'name' ? ['settings', page] : [page];
+  return page === 'brain' || page === 'name' ? ['settings', page] : [page];
 }
 
 /** The status line, and the page that fixes what it reports (null when there is nothing to fix). */
