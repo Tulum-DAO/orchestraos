@@ -101,7 +101,7 @@ export function RotationSettings({ agentId, isArturo }: { agentId: string; isArt
   const cv = compactNowView({ canCompact: settings?.compact_now, ask, notice, showNotices: settings?.show_compaction ?? true });
   return (
     <div className="rotation-settings" data-rotation-settings>
-      <div className={`arturo-panel-field${settings && settings.compact_now === false ? ' is-disabled' : ''}`} data-rotation-compact-now-row>
+      <div className={`panel-field${settings && settings.compact_now === false ? ' is-disabled' : ''}`} data-rotation-compact-now-row>
         <span id={`compact-now-${agentId}`}>Compact now</span>
         <button type="button" className="rotation-compact" aria-describedby={`compact-now-line-${agentId}`}
                 disabled={!settings || !cv.enabled} onClick={() => void compactNow()} data-rotation-compact-now>
@@ -112,12 +112,12 @@ export function RotationSettings({ agentId, isArturo }: { agentId: string; isArt
         <p id={`compact-now-line-${agentId}`} className={`rotation-status rotation-compact-line is-${cv.tone}`}
            role={cv.tone === 'error' ? 'alert' : 'status'} data-rotation-compact-line={cv.tone}>{cv.line}</p>
       )}
-      <div className="arturo-panel-field">
+      <div className="panel-field">
         <span id={`auto-cmp-${agentId}`}>Auto-compact</span>
         <Switch on={auto} labelledBy={`auto-cmp-${agentId}`} disabled={!settings} onToggle={() => toggle('auto_compact')} data="auto" />
       </div>
-      <p className="arturo-panel-note rotation-note">You can also type /compact in the chat at any time.</p>
-      <div className={`arturo-panel-field${auto ? '' : ' is-disabled'}`} data-rotation-compact-row>
+      <p className="panel-note rotation-note">You can also type /compact in the chat at any time.</p>
+      <div className={`panel-field${auto ? '' : ' is-disabled'}`} data-rotation-compact-row>
         <label htmlFor={`compact-at-${agentId}`}>Compact at</label>
         <span className="rotation-stepper">
           <button type="button" className="rotation-step" aria-label="Lower"
@@ -133,18 +133,18 @@ export function RotationSettings({ agentId, isArturo }: { agentId: string; isArt
                   disabled={!settings || !auto || (shown.ok && shown.value >= COMPACT_MAX)} onClick={() => step(1)}><Plus size={14} /></button>
         </span>
       </div>
-      <p className={`arturo-panel-note rotation-note${auto ? '' : ' is-disabled'}`} id={`compact-note-${agentId}`}>
+      <p className={`panel-note rotation-note${auto ? '' : ' is-disabled'}`} id={`compact-note-${agentId}`}>
         {auto
           ? <>Compacts when the conversation fills this share of the context window ({COMPACT_MIN}–{COMPACT_MAX}%). A safety limit at {guard}% can't be changed.</>
           : <>Applies while Auto-compact is on ({COMPACT_MIN}–{COMPACT_MAX}%). A safety limit at {guard}% can't be changed.</>}
       </p>
-      <div className="arturo-panel-field">
+      <div className="panel-field">
         <span id={`show-cmp-${agentId}`}>Show compaction messages</span>
         <Switch on={settings?.show_compaction ?? true} labelledBy={`show-cmp-${agentId}`} disabled={!settings}
                 onToggle={() => toggle('show_compaction')} data="show" />
       </div>
-      {loadError ? <p className="arturo-panel-error" role="alert">{loadError}</p>
-        : status.kind === 'error' ? <p className="arturo-panel-error" role="alert" data-rotation-error>{status.text}</p>
+      {loadError ? <p className="panel-error" role="alert">{loadError}</p>
+        : status.kind === 'error' ? <p className="panel-error" role="alert" data-rotation-error>{status.text}</p>
         : status.kind === 'saving' ? <p className="rotation-status" role="status">Saving…</p>
         : status.kind === 'saved' ? <p className="rotation-status" role="status" data-rotation-saved>Saved. Applies from the next turn.</p>
         : null}

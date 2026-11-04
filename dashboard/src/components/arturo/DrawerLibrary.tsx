@@ -118,21 +118,21 @@ export function DrawerLibrary({ agentId, name }: { agentId: string; name: string
 
   let body: ReactNode;
   if (previews.isError) {
-    body = <p className="arturo-panel-empty">The library can't be read right now.</p>;
+    body = <p className="panel-empty">The library can't be read right now.</p>;
   } else if (loading) {
-    body = <p className="arturo-panel-empty">Loading…</p>;
+    body = <p className="panel-empty">Loading…</p>;
   } else if (chip === 'all') {
     const any = LIBRARY_GROUPS.some((g) => (counts[g] ?? 0) > 0);
     body = !any ? (
-      <div className="arturo-panel-empty" data-library-empty>
+      <div className="panel-empty" data-library-empty>
         <p>Nothing yet. Files, pictures and links {name} makes will be listed here.</p>
-        <p className="arturo-panel-note">A project's files are under <a href="/projects">Projects</a>.</p>
+        <p className="panel-note">A project's files are under <a href="/projects">Projects</a>.</p>
       </div>
     ) : LIBRARY_GROUPS.filter((g) => (counts[g] ?? 0) > 0).map((g) => {
       const list = g === 'unclear' ? unclear.data ?? [] : previews.data?.[g as Exclude<LibraryGroup, 'unclear'>] ?? [];
       return (
         <section key={g} className="dl-group" data-library-group={g}>
-          <h3 className="arturo-panel-section">{GROUP_LABEL[g]}</h3>
+          <h3 className="panel-section">{GROUP_LABEL[g]}</h3>
           {g === 'mentioned' && <p className="dl-hint">Shown or named, not made by {name}.</p>}
           {g === 'unclear' && <p className="dl-hint">Changed while more than one agent was working there.</p>}
           <div className="dl-list">{list.slice(0, PREVIEW).map((it) => row(it, g))}</div>
@@ -148,8 +148,8 @@ export function DrawerLibrary({ agentId, name }: { agentId: string; name: string
       <section className="dl-group" data-library-group={chip}>
         {chip === 'mentioned' && <p className="dl-hint">Shown or named, not made by {name}.</p>}
         {chip === 'unclear' && retiredSwitch}
-        {waiting ? <p className="arturo-panel-empty">Loading…</p>
-          : items.length === 0 ? <p className="arturo-panel-empty">None.</p>
+        {waiting ? <p className="panel-empty">Loading…</p>
+          : items.length === 0 ? <p className="panel-empty">None.</p>
           : byBucket(items, now).map(([b, list]) => (
             <div key={b} data-library-bucket={b}>
               <h4 className="dl-bucket">{BUCKET_LABEL[b]}</h4>

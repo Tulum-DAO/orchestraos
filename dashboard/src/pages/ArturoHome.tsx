@@ -20,6 +20,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, PhoneOff } from 'lucide-react';
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
+import '../components/kit/panel.css';
 import '../components/arturo/arturo.css';
 import { ArturoPanel } from '../components/arturo/ArturoPanel';
 import ModelPicker from '../components/kit/ModelPicker';

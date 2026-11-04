@@ -15,16 +15,17 @@ import { formatChangedBy } from '../../lib/settingsApi';
 import { ADMIN_LOCK_NOTE } from '../../lib/myRole';
 import { descIdOf, RowDescription, SettingsQuery, type RowStatus } from './settingsState';
 import { SavedSlot } from './SavedSlot';
+import '../kit/panel.css';
 import './settings.css';
 
 export function Group({ title, scope, children }: { title: string; scope: SettingScopeTag; children: ReactNode }) {
   return (
     <section className="settings-group" data-settings-group={scope}>
-      <h3 className="arturo-panel-section settings-group-head">
+      <h3 className="panel-section settings-group-head">
         <span>{title}</span>
         <span className="settings-scope" data-scope={scope}>{SCOPE_LABEL[scope]}</span>
       </h3>
-      <div className="arturo-panel-list">{children}</div>
+      <div className="panel-list">{children}</div>
     </section>
   );
 }
@@ -59,7 +60,7 @@ export function SettingRow({ id, label, description, keywords = [], control, sta
   const descId = description ? descIdOf(id) : undefined;
   return (
     <div className="settings-row" data-setting={id}>
-      <div className={`arturo-panel-field${stacked ? ' settings-stacked' : ''}${locked ? ' is-disabled' : ''}`}>
+      <div className={`panel-field${stacked ? ' settings-stacked' : ''}${locked ? ' is-disabled' : ''}`}>
         {description
           ? <span className="settings-row-text"><span className="settings-row-titleline"><span id={`setting-${id}`} className="settings-row-title">{label}</span><SavedSlot on={status.kind === 'saved'} /></span><span id={descId} className="settings-row-desc" data-setting-desc>{description}</span></span>
           : <span className="settings-row-titleline"><span id={`setting-${id}`}>{label}</span><SavedSlot on={status.kind === 'saved'} /></span>}
@@ -68,11 +69,11 @@ export function SettingRow({ id, label, description, keywords = [], control, sta
         </span>
       </div>
       {below}
-      {status.kind === 'error' && <p className="arturo-panel-error" role="alert" data-setting-error>{status.text}</p>}
-      {locked && <p className="arturo-panel-note settings-lock" data-setting-locked><Lock size={12} aria-hidden /> {ADMIN_LOCK_NOTE}</p>}
-      {note && <p className="arturo-panel-note" data-setting-note>{note}</p>}
-      {detail && <p className="arturo-panel-note" data-setting-detail>{detail}</p>}
-      {changed && <p className="arturo-panel-note" data-setting-changed>{changed}</p>}
+      {status.kind === 'error' && <p className="panel-error" role="alert" data-setting-error>{status.text}</p>}
+      {locked && <p className="panel-note settings-lock" data-setting-locked><Lock size={12} aria-hidden /> {ADMIN_LOCK_NOTE}</p>}
+      {note && <p className="panel-note" data-setting-note>{note}</p>}
+      {detail && <p className="panel-note" data-setting-detail>{detail}</p>}
+      {changed && <p className="panel-note" data-setting-changed>{changed}</p>}
     </div>
   );
 }
@@ -115,7 +116,7 @@ export function Choice<T extends string | number>({ labelledBy, value, options, 
 }
 
 /** A destructive action asks once, naming what it does. */
-export function ConfirmButton({ label, confirmLabel = label, consequence, onConfirm, data, className = 'arturo-panel-link' }: {
+export function ConfirmButton({ label, confirmLabel = label, consequence, onConfirm, data, className = 'panel-link' }: {
   label: string; consequence: string; onConfirm: () => void; data?: string;
   /** The confirming button's words, when shorter than the action's ("Reset" for "Reset display settings"). */
   confirmLabel?: string; className?: string;
@@ -124,9 +125,9 @@ export function ConfirmButton({ label, confirmLabel = label, consequence, onConf
   if (!asking) return <button type="button" className={className} onClick={() => setAsking(true)} data-confirm={data}>{label}</button>;
   return (
     <span className="settings-control" role="group" aria-label={label}>
-      <span className="arturo-panel-note">{consequence}</span>
-      <button type="button" className="arturo-panel-link" onClick={() => setAsking(false)}>Cancel</button>
-      <button type="button" className="arturo-panel-primary" onClick={() => { setAsking(false); onConfirm(); }} data-confirm-yes={data}>{confirmLabel}</button>
+      <span className="panel-note">{consequence}</span>
+      <button type="button" className="panel-link" onClick={() => setAsking(false)}>Cancel</button>
+      <button type="button" className="panel-primary" onClick={() => { setAsking(false); onConfirm(); }} data-confirm-yes={data}>{confirmLabel}</button>
     </span>
   );
 }

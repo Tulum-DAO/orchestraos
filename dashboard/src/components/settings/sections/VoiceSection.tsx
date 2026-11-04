@@ -29,7 +29,7 @@ function VoiceColourRow() {
   return <SettingRow id="voice.accentVoice" label="Voice colour" description={COLOUR_DESC}
     keywords={['colour', 'color', 'voice', 'accent', 'mic', 'microphone', 'dictation']} status={status}
     control={<input type="color" value={s.accentVoice} aria-labelledby="setting-voice.accentVoice" aria-describedby={descIdOf('voice.accentVoice')}
-                    className="arturo-panel-swatch" onChange={(e) => { s.setAccentVoice(e.target.value); flash({ kind: 'saved' }); }} />} />;
+                    className="panel-swatch" onChange={(e) => { s.setAccentVoice(e.target.value); flash({ kind: 'saved' }); }} />} />;
 }
 
 export function VoiceSection() {
@@ -39,7 +39,7 @@ export function VoiceSection() {
       <PageIntro>{VOICE_INTRO}</PageIntro>
       <p className="settings-page-intro" data-voice-server-link>
         {SERVER_VOICE_POINTER}{' '}
-        <button type="button" className="arturo-panel-link settings-inline-link" onClick={() => openSettings('server-voice')}>
+        <button type="button" className="panel-link settings-inline-link" onClick={() => openSettings('server-voice')}>
           {serverGroupLabel()} › Voice &amp; calls
         </button>.
       </p>

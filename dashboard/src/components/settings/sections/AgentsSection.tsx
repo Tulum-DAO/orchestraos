@@ -49,7 +49,7 @@ function useOpenAgentPanel(): (id: string) => void {
 
 function AgentLink({ id, name }: { id: string; name: string }) {
   const open = useOpenAgentPanel();
-  return <button type="button" className="arturo-panel-link settings-agent-link" data-agent-link={id} onClick={() => open(id)}>{name}</button>;
+  return <button type="button" className="panel-link settings-agent-link" data-agent-link={id} onClick={() => open(id)}>{name}</button>;
 }
 
 /** "N of M use their own", right-aligned under the row; the chevron opens the list of those agents and their values. */
@@ -100,7 +100,7 @@ function DefaultModelRow() {
           onValueChange={(p) => { if (!(p.providerId in models)) return; setRuntime(p.providerId); void save({ runtime: p.providerId, model: p.modelId }, mergeDefaultModel(models, p.providerId, p.modelId)); }}
           effort={effortEditable ? efforts[runtime] ?? null : null} effortClearable
           onEffortChange={effortEditable ? (level) => { void eff.save({ runtime, effort: level }, mergeDefaultEffort(efforts, runtime, level)); } : undefined} />
-      : <span className="arturo-panel-rowvalue">{Object.entries(models).map(([r, m]) => `${r}: ${m}`).join(' · ') || '…'}</span>} />;
+      : <span className="panel-rowvalue">{Object.entries(models).map(([r, m]) => `${r}: ${m}`).join(' · ') || '…'}</span>} />;
 }
 
 function SafetyLimitsRow() {
@@ -110,7 +110,7 @@ function SafetyLimitsRow() {
   return <SettingRow id="agents.safetyLimits" label="Safety limits" keywords={['safety', 'limit', 'guard', 'ceiling', 'context']}
     description="Fixed: these keep agents from running out of room. The same for every agent."
     detail={row?.detail ?? (!row && loadError ? `Couldn't load settings: ${loadError}` : null)}
-    control={<span className="arturo-panel-rowvalue">{v && typeof v === 'object' ? `Forced compaction at ${v.forced_compaction_pct}% · context ceiling ${v.context_ceiling_pct}%` : '…'}</span>} />;
+    control={<span className="panel-rowvalue">{v && typeof v === 'object' ? `Forced compaction at ${v.forced_compaction_pct}% · context ceiling ${v.context_ceiling_pct}%` : '…'}</span>} />;
 }
 
 function ProcessRow({ p, canStop, onStopped }: { p: BackgroundProcess; canStop: boolean; onStopped: (text: string) => void }) {
@@ -132,24 +132,24 @@ function ProcessRow({ p, canStop, onStopped }: { p: BackgroundProcess; canStop: 
   const meta = [startedText(p.startedAt, zone), portsText(p.ports)].filter(Boolean).join(' · ');
   return (
     <div className="settings-row" data-process={p.pid}>
-      <div className="arturo-panel-field">
+      <div className="panel-field">
         <span className="settings-row-text">
           <span className="settings-row-titleline">
             <code className={`settings-proc-cmd${full ? ' is-full' : ''}`} title={label}>{full ? label : short}</code>
           </span>
           <span className="settings-row-desc">
             {p.agent ? <AgentLink id={p.agent} name={nameOf(p.agent)} /> : 'No agent'}{meta ? ` · ${meta}` : ''}
-            {cut && <> · <button type="button" className="arturo-panel-link" aria-expanded={full} onClick={() => setFull((f) => !f)}>{full ? 'Show less' : 'Show all'}</button></>}
+            {cut && <> · <button type="button" className="panel-link" aria-expanded={full} onClick={() => setFull((f) => !f)}>{full ? 'Show less' : 'Show all'}</button></>}
           </span>
         </span>
         {canStop && (
           <span className="settings-control">
-            {busy ? <span className="arturo-panel-note">Stopping…</span>
-              : <ConfirmButton label="Stop" consequence={stopConsequence(p)} onConfirm={() => void stop()} data={`stop-${p.pid}`} className="arturo-panel-link settings-proc-stop" />}
+            {busy ? <span className="panel-note">Stopping…</span>
+              : <ConfirmButton label="Stop" consequence={stopConsequence(p)} onConfirm={() => void stop()} data={`stop-${p.pid}`} className="panel-link settings-proc-stop" />}
           </span>
         )}
       </div>
-      {error && <p className="arturo-panel-error" role="alert" data-process-error>{error}</p>}
+      {error && <p className="panel-error" role="alert" data-process-error>{error}</p>}
     </div>
   );
 }
@@ -165,16 +165,16 @@ function BackgroundProcesses() {
   const onStopped = (text: string) => { setDone(text); void client.invalidateQueries({ queryKey: PROCESSES_KEY }); };
   let body;
   if (!data) body = <p className="settings-row-desc">…</p>;
-  else if (!data.ok) body = <p className="arturo-panel-error" role="alert">{`Couldn't read the running programs: ${data.error}`}</p>;
+  else if (!data.ok) body = <p className="panel-error" role="alert">{`Couldn't read the running programs: ${data.error}`}</p>;
   else if (!data.value.supported) body = <p className="settings-row-desc">This server can't list its programs.</p>;
   else if (!data.value.processes.length) body = <p className="settings-row-desc" data-processes-empty>Nothing is running.</p>;
   return <>
     {list?.processes.map((p) => <ProcessRow key={`${p.pid}-${p.startTicks}`} p={p} canStop={list.canStop} onStopped={onStopped} />)}
     <div className="settings-row settings-proc-foot" data-setting="agents.backgroundProcesses">
       {body}
-      {done && <p className="arturo-panel-note" role="status">{done}</p>}
-      {list && !list.canStop && list.processes.length > 0 && <p className="arturo-panel-note settings-lock"><Lock size={12} aria-hidden /> {ADMIN_LOCK_NOTE}</p>}
-      <button type="button" className="arturo-panel-link settings-proc-refresh" onClick={refresh} disabled={isFetching} data-processes-refresh>
+      {done && <p className="panel-note" role="status">{done}</p>}
+      {list && !list.canStop && list.processes.length > 0 && <p className="panel-note settings-lock"><Lock size={12} aria-hidden /> {ADMIN_LOCK_NOTE}</p>}
+      <button type="button" className="panel-link settings-proc-refresh" onClick={refresh} disabled={isFetching} data-processes-refresh>
         <RefreshCw size={14} aria-hidden /> Refresh
       </button>
     </div>

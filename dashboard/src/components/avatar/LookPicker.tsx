@@ -91,7 +91,7 @@ export function LookPickerPopover({ agentId, open, onClose, canSave }: { agentId
       <div className="look-pop" role="dialog" aria-modal="true" aria-label="Pick a look" onClick={(e) => e.stopPropagation()}>
         <div className="look-pop-bar">
           <span className="look-pop-title">Pick a look</span>
-          <button type="button" className="arturo-panel-done" onClick={onClose} autoFocus>Done</button>
+          <button type="button" className="panel-done" onClick={onClose} autoFocus>Done</button>
         </div>
         <LookPicker agentId={agentId} heroSize={128} canSave={canSave} />
       </div>

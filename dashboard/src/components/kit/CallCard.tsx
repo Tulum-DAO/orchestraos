@@ -21,6 +21,7 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AudioLines, ListTree, MoreHorizontal, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { CallAgentContext } from '../chat/callAgentContext';
 import { fetchAgentCall, focusWork, saveCallRating, withWork, type AgentCall } from '../../lib/agentCalls';
+import './panel.css';
 import '../arturo/arturo.css';
 import './callCard.css';
 import ToolCard from './ToolCard';

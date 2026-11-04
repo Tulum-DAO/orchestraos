@@ -1,4 +1,4 @@
-/* The drawer's Library (DrawerLibrary.tsx). Uses the drawer's tokens (arturo.css, .agent-panel-host), so it
+/* The drawer's Library (DrawerLibrary.tsx). Uses the drawer's tokens (kit/panel.css, .agent-panel-host), so it
    follows light and dark with the rest of the drawer. */
 .dl{ min-width:0; }
 /* Chips: one line that scrolls sideways inside itself on a phone, never the page. */
@@ -9,7 +9,7 @@
 .dl-chip.is-on{ background:var(--text); color:var(--panel); border-color:var(--text); }
 @media (hover:hover){ .dl-chip:not(.is-on):hover{ background:var(--card); } }
 .dl-group{ margin-top:10px; }
-.dl-group .arturo-panel-section{ margin-bottom:4px; }
+.dl-group .panel-section{ margin-bottom:4px; }
 .dl-hint{ font-size: calc(12px * var(--ui-text-scale, 1)); color:var(--grey2); margin:0 2px 4px; }
 .dl-bucket{ font-size: calc(12px * var(--ui-text-scale, 1)); font-weight:500; color:var(--grey2); margin:12px 2px 2px; }
 .dl-list{ display:flex; flex-direction:column; }

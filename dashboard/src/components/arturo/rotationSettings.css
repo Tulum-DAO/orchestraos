@@ -1,5 +1,5 @@
 /* RotationSettings: the two compaction rows in an agent's Setup. Colours come from the drawer's own variables
-   (arturo.css), so both themes follow it. */
+   (kit/panel.css), so both themes follow it. */
 .rotation-settings{ border-top:1px solid var(--hair); margin-top:12px; }
 .rotation-switch{ position:relative; flex:0 0 auto; width:44px; height:26px; border-radius:13px; border:0; padding:0;
   background:var(--hair); cursor:pointer; transition:background .15s; }
@@ -19,7 +19,7 @@
 .rotation-number input[aria-invalid="true"]{ border-color:var(--err-soft); }
 .rotation-status{ font-size: calc(13px * var(--ui-text-scale, 1)); color:var(--grey); margin:6px 2px 0; }
 .rotation-note{ margin:4px 2px 10px; }
-.rotation-note.is-disabled, .arturo-panel-field.is-disabled label{ color:var(--grey2); }
+.rotation-note.is-disabled, .panel-field.is-disabled label{ color:var(--grey2); }
 /* index.css gives every control min-height:44px on phones (touch targets), which stretched the switch and the stepper
    out of shape. They keep their drawn size and meet the 44px target with an invisible tap area instead. */
 .rotation-switch, .rotation-step, .rotation-number input{ min-height:0; }
@@ -36,4 +36,4 @@
 .rotation-compact-line{ margin:4px 2px 10px; }
 .rotation-compact-line.is-done{ color:var(--text); }
 .rotation-compact-line.is-error{ color:var(--err-soft); }
-.arturo-panel-field.is-disabled > span{ color:var(--grey2); }
+.panel-field.is-disabled > span{ color:var(--grey2); }
