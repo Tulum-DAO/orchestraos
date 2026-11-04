@@ -386,7 +386,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           compact
             // A step off the page in either theme (the tone scale: near-black in dark, near-white in light), so
             // the theme-token prose inside it reads in both.
-            ? 'bg-tone-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
+            ? 'bg-tone-950 rounded-lg p-3 max-h-96 overflow-y-auto overflow-x-hidden space-y-2.5'
             // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
             // and the right edges of tool cards and user bubbles were 130px apart because each
             // sized itself to a different container). ONE column, one pair of edges, shared with
@@ -396,7 +396,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             // so a transcript taller than the pane could never be scrolled back (Shaw, 2026-10-11).
             // An auto margin only takes free space, so a short chat still sits on the composer and
             // a long one overflows downward and scrolls.
-            : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col'
+            // Never sideways (overflow-x-hidden, both layouts): nothing in the thread may widen it; wide code and
+            // tables scroll in their own boxes, popovers are portaled, sticky notes still stick (2026-11-04).
+            : 'flex-1 overflow-y-auto min-h-0 overflow-x-hidden overscroll-y-contain flex flex-col'
         }
       >
         {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the

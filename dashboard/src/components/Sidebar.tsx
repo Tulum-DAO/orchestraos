@@ -28,7 +28,6 @@ import type { LucideIcon } from 'lucide-react';
 import { useUser } from '../hooks/useUser';
 import { ASSISTANT_V2_ENABLED } from '../lib/assistant/config';
 import { AgentRail } from './workbench/AgentRail';
-import UsageLine from './workbench/UsageLine';
 import { listThreads, type ThreadSummary } from '../lib/arturoThreads';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
 import { startNewArturoChat } from '../lib/arturoNewChat';
@@ -378,9 +377,6 @@ export function Sidebar({ onNavigate, variant = 'desktop' }: SidebarProps = {}) 
       {/* User card. Its name and role open the operator menu (Settings, Appearance, Log out); the logout icon stays beside it. */}
       <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 shrink-0">
         <OperatorCard username={username} role={isAdmin ? 'admin' : user?.role || 'user'} onNavigate={onNavigate} />
-        <div className="pt-2">
-          <UsageLine />
-        </div>
       </div>
     </aside>
   );

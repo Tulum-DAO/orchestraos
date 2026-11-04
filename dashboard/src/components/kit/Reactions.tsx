@@ -24,7 +24,7 @@ import { createPortal } from 'react-dom';
 import { Copy as CopyIcon, Hash, SmilePlus } from 'lucide-react';
 import { longPressControl } from '../../lib/railAgents';
 import { badgeGroups, whoReacted, reactorName, QUICK_EMOJI, type BadgeGroup, type Reactor, type StoredReaction } from '../../lib/reactionState';
-import { BAR_WIDTH, barOffsetTop, boxOf, liftLayout, popoverAt, type Box, type Size } from '../../lib/reactionLayout';
+import { BAR_OFFSET, barOffsetTop, barUnderLeft, boxOf, liftLayout, popoverAt, type Box, type Size } from '../../lib/reactionLayout';
 import { splitAttachments } from '../../lib/threadKit/markdown';
 import {
   ReactionSlotContext, clipBoxOf, useCoarsePointer, useReactionsCtx, wordsBox, type PressHandlers, type ReactionSlot, type ReactSide,
@@ -133,8 +133,8 @@ export function ReactionRow({ reactRef, side, list, text, skin, children }: {
       const top = barOffsetTop(side, box, clipBoxOf(el));
       // Outside: centred beside the words. Under (no room outside): under the END of the words, not the column's edge.
       setBarAt(top !== null
-        ? { out: true, top, left: side === 'agent' ? Math.round(box.width) + 12 : undefined }
-        : { out: false, left: side === 'agent' ? Math.max(0, Math.round(box.width) - BAR_WIDTH) : undefined });
+        ? { out: true, top, left: side === 'agent' ? Math.round(box.width) + BAR_OFFSET : undefined }
+        : { out: false, left: side === 'agent' ? barUnderLeft('agent', Math.round(box.width)) : undefined });
     },
     onBadge: (g, el) => {
       if (!coarse) { pick(g.emoji); return; }

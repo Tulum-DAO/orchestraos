@@ -42,17 +42,22 @@
 }
 
 /* --- desktop hover icons -------------------------------------------------------------------------------------- */
+/* --rx-bar-w = BAR_WIDTH and --rx-bar-off = BAR_OFFSET (lib/reactionLayout; chatNoXScroll.test pins them equal). */
 .rx-bar {
+  --rx-bar-w: 94px; --rx-bar-off: 12px;
   position: absolute; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 2px;
   border-radius: 10px; border: 1px solid var(--border); background: var(--popover); color: var(--muted-foreground);
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.16); opacity: 0; pointer-events: none; transition: opacity 200ms ease;
 }
 .rx-bar::before { content: ''; position: absolute; inset: -8px -14px; z-index: -1; }   /* the gap to the bubble keeps the hover */
 /* outside: 12px off the outer edge (clear of the badge's 8px overhang), top set inline (barOffsetTop: centred) */
-.rx-bar[data-place="out"][data-side="agent"] { left: calc(100% + 12px); }
-.rx-bar[data-place="out"][data-side="user"] { right: calc(100% + 12px); }
-.rx-bar[data-place="under"][data-side="agent"] { right: 0; top: calc(100% + 2px); }
-.rx-bar[data-place="under"][data-side="user"] { left: 0; top: calc(100% + 2px); }
+.rx-bar[data-place="out"][data-side="agent"] { left: calc(100% + var(--rx-bar-off)); }
+.rx-bar[data-place="out"][data-side="user"] { right: calc(100% + var(--rx-bar-off)); }
+/* under: from the inner corner, but never past the bubble's FAR edge. A bubble narrower than the bar gets the bar flush
+   with that far edge instead, so an (invisible, still laid-out) bar can't push past the scroller and scroll the chat
+   sideways. */
+.rx-bar[data-place="under"][data-side="agent"] { right: min(0px, calc(100% - var(--rx-bar-w))); top: calc(100% + 2px); }
+.rx-bar[data-place="under"][data-side="user"] { left: min(0px, calc(100% - var(--rx-bar-w))); top: calc(100% + 2px); }
 [data-rx-anchor]:hover > .rx-bar, .rx-bar:has(:focus-visible), .rx-bar[data-open] { opacity: 1; pointer-events: auto; }
 .rx-bar-btn {
   display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px;

@@ -20,18 +20,30 @@ export interface Size { width: number; height: number }
 
 export const EDGE = 8;
 export const GAP = 8;
-/** The hover icons' width: three 28px buttons, their gaps and padding. */
-export const BAR_WIDTH = 96;
+/** The hover icons' width: three 28px buttons, two 2px gaps, 2px padding and a 1px border each side (= --rx-bar-w in
+ *  components/kit/reactions.css; chatNoXScroll.test pins them equal). */
+export const BAR_WIDTH = 94;
+/** How far outside the bubble's outer edge the hover icons sit when they go outside (= --rx-bar-off). */
+export const BAR_OFFSET = 12;
 /** ...and its height. */
 export const BAR_HEIGHT = 32;
 
 export const boxOf = (r: { left: number; top: number; width: number; height: number }): Box =>
   ({ left: r.left, top: r.top, width: r.width, height: r.height });
 
-/** Whether the hover icons fit outside the bubble on its outer side, inside the scroller's box. */
+/** Whether the hover icons fit outside the bubble on its outer side, inside the scroller's box: room for their whole
+ *  extent (BAR_OFFSET off the bubble, the bar, then GAP to the scroller's edge), so they are never clipped by it. */
 export function barOutside(side: 'user' | 'agent', anchor: Box, clip: Box, barWidth = BAR_WIDTH): boolean {
   const room = side === 'agent' ? clip.left + clip.width - (anchor.left + anchor.width) : anchor.left - clip.left;
-  return room >= barWidth + GAP;
+  return room >= BAR_OFFSET + barWidth + GAP;
+}
+
+/** Under the bubble (no room outside): the hover icons' left edge, from the bubble's left. They start at the bubble's
+ *  outer edge (the agent's right, flush; the person's left) but never reach past its OTHER edge: a bubble narrower than
+ *  the bar gets the bar flush with that far edge instead. The person's side is drawn by the CSS
+ *  (reactions.css `left: min(0px, calc(100% - var(--rx-bar-w)))`), the agent's inline (Reactions.tsx), both this rule. */
+export function barUnderLeft(side: 'user' | 'agent', bubbleWidth: number, barWidth = BAR_WIDTH): number {
+  return side === 'agent' ? Math.max(0, bubbleWidth - barWidth) : Math.min(0, bubbleWidth - barWidth);
 }
 
 /** Vertical offset (from the bubble's top) of the hover icons on the bubble's outer side: centred on the bubble, never
