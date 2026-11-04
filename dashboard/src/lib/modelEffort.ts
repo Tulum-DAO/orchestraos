@@ -59,12 +59,13 @@ export function effortLabel(runtime: string | null | undefined, level: string | 
   return table[runtime]?.levels.find((l) => l.id === level)?.label ?? null;
 }
 
-/** The control's choices: the levels, with "CLI default" (id '') first when a chosen level can be taken out again. */
-export function effortChoices(levels: EffortLevel[], clearable: boolean): EffortLevel[] {
-  return clearable ? [L('', 'CLI default'), ...levels] : levels;
-}
+export const CLI_DEFAULT = 'CLI default';
 
-/** A choice's id back to a level: '' (CLI default) is null. */
-export function effortFromChoice(id: string): string | null {
-  return id === '' ? null : id;
+/** Where the Effort slider stands for a level: its stop and the name said beside "Effort" (and as aria-valuetext).
+ *  No level (or one the runtime does not have): the CLI's own default, `unset`, the thumb resting on the middle stop
+ *  and the name "CLI default" (no level is claimed for it; only Settings › Agents offers it, as a toggle). */
+export function effortStop(levels: EffortLevel[], value: string | null | undefined): { index: number; name: string; unset: boolean } {
+  const i = value ? levels.findIndex((l) => l.id === value) : -1;
+  if (i >= 0) return { index: i, name: levels[i].label, unset: false };
+  return { index: Math.floor((levels.length - 1) / 2), name: CLI_DEFAULT, unset: true };
 }

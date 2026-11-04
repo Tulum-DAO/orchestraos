@@ -108,6 +108,8 @@ export interface ModelInfo {
   capabilities: ModelCapabilities;
   /** Fields we have NOT confirmed for this model — never silently assumed. */
   capabilities_unverified?: string[];
+  /** The CLI's own description of the model, when its catalog probe reads one (probe.description_key). */
+  description?: string;
   /** Set only on a model an agent seat may use and Arturo may not (contract/seat-models.json), with the reason a
    *  picker shows when it dims it. Absent on every other row. */
   seat_only?: true;

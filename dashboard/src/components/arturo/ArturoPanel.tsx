@@ -20,7 +20,7 @@
  * (Memory), a thread's ?jobs=1 (Activity). Settings for the whole install or for this device live in Settings
  * (components/settings): "Server settings" and the voice provider rows open it.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from 'lucide-react';
 import { arturoHealth, ARTURO_DISABLED_TEXT, handsFreeReady, isArturoDisabled, type ArturoHealth } from '../../lib/arturo';
 import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
@@ -32,8 +32,9 @@ import { HeadlessDevNote } from './HeadlessDevNote';
 import { Row, Info, LinkRow } from './PanelRows';
 import { TakesCalls } from './TakesCalls';
 import { useOpenSettings } from '../settings/useOpenSettings';
-import { applyNote, fetchAgentModel, switchAgentModel, switchableModels, switchNotice, pickRefusal,
-         type AgentModelInfo, type SwitchNotice } from '../../lib/agentModel';
+import { applyNote, fetchAgentModel, switchAgentModel, switchableModels, pickRefusal,
+         type AgentModelInfo } from '../../lib/agentModel';
+import { useLiveSwitch } from '../../hooks/useLiveSwitch';
 import ModelPicker from '../kit/ModelPicker';
 import { agentModelTitle } from '../../lib/modelTitle';
 import { renameAgent } from '../../lib/railAgents';
@@ -616,35 +617,46 @@ function StylePage({ agentId }: { agentId: string }) {
 /** The model this agent runs, and the ones it can switch to (lib/agentModel.ts: live where its CLI allows, at its
  *  next rotation otherwise; a busy agent switches when its turn ends). */
 function ModelPage({ agentId, onChanged, onClose }: { agentId: string; onChanged: (m: AgentModelInfo | null) => void; onClose: () => void }) {
-  const [info, setInfo] = useState<AgentModelInfo | null | undefined>(undefined);
-  const [notice, setNotice] = useState<SwitchNotice | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Kept with the agent it was read for, so another agent's late answer never shows here.
+  const [infoOf, setInfoOf] = useState<{ id: string; info: AgentModelInfo | null } | null>(null);
+  const info = infoOf?.id === agentId ? infoOf.info : undefined;
   useEffect(() => {
     let alive = true;
-    void fetchAgentModel(agentId).then((m) => { if (alive) setInfo(m); });
+    void fetchAgentModel(agentId).then((m) => { if (alive) setInfoOf({ id: agentId, info: m }); });
     return () => { alive = false; };
   }, [agentId]);
+  // A re-read after a switch (lib/liveSwitch.ts: a failure, a confirmed live switch once its record caught up) updates
+  // this page and the Model row behind it.
+  const resync = useCallback(() => fetchAgentModel(agentId).then((m) => {
+    setInfoOf({ id: agentId, info: m });
+    if (m) onChanged(m);
+    return m;
+  }), [agentId, onChanged]);
+  // Picks go through the agent's live-switch sequencer, the one the composer uses too: one request out, the latest pick
+  // waiting, the newest shown at once and only the newest outcome said.
+  const live = useLiveSwitch(agentId, {
+    send: switchAgentModel,
+    resync,
+    baseModel: info?.pending?.model ?? info?.model ?? null,
+    // The Model row behind this page moves on a confirmed live switch only; a switch waiting for the turn to end or for
+    // the next rotation is said by the notice, and the re-read after it updates the row.
+    onApplied: ({ model }) => { if (info) onChanged({ ...info, model }); },
+  });
   if (info === undefined) return <p className="panel-empty">Loading…</p>;
   if (info === null) return <p className="panel-empty">Couldn't read this agent's model.</p>;
+  const shown = { ...info, ...live.shown };
   const why = pickRefusal(info, { providerId: info.runtime ?? '', modelLabel: '' });
   const pick = (id: string, label: string) => {
-    if (busy || id === info.model) return;
-    setBusy(true);
-    setNotice({ tone: 'wait', text: `Switching to ${label}…` });
-    void switchAgentModel(agentId, id).then(({ status, body }) => {
-      setBusy(false);
-      setNotice(switchNotice(status, body, label));
-      if (status === 200 && body.ok && body.switching === 'switched') {
-        const next = { ...info, model: id };
-        setInfo(next); onChanged(next);
-      }
-    });
+    // The model it shows, with nothing out: nothing to do. While a switch is out, the sequencer decides.
+    if (!live.busy && id === shown.model) return;
+    live.pick({ model: { id, label } });
   };
+  const notice = live.notice;
   return (
     <>
       {why ? <p className="panel-note">{why}</p> : (
-        <ModelPicker variant="inline" value={{ providerId: info.runtime ?? '', modelId: info.model ?? '' }}
-          agentModels={{ providerId: info.runtime ?? '', models: switchableModels(info) }} note={applyNote(info)} onBeforeNewAgent={onClose}
+        <ModelPicker variant="inline" value={{ providerId: shown.runtime ?? '', modelId: shown.model ?? '' }}
+          agentModels={{ providerId: shown.runtime ?? '', models: switchableModels(shown) }} note={applyNote(shown)} onBeforeNewAgent={onClose}
           onValueChange={(p) => pick(p.modelId, p.modelLabel)} />
       )}
       {notice && <p className={notice.tone === 'error' ? 'panel-error' : 'panel-note'} role="status">{notice.text}</p>}

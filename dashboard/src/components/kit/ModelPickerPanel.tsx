@@ -2,15 +2,17 @@
  * ModelPickerPanel — what the model picker draws, from props only (no fetching, no effects), so it renders the same
  * in the popover, the phone sheet and in place on a settings page, and can be rendered in a test.
  *
- *   ┌──────┬──────────────────────────────────────┐
- *   │ rail │ header: provider · status · usage  v │   the rail: one tab per runtime, a usage ring round its mark
- *   │      │ [ Search all models ]                │   and a status dot; on a phone it is a row of tabs on top
- *   │      │ Opus 5.5 Deep work · long tasks    ✓ │   one row per FAMILY, its newest version: name, purpose (lib/modelPurpose.ts),
- *   │      │ Sonnet 5 Everyday · fast             │   "default", check (the row in use is tinted; no radio)
- *   │      │ › Older versions                   4 │   every older model, one row each; opens by itself on an older model in use
- *   │  +   │ Context [Standard|1M] Effort [Low|…] │   Context: only when the family in use comes in more than one size;
- *   │      │ Applies from your next message       │   Effort: only where a level would really be applied (lib/modelEffort.ts)
- *   └──────┴──────────────────────────────────────┘
+ *   ┌──────┬────────────────────────────────────────┐
+ *   │ rail │ Claude                                 │   the rail: every provider (unusable ones dimmed), a usage ring
+ *   │      │ [ Search all models ]                  │   round each mark and a status dot; status, usage and CLI version are
+ *   │      │ Opus 5.5 Deep work · long tasks      ✓ │   the mark's title / aria-label; on a phone it is a row of tabs on top
+ *   │      │ Sonnet 5 Everyday · fast               │   one row per FAMILY, its newest version: name, purpose (lib/modelPurpose.ts),
+ *   │      │ › Older versions                       │   "default" (where a default is set), check (the row in use is tinted)
+ *   │  +   │ Context [200K|1M]   Effort High ──●──  │   one line, wrapping when narrow: Context only with 2+ usable sizes,
+ *   └──────┴────────────────────────────────────────┘   Effort (a stop slider) only where a level is really applied
+ *   A provider not installed / not signed in: its banner says so, with Sign in (the Connect sheet), else the CLI's own
+ *   sign-in or install command; its models listed, dimmed. "+": add a provider. A footer note only for an unusual
+ *   timing ("Applies from this agent's next rotation").
  *
  * The container (ModelPicker.tsx) owns the state and the keyboard; the rules are lib/modelPickerPanel.ts.
  */
@@ -18,12 +20,14 @@ import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
 import { Check, ChevronRight, Plus, Search, X } from 'lucide-react';
 import { isCurrent, type PickerModel, type PickerValue } from '../../lib/modelPicker';
 import { modelPurpose } from '../../lib/modelPurpose';
-import type { EffortLevel } from '../../lib/modelEffort';
+import { effortStop, type EffortLevel } from '../../lib/modelEffort';
 import {
-  canPick, isRuntimeDefault, otherRuntimeNote, ringDash, rowReason, statusWords,
+  canPick, isRuntimeDefault, otherRuntimeNote, railLabel, ringDash, rowReason, showsDefaultMark,
   type Browse, type BrowseRow, type ContextControl, type PickerScope, type RailEntry,
 } from '../../lib/modelPickerPanel';
 import type { ProviderRow } from '../../lib/modelSelectorFilter';
+import { StopSlider } from './StopSlider';
+import { cliFor, installCommand, signinCommand } from '../../lib/providerConnect';
 
 export type PanelLayout = 'popover' | 'sheet' | 'inline';
 export type MarkRenderer = (providerId: string, label: string, size: number, dim?: boolean) => ReactNode;
@@ -52,11 +56,12 @@ export interface ModelPickerPanelProps {
   renderMark: MarkRenderer;
   /** "Use the default brain" (Arturo): its key, whether it is in use, and the pick. */
   defaultRow?: { key: string; selected: boolean; onPick: () => void } | null;
-  /** The effort control, only where it would be applied. */
-  effort?: { levels: EffortLevel[]; value: string | null; onChange: (id: string) => void } | null;
-  /** The Context size control (Standard | 1M), only when the family in use comes in more than one size. */
+  /** The Effort slider, only where a level would be applied: the levels usable here, the one in use (null: the CLI's
+   *  default) and, `clearable` (Settings › Agents), a "CLI default" toggle; onChange(null) puts the CLI's default back. */
+  effort?: { levels: EffortLevel[]; value: string | null; onChange: (id: string | null) => void; clearable?: boolean } | null;
+  /** The Context size control (200K | 1M), only when the family in use comes in two or more sizes usable here. */
   context?: (ContextControl & { onChange: (id: string) => void }) | null;
-  /** When a pick takes effect ("Applies from your next message"). */
+  /** Only an unusual timing ("Applies from this agent's next rotation"); the usual one is not said. */
   note?: string | null;
   onSignIn?: ((providerId: string) => void) | null;
   onNewAgent?: ((providerId: string) => void) | null;
@@ -102,16 +107,10 @@ export function RailMark({ entry, size, renderMark }: { entry: RailEntry; size: 
   );
 }
 
-function railTitle(e: RailEntry, row: ProviderRow | undefined): string {
-  const status = row ? statusWords(row) : e.status;
-  return `${e.label}: ${status}${e.usage ? `, ${e.usage.text}` : ''}`;
-}
-
 export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPickerPanelProps) {
   const sheet = p.layout === 'sheet';
   const labelOf = (id: string) => p.entries.find((e) => e.id === id)?.label ?? id;
   const entry = p.entries.find((e) => e.id === p.tab) ?? null;
-  const row = p.rows.find((r) => r.provider.id === p.tab);
   const searching = !!p.query.trim();
   const listId = `${p.idBase}-list`;
   const tabPanelId = `${p.idBase}-panel`;
@@ -126,8 +125,7 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
         const on = e.id === p.tab && !searching;
         return (
           <button key={e.id} type="button" role="tab" id={`${p.idBase}-tab-${e.id}`} aria-selected={on} aria-controls={tabPanelId}
-                  tabIndex={e.id === p.tab ? 0 : -1} title={railTitle(e, p.rows.find((r) => r.provider.id === e.id))}
-                  aria-label={railTitle(e, p.rows.find((r) => r.provider.id === e.id))} data-rail={e.id}
+                  tabIndex={e.id === p.tab ? 0 : -1} title={railLabel(e)} aria-label={railLabel(e)} data-rail={e.id}
                   onClick={() => p.onTab(e.id)}
                   className={`${sheet ? 'min-w-[44px] min-h-[44px] px-1.5 gap-1.5' : 'w-11 h-11'} inline-flex items-center justify-center rounded-lg shrink-0 ${on ? 'bg-tone-800' : 'hover:bg-tone-800/60'}${e.usable ? '' : ' opacity-60'}`}>
             <RailMark entry={e} size={18} renderMark={p.renderMark} />
@@ -144,29 +142,36 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
     </div>
   );
 
+  // The provider's name only: its status, usage and CLI version are the rail mark's title and aria-label (railLabel).
   const header = entry && !searching && (
-    <div className="flex items-baseline gap-1.5 px-3 pt-2.5 pb-1 text-px12 min-w-0" data-model-picker-header={entry.id}>
-      <span className="font-medium text-tone-100 shrink-0">{entry.label}</span>
-      <span className="text-tone-500 min-w-0 truncate">
-        · {row ? statusWords(row) : entry.status}
-        {entry.usage && <span className={entry.usage.high && !entry.usage.stale ? ' text-amber-500' : ''}> · {entry.usage.text}</span>}
-      </span>
-      {entry.version && <span className="ml-auto shrink-0 text-px10 text-tone-500 tabular-nums" title={`${entry.label} CLI version`}>v{entry.version}</span>}
-    </div>
+    <div className="flex items-baseline px-3 pt-2.5 pb-1 text-px12 min-w-0" data-model-picker-header={entry.id}><span className="font-medium text-tone-100 truncate">{entry.label}</span></div>
   );
 
   // What the selected provider needs before its models can be picked here.
   const otherNote = entry && !searching ? otherRuntimeNote(entry.id, entry.label, p.scope, labelOf) : null;
+  const installed = !!p.rows.find((r) => r.provider.id === entry?.id)?.provider.installed;
+  const installCmd = entry && !installed ? installCommand(entry.id) : null;
   const banner = entry && !searching && (!entry.usable || otherNote) && (
     <div className="mx-3 my-1.5 px-3 py-2 rounded-lg bg-tone-800/50 text-px12 text-tone-300 flex flex-col gap-2" data-model-picker-banner={entry.id}>
       {!entry.usable ? (
         <>
-          <span>{entry.label} is {row ? statusWords(row) : 'not available'} on this machine.</span>
-          {p.onSignIn && (
+          <span>{entry.label} is {entry.statusText} on this machine.</span>
+          {p.onSignIn ? (
             <button type="button" onClick={() => p.onSignIn!(entry.id)} data-model-connect={entry.id}
                     className={`self-start ${target} px-3 rounded-lg border border-tone-700 text-tone-100 hover:bg-tone-800`}>
               Sign in
             </button>
+          ) : installed ? (
+            // No sign-in flow here (the deployment has it off): the CLI's own way, on this machine.
+            <span className="text-tone-400" data-model-banner-signin-note={entry.id}>
+              Sign in from the CLI on this machine: <code className="px-1 rounded bg-tone-800 text-tone-200">{signinCommand(entry.id).replace(/\s+/g, ' ')}</code>
+            </span>
+          ) : (
+            <span className="text-tone-400" data-model-banner-install={entry.id}>
+              {installCmd
+                ? <>Install it on this machine: <code className="px-1 rounded bg-tone-800 text-tone-200 break-all">{installCmd}</code>, then sign in.</>
+                : <>Install its CLI ({cliFor(entry.id)}) on this machine, then sign in.</>}
+            </span>
           )}
         </>
       ) : (
@@ -189,8 +194,8 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
   const rowFor = (m: PickerModel, family?: Extract<BrowseRow, { kind: 'family' }>) => {
     const pickable = canPick(m, p.scope);
     const on = family ? family.current : isCurrent(m, p.value);
-    const purpose = modelPurpose(m.providerId, m.name);
-    const isDefault = (family ? family.family.newest : [m]).some((x) => isRuntimeDefault(x, defaultOf(x.providerId)));
+    const purpose = modelPurpose(m.providerId, m.name, m.description);
+    const isDefault = showsDefaultMark(p.scope) && (family ? family.family.newest : [m]).some((x) => isRuntimeDefault(x, defaultOf(x.providerId)));
     const tag = family && family.family.newest.length > 1 ? undefined : m.tag;
     const why = !pickable ? rowReason(m, p.scope, labelOf) : null;
     return (
@@ -215,13 +220,12 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
 
   // "Older versions": a row of the list (the arrows reach it, Enter opens it), never a model.
   const olderRow = (r: Extract<BrowseRow, { kind: 'older' }>) => (
-    <div key={r.key} id={optionId(r.key)} role="option" aria-label={`Older versions (${r.count}), ${r.open ? 'shown' : 'hidden'}`}
+    <div key={r.key} id={optionId(r.key)} role="option" aria-label={`Older versions, ${r.open ? 'shown' : 'hidden'}`}
          data-model-older={r.providerId} onMouseDown={(e) => e.preventDefault()} aria-selected={false}
          onMouseEnter={() => p.onActive(r.key)} onClick={() => p.onToggleOlder?.(r.providerId)}
          className={`w-full flex items-center gap-2 px-3 ${target} mt-1 text-left text-px12 rounded-lg cursor-pointer ${r.key === p.active ? 'bg-tone-800/50 text-tone-100' : 'text-tone-400 hover:text-tone-200'}`}>
       <ChevronRight size={14} aria-hidden className={`shrink-0 transition-transform${r.open ? ' rotate-90' : ''}`} />
       <span className="flex-1 min-w-0">Older versions</span>
-      <span className="shrink-0 text-px11 text-tone-500 tabular-nums">{r.count}</span>
     </div>
   );
   const browsing = !searching && !!p.browse;
@@ -237,21 +241,18 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
     </div>
   );
 
-  // Context, beside Effort in the same style: the sizes of the family in use's newest version. A size that can't be
-  // picked here says why on a line under the controls (a phone has no hover).
-  const contextWhyId = `${p.idBase}-context-why`;
-  const contextWhy = p.context?.choices.filter((c) => c.disabled).map((c) => `${c.label}: ${c.title ?? 'Not available here'}`).join(' · ') || null;
+  // One footer line: Context (the usable sizes of the family in use) on the left, Effort on the right; it wraps on a
+  // narrow window or a phone. Only the controls that apply are drawn.
   const context = p.context && (
-    <div className="flex items-center gap-3 shrink-0" data-model-context>
+    <div className="flex items-center gap-2 shrink-0" data-model-context>
       <span className="text-px12 text-tone-400 shrink-0" id={`${p.idBase}-context`}>Context</span>
       <div role="radiogroup" aria-labelledby={`${p.idBase}-context`} className="flex rounded-lg border border-tone-800 p-0.5">
         {p.context.choices.map((c) => {
           const on = c.id === p.context!.value;
           return (
-            <button key={c.id} type="button" role="radio" aria-checked={on} disabled={c.disabled} title={c.title} data-context={c.id}
-                    aria-describedby={c.disabled ? contextWhyId : undefined}
+            <button key={c.id} type="button" role="radio" aria-checked={on} data-context={c.id}
                     onClick={() => p.context!.onChange(c.id)}
-                    className={`${target} px-2.5 rounded-md text-px12 disabled:opacity-50 disabled:cursor-default ${on ? 'bg-tone-800 text-tone-white' : 'text-tone-400 hover:text-tone-100'}`}>
+                    className={`${target} px-2.5 rounded-md text-px12 ${on ? 'bg-tone-800 text-tone-white' : 'text-tone-400 hover:text-tone-100'}`}>
               {c.label}
             </button>
           );
@@ -260,20 +261,28 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
     </div>
   );
 
-  const effort = p.effort && (
-    <div className="flex flex-1 min-w-[240px] items-center gap-3" data-model-effort>
+  // Effort: a slider of the levels usable here (lib/modelEffort.ts), the level named beside the word. In Settings ›
+  // Agents a level can be taken out again: the "CLI default" toggle (pressed: no level kept, the thumb hollow; moving
+  // the slider picks a level and releases it; releasing it keeps the level under the thumb).
+  const stop = p.effort ? effortStop(p.effort.levels, p.effort.value) : null;
+  // No level kept: the thumb is hollow everywhere; where the toggle says "CLI default", the name beside Effort is not
+  // said twice (until the thumb moves).
+  const unset = !!stop?.unset;
+  const effort = p.effort && stop && (
+    <div className="flex flex-1 min-w-[200px] ml-auto items-center gap-2" data-model-effort>
       <span className="text-px12 text-tone-400 shrink-0" id={`${p.idBase}-effort`}>Effort</span>
-      <div role="radiogroup" aria-labelledby={`${p.idBase}-effort`} className="flex flex-1 rounded-lg border border-tone-800 p-0.5">
-        {p.effort.levels.map((l) => {
-          const on = l.id === p.effort!.value;
-          return (
-            <button key={l.id} type="button" role="radio" aria-checked={on} onClick={() => p.effort!.onChange(l.id)} data-effort={l.id}
-                    className={`flex-1 ${target} px-2 rounded-md text-px12 ${on ? 'bg-tone-800 text-tone-white' : 'text-tone-400 hover:text-tone-100'}`}>
-              {l.label}
-            </button>
-          );
-        })}
-      </div>
+      <StopSlider stops={p.effort.levels.map((l) => l.label)} index={stop.index} valueText={stop.name}
+                  unset={unset} labelledBy={`${p.idBase}-effort`} attr="effort"
+                  showName nameWhenUnset={!p.effort.clearable} nameClassName="text-px12 text-tone-100 shrink-0 min-w-[4.5rem]"
+                  onIndex={(i) => p.effort!.onChange(p.effort!.levels[i].id)} />
+      {p.effort.clearable && (
+        <button type="button" aria-pressed={unset} data-effort-cli-default
+                onClick={() => p.effort!.onChange(unset ? p.effort!.levels[stop.index].id : null)}
+                title={unset ? "The CLI's own default effort is used. Press to choose a level" : "Use the CLI's own default effort"}
+                className={`${target} shrink-0 px-2.5 rounded-lg border text-px12 ${unset ? 'border-tone-700 bg-tone-800 text-tone-white' : 'border-tone-800 text-tone-400 hover:text-tone-100'}`}>
+          CLI default
+        </button>
+      )}
     </div>
   );
 
@@ -312,7 +321,6 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
       {!p.replaceBody && (context || effort) && (
         <div className="px-3 py-2 border-t border-tone-800 flex flex-wrap items-center gap-x-4 gap-y-2" data-model-picker-footer>
           {context}{effort}
-          {contextWhy && <p id={contextWhyId} className="w-full text-px11 leading-snug text-tone-500" data-model-context-reason>{contextWhy}</p>}
         </div>
       )}
       {!p.replaceBody && p.note && <p className="px-3 py-1.5 border-t border-tone-800 text-px11 text-tone-500" data-model-picker-note>{p.note}</p>}

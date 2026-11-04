@@ -1,7 +1,7 @@
 /**
  * modelPickerPanel.ts — the rules of the model picker's panel (components/kit/ModelPickerPanel.tsx): the provider
- * rail (status, usage ring, version), which models can be picked where, the all-provider search, the "default" mark,
- * the pill's words and the keyboard. Pure, so each rule is tested without a browser. The model list itself (names,
+ * rail (every provider; each mark's usage ring, and its status, usage and version as its label), which
+ * models can be picked where, the all-provider search, the "default" mark, the pill's words and the keyboard. Pure, so each rule is tested without a browser. The model list itself (names,
  * sizes, aliases, order) stays in lib/modelPicker.ts.
  *
  * The context rule: an EXISTING agent is one session in one runtime, so its picker offers only that runtime's models;
@@ -37,6 +37,12 @@ export function canPick(m: PickerModel, scope: PickerScope): boolean {
 export function otherRuntimeNote(providerId: string, providerLabel: string, scope: PickerScope, labelOf: (id: string) => string): string | null {
   if (scope.kind !== 'agent' || providerId === scope.runtime) return null;
   return `This agent runs on ${labelOf(scope.runtime)}. Each agent is one session in one runtime, so ${providerLabel} needs a new agent.`;
+}
+
+/** The runtime's "default" mark on a row: only where the picker SETS a default (Settings › Agents' default model,
+ *  Arturo's brain), never in an existing agent's picker, where it says nothing about that agent. */
+export function showsDefaultMark(scope: PickerScope): boolean {
+  return scope.kind === 'any';
 }
 
 /** A dimmed row's reason, shown under its name: why the model can't be used (not signed in, not allowed for this
@@ -105,6 +111,8 @@ export interface RailEntry {
   usable: boolean;
   /** In an agent's picker, a provider other than the agent's runtime. */
   otherRuntime: boolean;
+  /** Its status in words ("signed in", "not installed"). */
+  statusText: string;
   version?: string;
   defaultModel?: string;
   usage: UsageSummary | null;
@@ -117,10 +125,17 @@ export function railEntries(rows: ProviderRow[], usage: unknown, scope: PickerSc
     status: providerStatus(r),
     usable: r.selectable,
     otherRuntime: scope.kind === 'agent' && r.provider.id !== scope.runtime,
+    statusText: statusWords(r),
     ...(r.provider.version ? { version: r.provider.version } : {}),
     ...(r.provider.model_catalog_default ? { defaultModel: r.provider.model_catalog_default } : {}),
     usage: usageFor(usage, r.provider.id, now),
   }));
+}
+
+/** A rail mark's title and aria-label: everything the header used to say, the reading's age included ("Claude: signed
+ *  in, 74% of weekly used (as of 09:12), CLI v2.1.295"). */
+export function railLabel(e: RailEntry): string {
+  return `${e.label}: ${e.statusText}${e.usage ? `, ${e.usage.text}` : ''}${e.version ? `, CLI v${e.version}` : ''}`;
 }
 
 /** The provider the panel opens on: the agent's runtime, else the model in use's, else the first usable one. */
@@ -142,8 +157,8 @@ export function isRuntimeDefault(m: PickerModel, defaultId: string | null | unde
   return !!a && a.name === m.name && a.tag === m.tag;
 }
 
-/** The rows under the search box: with a query, matches from EVERY provider (each with its badge); without one, the
- *  selected provider's models. */
+/** The rows under the search box: with a query, matches from EVERY provider (each with its badge), signed in or not;
+ *  without one, the selected provider's models. */
 export function visibleRows(models: PickerModel[], query: string, tab: string | null): PickerModel[] {
   if (query.trim()) return flatten(groupModels(models, { query }));
   return models.filter((m) => m.providerId === tab);
@@ -272,7 +287,7 @@ export type BrowseRow =
    *  newest version's sizes (the row is ticked). */
   | { kind: 'family'; key: string; model: PickerModel; family: Family; current: boolean }
   /** The "Older versions" disclosure. */
-  | { kind: 'older'; key: string; providerId: string; count: number; open: boolean }
+  | { kind: 'older'; key: string; providerId: string; open: boolean }
   /** An older version, one row per concrete model. */
   | { kind: 'model'; key: string; model: PickerModel };
 
@@ -308,7 +323,7 @@ export function browseRows(models: PickerModel[], tab: string | null,
     const model = on && current ? current : resolveFamily(f, size, opts.scope, opts.defaultId);
     return { kind: 'family', key: model.key, model, family: f, current: on };
   });
-  if (older.length) rows.push({ kind: 'older', key: olderKey(tab), providerId: tab, count: older.length, open });
+  if (older.length) rows.push({ kind: 'older', key: olderKey(tab), providerId: tab, open });
   if (open) rows.push(...older.map((m): BrowseRow => ({ kind: 'model', key: m.key, model: m })));
   return { rows, current, currentFamily, olderOpen: open };
 }
@@ -319,23 +334,19 @@ export function pickableKeys(rows: BrowseRow[], scope: PickerScope): string[] {
 }
 
 export interface ContextControl {
-  choices: { id: string; label: string; disabled?: boolean; title?: string }[];
+  choices: { id: string; label: string }[];
   /** The size in use (a choice's id). */
   value: string;
 }
 
-/** The Context control: only for the model in use's family, when its newest version (the one in use) comes in more
- *  than one size. A size that can't be picked here is offered dimmed with why. */
+/** The Context control: only for the model in use's family, offering only the sizes of its newest version (the one
+ *  in use) that can be picked here; fewer than two of those, no control. A size that can't be used is never offered. */
 export function contextControl(b: Browse, value: PickerValue | null | undefined, scope: PickerScope): ContextControl | null {
   const cur = b.current && isCurrent(b.current, value) ? b.current : null;
   if (!cur || !b.currentFamily) return null;
-  const choices = contextChoices(b.currentFamily);
-  if (choices.length < 2) return null;
-  return {
-    choices: choices.map((c) => ({ id: c.tag, label: c.label,
-      ...(canPick(c.model, scope) ? {} : { disabled: true, title: c.model.unavailable ?? 'Not available here' }) })),
-    value: cur.tag ?? '',
-  };
+  const choices = contextChoices(b.currentFamily).filter((c) => canPick(c.model, scope));
+  if (choices.length < 2 || !choices.some((c) => c.tag === (cur.tag ?? ''))) return null;
+  return { choices: choices.map((c) => ({ id: c.tag, label: c.label })), value: cur.tag ?? '' };
 }
 
 /** The model a Context choice stands for (the current family's newest version in that size). */

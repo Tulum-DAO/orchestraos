@@ -367,3 +367,11 @@ test('#8: with no usable description, the resolved id goes beside the label', as
   assert.equal(versionedLabel({ label: 'Opus (1M context)', resolved: 'claude-opus-5[1m]' }), 'Opus (1M context) (claude-opus-5[1m])');
   assert.equal(versionedLabel({ label: 'Big (128K context)', description: 'Big 2.1 · x' }), 'Big 2.1');
 });
+
+test("the CLI's own model description reaches the picker (its purpose words), never invented", () => {
+  const r = probeModelCatalog({ ...CLAUDE_PROBE, description_key: "description" }, [], execReturning(CLAUDE_2_1_276_STDOUT));
+  const desc = Object.fromEntries(r.models.map((m) => [m.id, m.description]));
+  assert.equal(desc["claude-fable-5-1[1m]"], "Fable 5.1 · Most capable for your hardest and longest-running tasks");
+  const none = probeModelCatalog(CLAUDE_PROBE, [], execReturning(CLAUDE_2_1_276_STDOUT));
+  assert.ok(none.models.every((m) => !("description" in m)), "no description_key: no description");
+});

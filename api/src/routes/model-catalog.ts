@@ -342,6 +342,8 @@ function toModels(raw: RawModel[], staticModels: StaticModel[]): ModelInfo[] {
       id: row.id,
       label: versionedLabel(row) || known?.label || row.id,
       capabilities,
+      // The CLI's own words for the model, passed on as they are: the picker's purpose words when it has none of its own.
+      ...(row.description ? { description: row.description } : {}),
       ...(unverified.length ? { capabilities_unverified: unverified } : {}),
     });
   }
