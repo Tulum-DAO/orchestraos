@@ -11,7 +11,7 @@ import type { MenuOption } from '../../lib/menuAnswer';
 import { MultiPartAnswer } from './MultiPartCard';
 import DecisionQuestion from './DecisionQuestion';
 import { isTerminalMenu } from '../../lib/decisionCard';
-import DecisionCard, { ApprovalAnswer } from './DecisionCard';
+import DecisionCard, { ApprovalAnswer, FooterDismiss } from './DecisionCard';
 import ApprovalExtras from './ApprovalExtras';
 import { approvalCardBody, approvalCardAgent } from '../../lib/approvalCard';
 
@@ -96,10 +96,14 @@ export default function PendingApprovalCard({ item, highlighted, onChanged, id, 
       risk={item.risk_level} body={approvalCardBody(item)} open extra={extra}
       onDismiss={isMenu ? dismiss : undefined} report={{ id: item.id, from: approvalCardAgent(item) || null }}>
       {/* A menu sent read-only (a multi-part menu this client is not given whole) only says where to answer it. */}
+      {/* In a popover its Dismiss is under the notice (FooterDismiss); elsewhere the header's ✕. */}
       {isMenu ? (
-        <div className="mx-4 mb-3 text-xs text-warning bg-warning/10 border border-warning/30 rounded-xl px-3 py-2">
-          {item.menu?.notice || 'Multi-part menu — open the agent to answer.'}
-        </div>
+        <>
+          <div className="mx-4 mb-3 text-xs text-warning bg-warning/10 border border-warning/30 rounded-xl px-3 py-2">
+            {item.menu?.notice || 'Multi-part menu — open the agent to answer.'}
+          </div>
+          <FooterDismiss />
+        </>
       ) : (
         <ApprovalAnswer sending={sending} error={error}
           onApprove={() => void send('approve', {})}

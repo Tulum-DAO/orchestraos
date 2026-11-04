@@ -8,12 +8,19 @@
  *
  * Theme colours only (card, border, muted, info, success, warning, destructive), so light and dark both work.
  * The card takes focus when clicked, which is what scopes its keys (1–9, Return, e) to it.
+ *
+ * In a card's popover (CardPopContext, components/kit/cardPopContext.ts) the header's top right holds the popover's
+ * Go to card and Close instead of the ✕, and a dismissable card's Dismiss moves under its answer area
+ * (FooterDismiss).
  */
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { ListChecks, Loader2, X } from 'lucide-react';
 import Markdown from './Markdown';
 import { withRefs } from '../kit/RefText';
+import { PopHeaderControls } from '../kit/CardPopControls';
+import { useCardPop } from '../kit/cardPopContext';
+import { PILL, PILL_QUIET } from '../../lib/cardButtons';
 import { previewText, type DecisionTone } from '../../lib/decisions';
 import { CHIP_LABEL, approvalAction, riskText, type CardKind } from '../../lib/decisionCard';
 import type { ScreenAnswer } from '../../lib/screenCards';
@@ -23,6 +30,8 @@ import { useScreenCard } from '../../lib/threadKit/useScreenCard';
 /** The answer area inside a card says how an answer Arturo hands back is applied (ApprovalAnswer's Approve/Deny). */
 type Answerer = (a: ScreenAnswer) => string | null;
 const AnswerSlot = createContext<((fn: Answerer | null) => void) | null>(null);
+/** In a popover: the card's dismiss, which its answer area draws (FooterDismiss) instead of the header's ✕. */
+const DismissSlot = createContext<(() => Promise<string | null>) | null>(null);
 
 const SUMMARY_PREVIEW = 280;
 
@@ -76,6 +85,7 @@ export default function DecisionCard(p: DecisionCardProps) {
   const frame = useRef<HTMLDivElement>(null);
   const answerer = useRef<Answerer | null>(null);
   const live = p.open && !p.dismissed;
+  const pop = useCardPop();
   useScreenCard(frame, p.report ? {
     id: p.report.id, kind: p.kind, from: p.report.from ?? p.agent ?? null,
     state: p.dismissed ? 'dismissed' : live ? 'waiting' : p.report.state ?? 'answered',
@@ -101,7 +111,8 @@ export default function DecisionCard(p: DecisionCardProps) {
               {risk && <span>· {risk}</span>}
             </div>
           </div>
-          {p.onDismiss && p.open && !p.dismissed && <DismissButton onDismiss={p.onDismiss} />}
+          {pop ? <PopHeaderControls className="-mr-1.5 -mt-1" />
+            : p.onDismiss && p.open && !p.dismissed && <DismissButton onDismiss={p.onDismiss} />}
         </div>
         {summary && (
           <div className={clsx('mt-2 text-sm leading-relaxed', p.open ? 'text-card-foreground/85' : 'text-muted-foreground')}>
@@ -116,23 +127,36 @@ export default function DecisionCard(p: DecisionCardProps) {
         {p.extra && <div className="mt-2 space-y-2">{p.extra}</div>}
       </div>
       {p.open && !p.dismissed
-        ? <div className="mt-2"><AnswerSlot.Provider value={(fn) => { answerer.current = fn; }}>{p.children}</AnswerSlot.Provider></div>
+        ? (
+          <div className="mt-2">
+            <AnswerSlot.Provider value={(fn) => { answerer.current = fn; }}>
+              <DismissSlot.Provider value={pop && p.onDismiss ? p.onDismiss : null}>{p.children}</DismissSlot.Provider>
+            </AnswerSlot.Provider>
+          </div>
+        )
         : <div className="px-4 pt-1 pb-3 text-xs text-muted-foreground" data-testid="decision-outcome">{p.dismissed ? 'Dismissed' : p.outcome}</div>}
     </div>
   );
 }
 
 /** A card in an agent's chat: on the agent's side and message-sized, the way Arturo's cards sit under his
- *  replies, instead of spanning the column like a page element. Approvals and Inbox are lists and stay full width. */
+ *  replies, instead of spanning the column like a page element. Approvals and Inbox are lists and stay full width.
+ *  `data-agent-side` lets a card popover (kit.css .kit-card-pop-card) lift the chat measure: there the card fills it. */
 export function AgentSide({ children }: { children: ReactNode }) {
   return (
     <div className="flex justify-start">
-      <div className="w-full max-w-[min(92%,480px)]">{children}</div>
+      <div className="w-full max-w-[min(92%,480px)]" data-agent-side>{children}</div>
     </div>
   );
 }
 
-export function DismissButton({ onDismiss }: { onDismiss: () => Promise<string | null> }) {
+/** A card's Dismiss: two taps, so a stray one never dismisses (the first arms it for 5s), with a spinner while it goes
+ *  and the error it comes back with. `place` 'header' (a card on a page): the ✕ at the card's top right. 'footer'
+ *  (a card in a popover, whose top right is the popover's Close): a quiet "Dismiss" pill left of Send, the same
+ *  height and radius as the footer's pills. */
+export function DismissButton({ onDismiss, place = 'header' }: {
+  onDismiss: () => Promise<string | null>; place?: 'header' | 'footer';
+}) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +174,20 @@ export function DismissButton({ onDismiss }: { onDismiss: () => Promise<string |
     const err = await onDismiss();
     setBusy(false); setArmed(false); setError(err);
   };
+  if (place === 'footer') {
+    return (
+      <>
+        <button type="button" onClick={() => { void click(); }} aria-label={armed ? 'Dismiss this menu' : 'Dismiss'}
+                title={armed ? undefined : 'Dismiss'} data-card-dismiss data-armed={armed || undefined}
+                className={clsx('shrink-0 inline-flex items-center justify-center gap-1',
+                  armed ? `${PILL} border-border bg-muted text-foreground hover:bg-accent` : PILL_QUIET)}>
+          {busy ? <Loader2 size={12} className="animate-spin" /> : null}{armed ? 'Dismiss ✓' : 'Dismiss'}
+        </button>
+        {/* Its own line under the row (the row wraps), so the buttons never move. */}
+        {error && <div className="basis-full order-last text-px11 text-warning text-right">{error}</div>}
+      </>
+    );
+  }
   return (
     <div className="touch-compact shrink-0 -mr-1.5 -mt-1 flex flex-col items-end">
       {armed ? (
@@ -164,6 +202,19 @@ export function DismissButton({ onDismiss }: { onDismiss: () => Promise<string |
         </button>
       )}
       {error && <div className="text-px11 text-warning mt-1 max-w-[220px] text-right">{error}</div>}
+    </div>
+  );
+}
+
+/** A dismissable card's Dismiss under its answer area, on a row of its own at the right, when the card is in a
+ *  popover (DecisionCard's DismissSlot); nothing elsewhere, where the header's ✕ dismisses it. Used by an answer
+ *  area with no buttons of its own (a read-only menu's notice). */
+export function FooterDismiss() {
+  const onDismiss = useContext(DismissSlot);
+  if (!onDismiss) return null;
+  return (
+    <div className="touch-compact flex flex-wrap items-center justify-end gap-2 px-4 pb-3" data-card-footer>
+      <DismissButton onDismiss={onDismiss} place="footer" />
     </div>
   );
 }
