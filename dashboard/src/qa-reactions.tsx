@@ -5,6 +5,9 @@
  *
  *   ?skin=bubbles|modern   the chat style (default bubbles)
  *   ?theme=dark|light      (default dark)
+ *   ?scene=tools           a chat with tool runs (Bubbles' thin lines), a table reply and a code reply, and
+ *                          window.__qaStream('mid' | 'done') to show a reply mid-stream (a tool still running, the live
+ *                          overlay) and the frame right after its hand-off to the finished transcript row
  *
  * window.__rxEmit(ref, emoji, agentId) sends a stream event as if that agent had reacted (a live update).
  */
@@ -13,6 +16,7 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import type { ChatItem } from './lib/transcript';
 import type { ReactionChange, StoredReaction } from './lib/reactionState';
+import type { LiveText } from './lib/threadKit/view';
 
 const q = new URLSearchParams(location.search);
 const AGENT = 'qa-agent';
@@ -33,6 +37,36 @@ const ITEMS: ChatItem[] = [
   say(4, 'assistant', 'Here is the short version of what changed:\n\n- the reactions store\n- the API and its stream\n- the server-stamped message refs'),
   say(5, 'user', 'Ship it'),
 ];
+
+// ?scene=tools: tool runs between the bubbles.
+const run = (n: number, tool: string, input: Record<string, unknown>, result?: string, isError = false): ChatItem[] => {
+  const id = `toolu_qa${n}`;   // the same call in two frames (running, then done) keeps its id
+  const use = { kind: 'tool_use', role: 'assistant', tool, input, summary: '', id, uuid: u(n), ts: at(n) };
+  return result === undefined ? [use as unknown as ChatItem]
+    : [use as unknown as ChatItem, { kind: 'tool_result', role: 'user', text: result, tool_use_id: id, is_error: isError, uuid: u(n + 50), ts: at(n + 1) } as unknown as ChatItem];
+};
+const TOOLS: ChatItem[] = [
+  say(11, 'user', 'Is the deploy healthy? Check the box.'),
+  say(12, 'assistant', 'Checking the box now.'),
+  ...run(13, 'Bash', { command: 'D=/home/sam/orchestraos; cd $D && git log --oneline -3' }, 'f3662c9 fix(dashboard): no Typing or live bubble\n355a970 fix(reactions): the wake watcher snapshots\n49fd99e fix(arturo): ChatMirror never notes a reaction wake'),
+  ...run(15, 'Read', { file_path: '/home/sam/orchestraos/dashboard/package.json' }, '{\n  "name": "dashboard",\n  "private": true,\n  "version": "0.0.0"\n}'),
+  ...run(17, 'Bash', { command: 'curl -sf http://127.0.0.1:8080/health | jq .' }, '{\n  "ok": true,\n  "api": "up",\n  "web": "up"\n}'),
+  say(19, 'assistant', 'All green. The summary:\n\n| check | state | note |\n|---|---|---|\n| api | ok | 12ms |\n| web | ok | served from dist |\n| git | clean | f3662c9 |'),
+  say(20, 'user', 'And the last log lines?'),
+  ...run(21, 'Bash', { command: 'tail -n 3 /var/log/orchestra/dashboard.log' }, '10:02:11 GET /api/agents 200 4ms\n10:02:12 GET /api/health 200 1ms\n10:02:14 SSE /api/agents/dev/stream open'),
+  say(23, 'assistant', 'The last three lines:\n\n```log\n10:02:11 GET /api/agents 200 4ms\n10:02:12 GET /api/health 200 1ms\n10:02:14 SSE /api/agents/dev/stream open\n```\n\nNothing unusual.'),
+];
+const STREAM_USER = say(30, 'user', 'Run the tests and tell me where lint stands.');
+const STREAM_LEAD = say(31, 'assistant', 'Running the suite.');
+const STREAM_TEXT = 'The suite passed: 1045 tests, no failures.\n\nLint is at 274 problems, exactly the cap, so nothing new.';
+const STREAM_LIVE: LiveText = { text: 'The suite passed: 1045 tests, no failures.\n\nLint is at 274 prob' };
+const STREAM: Record<'mid' | 'done', { items: ChatItem[]; live: LiveText | null }> = {
+  mid: { items: [...TOOLS, STREAM_USER, STREAM_LEAD, ...run(32, 'Bash', { command: 'cd dashboard && npm test' }, 'tests 1045\npass 1045\nfail 0'), ...run(34, 'Bash', { command: 'npx eslint . | tail -1' })], live: STREAM_LIVE },
+  done: { items: [], live: null },
+};
+STREAM.done.items = [...TOOLS, STREAM_USER, STREAM_LEAD, ...run(32, 'Bash', { command: 'cd dashboard && npm test' }, 'tests 1045\npass 1045\nfail 0'),
+  ...run(34, 'Bash', { command: 'npx eslint . | tail -1' }, '✖ 274 problems (260 errors, 14 warnings)'), say(36, 'assistant', STREAM_TEXT)];
+const sceneItems = q.get('scene') === 'tools' ? TOOLS : ITEMS;
 
 const store: Record<string, StoredReaction[]> = {
   [ref(2)]: [{ emoji: '👍', reactor: me, at: at(10) }, { emoji: '👍', reactor: dev, at: at(11) }, { emoji: '🎉', reactor: dev, at: at(12) }],
@@ -83,16 +117,20 @@ document.documentElement.classList.toggle('dark', (q.get('theme') ?? 'dark') ===
 try { localStorage.setItem('orchestra.agentPrefs', JSON.stringify({ [AGENT]: q.get('skin') === 'modern' ? 'modern' : 'bubbles' })); } catch { /* storage blocked */ }
 
 // Loaded after the stubs and the saved style are in place (the prefs store reads them when its module loads).
+// window.__qaStream draws the chat again on a stage of a reply's stream (scene=tools).
 void Promise.all([import('./components/chat/TranscriptChatView'), import('@tanstack/react-query')]).then(([chat, rq]) => {
   const TranscriptChatView = chat.default;
   const client = new rq.QueryClient({ defaultOptions: { queries: { retry: false } } });
-  createRoot(document.getElementById('qa-root')!).render(
+  const root = createRoot(document.getElementById('qa-root')!);
+  const draw = (items: ChatItem[], live: LiveText | null) => root.render(
     <StrictMode>
       <rq.QueryClientProvider client={client}>
         <div className="bg-background text-foreground" style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-          <TranscriptChatView agentId={AGENT} fixtureItems={ITEMS} state="idle" hideStatusBar />
+          <TranscriptChatView agentId={AGENT} fixtureItems={items} state={live ? 'working' : 'idle'} hideStatusBar liveText={live} />
         </div>
       </rq.QueryClientProvider>
     </StrictMode>,
   );
+  (window as unknown as { __qaStream: (stage: 'mid' | 'done') => void }).__qaStream = (stage) => draw(STREAM[stage].items, STREAM[stage].live);
+  draw(sceneItems, null);
 });

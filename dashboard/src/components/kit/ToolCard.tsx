@@ -11,6 +11,13 @@
  * (lib/cardRefs.ts): in the row's one line, which is itself a button, it reads as the card's words and state; in
  * the opened detail it is the card's chip, which opens the card.
  *
+ * Looks: 'card' (the default, above) or 'lines' (Bubbles' agent chat and Bubbles' thread parts:
+ * "Collapse to a thin line that's still expandable (but displays other thin lines which are themselves expandable)
+ * where applicable, and can expand to display a code div (which is always copyable)"): the run is ONE thin, quiet line
+ * between the bubbles, the fold's own words (runSummary; while it works, the call it is on); opened, one thin line per
+ * call (and what was said between them); a call's line opens to a code block with its input and what came back, its
+ * Copy always shown (kit Markdown CodeFrame). One call skips the middle level. Same density, same live jobs.
+ *
  * Skins (as the kit's Markdown): "bubbles" (agent chats), "modern" (Arturo's page), "pane" (his floating pane). The
  * card's own colours are the --bui-* tokens either way; the skin sets the chips' look.
  *
@@ -21,13 +28,16 @@ import { useContext, useEffect, useState, type ReactNode } from 'react';
 import { LiveJobsContext } from './liveJobsContext';
 import { failedLabel, jobElapsed, type AgentJob } from '../../lib/agentJobs';
 import {
-  Bookmark, Bot, Check, ChevronDown, FileText, Globe, Image as ImageIcon, ListChecks, ListTree, LoaderCircle,
+  Bookmark, Bot, Check, ChevronDown, ChevronRight, FileText, Globe, Image as ImageIcon, ListChecks, ListTree, LoaderCircle,
   Map as MapIcon, MessageSquare, Pencil, Search, Terminal, Wrench, X,
 } from 'lucide-react';
 import { shortPath } from '../../lib/transcript';
 import { withRefs } from './RefText';
-import type { Skin } from './Markdown';
-import { callDetail, callLabel, hasDetail, iconKey, runSummary, type IconKey, type ToolCallView } from '../../lib/toolCalls';
+import { CodeFrame, type Skin } from './Markdown';
+import {
+  callCode, callDetail, callLabel, callLine, hasDetail, iconKey, liveCall, runSummary, runTimes, type IconKey, type ToolCallView,
+} from '../../lib/toolCalls';
+import { MESSAGE_TIME_TONE, messageTimeLabel } from '../../lib/messageTime';
 import type { ToolDensity } from '../../lib/toolCardDetail';
 
 const ICONS: Record<IconKey, ReactNode> = {
@@ -170,9 +180,11 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
 /** What a folded run lists when opened: its calls, and anything said between them (an agent's thinking), in order. */
 export type ToolRunEntry = { kind: 'call'; call: ToolCallView } | { kind: 'note'; key: string; node: ReactNode };
 
-export default function ToolCard({ calls, entries, interrupted = false, density = 'normal', className, skin = 'bubbles' }: {
+export default function ToolCard({ calls, entries, interrupted = false, density = 'normal', className, skin = 'bubbles', look = 'card' }: {
   calls: ToolCallView[];
   skin?: Skin;
+  /** 'card' (above) or Bubbles' thin 'lines' (ToolLines, below). */
+  look?: 'card' | 'lines';
   /** The calls with what came between them; without it, the calls alone. */
   entries?: ToolRunEntry[];
   /** The agent stopped before these finished: they read as stopped, not as still running. */
@@ -187,6 +199,7 @@ export default function ToolCard({ calls, entries, interrupted = false, density 
   const launched = jobs ? calls.flatMap((c) => (c.toolUseId && jobs.get(c.toolUseId) ? [jobs.get(c.toolUseId)!] : [])) : [];
   const bgRunning = launched.filter((j) => j.status === 'running').length;
   const bgFailed = launched.filter((j) => j.status === 'failed').length;
+  if (look === 'lines') return <ToolLines calls={calls} entries={entries} interrupted={interrupted} density={density} skin={skin} className={className} />;
   if (!calls.length) return null;
   const card = `w-full max-w-[min(92%,34rem)] rounded-lg border border-line px-2.5 py-1${className ? ` ${className}` : ''}`;
   if (calls.length === 1) {
@@ -216,6 +229,147 @@ export default function ToolCard({ calls, entries, interrupted = false, density 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* --- Bubbles: thin lines ------------------------------------------------------------------------------------------ */
+
+/** What a line opens to: grown in over 200ms (rows 0fr to 1fr), drawn the first time it opens and kept after, so a
+ *  closed run of fifty calls costs nothing and a close still eases out; closed, nothing in it takes the focus. */
+function Reveal({ open, children }: { open: boolean; children: ReactNode }) {
+  const [seen, setSeen] = useState(open);
+  if (open && !seen) setSeen(true);
+  return (
+    <div className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+      style={{ gridTemplateRows: open ? '1fr' : '0fr', opacity: open ? 1 : 0 }} inert={!open}>
+      <div className="min-h-0 overflow-hidden">{seen && children}</div>
+    </div>
+  );
+}
+
+/** One thin, quiet line: muted small words, the chevron after them; a button that says whether it is open. `wrap`:
+ *  the run's own line wraps rather than clipping its tail ("(1 failed)" on a phone); a call's line is one line. */
+function LineButton({ open, canOpen, onToggle, lead, tail, time, wrap = false, children }: {
+  open: boolean; canOpen: boolean; onToggle: () => void; lead?: ReactNode; tail?: ReactNode;
+  /** When it happened (LineTime), just after the chevron: its own slot, never in the words the label truncates. */
+  time?: ReactNode; wrap?: boolean; children: ReactNode;
+}) {
+  const chevron = canOpen && (
+    <ChevronRight size={12} strokeWidth={2.2} aria-hidden
+      className="ml-0.5 inline-block shrink-0 align-[-2px] opacity-70 transition-transform duration-200 motion-reduce:transition-none"
+      style={{ transform: open ? 'rotate(90deg)' : 'none' }} />
+  );
+  return (
+    <button type="button" aria-expanded={canOpen ? open : undefined} disabled={!canOpen} onClick={onToggle}
+      className="relative flex w-full min-w-0 items-center gap-1.5 rounded-control py-0.5 text-left text-[11.5px] leading-5 text-muted-foreground transition-colors duration-200 motion-reduce:transition-none enabled:hover:text-foreground disabled:cursor-default">
+      {lead}
+      {/* a line that wraps carries its time inline, so it follows the chevron on whichever row that ends up */}
+      {wrap ? <span className="min-w-0 break-words">{children}{chevron}{time && <span className="ml-2 inline-block">{time}</span>}</span>
+        : <><span className="min-w-0 truncate">{children}</span>{chevron}</>}
+      {/* right after the chevron (8px), never at the column's far edge: the time hugs its own line; the words before it
+          truncate, never the time */}
+      {(tail || (time && !wrap)) && <span className="ml-0.5 flex shrink-0 items-center gap-2">{tail}{!wrap && time}</span>}
+    </button>
+  );
+}
+
+/** When a line's call or run happened, as the time under a bubble says it (lib/messageTime: same words, same muted
+ *  look): one time, or "10:12–10:17" for a run over a minute. A screen reader hears ", at 10:12" or
+ *  ", from 10:12 to 10:17" after the line's words. No time: nothing. */
+function LineTime({ start, end }: { start?: string; end?: string }) {
+  const a = messageTimeLabel(start);
+  if (!a) return null;
+  const b = end ? messageTimeLabel(end) : null;
+  return (
+    <time dateTime={start} title={b ? `${a.title} – ${b.title}` : a.title} className={`${MESSAGE_TIME_TONE} tabular-nums whitespace-nowrap`}>
+      <span className="sr-only">{end ? ', from ' : ', at '}</span>{a.label}
+      {b && <><span aria-hidden>–</span><span className="sr-only"> to </span>{b.label}</>}
+    </time>
+  );
+}
+
+const Spinner = () => <LoaderCircle size={11} className="shrink-0 animate-spin motion-reduce:animate-none" aria-label="running" />;
+
+/** A call's code block: its input as written, then what came back (red when it failed); Copy takes both. */
+function CallCode({ call, skin }: { call: ToolCallView; skin: Skin }) {
+  const code = callCode(call);
+  const keep = { onTouchStart: (e: { stopPropagation: () => void }) => e.stopPropagation() };
+  return (
+    <CodeFrame className="mt-0.5 mb-1.5" label={callLabel(call.name)} copyText={code.copy} copyLabel="Copy call">
+      {code.input && (
+        <pre className="kit-code-scroll max-h-48 overflow-auto px-3 py-2 font-mono text-[11.5px] leading-relaxed text-ink whitespace-pre" {...keep}>
+          {withRefs(code.input, skin, 'in')}
+        </pre>
+      )}
+      {code.output && (
+        <pre className={`kit-code-scroll max-h-72 overflow-auto border-t border-line-strong px-3 py-2 font-mono text-[11.5px] leading-relaxed whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`} {...keep}>
+          {withRefs(code.output, skin, 'out')}
+        </pre>
+      )}
+    </CodeFrame>
+  );
+}
+
+/** One call as a thin line ("Bash · D=/home/sam/…"), opening to its code block. Still running: its spinner (or the
+ *  background job it launched, live), nothing to open yet. `top`: the run is this one call (no middle level). */
+function CallLine({ call, skin, top = false, className }: { call: ToolCallView; skin: Skin; top?: boolean; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const job = useJobOf(call);
+  const code = callCode(call);
+  const canOpen = call.status !== 'running' && !!(code.input || code.output);
+  const { label, detail } = callLine(call);
+  const line = (
+    <>
+      <LineButton open={open} canOpen={canOpen} onToggle={() => setOpen((o) => !o)}
+        lead={!job && call.status === 'running' ? <Spinner /> : call.status === 'failed' ? <X size={11} className="shrink-0 text-red" aria-label="failed" /> : undefined}
+        tail={job && <JobLive job={job} />} time={<LineTime start={call.ts} />}>
+        <span className="text-foreground/75">{label}</span>
+        {detail && <> · {withRefs(detail, skin, 'chip', true)}</>}
+      </LineButton>
+      {/* the code block is as wide as a wide bubble (85% of the column) on a wide screen; a phone gives code all of it */}
+      {canOpen && <Reveal open={open}><div className="sm:max-w-[85%]"><CallCode call={call} skin={skin} /></div></Reveal>}
+    </>
+  );
+  return top
+    ? <div className={`w-full min-w-0${className ? ` ${className}` : ''}`} data-testid="tool-calls" data-look="lines" data-skin={skin} data-tool-line={call.name}>{line}</div>
+    : <div className="min-w-0" data-tool-line={call.name}>{line}</div>;
+}
+
+/** Bubbles: a turn's tool run as one thin line ("Worked for 1m 8s — ran 3 commands ›"; while it works, the call it
+ *  is on, live), opening to one thin line per call and what was said between them. */
+function ToolLines({ calls, entries, interrupted, density, skin, className }: {
+  calls: ToolCallView[]; entries?: ToolRunEntry[]; interrupted: boolean; density: ToolDensity; skin: Skin; className?: string;
+}) {
+  // Folded by default (the line is the turn's tool story); 'verbose' starts it open, as the card does.
+  const [open, setOpen] = useState(density === 'verbose');
+  const jobs = useContext(LiveJobsContext);
+  if (!calls.length) return null;
+  if (calls.length === 1) return <CallLine call={calls[0]} skin={skin} top className={className} />;
+  const s = runSummary(calls, interrupted);
+  const live = liveCall(calls, interrupted);
+  const step = live ? callLine(live) : null;
+  const launched = jobs ? calls.flatMap((c) => (c.toolUseId && jobs.get(c.toolUseId) ? [jobs.get(c.toolUseId)!] : [])) : [];
+  const bgRunning = launched.filter((j) => j.status === 'running').length;
+  const bgFailed = launched.filter((j) => j.status === 'failed').length;
+  const tone = s.tone === 'failed' ? 'text-red' : s.tone === 'stopped' ? 'text-orange' : '';
+  const when = runTimes(calls);
+  return (
+    <div className={`w-full min-w-0${className ? ` ${className}` : ''}`} data-testid="tool-calls" data-look="lines" data-skin={skin}>
+      <LineButton open={open} canOpen onToggle={() => setOpen((v) => !v)} wrap lead={live ? <Spinner /> : undefined}
+        time={when && <LineTime start={when.start} end={when.end} />}>
+        <span className={`tabular-nums ${tone}`}>{s.lead}</span>
+        {step ? <> · <span className="text-foreground/75">{step.label}</span>{step.detail && <> · {withRefs(step.detail, skin, 'step', true)}</>}</>
+          : s.headline && <> — {s.headline}</>}
+        {bgRunning > 0 && <span className="text-orange" data-job-live-head="running"> · {bgRunning} running in the background</span>}
+        {bgFailed > 0 && <span className="text-red" data-job-live-head="failed"> · {bgFailed} failed in the background</span>}
+      </LineButton>
+      <Reveal open={open}>
+        <div className="ml-[5px] mt-0.5 flex flex-col border-l border-border pl-3">
+          {(entries ?? calls.map((call): ToolRunEntry => ({ kind: 'call', call }))).map((e) =>
+            e.kind === 'call' ? <CallLine key={e.call.id} call={e.call} skin={skin} /> : <div key={e.key} className="py-0.5">{e.node}</div>)}
+        </div>
+      </Reveal>
     </div>
   );
 }

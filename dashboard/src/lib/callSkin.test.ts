@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { BUBBLES_USER, BUBBLES_BODY, assistantTurnClass, turnSkinOf } from './chatSkin.ts';
+import { BUBBLES_AGENT, BUBBLES_USER, BUBBLES_BODY, BUBBLES_WIDE, BUBBLES_WIDTH, assistantTurnClass, bubbleWidthOf, turnSkinOf } from './chatSkin.ts';
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -17,7 +17,7 @@ test('the skin an agent call is drawn in follows its chat style (Dev: the chat i
 });
 
 test('one bubble, one body: the thread and the call share them, nobody keeps a copy', () => {
-  const bubbleClasses = BUBBLES_USER.replace(/[[\]/.]/g, (c) => `\\${c}`);
+  const bubbleClasses = BUBBLES_USER.replace(/[[\]/.()%]/g, (c) => `\\${c}`);
   for (const f of ['components/kit/ThreadView.tsx', 'components/chat/TranscriptCards.tsx', 'components/kit/CallCard.tsx', 'components/call/CallTranscript.tsx']) {
     assert.doesNotMatch(src(f), new RegExp(bubbleClasses), `${f} keeps no copy of the bubble's classes`);
   }
@@ -40,4 +40,40 @@ test("an agent call's turns use the shared turns in its skin; Bubbles shows no n
   assert.match(live, /skin === 'modern' \? <span/);
   assert.match(src('components/call/CallBar.tsx'), /call\?\.party === 'agent' \? turnSkinOf\(chatStyle, styleBeforeDev\(agentId\)\) : undefined/);
   assert.match(src('components/chat/TranscriptChatView.tsx'), /skin: modern \? 'modern' as const : 'bubbles' as const/);
+});
+
+test('an agent reply is a bubble again (Bubbles): bordered card on the left, its corner toward the agent', () => {
+  for (const c of ['rounded-2xl', 'rounded-tl-sm', 'border', 'border-border', 'bg-card', 'text-card-foreground', 'px-3.5', 'py-2', 'text-[13px]', 'leading-relaxed', 'break-words', 'min-w-0']) {
+    assert.ok(BUBBLES_AGENT.split(' ').includes(c), `agent bubble has ${c}`);
+  }
+  // the bubble lives INSIDE MessageText, so the streaming overlay and the finished reply share it
+  const msg = src('components/kit/Message.tsx');
+  assert.match(msg, /if \(skin === 'pane'\) return <div className="bubble">/);
+  assert.match(msg, /if \(skin === 'modern'\) return <div className="txt">/);
+  assert.match(msg, /className=\{`\$\{BUBBLES_AGENT\} \$\{bubbleWidthOf\(widthFrom \?\? text\)\}`\}/);
+  assert.match(msg, /data-agent-bubble/);
+});
+
+test('both bubbles: 85% of the column up to 560px; a table or fenced code may widen to 85%', () => {
+  assert.equal(BUBBLES_WIDTH, 'max-w-[min(85%,560px)]');
+  assert.equal(BUBBLES_WIDE, 'max-w-[85%]');
+  assert.ok(BUBBLES_USER.startsWith(`${BUBBLES_WIDTH} `));
+  assert.ok(!BUBBLES_USER.includes(BUBBLES_WIDE));
+  assert.equal(bubbleWidthOf('Plain words, **bold**, a `code` span.'), BUBBLES_WIDTH);
+  assert.equal(bubbleWidthOf('Here:\n\n```sh\nls -la\n```'), BUBBLES_WIDE);
+  assert.equal(bubbleWidthOf('| a | b |\n|---|---|\n| 1 | 2 |'), BUBBLES_WIDE);
+  // a just-sent message has the same width as the bubble that replaces it
+  assert.match(src('components/chat/TranscriptCards.tsx'), /clsx\(BUBBLES_WIDTH, 'rounded-2xl rounded-br-sm/);
+});
+
+test("a live reply's bubble is as wide as its finished one: a fence or a table row seen while it streams widens it", () => {
+  // still being written: the fence is open, the table has only its first row
+  assert.equal(bubbleWidthOf('Here:\n\n```sh\nls -la'), BUBBLES_WIDE);
+  assert.equal(bubbleWidthOf('The summary:\n\n| check | state |'), BUBBLES_WIDE);
+  assert.equal(bubbleWidthOf('A pipe | in a sentence is not a table.'), BUBBLES_WIDTH);
+  // the live overlay draws only finished paragraphs, so it measures the whole live text, not what it draws
+  const tv = src('components/kit/ThreadView.tsx');
+  assert.match(tv, /<MessageText text=\{t!\.text\} skin=\{skin\} widthFrom=\{text\} \/>/);
+  assert.match(tv, /<Parts parts=\{c\.parts\} skin=\{skin\} widthFrom=\{parts\} \/>/);
+  assert.match(src('components/kit/Message.tsx'), /bubbleWidthOf\(widthFrom \?\? text\)/);
 });
