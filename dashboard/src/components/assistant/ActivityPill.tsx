@@ -45,7 +45,7 @@ export default function ActivityPill({ activity, className }: Props) {
     <div
       title={UPGRADE_HINT}
       className={clsx(
-        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium select-none',
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-px11 font-medium select-none',
         isError
           ? 'bg-red-500/10 text-tone-red-300'
           : isAnswering

@@ -28,7 +28,7 @@ function AgentStatusGrid() {
             />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium truncate">{a.name || a.id}</p>
-              <p className="text-[11px] text-tone-500 truncate">
+              <p className="text-px11 text-tone-500 truncate">
                 {[a.tier, a.machine].filter(Boolean).join(' · ')}
                 {a.current_task ? ` · ${String(a.current_task).slice(0, 40)}` : ''}
               </p>
@@ -60,7 +60,7 @@ function ThroughputBars({ data }: { data: { date: string; label: string; count: 
               style={{ height: `${Math.max((d.count / maxCount) * 100, d.count > 0 ? 2 : 0)}%` }}
             />
           </div>
-          <span className="text-[10px] text-tone-500 truncate w-full text-center">{d.label}</span>
+          <span className="text-px10 text-tone-500 truncate w-full text-center">{d.label}</span>
         </div>
       ))}
     </div>
@@ -93,7 +93,7 @@ function TaskFunnel({ funnel }: { funnel: Record<string, number> }) {
             <div className={`w-3 h-3 rounded-full ${stage.color}`} />
             <p className="text-2xl font-bold tabular-nums">{count}</p>
             <p className={`text-xs font-medium ${stage.text}`}>{stage.label}</p>
-            <p className="text-[11px] text-tone-600">{pct}% of total</p>
+            <p className="text-px11 text-tone-600">{pct}% of total</p>
           </div>
         );
       })}
@@ -145,7 +145,7 @@ function ProjectHealthTable({ rows }: { rows: any[] }) {
                 <td className="py-2 pr-4">
                   <span className="font-medium">{p.name}</span>
                   {stale && (
-                    <span className="ml-2 text-[10px] text-yellow-500 font-medium uppercase tracking-wide">stale</span>
+                    <span className="ml-2 text-px10 text-yellow-500 font-medium uppercase tracking-wide">stale</span>
                   )}
                 </td>
                 <td className="py-2 pr-4 text-tone-400 tabular-nums">

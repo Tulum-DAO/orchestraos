@@ -39,7 +39,7 @@ export function CodeFrame({ label, copyText, copyLabel = 'Copy code', tools, dar
     <div className={`${dark ? 'dark ' : ''}rounded-md border border-line-strong bg-inset text-ink overflow-hidden ${className}${reveal !== undefined ? ' rv' : ''}`} data-code-frame
          {...revealAttrs(reveal, true)}>
       <div className="touch-compact flex items-center gap-2 px-2.5 py-1 bg-field border-b border-line-strong">
-        <span className="text-[10px] font-mono text-ink-3">{label}</span>
+        <span className="text-px10 font-mono text-ink-3">{label}</span>
         <span className="ml-auto" />
         {tools}
         <Copy text={copyText} label={copyLabel} size={12}
@@ -66,12 +66,12 @@ export function CodeBlock({ code, lang, dark = false, units }: { code: string; l
       tools={long && (
         <button
           onClick={() => setOpen(!open)}
-          className={`text-[10px] text-bui-accent-ink hover:opacity-80${fold !== undefined ? ' rv' : ''}`} {...revealAttrs(fold, true)}
+          className={`text-px10 text-bui-accent-ink hover:opacity-80${fold !== undefined ? ' rv' : ''}`} {...revealAttrs(fold, true)}
         >
           {open ? 'Collapse' : `Show ${lines.length} lines`}
         </button>
       )}>
-      <pre className="kit-code-scroll px-3 py-2 overflow-x-auto text-[12px] leading-relaxed" {...touchProps}>
+      <pre className="kit-code-scroll px-3 py-2 overflow-x-auto text-px12 leading-relaxed" {...touchProps}>
         <code className="font-mono text-ink whitespace-pre">{units
           ? shown.map((l, i) => <span key={i} className={units.lines[i] !== undefined ? 'rv' : undefined} {...revealAttrs(units.lines[i])}>{i < shown.length - 1 ? `${l}\n` : l}</span>)
           : shown.join('\n')}</code>
@@ -79,7 +79,7 @@ export function CodeBlock({ code, lang, dark = false, units }: { code: string; l
       {long && !open && (
         <button
           onClick={() => setOpen(true)}
-          className={`w-full text-center py-1 text-[10px] text-ink-3 hover:text-ink-2 bg-field border-t border-line-strong${fold !== undefined ? ' rv' : ''}`}
+          className={`w-full text-center py-1 text-px10 text-ink-3 hover:text-ink-2 bg-field border-t border-line-strong${fold !== undefined ? ' rv' : ''}`}
           {...revealAttrs(fold, true)}
         >
           … {lines.length - CODE_COLLAPSE_LINES} more lines

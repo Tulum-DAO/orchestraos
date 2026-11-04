@@ -14,7 +14,7 @@ import { fetchLibraryLookup, fileTarget, isGone, librarySource, shortPath, type 
 
 // Above the thread, its composer and the drawer.
 let zTop = 90;
-const CHIP = 'inline-flex max-w-full items-center gap-1 rounded-md border border-current/15 px-1.5 py-0.5 font-mono text-[11.5px]';
+const CHIP = 'inline-flex max-w-full items-center gap-1 rounded-md border border-current/15 px-1.5 py-0.5 font-mono text-px11h';
 
 interface Win { path: string; target: FileTarget; x: number; y: number; z: number }
 

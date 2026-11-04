@@ -65,7 +65,7 @@ export default function AssistantInput({ onSend, onCancel, streaming, disabled }
           </button>
         )}
       </div>
-      <p className="text-[10px] text-tone-600 mt-1">⌘/Ctrl+Enter to send · read-only V1</p>
+      <p className="text-px10 text-tone-600 mt-1">⌘/Ctrl+Enter to send · read-only V1</p>
     </div>
   );
 }

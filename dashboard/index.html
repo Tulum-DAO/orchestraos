@@ -17,6 +17,11 @@
         if (c !== 'light' && c !== 'dark') c = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         if (c === 'dark') document.documentElement.classList.add('dark');
         document.querySelector('meta[name="theme-color"]').setAttribute('content', c === 'dark' ? '#0a0a0a' : '#ffffff');
+        // Text size (Settings › Display) before the first paint too, the same key and values as src/lib/displaySettings.ts.
+        try {
+          var t = parseFloat(localStorage.getItem('orchestra.display.textScale'));
+          if ([0.87, 1, 1.12, 1.25, 1.5].indexOf(t) >= 0) document.documentElement.style.setProperty('--ui-text-scale', String(t));
+        } catch (e) {}
       })();
     </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />

@@ -40,7 +40,7 @@ function Context({ body, extra }: { body?: string | null; extra?: ReactNode }) {
   return (
     <div className="space-y-2">
       {text && (
-        <div className="text-[13px] leading-relaxed text-card-foreground/85">
+        <div className="text-px13 leading-relaxed text-card-foreground/85">
           <Markdown text={more || !long ? text : previewText(text, SUMMARY_PREVIEW)} />
           {long && (
             <button type="button" onClick={() => setMore((v) => !v)} className="text-xs text-info hover:underline mt-0.5">

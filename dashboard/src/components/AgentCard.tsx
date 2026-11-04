@@ -381,12 +381,12 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               )}
               {agent.alive && onKill && onSpawn && confirmKill === 'restart' && (
                 <div className="flex items-center gap-2 px-3 py-2">
-                  <span className="text-[11px] text-tone-amber-400">Restart?</span>
+                  <span className="text-px11 text-tone-amber-400">Restart?</span>
                   <button onClick={() => { onKill(agent.id); setTimeout(() => onSpawn(agent.id), 3000); setShowMenu(false); setConfirmKill(null); logAction('agent.restart', agent.id); }} className="text-xs px-2 py-1 rounded bg-amber-500/25 text-tone-amber-400 hover:bg-amber-500/40 transition-colors font-medium">Yes</button>
                   <button onClick={() => setConfirmKill(null)} className="text-xs px-2 py-1 rounded bg-tone-800 text-tone-400 hover:bg-tone-700 transition-colors font-medium">No</button>
                 </div>
               )}
-              <div className="px-3 py-2 text-[10px] text-tone-600 border-t border-tone-800 mt-1">
+              <div className="px-3 py-2 text-px10 text-tone-600 border-t border-tone-800 mt-1">
                 <div>Tier: {agent.tier} · {machine}</div>
                 <div>Session: {agent.tmux_session || agent.id}</div>
               </div>
@@ -399,18 +399,18 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
         <TierBadge tier={agent.tier} />
         <span className={clsx(
-          'text-[11px] px-1.5 py-0.5 rounded font-medium',
+          'text-px11 px-1.5 py-0.5 rounded font-medium',
           getMachineBadgeStyle(machine, machineStatus)
         )}>
           {machine}
         </span>
         {(agent.tags || []).filter((t: string) => t.startsWith('client:')).map((t: string) => (
-          <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-violet-500/15 text-tone-violet-400">
+          <span key={t} className="text-px11 px-1.5 py-0.5 rounded font-medium bg-violet-500/15 text-tone-violet-400">
             {t.slice(7)}
           </span>
         ))}
         {(agent.tags || []).filter((t: string) => t.startsWith('owner:') && t !== 'owner:operator').map((t: string) => (
-          <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-cyan-500/15 text-tone-cyan-400">
+          <span key={t} className="text-px11 px-1.5 py-0.5 rounded font-medium bg-cyan-500/15 text-tone-cyan-400">
             {t.slice(6)}
           </span>
         ))}
@@ -419,7 +419,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       {/* Working on + live state */}
       <div className="mt-3">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wider text-tone-500">Working on:</span>
+          <span className="text-px11 uppercase tracking-wider text-tone-500">Working on:</span>
           {/* These badges keyed off `agent.live_state`, a field that appears
               NOWHERE in the API — zero hits across api/src, null on all 172
               rows — so Active/Waiting/Idle have never once rendered. Rebound to
@@ -437,7 +437,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
 
             return (
 
-              <span className={clsx('flex items-center gap-1 text-[10px] font-medium', st.text)}>
+              <span className={clsx('flex items-center gap-1 text-px10 font-medium', st.text)}>
 
                 <span className={clsx('w-1.5 h-1.5 rounded-full', st.dot)} />
 
@@ -474,7 +474,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
         <div className="flex items-center gap-2">
           {agent.alive && onKill && confirmKill === 'kill' && (
             <div className="flex items-center gap-1">
-              <span className="text-[10px] text-tone-red-400 mr-1">Kill?</span>
+              <span className="text-px10 text-tone-red-400 mr-1">Kill?</span>
               <button
                 onClick={() => { onKill(agent.id); logAction('agent.kill', agent.id, agent.name); setConfirmKill(null); }}
                 disabled={killing}
@@ -609,7 +609,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               </div>
             </div>
             {injectResult && (
-              <span className={clsx('text-[10px] mt-1 block', injectOk ? 'text-green-500' : 'text-tone-red-400')}>
+              <span className={clsx('text-px10 mt-1 block', injectOk ? 'text-green-500' : 'text-tone-red-400')}>
                 {injectResult}
               </span>
             )}
@@ -676,7 +676,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <TierBadge tier={agent.tier} />
-                    <span className="text-[11px] text-tone-500">{machine}</span>
+                    <span className="text-px11 text-tone-500">{machine}</span>
                   </div>
                 </div>
               </div>
@@ -687,7 +687,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 {agent.machine === 'vps' && (
                   <button
                     onClick={() => setShowAuthFlow(true)}
-                    className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-amber-500/10 text-tone-amber-400/80 hover:text-tone-amber-300 transition-colors"
+                    className="flex items-center gap-1 text-px11 px-2 py-1 rounded-md bg-amber-500/10 text-tone-amber-400/80 hover:text-tone-amber-300 transition-colors"
                     title="Re-authenticate Claude on VPS"
                   >
                     <KeyRound size={12} />
@@ -698,7 +698,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   <button
                     onClick={() => { setDevMode(false); logAction('agent.mode.chat', agent.id); }}
                     className={clsx(
-                      'text-[11px] px-2.5 py-1 transition-colors',
+                      'text-px11 px-2.5 py-1 transition-colors',
                       !devMode ? 'bg-tone-700 text-tone-100' : 'text-tone-500 hover:text-tone-300'
                     )}
                   >
@@ -707,7 +707,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   <button
                     onClick={openDevMode}
                     className={clsx(
-                      'text-[11px] px-2.5 py-1 transition-colors',
+                      'text-px11 px-2.5 py-1 transition-colors',
                       devMode ? 'bg-tone-green-800 text-tone-green-300' : 'text-tone-500 hover:text-tone-300'
                     )}
                   >
@@ -799,7 +799,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               <div className="flex items-center gap-2">
                 <FileText size={14} className="text-tone-400" />
                 <span className="text-sm font-semibold text-tone-200">{promptEditing ? 'Edit' : 'View'} Prompt — {agent.name || agent.id}</span>
-                {isProtected && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-400">read-only</span>}
+                {isProtected && <span className="text-px10 px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-400">read-only</span>}
               </div>
               <button onClick={() => setShowPromptModal(false)} aria-label="Close prompt viewer" title="Close prompt viewer" className="text-tone-500 hover:text-tone-300"><X size={16} /></button>
             </div>

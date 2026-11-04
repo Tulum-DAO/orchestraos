@@ -12,7 +12,7 @@ export default function HeadlessDevBanner({ dev }: { dev: HeadlessDev }) {
   const warn = b.tone === 'warn';
   return (
     <div role="status" aria-live="polite" data-headless-dev
-         className={`mx-3 mt-2 mb-1 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2 text-[13px] ${
+         className={`mx-3 mt-2 mb-1 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2 text-px13 ${
            warn ? 'border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100'
              : 'border-border bg-muted text-foreground'}`}>
       <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -24,8 +24,8 @@ export default function HeadlessDevBanner({ dev }: { dev: HeadlessDev }) {
           {b.actions.map((a, i) => (
             <button key={a.id} type="button" data-dev-action={a.id} onClick={() => dev.act(a.id)}
                     className={i === 0
-                      ? 'rounded-full bg-foreground px-3 py-1 text-[12.5px] font-medium text-background hover:opacity-90'
-                      : 'rounded-full border border-border px-3 py-1 text-[12.5px] font-medium text-foreground hover:bg-background'}>
+                      ? 'rounded-full bg-foreground px-3 py-1 text-px12h font-medium text-background hover:opacity-90'
+                      : 'rounded-full border border-border px-3 py-1 text-px12h font-medium text-foreground hover:bg-background'}>
               {a.label}
             </button>
           ))}

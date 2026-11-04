@@ -119,7 +119,7 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
   return (
     <div className="mt-1">
       <QuestionCard key={menuKey} title={isPermission ? 'Permission' : 'The agent is asking'}
-        context={menu.context ? <div className="text-[13px] font-mono break-words text-card-foreground/85">{menu.context}</div> : null}
+        context={menu.context ? <div className="text-px13 font-mono break-words text-card-foreground/85">{menu.context}</div> : null}
         parts={parts} onSubmit={submit} onDismiss={dismiss} dismissed={dismissed}
         report={{ id: card?.id ?? `menu:${agentId}`, kind: isPermission ? 'permission' : 'menu', from: agentId,
           summary: menu.context ?? null }} />

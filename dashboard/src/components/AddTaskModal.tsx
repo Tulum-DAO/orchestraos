@@ -138,14 +138,14 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
           <div className="grid grid-cols-2 gap-3">
             {/* Type */}
             <div>
-              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Type</label>
+              <label className="block text-px11 text-tone-500 mb-1 uppercase tracking-wider">Type</label>
               <div className="flex flex-wrap gap-1.5">
                 {TYPES.map(t => (
                   <button
                     key={t.value}
                     onClick={() => setType(t.value)}
                     className={clsx(
-                      'px-2.5 py-1 rounded text-[11px] font-medium transition-all',
+                      'px-2.5 py-1 rounded text-px11 font-medium transition-all',
                       type === t.value ? t.color + ' ring-1 ring-current' : 'bg-tone-800 text-tone-500 hover:text-tone-300'
                     )}
                   >
@@ -157,7 +157,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
             {/* Priority */}
             <div>
-              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Priority</label>
+              <label className="block text-px11 text-tone-500 mb-1 uppercase tracking-wider">Priority</label>
               <select
                 value={priority}
                 onChange={e => setPriority(e.target.value)}
@@ -171,7 +171,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
             {/* Client */}
             <div>
-              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Client</label>
+              <label className="block text-px11 text-tone-500 mb-1 uppercase tracking-wider">Client</label>
               <select
                 value={client}
                 onChange={e => setClient(e.target.value)}
@@ -186,7 +186,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
 
             {/* Assignee */}
             <div>
-              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Route to</label>
+              <label className="block text-px11 text-tone-500 mb-1 uppercase tracking-wider">Route to</label>
               <div className="flex items-center gap-2">
                 <input
                   value={assignee}
@@ -196,13 +196,13 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
                 />
               </div>
               {assigneeName && assignee && (
-                <p className="text-[10px] text-tone-500 mt-0.5">{assigneeName}</p>
+                <p className="text-px10 text-tone-500 mt-0.5">{assigneeName}</p>
               )}
             </div>
 
             {/* Due date */}
             <div className="col-span-2">
-              <label className="block text-[11px] text-tone-500 mb-1 uppercase tracking-wider">Due date (optional)</label>
+              <label className="block text-px11 text-tone-500 mb-1 uppercase tracking-wider">Due date (optional)</label>
               <input
                 type="date"
                 value={dueDate}

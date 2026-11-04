@@ -134,20 +134,20 @@ function agentInitial(name: string): string {
 function ChannelBadge({ channel }: { channel: string }) {
   if (channel === 'telegram') {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-tone-blue-900/60 text-tone-blue-300 border border-tone-blue-800/50">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-px10 font-medium bg-tone-blue-900/60 text-tone-blue-300 border border-tone-blue-800/50">
         <Smartphone size={10} /> Telegram
       </span>
     );
   }
   if (channel === 'voice') {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-tone-purple-900/60 text-tone-purple-300 border border-tone-purple-800/50">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-px10 font-medium bg-tone-purple-900/60 text-tone-purple-300 border border-tone-purple-800/50">
         Voice
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-tone-800 text-tone-400 border border-tone-700">
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-px10 font-medium bg-tone-800 text-tone-400 border border-tone-700">
       <Monitor size={10} /> Dashboard
     </span>
   );
@@ -227,7 +227,7 @@ function ThreadPanel({
             <div key={msg.id} className="flex gap-3 px-4 py-3">
               <div
                 className={clsx(
-                  'w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-tone-white shrink-0 mt-0.5',
+                  'w-6 h-6 rounded-full flex items-center justify-center text-px10 font-bold text-tone-white shrink-0 mt-0.5',
                   agentColor(msg.from_agent)
                 )}
                 title={msg.from_agent}
@@ -242,7 +242,7 @@ function ThreadPanel({
                   {msg.to_agent && (
                     <span className="text-xs text-tone-600">to {msg.to_agent}</span>
                   )}
-                  <span className="text-[10px] text-tone-700 font-mono ml-auto">
+                  <span className="text-px10 text-tone-700 font-mono ml-auto">
                     {formatTime(msg.created_at)}
                   </span>
                 </div>
@@ -332,7 +332,7 @@ function ConversationCard({ conv }: { conv: Conversation }) {
               <StatusDot status={conv.status} />
               <ChannelBadge channel={conv.channel} />
               {conv.tenant_id && (
-                <span className="text-[10px] text-tone-600 font-mono">
+                <span className="text-px10 text-tone-600 font-mono">
                   {conv.tenant_id}
                 </span>
               )}
@@ -342,12 +342,12 @@ function ConversationCard({ conv }: { conv: Conversation }) {
             {participants.length > 0 && (
               <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                 {participants.slice(0, 4).map(p => (
-                  <span key={p} className="text-[10px] text-tone-500 bg-tone-800 px-1.5 py-0.5 rounded">
+                  <span key={p} className="text-px10 text-tone-500 bg-tone-800 px-1.5 py-0.5 rounded">
                     {p}
                   </span>
                 ))}
                 {participants.length > 4 && (
-                  <span className="text-[10px] text-tone-600">+{participants.length - 4} more</span>
+                  <span className="text-px10 text-tone-600">+{participants.length - 4} more</span>
                 )}
               </div>
             )}
@@ -360,11 +360,11 @@ function ConversationCard({ conv }: { conv: Conversation }) {
 
           {/* Right meta */}
           <div className="flex flex-col items-end gap-1 shrink-0 text-right">
-            <span className="text-[10px] text-tone-600 font-mono whitespace-nowrap">
+            <span className="text-px10 text-tone-600 font-mono whitespace-nowrap">
               {relativeTime(conv.last_msg_at || conv.updated_at)}
             </span>
             {conv.iteration_count > 0 && (
-              <span className="text-[10px] text-tone-700">{conv.iteration_count} msgs</span>
+              <span className="text-px10 text-tone-700">{conv.iteration_count} msgs</span>
             )}
             {expanded ? (
               <ChevronUp size={14} className="text-tone-600" />
@@ -405,7 +405,7 @@ function OperatorMessageCard({ msg }: { msg: any }) {
           <span className="text-xs font-semibold text-tone-300">{msg.from}</span>
           {msg.to && <span className="text-xs text-tone-600">to {msg.to}</span>}
           <ChannelBadge channel={msg.channel} />
-          <span className="text-[10px] text-tone-700 font-mono ml-auto">
+          <span className="text-px10 text-tone-700 font-mono ml-auto">
             {relativeTime(msg.created_at)}
           </span>
         </div>

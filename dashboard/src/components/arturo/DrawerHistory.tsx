@@ -32,6 +32,7 @@ import {
 } from '../../lib/drawerHistory';
 import { CardSurface, useScreenCard } from '../../lib/threadKit/useScreenCard';
 import type { ScreenCard } from '../../lib/screenCards';
+import { useInstallTimeZone } from '../../stores/serverSettings';
 import './drawerHistory.css';
 
 // The drawer slides out in 200ms; the chat's card is scrolled to once the drawer's copy of it is gone.
@@ -207,6 +208,7 @@ function ResolvedCard({ item, now, onAnswered, onGoTo }: {
   item: HistoryItem; now: number; onAnswered: () => void; onGoTo: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const tz = useInstallTimeZone();
   const outcome = item.outcome ?? 'answered';
   const multi = item.answer.length > 1 || !!item.answer[0]?.question;
   // A terminal menu's record is one line in the chat too: there is no fuller card to open.
@@ -233,7 +235,7 @@ function ResolvedCard({ item, now, onAnswered, onGoTo }: {
           </ol>
         ) : <p className="dh-answer" data-history-answer>{item.answer[0].text}</p>
       )}
-      <p className="dh-meta dh-who">{resolvedLine(item, now)}</p>
+      <p className="dh-meta dh-who">{resolvedLine(item, now, tz)}</p>
       {(expandable || item.inChat) && (
         <div className="dh-actions">
           {expandable && (

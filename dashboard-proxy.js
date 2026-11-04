@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { wsOriginDecision } = require("./dashboard-ws-origin");
 const { listedLoginShell } = require("./dashboard-login-shells");
+const { allowedLogins } = require("./dashboard-tailscale-users");
 let pty = null;
 try { pty = require("node-pty"); } catch (e) { console.warn("dashboard-proxy: node-pty not installed — web terminal disabled (npm install node-pty to enable)"); }
 
@@ -133,7 +134,8 @@ function tailscaleOperator(req) {
   if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer)) return false;
   let raw = process.env.ORCHESTRA_TAILSCALE_USERS || "";
   if (!raw) { try { raw = fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "state", "tailscale-users"), "utf8"); } catch { raw = ""; } }
-  const allowed = raw.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter((s) => s && !s.startsWith("#"));
+  // `login [role]` per line (Settings phase 1): only a word with an @ is a login (dashboard-tailscale-users.js).
+  const allowed = allowedLogins(raw);
   const login = String(req.headers["tailscale-user-login"] || "").trim().toLowerCase();
   return !!login && allowed.includes(login);
 }

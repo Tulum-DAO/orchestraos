@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { agentCallsDefault, agentCallsDefaultOn, writeAgentCallsDefault, writeAgentCallSwitch, agentCallSwitch } from './agentCallGate.js';
 
 const CASES = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'contract', 'agent-call-gate.json'), 'utf-8')).cases as {
   name: string; seat: string; switch_on: unknown; headless: boolean; registry_runtime: string | null; dev: boolean; engine: string | null; expected: boolean;
@@ -92,4 +93,26 @@ test('a slow engine read does not hold the settings up', async () => {
   assert.equal(v, 'unreachable');
   assert.ok(Date.now() - t0 < 400);
   forgetLiveEngine();
+});
+
+const callsDir = () => { const d = mkdtempSync(join(tmpdir(), 'agent-calls-')); mkdirSync(join(d, 'state')); return d; };
+const callsDoc = (d: string) => JSON.parse(readFileSync(join(d, 'state', 'agent-calls.json'), 'utf-8'));
+
+test('new agents take calls unless the install default says off; the seats are kept', () => {
+  const d = callsDir();
+  assert.equal(agentCallsDefault(d), null);
+  assert.equal(agentCallsDefaultOn(d), true);
+  writeFileSync(join(d, 'state', 'agent-calls.json'), JSON.stringify({ seats: { a: { on: true, ack_after_s: 3 } } }));
+  writeAgentCallsDefault(d, false);
+  assert.equal(agentCallsDefaultOn(d), false);
+  assert.deepEqual(callsDoc(d), { seats: { a: { on: true, ack_after_s: 3 } }, default: { on: false } });
+});
+
+test('a seat\'s switch is written with its other options kept', () => {
+  const d = callsDir();
+  writeFileSync(join(d, 'state', 'agent-calls.json'), JSON.stringify({ seats: { s: { ack_after_s: 5, mode: 'forced' } } }));
+  writeAgentCallSwitch(d, 's', true);
+  writeAgentCallSwitch(d, 'new', false);
+  assert.deepEqual(callsDoc(d).seats, { s: { ack_after_s: 5, mode: 'forced', on: true }, new: { on: false, ack_after_s: 3 } });
+  assert.equal(agentCallSwitch(d, 's'), true);
 });

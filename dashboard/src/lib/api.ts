@@ -1,4 +1,5 @@
 import { operatorUserId } from './runtimeConfig';
+import { setInstallRole } from './myRole';
 const BASE = '/api';
 
 function handleAuthError(res: Response, path: string) {
@@ -120,7 +121,8 @@ export const fetchProjectFile = (slug: string, path: string) =>
 export const projectFileRawUrl = (slug: string, path: string) =>
   `${BASE}/projects/${encodeURIComponent(slug)}/files/content?raw=1&path=${encodeURIComponent(path)}`;
 
-export const fetchMe = () => get<{ username: string; role: string; allowed_agents: string | string[] }>('/me');
+export const fetchMe = () => get<{ username: string; role: string; install_role?: string; allowed_agents: string | string[] }>('/me')
+  .then((me) => { setInstallRole(me.install_role); return me; });
 export const fetchAgents = () => get('/agents');
 
 /** One message another agent (or a service) sent this agent, in full: the body behind a "Message from" line. */

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { cleanPrefsChange, readPrefs, writePrefs, isAgentId } from './agentPrefs.js';
+import { writeUserPref } from './userPrefs.js';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'agent-prefs-'));
 
@@ -105,4 +106,17 @@ test('a client cannot set the record itself', () => {
   const d = dir();
   writePrefs(d, 'operator', 'dev-demo', { style: 'dev', style_before_dev: 'modern' } as any);
   assert.equal(readPrefs(d, 'operator', 'dev-demo').style_before_dev, 'bubbles', 'the server records what it saw');
+});
+
+test('an agent with no style chosen uses the person\'s default chat style; Arturo stays Modern', () => {
+  const d = dir();
+  writeUserPref(d, 'operator', 'default_chat_style', 'modern');
+  assert.equal(readPrefs(d, 'operator', 'dev-demo').style, 'modern');
+  assert.equal(readPrefs(d, 'operator', 'dev-demo').style_before_dev, 'modern');
+  assert.equal(readPrefs(d, 'sample-user', 'dev-demo').style, 'bubbles', 'another person keeps the built-in default');
+  writeUserPref(d, 'operator', 'default_chat_style', 'bubbles');
+  assert.equal(readPrefs(d, 'operator', 'arturo').style, 'modern');
+  writePrefs(d, 'operator', 'dev-demo', { style: 'bubbles' });
+  writeUserPref(d, 'operator', 'default_chat_style', 'modern');
+  assert.equal(readPrefs(d, 'operator', 'dev-demo').style, 'bubbles', 'a chosen style always wins');
 });

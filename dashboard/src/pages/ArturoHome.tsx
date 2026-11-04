@@ -62,9 +62,11 @@ import { LookPickerPopover } from '../components/avatar/LookPicker';
 import { useAgentRecord, setArturoActivity, setArturoProvider, ARTURO_ID } from '../components/avatar/agentState';
 import { arturoProvider } from '../lib/avatarStatus';
 import { applyAssistantName, assistantName, named, useAssistantName } from '../lib/assistantName';
-import { canChangeLook, showsLookCard, readDismissed, writeDismissed } from '../lib/avatarLooks';
+import { useInstallAdmin } from '../lib/myRole';
+import { showsLookCard, readDismissed, writeDismissed } from '../lib/avatarLooks';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
 import { SidebarMenuButton } from '../components/SidebarMenuButton';
+import { useTextAvatar } from '../lib/deviceSettings';
 
 type Turn = { id: number; seq?: number; role: 'user' | 'arturo'; text: string; tools?: string[]; images?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
@@ -124,7 +126,8 @@ export default function ArturoHome() {
   const arturoRec = useAgentRecord(ARTURO_ID);
   const phoneBar = useSyncExternalStore(subscribePhoneBar, isPhoneBar, () => false);
   const aname = useAssistantName();
-  const canSaveLook = canChangeLook();
+  const lookFace = useTextAvatar(24);
+  const canSaveLook = useInstallAdmin();   // subscribed: /api/me answering after the first render unlocks it
   const [pickerOpen, setPickerOpen] = useState(false);
   const [lookDismissed, setLookDismissed] = useState(() => readDismissed(lsStore(), ARTURO_ID));
   const showLookCard = showsLookCard({ chosen: arturoRec.chosen, canSave: canSaveLook, dismissed: lookDismissed });
@@ -544,7 +547,7 @@ export default function ArturoHome() {
   const lookCard = showLookCard ? (
     <div key="lookcard" className="arturo-lookcard la-on-card">
       <button type="button" className="arturo-lookcard-open" onClick={() => setPickerOpen(true)}>
-        <AgentAvatar agentId={ARTURO_ID} role="activity" size={24} label={aname} />
+        <AgentAvatar agentId={ARTURO_ID} role="activity" size={lookFace} label={aname} />
         <span>Pick a look for {aname}</span>
         <ChevronRight size={16} aria-hidden />
       </button>
@@ -575,7 +578,7 @@ export default function ArturoHome() {
         <div className="arturo-header-end">
           <div ref={registerEndSlot ?? undefined} data-header-end-slot className="touch-compact flex items-center" />
           {/* The gear toggles Arturo's slide-out panel (Overview, Memory, Activity). */}
-          <button ref={gearRef} className="arturo-glyph" aria-label="Open brain" aria-expanded={panelOpen} aria-controls="arturo-panel"
+          <button ref={gearRef} className="arturo-glyph" aria-label={`${aname}'s panel`} aria-expanded={panelOpen} aria-controls="arturo-panel"
                   onClick={() => setPanelOpen((o) => !o)}>
             <Settings size={22} strokeWidth={2.2} absoluteStrokeWidth />
           </button>
@@ -597,8 +600,8 @@ export default function ArturoHome() {
                          glanceKey={draft} glanceAt={HERO_GLANCE_AT}
                          className="arturo-hero-face la-on-canvas" label={aname} />
             <div className="greet serif">{greeting(name)}</div>
-            {starting && <div className="tools" style={{ color: 'rgba(var(--ink), var(--t45))', fontSize: 13 }}>{STARTING_TEXT}</div>}
-            {arturoDisabled && <div className="tools" style={{ color: 'var(--grey)', fontSize: 13 }}>{named(ARTURO_DISABLED_TEXT, aname)}</div>}
+            {starting && <div className="tools" style={{ color: 'rgba(var(--ink), var(--t45))', fontSize: 'calc(13px * var(--ui-text-scale, 1))' }}>{STARTING_TEXT}</div>}
+            {arturoDisabled && <div className="tools" style={{ color: 'var(--grey)', fontSize: 'calc(13px * var(--ui-text-scale, 1))' }}>{named(ARTURO_DISABLED_TEXT, aname)}</div>}
             {lookCard}
           </div>
         ) : (

@@ -52,6 +52,7 @@ import { jobsByToolUse } from '../../lib/agentJobs';
 import { agentRows, type LiveText } from '../../lib/threadKit/view';
 import { stableLiveBlocks } from '../../lib/threadKit/liveBlocks';
 import { findReveal } from '../../lib/revealStore';
+import { motionReduced } from '../../lib/motion';
 import { useChatStyle } from '../../lib/agentPrefs';
 
 const NO_PENDING: PendingSend[] = [];
@@ -91,7 +92,7 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
   // One rule with every other surface: stale -> grey, updating -> dimmed last-known colour.
   const s = styleForAgentState(feed, STATE_STYLE[state] || STATE_STYLE.unknown);
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] ${s.text}`}>
+    <span className={`inline-flex items-center gap-1.5 text-px11 ${s.text}`}>
       <span className={`w-2 h-2 rounded-full ${s.dot}`} />
       {s.label}
     </span>
@@ -328,7 +329,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     if (findReveal(lastKey)) return;
     const mark = columnRef.current?.querySelector(`[data-row-key="${CSS.escape(lastKey)}"]`);
     const el = mark?.nextElementSibling as HTMLElement | null;
-    if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!el || motionReduced()) return;
     el.animate([{ transform: `translateY(${REPLY_RISE_A * WORKING_ROW_AVATAR}px)`, opacity: 0.35 }, { transform: 'none', opacity: 1 }],
       { duration: 165, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
   }, [lastKey]);
@@ -406,7 +407,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {!compact && <div ref={sentinelRef} data-anchor-skip data-older-sentinel aria-hidden className="h-0 shrink-0" />}
         {!compact && <OlderPagesNote show={paged.loading} />}
         <div ref={columnRef}
-          className={compact ? undefined : ["mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5", modern ? 'kit-modern' : ''].join(' ').trim()}
+          className={compact ? undefined : ["mt-auto w-full max-w-[calc(860px+var(--ui-col-extra,0px))] mx-auto px-4 pt-4 ui-feed-gap", modern ? 'kit-modern' : ''].join(' ').trim()}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
         >
         {loading ? (
@@ -427,7 +428,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           </ReactionsContext.Provider>
         )}
         {focusNotice && (
-          <div role="status" className="sticky z-[5] bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-tone-300 px-3 py-1.5 rounded-full border border-tone-700 bg-tone-900/95 shadow">
+          <div role="status" className="sticky z-[5] bottom-2 mx-auto w-fit max-w-[92%] text-px11 text-tone-300 px-3 py-1.5 rounded-full border border-tone-700 bg-tone-900/95 shadow">
             {focusNotice}
           </div>
         )}
@@ -450,7 +451,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {live && st === 'working' && !hideStatusBar && (
           <div className="flex items-center gap-2 px-1 py-1">
             <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-            <span className="text-[11px] text-tone-500 italic">agent is working…</span>
+            <span className="text-px11 text-tone-500 italic">agent is working…</span>
           </div>
         )}
         </div>
@@ -465,7 +466,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       <div className="flex items-center gap-3 px-3 py-1.5 border-t border-tone-800/50">
         <StatePill state={st} feed={feed} />
         {strandedText && (
-          <span className="text-[10px] text-yellow-500/90 truncate">
+          <span className="text-px10 text-yellow-500/90 truncate">
             ✎ unsent: "{strandedText.slice(0, 60)}"
           </span>
         )}

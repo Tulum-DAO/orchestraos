@@ -33,7 +33,7 @@ export function ArturoButton({ small = false }: { small?: boolean } = {}) {
       {/* 'drawer': his look and badge, animated, no status dot; selected = the eyes wander and follow the pointer */}
       <AgentAvatar agentId={ARTURO_ID} role="drawer" size={size} selected label={aname} className="pointer-events-none" />
       {exchanges > 0 && !open && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-tone-200 text-tone-900 text-[10px] leading-4 font-semibold text-center">
+        <span className="absolute -top-0.5 -right-0.5 min-w-4 min-h-4 px-1 rounded-full bg-tone-200 text-tone-900 text-px10 leading-[calc(1rem*var(--ui-text-scale,1))] font-semibold text-center">
           {exchanges}
         </span>
       )}

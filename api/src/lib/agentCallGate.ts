@@ -71,3 +71,53 @@ export async function liveEngine(waitMs = 1500, now = Date.now(), fetcher: () =>
 
 /** Tests: forget the cached engine. */
 export function forgetLiveEngine(): void { engineCache = null; inflight = null; }
+
+// ── Writes (Settings › Voice & calls "New agents take calls"; the agent panel's "Takes calls") ─────────────────────
+// Same file and shape the voice side and scripts/headless_adopt.py read; every other key and option is kept.
+const callsFile = (dataDir: string) => path.join(dataDir, 'state', 'agent-calls.json');
+type CallsDoc = Record<string, unknown> & { seats: Record<string, Record<string, unknown>>; default?: Record<string, unknown> };
+
+function readCallsDoc(dataDir: string): CallsDoc {
+  try {
+    const d = JSON.parse(fs.readFileSync(callsFile(dataDir), 'utf-8'));
+    if (d && typeof d === 'object' && !Array.isArray(d)) {
+      const seats = d.seats && typeof d.seats === 'object' && !Array.isArray(d.seats) ? d.seats : {};
+      return { ...d, seats };
+    }
+  } catch { /* none yet */ }
+  return { seats: {} };
+}
+
+function writeCallsDoc(dataDir: string, doc: CallsDoc): void {
+  const f = callsFile(dataDir);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = path.join(path.dirname(f), `.${path.basename(f)}.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n');
+  fs.renameSync(tmp, f);
+}
+
+/** The install default as stored: true, false, or null when none is set. */
+export function agentCallsDefault(dataDir: string): boolean | null {
+  const d = readCallsDoc(dataDir).default;
+  return d && typeof d === 'object' && typeof d.on === 'boolean' ? d.on : null;
+}
+
+/** New agents take calls unless the install default says off (today's behaviour: headless_adopt turns them on). */
+export function agentCallsDefaultOn(dataDir: string): boolean {
+  return agentCallsDefault(dataDir) !== false;
+}
+
+export function writeAgentCallsDefault(dataDir: string, on: boolean): void {
+  const doc = readCallsDoc(dataDir);
+  doc.default = { ...(doc.default && typeof doc.default === 'object' ? doc.default : {}), on };
+  writeCallsDoc(dataDir, doc);
+}
+
+export function writeAgentCallSwitch(dataDir: string, seat: string, on: boolean): void {
+  const doc = readCallsDoc(dataDir);
+  const row: Record<string, unknown> = { ...(doc.seats[seat] && typeof doc.seats[seat] === 'object' ? doc.seats[seat] : {}) };
+  row.on = on;
+  if (!('ack_after_s' in row)) row.ack_after_s = 3;
+  doc.seats[seat] = row;
+  writeCallsDoc(dataDir, doc);
+}

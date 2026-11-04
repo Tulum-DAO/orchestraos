@@ -15,6 +15,7 @@ import { describeSendState, sendToAgent } from '../../lib/agentSend';
 import { useCompactionNotices } from '../../stores/compactionNotices';
 import { checkCompactAt, fetchSeatSettings, saveSeatSettings, showsRotationSettings, stepCompactAt,
          COMPACT_MAX, COMPACT_MIN, type SeatSettings, type SettingsChange } from '../../lib/seatSettings';
+import { Switch } from './PanelRows';
 import './rotationSettings.css';
 
 type Status = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; text: string };
@@ -148,14 +149,5 @@ export function RotationSettings({ agentId, isArturo }: { agentId: string; isArt
         : status.kind === 'saved' ? <p className="rotation-status" role="status" data-rotation-saved>Saved. Applies from the next turn.</p>
         : null}
     </div>
-  );
-}
-
-function Switch({ on, labelledBy, disabled, onToggle, data }: { on: boolean; labelledBy: string; disabled: boolean; onToggle: () => void; data: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-labelledby={labelledBy} disabled={disabled} onClick={onToggle}
-            className={`rotation-switch${on ? ' is-on' : ''}`} data-rotation-switch={data}>
-      <span className="rotation-switch-knob" />
-    </button>
   );
 }

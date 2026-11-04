@@ -16,6 +16,7 @@
  *   event: status   data: { seat, status, ts, runtime }   — one per changed seat
  *   event: gone     data: { seat }                          — seat left the file
  *   event: step     data: { seat, text, ts }               — what the seat is doing now ('' = nothing)
+ *   event: setting  data: { key, value, changedBy, changedAt }  — an Everyone setting changed (routes/settings.ts)
  *
  * HEADLESS SEATS are left out (<data dir>/state/headless-seats.json, scripts/headless_switch.py): telemetryd
  * reads a seat from its pane, and a headless seat's pane holds its supervisor, not the agent, so its words
@@ -218,4 +219,11 @@ export function stopStatusStream(): void {
     void stepWatcher.close();
     stepWatcher = null;
   }
+}
+
+export interface SettingChangeEvent { key: string; value: unknown; changedBy: string; changedAt: string }
+
+/** Settings: an Everyone change, so every other open dashboard shows it without a reload. */
+export function broadcastSetting(change: SettingChangeEvent): void {
+  send(`event: setting\ndata: ${JSON.stringify(change)}\n\n`);
 }

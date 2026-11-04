@@ -59,9 +59,9 @@ export function PluginCard({ plugin, agentSkills, agents, onAssign, onUnassign }
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-tone-100 font-semibold truncate">{plugin.name}</span>
-                <span className="text-[10px] text-tone-600">v{plugin.version}</span>
+                <span className="text-px10 text-tone-600">v{plugin.version}</span>
               </div>
-              <span className={clsx('text-[10px] font-medium px-1.5 py-0.5 rounded-full', MARKETPLACE_COLORS[plugin.marketplace] || 'bg-tone-800 text-tone-500')}>
+              <span className={clsx('text-px10 font-medium px-1.5 py-0.5 rounded-full', MARKETPLACE_COLORS[plugin.marketplace] || 'bg-tone-800 text-tone-500')}>
                 {plugin.marketplace.replace('-marketplace', '').replace('claude-', '')}
               </span>
             </div>
@@ -69,7 +69,7 @@ export function PluginCard({ plugin, agentSkills, agents, onAssign, onUnassign }
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs text-tone-500">{plugin.skills.length} skills</span>
             {assignedAgentCount > 0 && (
-              <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-tone-green-400">
+              <span className="text-px11 px-1.5 py-0.5 rounded-full bg-green-500/15 text-tone-green-400">
                 {assignedAgentCount} agents
               </span>
             )}
@@ -83,7 +83,7 @@ export function PluginCard({ plugin, agentSkills, agents, onAssign, onUnassign }
         <div className="border-t border-tone-800 p-5 space-y-4">
           {/* Skills list */}
           <div>
-            <span className="text-[11px] uppercase tracking-wider text-tone-600 block mb-2">Skills ({plugin.skills.length})</span>
+            <span className="text-px11 uppercase tracking-wider text-tone-600 block mb-2">Skills ({plugin.skills.length})</span>
             <div className="space-y-2">
               {plugin.skills.map(skill => (
                 <div key={skill.id} className="p-3 rounded-lg bg-tone-800/50 border border-tone-800">
@@ -93,13 +93,13 @@ export function PluginCard({ plugin, agentSkills, agents, onAssign, onUnassign }
                   </div>
                   <p className="text-xs text-tone-500 mt-1">{skill.description}</p>
                   {skill.trigger && (
-                    <p className="text-[10px] text-tone-600 mt-1 italic">Trigger: {skill.trigger}</p>
+                    <p className="text-px10 text-tone-600 mt-1 italic">Trigger: {skill.trigger}</p>
                   )}
                   {/* Agents with this skill */}
                   {Object.entries(agentSkills).filter(([, skills]) => skills.includes(skill.id)).length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
                       {Object.entries(agentSkills).filter(([, skills]) => skills.includes(skill.id)).map(([agentId]) => (
-                        <span key={agentId} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-tone-700 text-tone-300">
+                        <span key={agentId} className="inline-flex items-center gap-1 text-px10 px-1.5 py-0.5 rounded bg-tone-700 text-tone-300">
                           {agentId}
                           <button onClick={(e) => { e.stopPropagation(); onUnassign(skill.id, agentId); }} className="text-tone-500 hover:text-tone-red-400">
                             <X size={10} />
@@ -116,7 +116,7 @@ export function PluginCard({ plugin, agentSkills, agents, onAssign, onUnassign }
           {/* Assign skill to agent */}
           {plugin.skills.length > 0 && (
             <div className="pt-3 border-t border-tone-800">
-              <span className="text-[11px] uppercase tracking-wider text-tone-600 block mb-2">Assign to Agent</span>
+              <span className="text-px11 uppercase tracking-wider text-tone-600 block mb-2">Assign to Agent</span>
               <div className="flex items-center gap-2">
                 <select value={selectedSkill} onChange={(e) => setSelectedSkill(e.target.value)}
                   className="flex-1 bg-tone-800 border border-tone-700 text-tone-300 text-sm rounded-lg px-2 py-1.5 focus:outline-none">

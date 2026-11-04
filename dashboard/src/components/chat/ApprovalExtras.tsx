@@ -68,7 +68,7 @@ export default function ApprovalExtras({ item, expanded, onToggle }: { item: App
       )}
       {item.rule_text && (
         <div className="border border-border rounded-lg px-3 py-2">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Rule that will be added</p>
+          <p className="text-px10 text-muted-foreground uppercase tracking-wider mb-1">Rule that will be added</p>
           <p className="text-xs font-mono leading-relaxed">{item.rule_text}</p>
         </div>
       )}

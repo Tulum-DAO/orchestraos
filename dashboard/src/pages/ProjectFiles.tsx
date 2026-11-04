@@ -135,10 +135,10 @@ export default function ProjectFiles() {
                       {/* who made it: beside the name on a wide screen, under it on a phone so the candidates fit */}
                       <span className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center sm:gap-2">
                         <span className="truncate sm:flex-1">{fname}</span>
-                        {by && <span className={clsx('text-[11px] truncate sm:max-w-[45%]', entry?.attribution === 'agent' ? 'text-tone-400' : 'text-tone-500 italic')}
+                        {by && <span className={clsx('text-px11 truncate sm:max-w-[45%]', entry?.attribution === 'agent' ? 'text-tone-400' : 'text-tone-500 italic')}
                                      title={by} data-made-by={entry?.attribution}>{by}</span>}
                       </span>
-                      {unfiled.has(f.path) && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-300 shrink-0">unfiled</span>}
+                      {unfiled.has(f.path) && <span className="text-px10 px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-300 shrink-0">unfiled</span>}
                       <span className="text-xs text-tone-600 shrink-0">{fmtSize(f.size)}</span>
                     </button>
                   );

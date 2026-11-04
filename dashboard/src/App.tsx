@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DashboardLayout } from './layouts/DashboardLayout';
 import { RouteErrorBoundary } from './components/RouteErrorBoundary';
@@ -25,18 +26,41 @@ import ArturoHome from './pages/ArturoHome';
 import { ASSISTANT_V2_ENABLED } from './lib/assistant/config';
 import { indexPage } from './lib/features';
 import NotFound from './components/NotFound';
+import { SettingsShell } from './components/settings/SettingsShell';
+import { useOpenSettings } from './components/settings/useOpenSettings';
+import { backgroundPath, isMacPlatform, isSettingsShortcut, settingsSectionOf, settingsStateOf } from './lib/settingsRoute';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchInterval: 10_000, staleTime: 5_000 } }
 });
 
 
-export default function App() {
+/** Every route, plus Settings drawn OVER the page it was opened from (the "background location"): while /settings/… is
+ *  showing, the routes below keep rendering the page behind it, so opening Settings never unloads that page. */
+function AppRoutes() {
+  const location = useLocation();
+  const section = settingsSectionOf(location.pathname);
+  const inSettings = section !== undefined;
+  const nav = settingsStateOf(location.state);
+  // A deep link (/settings/voice typed or reloaded with no page behind it) shows the home page behind: the index
+  // route itself when it is a page, else where it redirects, since a <Navigate> behind Settings would close it.
+  const pageLocation = !inSettings ? location : nav.settingsBg ? backgroundPath(nav) : indexPage() === 'arturo' ? '/' : '/overview';
+  const openSettings = useOpenSettings();
+  // ⌘, on a Mac, Ctrl+, elsewhere.
+  useEffect(() => {
+    const mac = isMacPlatform(navigator.platform || '');
+    const onKey = (e: KeyboardEvent) => {
+      if (!isSettingsShortcut(e, mac)) return;
+      e.preventDefault();
+      if (settingsSectionOf(window.location.pathname) === undefined) openSettings('general');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openSettings]);
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <RouteErrorBoundary label="app">
-        <Routes>
+    <>
+      <RouteErrorBoundary label="app">
+        <Routes location={pageLocation}>
           {/* Internal dashboard */}
           <Route element={<DashboardLayout />}>
             {/* Arturo home is the MAIN page, inside the same shell as every other page so the sidebar
@@ -66,7 +90,18 @@ export default function App() {
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
-        </RouteErrorBoundary>
+      </RouteErrorBoundary>
+      {/* Its own boundary: a throw inside Settings shows there and never unmounts the app behind it. */}
+      {inSettings && <RouteErrorBoundary label="settings"><SettingsShell section={section} /></RouteErrorBoundary>}
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AppRoutes />
       </BrowserRouter>
     </QueryClientProvider>
   );

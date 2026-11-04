@@ -70,7 +70,7 @@ export function ReportSheet({ isOpen, onClose, agentId }: ReportSheetProps) {
               className={`text-left rounded-xl border px-3 py-2 min-h-[52px] transition-colors ${kind === k.kind ? 'border-red-500/60 bg-red-500/10' : 'border-border hover:bg-muted'}`}
             >
               <div className="text-sm font-medium">{k.label}</div>
-              <div className="text-[11px] text-muted-foreground">{k.hint}</div>
+              <div className="text-px11 text-muted-foreground">{k.hint}</div>
             </button>
           ))}
         </div>

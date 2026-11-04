@@ -25,7 +25,7 @@ test('one bubble, one body: the thread and the call share them, nobody keeps a c
   assert.match(src('components/kit/ThreadView.tsx'), /<UserWords skin="modern">/);
   assert.match(src('components/chat/TranscriptCards.tsx'), /className=\{BUBBLES_USER\}/);
   assert.match(src('components/kit/Markdown.tsx'), /skin === 'bubbles' \? BUBBLES_BODY : ''/);
-  assert.ok(BUBBLES_BODY.includes('text-[13px]'));
+  assert.ok(BUBBLES_BODY.includes('text-px13'));
 });
 
 test("an agent call's turns use the shared turns in its skin; Bubbles shows no names; Arturo's card is unchanged", () => {
@@ -43,7 +43,7 @@ test("an agent call's turns use the shared turns in its skin; Bubbles shows no n
 });
 
 test('an agent reply is a bubble again (Bubbles): bordered card on the left, its corner toward the agent', () => {
-  for (const c of ['rounded-2xl', 'rounded-tl-sm', 'border', 'border-border', 'bg-card', 'text-card-foreground', 'px-3.5', 'py-2', 'text-[13px]', 'leading-relaxed', 'break-words', 'min-w-0']) {
+  for (const c of ['rounded-2xl', 'rounded-tl-sm', 'border', 'border-border', 'bg-card', 'text-card-foreground', 'px-3.5', 'py-2', 'text-px13', 'leading-relaxed', 'break-words', 'min-w-0']) {
     assert.ok(BUBBLES_AGENT.split(' ').includes(c), `agent bubble has ${c}`);
   }
   // the bubble lives INSIDE MessageText, so the streaming overlay and the finished reply share it
@@ -55,7 +55,7 @@ test('an agent reply is a bubble again (Bubbles): bordered card on the left, its
 });
 
 test('both bubbles: 85% of the column up to 560px; a table or fenced code may widen to 85%', () => {
-  assert.equal(BUBBLES_WIDTH, 'max-w-[min(85%,560px)]');
+  assert.equal(BUBBLES_WIDTH, 'max-w-[min(85%,var(--ui-msg-width,560px))]');
   assert.equal(BUBBLES_WIDE, 'max-w-[85%]');
   assert.ok(BUBBLES_USER.startsWith(`${BUBBLES_WIDTH} `));
   assert.ok(!BUBBLES_USER.includes(BUBBLES_WIDE));
@@ -74,5 +74,5 @@ test("a live reply's bubble is as wide as its finished one: a fence or a table r
   // the live bubble is measured on the whole live text (its words not drawn yet included), so it widens the moment a
   // fence or table row arrives; the prose already shown keeps the narrow bubble's measure, so it never re-wraps
   assert.match(src('components/kit/Message.tsx'), /bubbleWidthOf\(widthFrom \?\? text\)/);
-  assert.match(src('components/kit/kit.css'), /\[data-agent-bubble\] > \.kit-md > :not\(\.kit-table-box\):not\(\[data-code-frame\]\) \{ max-width: 530px; \}/);
+  assert.match(src('components/kit/kit.css'), /\[data-agent-bubble\] > \.kit-md > :not\(\.kit-table-box\):not\(\[data-code-frame\]\) \{ max-width: calc\(var\(--ui-msg-width, 560px\) - 30px\); \}/);
 });

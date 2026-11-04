@@ -57,13 +57,14 @@ import runtimesAvailableRouter from './routes/runtimes-available.js';
 import factsRouter from './routes/facts.js';
 import chatHistoryRouter from './routes/chat-history.js';
 import reactionsRouter from './routes/reactions.js';
+import settingsRouter from './routes/settings.js';
 import { ensureAgentReactToken } from './lib/agent-react-token.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
 import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket, createVoiceLiveReadyRouter } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
-import { principal } from './lib/principal.js';
+import { principal, installRole } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
@@ -177,6 +178,7 @@ app.get('/api/me', (req, res) => {
   res.json({
     username: p.username,
     role: p.role,
+    install_role: installRole(req),
     allowed_agents: p.allowedAgents,
     client_scope: p.clientScope,
     trusted: p.trusted,
@@ -237,6 +239,7 @@ app.use('/api/runtimes', runtimesAvailableRouter);
 app.use('/api/facts', factsRouter);
 app.use('/api/chat-history', chatHistoryRouter); // the /chat-history page's list + thread reads (router existed, was never mounted)
 app.use('/api/reactions', reactionsRouter); // message reactions: GET/PUT/DELETE + /stream SSE (routes/reactions.ts)
+app.use('/api/settings', settingsRouter); // Settings: the registry's rows; PUT one (routes/settings.ts)
 
 const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 // Stored-XSS fix (attach spec §B.2.4, agent-state-truth): uploads are USER

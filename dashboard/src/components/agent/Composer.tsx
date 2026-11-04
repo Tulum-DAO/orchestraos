@@ -116,16 +116,16 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             "this will wait", not a disabled button. The blocked cases are the two where a
             keystroke does damage (it answers a menu) or nothing at all (the pane is down). */}
         {notice && (
-          <p className={`mx-6 mb-1 text-[11px] ${notice.tone === 'error' ? 'text-red-600 dark:text-red-400'
+          <p className={`mx-6 mb-1 text-px11 ${notice.tone === 'error' ? 'text-red-600 dark:text-red-400'
             : 'text-muted-foreground'}`} role="status">{notice.text}</p>
         )}
         {gate && gate.send === 'blocked' && (
-          <p className="mx-6 mb-1 text-[11px] text-amber-500 dark:text-amber-300" role="status">{gate.reason}</p>
+          <p className="mx-6 mb-1 text-px11 text-amber-500 dark:text-amber-300" role="status">{gate.reason}</p>
         )}
         {/* "Will be queued…" says what happens to a typed draft, so it shows only while there is one: with an empty
             box the working row sits right on the message box. */}
         {gate && gate.send === 'enabled' && gate.queued && draft.trim() !== '' && (
-          <p className="mx-6 mb-1 text-[11px] text-muted-foreground" role="status">
+          <p className="mx-6 mb-1 text-px11 text-muted-foreground" role="status">
             {gate.reason}
             {delegatedWorkLabel(subagents) && (
               <span className="opacity-80"> · {delegatedWorkLabel(subagents)}</span>
@@ -133,7 +133,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           </p>
         )}
         {gate && gate.send === 'enabled' && !gate.queued && delegatedWorkLabel(subagents) && (
-          <p className="mx-6 mb-1 text-[11px] text-muted-foreground" role="status">
+          <p className="mx-6 mb-1 text-px11 text-muted-foreground" role="status">
             {delegatedWorkLabel(subagents)}
           </p>
         )}

@@ -146,7 +146,7 @@ export default function Approvals() {
               {Icon && <Icon size={13} />}
               {label}
               {count > 0 && (
-                <span className="bg-red-600/80 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-0.5">{count}</span>
+                <span className="bg-red-600/80 text-white text-px10 font-bold px-1.5 py-0.5 rounded-full ml-0.5">{count}</span>
               )}
             </button>
           );

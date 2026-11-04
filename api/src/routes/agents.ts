@@ -20,7 +20,7 @@ import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistere
 import { loadConfig, dataDir } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
-import { actingAgent, principal } from '../lib/principal.js';
+import { actingAgent, principal, installRole, changedBy } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { decorateIdentity, readSeatNames } from '../lib/agentIdentity.js';
@@ -33,7 +33,8 @@ import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
 import { headlessSeats } from '../services/status-stream.js';
 import { headlessInDev, paneHoldsSupervisor, PANE_IS_SUPERVISOR } from '../lib/paneGuard.js';
-import { agentCallGoesToSeat, agentCallSwitch, liveEngine } from '../lib/agentCallGate.js';
+import { agentCallGoesToSeat, agentCallSwitch, liveEngine, writeAgentCallSwitch } from '../lib/agentCallGate.js';
+import { recordSettingChange } from '../lib/settingsLog.js';
 import { headlessStep, stepFromProbe } from '../services/live-step.js';
 
 function macSshTarget(): string {
@@ -609,7 +610,9 @@ router.get('/:id/settings', async (req: Request, res: Response) => {
   // Dev is not headless to the gateway, so it is not offered there either.
   res.json({ ok: true, agent: req.params.id, rotates: seatRotates(req.params.id, getRegistry() as any),
              compact_now: seatCanCompactNow(req.params.id, getRegistry() as any, headlessSeats(), headlessInDev),
-             agent_calls: await agentCallsLabel(req.params.id), in_dev: headlessInDev(req.params.id),
+             agent_calls: await agentCallsLabel(req.params.id),
+             takes_calls: agentCallSwitch(dataDir(), req.params.id) === true,
+             in_dev: headlessInDev(req.params.id),
              ...readSeatSettings(dataDir(), req.params.id), history: seatHistory(dataDir(), req.params.id).slice(-20) });
 });
 /** `agent_calls`: whether a call to this agent is its own call (lib/agentCallGate.ts, the voice side's
@@ -642,6 +645,21 @@ router.put('/:id/settings', (req: Request, res: Response) => {
   if ('error' in r) { res.status(400).json({ ok: false, error: r.error }); return; }
   const now = writeSeatSettings(dataDir(), req.params.id, r.change, who);
   res.json({ ok: true, agent: req.params.id, rotates: true, ...now, history: seatHistory(dataDir(), req.params.id).slice(-20) });
+});
+
+// PUT /api/agents/:id/takes-calls {on} — the agent panel's "Takes calls" (Settings phase 1): whether a call to this agent
+// is with the agent itself (state/agent-calls.json seats.<id>.on, the voice side's switch; other options kept). It
+// affects everyone who calls the agent, so only an admin may change it.
+router.put('/:id/takes-calls', (req: Request, res: Response) => {
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  const known = (getRegistry() as { agents?: Record<string, unknown> } | null)?.agents ?? {};
+  if (!Object.prototype.hasOwnProperty.call(known, req.params.id)) { res.status(404).json({ ok: false, error: `Agent '${req.params.id}' not found` }); return; }
+  if (installRole(req) !== 'admin') { res.status(403).json({ ok: false, error: 'Only an admin can change this' }); return; }
+  const on = (req.body || {}).on;
+  if (typeof on !== 'boolean') { res.status(400).json({ ok: false, error: 'on: true or false' }); return; }
+  writeAgentCallSwitch(dataDir(), req.params.id, on);
+  recordSettingChange(dataDir(), { key: `agent.takesCalls.${req.params.id}`, scope: 'everyone', by: changedBy(req), at: new Date().toISOString(), value: on });
+  res.json({ ok: true, agent: req.params.id, takes_calls: on });
 });
 
 // PUT /api/agents/:id/name {name} — rename an agent (scripts/identity_store/seat_names.py: names unique per project,

@@ -199,7 +199,7 @@ export default function Inbox() {
               <Icon size={13} />
               {label}
               {count > 0 && (
-                <span className="bg-red-600/80 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-0.5">{count}</span>
+                <span className="bg-red-600/80 text-white text-px10 font-bold px-1.5 py-0.5 rounded-full ml-0.5">{count}</span>
               )}
             </button>
           );
@@ -279,7 +279,7 @@ export default function Inbox() {
             <div key={`q-${q.id}`} className="rounded-xl border-l-4 border-l-amber-500 border border-tone-800 bg-tone-900 overflow-hidden">
               <div className="p-4 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-400 border border-amber-500/30 flex items-center gap-1">
+                  <span className="text-px10 font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-tone-amber-400 border border-amber-500/30 flex items-center gap-1">
                     <ClipboardList size={9} /> questionnaire
                   </span>
                   <span className="text-xs text-tone-500 flex items-center gap-1">

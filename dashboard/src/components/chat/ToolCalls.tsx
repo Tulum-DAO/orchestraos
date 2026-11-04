@@ -44,7 +44,7 @@ function PathChip({ path }: { path: string }) {
         navigator.clipboard?.writeText(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }, () => {});
       }}
       onKeyDown={(e) => { if (e.key === 'Enter') (e.currentTarget as HTMLElement).click(); }}
-      className="inline-flex h-5.5 min-w-0 flex-1 items-center gap-1 truncate rounded-chip bg-field px-1.5 font-mono text-[11.5px] text-ink-2 shadow-hairline hover:text-ink">
+      className="inline-flex h-5.5 min-w-0 flex-1 items-center gap-1 truncate rounded-chip bg-field px-1.5 font-mono text-px11h text-ink-2 shadow-hairline hover:text-ink">
       {copied ? <Check size={11} className="shrink-0 text-green" /> : <FileText size={11} className="shrink-0" />}
       <span className="truncate">{copied ? 'Copied' : shortPath(path)}</span>
     </span>
@@ -70,10 +70,10 @@ function Row({ call }: { call: ToolCallView }) {
               style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
           )}
         </span>
-        <span className="shrink-0 text-[12.5px] font-medium text-ink">{callLabel(call.name)}</span>
+        <span className="shrink-0 text-px12h font-medium text-ink">{callLabel(call.name)}</span>
         {call.filePath ? <PathChip path={call.filePath} />
           : call.chip ? (
-            <span className="inline-flex h-5.5 min-w-0 flex-1 items-center truncate rounded-chip bg-field px-1.5 font-mono text-[11.5px] text-ink-2 shadow-hairline">
+            <span className="inline-flex h-5.5 min-w-0 flex-1 items-center truncate rounded-chip bg-field px-1.5 font-mono text-px11h text-ink-2 shadow-hairline">
               {call.chip}
             </span>
           ) : <span className="flex-1" />}
@@ -87,7 +87,7 @@ function Row({ call }: { call: ToolCallView }) {
               {d.todos.length > 0 && (
                 <div className="flex flex-col gap-0.5" data-todos>
                   {d.todos.map((t, i) => (
-                    <div key={i} className={`flex items-start gap-2 text-[12px] ${t.status === 'completed' ? 'text-ink-3 line-through' : 'text-ink'}`}>
+                    <div key={i} className={`flex items-start gap-2 text-px12 ${t.status === 'completed' ? 'text-ink-3 line-through' : 'text-ink'}`}>
                       <span role="img" aria-label={t.status} className={t.status === 'completed' ? 'text-green' : t.status === 'in_progress' ? 'text-amber-500' : 'text-ink-3'}>
                         {t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : '○'}
                       </span>
@@ -97,12 +97,12 @@ function Row({ call }: { call: ToolCallView }) {
                 </div>
               )}
               {d.input && (
-                <pre className="max-h-60 overflow-auto rounded-control bg-field px-2 py-1 font-mono text-[11px] text-ink-2 whitespace-pre">{d.input}</pre>
+                <pre className="max-h-60 overflow-auto rounded-control bg-field px-2 py-1 font-mono text-px11 text-ink-2 whitespace-pre">{d.input}</pre>
               )}
               {d.resultLines ? d.resultLines.map((line, i) => (
-                <span key={i} className={`truncate font-mono text-[11.5px] leading-[1.6] ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`}>{line}</span>
+                <span key={i} className={`truncate font-mono text-px11h leading-[1.6] ${call.status === 'failed' ? 'text-red' : 'text-ink-2'}`}>{line}</span>
               )) : d.resultText && (
-                <pre className={`overflow-auto font-mono text-[11.5px] leading-[1.6] whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'} ${d.resultText.length > RESULT_TALL ? 'max-h-72' : ''}`}>
+                <pre className={`overflow-auto font-mono text-px11h leading-[1.6] whitespace-pre ${call.status === 'failed' ? 'text-red' : 'text-ink-2'} ${d.resultText.length > RESULT_TALL ? 'max-h-72' : ''}`}>
                   {d.resultText}
                 </pre>
               )}
@@ -137,7 +137,7 @@ export default function ToolCalls({ calls, entries, interrupted = false, density
   return (
     <div className={`${card} ${s.tone === 'failed' ? 'border-red/40' : ''}`} data-testid="tool-calls">
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
-        className="-mx-1.5 flex w-[calc(100%+12px)] items-start gap-1.5 rounded-control px-1.5 py-1 text-left text-[12.5px] transition-colors duration-100 hover:bg-hover-2">
+        className="-mx-1.5 flex w-[calc(100%+12px)] items-start gap-1.5 rounded-control px-1.5 py-1 text-left text-px12h transition-colors duration-100 hover:bg-hover-2">
         <ChevronDown size={12} strokeWidth={2.2} className="mt-[3px] shrink-0 text-ink-3 transition-transform duration-200"
           style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
         {/* Wraps rather than truncating: on a phone the clipped tail was the "(1 failed)". */}

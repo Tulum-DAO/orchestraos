@@ -162,12 +162,12 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
         </p>
 
         {isConnected && (
-          <p className={clsx('mt-1 text-[10px]', isSpeaking ? 'text-tone-green-400' : 'text-tone-600')}>
+          <p className={clsx('mt-1 text-px10', isSpeaking ? 'text-tone-green-400' : 'text-tone-600')}>
             {isSpeaking ? 'Speaking...' : 'Listening...'}
           </p>
         )}
 
-        {error && <p className="mt-2 text-[10px] text-tone-red-400">{error}</p>}
+        {error && <p className="mt-2 text-px10 text-tone-red-400">{error}</p>}
       </div>
 
       {/* Controls */}

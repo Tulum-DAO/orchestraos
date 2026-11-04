@@ -72,7 +72,7 @@ function extractTable(rawLines: string[]): { table: TableData; beforeIdx: number
 function renderTable(table: TableData) {
   return (
     <div className="overflow-x-auto my-1.5 -mx-1 rounded-lg border border-tone-700/50">
-      <table className="text-[11px] border-collapse w-full min-w-max">
+      <table className="text-px11 border-collapse w-full min-w-max">
         <thead>
           <tr className="bg-tone-800/60">
             {table.headers.map((h, i) => (

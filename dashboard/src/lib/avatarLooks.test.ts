@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAgentState } from '../components/avatar/avatarCore.ts';
 import { applySavedLooks, pickLook, resetToDefault, showsLookCard, readDismissed, writeDismissed, canChangeLook } from './avatarLooks.ts';
+import { setInstallRole } from './myRole.ts';
 import { avatarStateFor, arturoState, arturoProvider, stepPatch, STEP_FRESH_MS } from './avatarStatus.ts';
 
 const DEF = { shape: 'star', color: 'ink', eyeColor: 'auto' };
@@ -52,8 +53,10 @@ test('the "Pick a look" card: unchosen, can save, not dismissed on this device',
   assert.equal(showsLookCard({ chosen: true, canSave: true, dismissed: false }), false);    // saved by anyone: gone
   assert.equal(showsLookCard({ chosen: false, canSave: false, dismissed: false }), false);  // cannot save: not offered
   assert.equal(showsLookCard({ chosen: false, canSave: true, dismissed: true }), false);
-  // anyone may change a look for now, whatever their role
-  assert.equal(canChangeLook(), true);
+  // only an admin may change a look; a member (the default until the server says admin) may not
+  assert.equal(canChangeLook(), false);
+  setInstallRole('admin');
+  try { assert.equal(canChangeLook(), true); } finally { setInstallRole('member'); }
   const m = new Map<string, string>();
   const st = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); } };
   assert.equal(readDismissed(st, 'arturo'), false);

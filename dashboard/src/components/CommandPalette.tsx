@@ -224,12 +224,12 @@ export function CommandPalette() {
             aria-label="Go to an agent or a page"
             className="w-full bg-transparent py-3 text-sm text-tone-200 placeholder-tone-600 focus:outline-none"
           />
-          <kbd className="shrink-0 rounded border border-tone-700 px-1.5 py-0.5 text-[10px] text-tone-500">esc</kbd>
+          <kbd className="shrink-0 rounded border border-tone-700 px-1.5 py-0.5 text-px10 text-tone-500">esc</kbd>
         </div>
 
         <ul className="max-h-[50vh] overflow-y-auto py-1" role="listbox" aria-label="Results">
           {results.length === 0 && (
-            <li className="px-3 py-6 text-center text-[12px] text-tone-500">Nothing matches “{query}”.</li>
+            <li className="px-3 py-6 text-center text-px12 text-tone-500">Nothing matches “{query}”.</li>
           )}
           {results.map((e, i) => (
             <li key={`${e.kind}:${e.id}`}>
@@ -244,7 +244,7 @@ export function CommandPalette() {
                 }`}
               >
                 <span className="min-w-0 flex-1 truncate">{e.label}</span>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-tone-600">
+                <span className="shrink-0 text-px10 uppercase tracking-wide text-tone-600">
                   {e.sublabel || e.kind}
                 </span>
                 {i === cursor && <CornerDownLeft size={12} className="shrink-0 text-tone-500" aria-hidden />}

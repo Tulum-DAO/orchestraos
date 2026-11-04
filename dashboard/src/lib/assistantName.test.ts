@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_ASSISTANT_NAME, applyAssistantName, assistantName, subscribeAssistantName, readCached, named, canRename } from './assistantName.ts';
+import { setInstallRole } from './myRole.ts';
 import { panelStatus } from './arturoPanel.ts';
 import { handsFreeTitle } from './arturo.ts';
 import { transcriptText } from './arturoCallGroups.ts';
@@ -38,6 +39,8 @@ test('status, titles and the copied transcript use the name given', () => {
   assert.equal(transcriptText([{ role: 'user', text: 'hi' }, { role: 'arturo', text: 'hello' }], 'Example'), 'You: hi\nExample: hello');
 });
 
-test('anyone may rename the assistant for now, whatever their role', () => {
-  assert.equal(canRename(), true);
+test('only an admin may rename the assistant; a member (the default until the server says admin) may not', () => {
+  assert.equal(canRename(), false);
+  setInstallRole('admin');
+  try { assert.equal(canRename(), true); } finally { setInstallRole('member'); }
 });

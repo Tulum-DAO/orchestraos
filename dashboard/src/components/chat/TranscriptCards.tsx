@@ -8,6 +8,7 @@
  */
 import { BUBBLES_USER, BUBBLES_WIDTH } from '../../lib/chatSkin';
 import { MESSAGE_TIME_TONE, messageTimeLabel } from '../../lib/messageTime';
+import { useInstallTimeZone } from '../../stores/serverSettings';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { ChevronRight, ChevronDown, FileText } from 'lucide-react';
@@ -37,7 +38,7 @@ import { type ToolDensity } from '../../lib/toolCardDetail';
 /**
  * The disclosure control for every expandable card here.
  *
- * It was a text glyph (`▸` / `▾`) at `text-[10px]`, which renders about SIX PIXELS of
+ * It was a text glyph (`▸` / `▾`) at `text-px10`, which renders about SIX PIXELS of
  * actual ink and is both hard to see and far below any sane touch target. An icon at 14px
  * is the smallest thing that reads as a control rather than as punctuation. It is
  * `aria-hidden` because the control it belongs to always carries `aria-expanded`, so
@@ -58,13 +59,13 @@ export function PastedCard({ n, lines, content }: { n: number; lines: number; co
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-tone-800/50"
       >
-        <span className="text-[11px] text-tone-400">📋</span>
-        <span className="text-[11px] font-medium text-tone-300">Pasted text #{n}</span>
-        <span className="text-[10px] text-tone-500">· {lines} lines</span>
+        <span className="text-px11 text-tone-400">📋</span>
+        <span className="text-px11 font-medium text-tone-300">Pasted text #{n}</span>
+        <span className="text-px10 text-tone-500">· {lines} lines</span>
         <span className="ml-auto"><Caret open={open} /></span>
       </button>
       {open && (
-        <pre className="px-3 py-1.5 border-t border-tone-800 bg-tone-950 overflow-auto max-h-72 text-[11px] font-mono text-tone-400 whitespace-pre-wrap break-words">
+        <pre className="px-3 py-1.5 border-t border-tone-800 bg-tone-950 overflow-auto max-h-72 text-px11 font-mono text-tone-400 whitespace-pre-wrap break-words">
           {content}
         </pre>
       )}
@@ -91,7 +92,7 @@ function MessageGroup({ text, sender }: { text: string; sender: 'user' | 'assist
             seg.kind === 'prose' ? (
               isUser ? (
                 <div key={i} className="flex justify-end">
-                  <div className="rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-[13px] leading-relaxed text-white whitespace-pre-wrap break-words">
+                  <div className="rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-px13 leading-relaxed text-white whitespace-pre-wrap break-words">
                     {seg.text}
                   </div>
                 </div>
@@ -134,10 +135,11 @@ export function relativeAgo(ts?: string): string {
  * datetime on hover. Absent ts renders NOTHING rather than a guessed time.
  */
 export function MessageTime({ ts, align = 'left' }: { ts?: string; align?: 'left' | 'right' }) {
-  const t = messageTimeLabel(ts);
+  const tz = useInstallTimeZone();
+  const t = messageTimeLabel(ts, undefined, tz);
   if (!t) return null;
   return (
-    <span className={`block mt-0.5 ${MESSAGE_TIME_TONE} ${align === 'right' ? 'text-right' : 'text-left'}`} title={t.title}>
+    <span data-msg-time className={`block mt-0.5 ${MESSAGE_TIME_TONE} ${align === 'right' ? 'text-right' : 'text-left'}`} title={t.title}>
       {t.label}
     </span>
   );
@@ -152,7 +154,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
       <div className="flex justify-center my-1">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="text-[10px] text-tone-500 hover:text-tone-300 px-2 py-0.5 rounded-full border border-tone-800 bg-tone-900/40"
+          className="text-px10 text-tone-500 hover:text-tone-300 px-2 py-0.5 rounded-full border border-tone-800 bg-tone-900/40"
         >
           {open ? 'Hide' : 'Show'} session prompt ({Math.round(text.length / 100) / 10}k chars)
         </button>
@@ -172,7 +174,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
                    className="h-24 max-w-[12rem] rounded-xl object-cover border border-border bg-muted" />
             </a>
           ) : (
-            <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-border bg-muted text-[11px] text-foreground/80">
+            <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-border bg-muted text-px11 text-foreground/80">
               <FileText size={12} />{a.name}
             </span>
           ))}
@@ -185,7 +187,7 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
         </div>
       )}
       {queued && (
-        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
+        <span className="mt-0.5 text-px9 uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
           queued
         </span>
       )}
@@ -216,20 +218,20 @@ export function SystemMessageCard({ msg, raw }: { msg: SystemMessage; raw: strin
     <div className="flex justify-start" data-testid="system-message" data-machine={msg.kind} data-tone={tone}>
       <div className={clsx('max-w-[85%] min-w-0 rounded-xl border bg-tone-950/80 px-2.5 py-1.5', border)}>
         <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 text-left">
-          <span className={clsx('text-[11px] w-3.5 text-center shrink-0', accent)} aria-hidden>{glyph}</span>
-          <span className="text-[11px] font-semibold text-tone-200 truncate">{scrubIds(msg.headline)}</span>
-          {msg.urgent && <span className="text-[10px] text-tone-amber-300">· {msg.detail}</span>}
+          <span className={clsx('text-px11 w-3.5 text-center shrink-0', accent)} aria-hidden>{glyph}</span>
+          <span className="text-px11 font-semibold text-tone-200 truncate">{scrubIds(msg.headline)}</span>
+          {msg.urgent && <span className="text-px10 text-tone-amber-300">· {msg.detail}</span>}
           <span className="ml-auto pl-2"><Caret open={open} /></span>
         </button>
         {open ? (
-          <div className="mt-1 max-h-80 overflow-y-auto text-[11px] leading-relaxed text-tone-400 whitespace-pre-wrap break-words select-text">{withRefs(raw)}</div>
+          <div className="mt-1 max-h-80 overflow-y-auto text-px11 leading-relaxed text-tone-400 whitespace-pre-wrap break-words select-text">{withRefs(raw)}</div>
         ) : (
           <div className="mt-0.5 pl-5 space-y-0.5 select-text">
-            {msg.subject && <div className="text-[12px] text-tone-200 break-words">{withRefs(msg.subject)}</div>}
+            {msg.subject && <div className="text-px12 text-tone-200 break-words">{withRefs(msg.subject)}</div>}
             {msg.detail && !msg.urgent && msg.kind !== 'task' && msg.kind !== 'approval' && (
-              <div className={clsx('text-[12px] font-medium break-words', accent)}>→ {withRefs(msg.detail)}</div>
+              <div className={clsx('text-px12 font-medium break-words', accent)}>→ {withRefs(msg.detail)}</div>
             )}
-            {msg.note && <div className="text-[11px] text-tone-500 break-words">{withRefs(msg.note)}</div>}
+            {msg.note && <div className="text-px11 text-tone-500 break-words">{withRefs(msg.note)}</div>}
           </div>
         )}
       </div>
@@ -244,12 +246,12 @@ export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'qu
   const waiting = kind === 'held' || kind === 'queued';
   return (
     <div className="flex flex-col items-end" data-testid="pending-bubble" data-pending-kind={kind}>
-      <div className={clsx(BUBBLES_WIDTH, 'rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words',
+      <div className={clsx(BUBBLES_WIDTH, 'rounded-2xl rounded-br-sm px-3.5 py-2 text-px13 leading-relaxed whitespace-pre-wrap break-words',
         waiting ? 'bg-blue-600/25 text-white/70' : 'bg-blue-600/50 text-white/85')}>
         {withRefs(text)}
       </div>
       {kind !== 'sent' && (
-        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
+        <span className="mt-0.5 text-px9 uppercase tracking-wide text-tone-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
           {kind === 'queuedInTurn' ? 'queued' : kind === 'held' ? 'held for its next turn' : 'saved to its inbox'}
         </span>
       )}
@@ -268,8 +270,8 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
           onClick={() => setOpen((o) => !o)}
           className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-tone-800/40"
         >
-          <span className="text-[11px] w-4 text-center text-tone-400">⇊</span>
-          <span className="text-[11px] font-semibold text-tone-300">
+          <span className="text-px11 w-4 text-center text-tone-400">⇊</span>
+          <span className="text-px11 font-semibold text-tone-300">
             {count} queued message{count === 1 ? '' : 's'} processed
           </span>
           <span className="ml-auto"><Caret open={open} /></span>
@@ -283,10 +285,10 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
               return (
               <div key={i} className="px-3 py-1.5">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[11px] font-semibold text-tone-300">{e.agent || 'unknown'}</span>
-                  <span className="text-[10px] text-tone-500">{relativeAgo(e.sent_ts)}</span>
+                  <span className="text-px11 font-semibold text-tone-300">{e.agent || 'unknown'}</span>
+                  <span className="text-px10 text-tone-500">{relativeAgo(e.sent_ts)}</span>
                 </div>
-                <div className="mt-0.5 text-[12px] leading-relaxed text-tone-400 whitespace-pre-wrap break-words">
+                <div className="mt-0.5 text-px12 leading-relaxed text-tone-400 whitespace-pre-wrap break-words">
                   {withRefs(e.body)}
                 </div>
               </div>
@@ -301,7 +303,7 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
 
 export function SystemPromptBody({ text }: { text: string }) {
   return (
-    <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-tone-800 bg-tone-950 p-2 text-[11px] font-mono text-tone-400 whitespace-pre-wrap">
+    <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-tone-800 bg-tone-950 p-2 text-px11 font-mono text-tone-400 whitespace-pre-wrap">
       {text}
     </pre>
   );
@@ -315,13 +317,13 @@ export function ThinkingCard({ text }: { text: string }) {
       <div className="w-full">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-1.5 text-[11px] text-tone-500 hover:text-tone-300 italic"
+          className="flex items-center gap-1.5 text-px11 text-tone-500 hover:text-tone-300 italic"
         >
           <Caret open={open} />
           <span>💭 {open ? 'Thinking' : scrubIds(firstLine) + '…'}</span>
         </button>
         {open && (
-          <div className="mt-1 pl-4 border-l-2 border-tone-800 text-[12px] leading-relaxed text-tone-400 whitespace-pre-wrap break-words">
+          <div className="mt-1 pl-4 border-l-2 border-tone-800 text-px12 leading-relaxed text-tone-400 whitespace-pre-wrap break-words">
             {withRefs(text)}
           </div>
         )}
@@ -350,7 +352,7 @@ function answeredQuestion(block: ToolBlock, records?: BatchRecord[]) {
 /** How a tool run is drawn: the kit card, or Bubbles' thin lines (kit/ToolCard.tsx). */
 export type ToolLook = 'card' | 'lines';
 
-export function ToolCard({ block, density = 'normal', look = 'card' }: { block: ToolBlock; density?: ToolDensity; look?: ToolLook }) {
+export function ToolCard({ block, density, look = 'card' }: { block: ToolBlock; density?: ToolDensity; look?: ToolLook }) {
   const records = useBatchRecords();
   const asked = answeredQuestion(block, records);
   if (asked) return asked;
@@ -366,7 +368,7 @@ export function ToolCard({ block, density = 'normal', look = 'card' }: { block: 
  * A turn's tool calls folded to ONE line, e.g. "Worked for 1m 8s — edited 2 files, ran 3 commands". Opening it lists
  * each call (with the thinking between them), and each call opens again to its input and output.
  */
-export function ToolGroupCard({ group, interrupted = false, density = 'normal', look = 'card' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity; look?: ToolLook }) {
+export function ToolGroupCard({ group, interrupted = false, density, look = 'card' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity; look?: ToolLook }) {
   // Answered questions are drawn as their cards under the folded line, not folded into it.
   const records = useBatchRecords();
   const asked = group.children.flatMap((c) => (c.kind === 'tool' ? [answeredQuestion(c, records)] : [])).filter(Boolean);
@@ -388,14 +390,14 @@ export function ToolGroupCard({ group, interrupted = false, density = 'normal', 
 }
 
 /** Like RenderNodeView, plus the folded tool group. */
-export function GroupedNodeView({ node, interrupted, density = 'normal', look = 'card' }: { node: GroupedNode; interrupted?: boolean; density?: ToolDensity; look?: ToolLook }) {
+export function GroupedNodeView({ node, interrupted, density, look = 'card' }: { node: GroupedNode; interrupted?: boolean; density?: ToolDensity; look?: ToolLook }) {
   return node.kind === 'tool_group'
     ? <ToolGroupCard group={node} interrupted={interrupted} density={density} look={look} />
     : <RenderNodeView node={node} density={density} look={look} />;
 }
 
 /** Dispatch a RenderNode to the right primitive. */
-export function RenderNodeView({ node, density = 'normal', look = 'card' }: { node: RenderNode; density?: ToolDensity; look?: ToolLook }) {
+export function RenderNodeView({ node, density, look = 'card' }: { node: RenderNode; density?: ToolDensity; look?: ToolLook }) {
   switch (node.kind) {
     case 'user': {
       if (node.isSystem) return <UserSystem text={node.text} />;
@@ -455,7 +457,7 @@ function UserSystem({ text }: { text: string }) {
       <div className="flex justify-center">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="text-[10px] text-tone-500 hover:text-tone-300 px-2 py-0.5 rounded-full border border-tone-800 bg-tone-900/40"
+          className="text-px10 text-tone-500 hover:text-tone-300 px-2 py-0.5 rounded-full border border-tone-800 bg-tone-900/40"
         >
           {open ? 'Hide' : 'Show'} session prompt ({Math.round(text.length / 100) / 10}k chars)
         </button>

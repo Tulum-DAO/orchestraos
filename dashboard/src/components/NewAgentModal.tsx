@@ -162,7 +162,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                       : 'border-tone-700 bg-tone-950 text-tone-400 hover:text-tone-200'}`}
                   >
                     <div className="text-sm font-medium">{k.t}</div>
-                    <div className="text-[11px] text-tone-500">{k.d}</div>
+                    <div className="text-px11 text-tone-500">{k.d}</div>
                   </button>
                 );
               })}

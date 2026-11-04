@@ -31,6 +31,7 @@ import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { isDegraded, lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 import { asChip, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu, kindLabel, type AgentChip } from '../../lib/agentChip';
 import { useProviderMarks, type ProviderMarks } from '../../hooks/useProviderMarks';
+import { useTextAvatar } from '../../lib/deviceSettings';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
   { key: 'needsYou', label: 'Needs you', badge: true },
@@ -40,6 +41,7 @@ const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: b
 
 
 function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinnedNow, onRenamed }: { agent: RailAgent & { chip?: AgentChip }; active: boolean; onPick: (id: string) => void; feed: FeedVerdict; showProvider: boolean; marks: ProviderMarks; label: string; pinnedNow: boolean; onRenamed: () => void }) {
+  const face = useTextAvatar(32);
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,10 +77,11 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
     ) : (
     <button
       type="button"
+      data-rail-row={agent.id}
       onClick={() => onPick(agent.id)}
       aria-current={active ? 'true' : undefined}
       className={clsx(
-        'w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm min-w-0',
+        'w-full flex items-center gap-2 px-2 py-[calc(6px*var(--ui-gap,1))] min-h-8 max-md:min-h-11 rounded text-left text-sm min-w-0',
         'hover:bg-neutral-200/70 dark:hover:bg-neutral-800/70 focus:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500',
         active && 'bg-neutral-200 dark:bg-neutral-800',
       )}
@@ -86,7 +89,7 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
     >
       {/* 32px filling the row's padding (the negative margin), so the row is no taller than before. */}
       <span className={clsx('-my-1.5 shrink-0', active ? 'la-on-selected' : 'la-on-sidebar')}>
-        <AgentAvatar agentId={agent.id} role="sidebar" size={32} selected={active} provider={provKey ?? null} label={agent.name || agent.id} />
+        <AgentAvatar agentId={agent.id} role="sidebar" size={face} selected={active} provider={provKey ?? null} label={agent.name || agent.id} />
       </span>
       {mark && (
         <span
@@ -98,18 +101,18 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
           dangerouslySetInnerHTML={{ __html: mark.svg }}
         />
       )}
-      <span className="truncate flex-1 min-w-0">{label}</span>
+      <span className="truncate flex-1 min-w-0" data-rail-name>{label}</span>
       {/* on a call with this agent: a green "···· 0:10" pill */}
       {onCall && <CallPill />}
       {kind && (
-        <span className="shrink-0 text-[10px] text-neutral-600 dark:text-neutral-500" data-testid="rail-kind"
+        <span className="shrink-0 text-px10 text-neutral-600 dark:text-neutral-500" data-testid="rail-kind"
               title={kind === 'Service' ? 'A service: it takes no messages' : 'Run elsewhere: not checked from here'}>
           {kind}
         </span>
       )}
       {ctx !== undefined && (
         <span
-          className={clsx('shrink-0 text-[10px] tabular-nums [@media(hover:hover)]:group-hover:invisible group-focus-within:invisible', ctxHigh ? 'text-amber-700 dark:text-amber-400' : 'text-neutral-600 dark:text-neutral-500')}
+          className={clsx('shrink-0 text-px10 tabular-nums [@media(hover:hover)]:group-hover:invisible group-focus-within:invisible', ctxHigh ? 'text-amber-700 dark:text-amber-400' : 'text-neutral-600 dark:text-neutral-500')}
           title={ctx === null ? 'Context: no reading' : chip ? `Context: ${ctx}` : `Context used: ${ctx}`}
           data-testid="rail-context"
         >
@@ -118,14 +121,14 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
       )}
       {prov && (
         <span
-          className="shrink-0 text-[10px] font-medium text-neutral-600 dark:text-neutral-500 tabular-nums"
+          className="shrink-0 text-px10 font-medium text-neutral-600 dark:text-neutral-500 tabular-nums"
           title={providerTitle(provName, chip, (agent as { model?: string }).model)}
         >
           {prov}
         </span>
       )}
       {unread > 0 && (
-        <span className="shrink-0 min-w-4 px-1 rounded-full bg-neutral-300 dark:bg-neutral-700 text-[10px] text-neutral-800 dark:text-neutral-200 text-center tabular-nums">
+        <span className="shrink-0 min-w-4 px-1 rounded-full bg-neutral-300 dark:bg-neutral-700 text-px10 text-neutral-800 dark:text-neutral-200 text-center tabular-nums">
           {unread > 99 ? '99+' : unread}
         </span>
       )}
@@ -147,7 +150,7 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks, label, pinn
                onPin={() => { setMenu(false); void togglePin(agent.id).then(setError); }}
                onRename={() => { setMenu(false); setError(null); setRenaming(true); }} />
     )}
-    {error && <p className="px-2 pb-1 text-[11px] text-red-600 dark:text-red-400" role="alert">{error}</p>}
+    {error && <p className="px-2 pb-1 text-px11 text-red-600 dark:text-red-400" role="alert">{error}</p>}
     </div>
   );
 }
@@ -175,6 +178,7 @@ function RowMenu({ pinnedNow, onPin, onRename, onClose }: { pinnedNow: boolean; 
 
 /** Rename in place: Enter saves, Escape (or leaving the field) cancels; a refusal shows its reason under the row. */
 function RenameField({ agent, active, initial, onDone, onError }: { agent: RailAgent; active: boolean; initial: string; onDone: (ok: boolean) => void; onError: (e: string | null) => void }) {
+  const face = useTextAvatar(32);
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -188,7 +192,7 @@ function RenameField({ agent, active, initial, onDone, onError }: { agent: RailA
   return (
     <div className={clsx('w-full flex items-center gap-2 px-2 py-1 rounded', active && 'bg-neutral-200 dark:bg-neutral-800')} onClick={(e) => e.stopPropagation()}>
       <span className={clsx('-my-1 shrink-0', active ? 'la-on-selected' : 'la-on-sidebar')}>
-        <AgentAvatar agentId={agent.id} role="sidebar" size={32} selected={active} label={initial} />
+        <AgentAvatar agentId={agent.id} role="sidebar" size={face} selected={active} label={initial} />
       </span>
       <input autoFocus value={text} disabled={busy} maxLength={40} aria-label={`New name for ${agent.full_name || initial}`} data-rail-rename
              onChange={(e) => { setText(e.target.value); onError(null); }}
@@ -204,13 +208,12 @@ function RenameField({ agent, active, initial, onDone, onError }: { agent: RailA
  *  keyboard) fades in a pill with its name, in the shape of the pill at the top of Arturo's page: it starts where
  *  the face is, with the same face in the same place, and runs to the right over the faces beside it. Clicking the
  *  pill opens that agent; leaving it lets it fade. */
-/** Faces are the same size as the avatars on the agent rows. */
-const FACE = 32;
 /** The name pill's inset around its face (px), the agent identity pill's (.agent-pill in index.css): the pill is
  *  placed so its face lands exactly on the face under it, so the inset never moves the face. */
 const PILL_INSET = 2;
 
 function FaceRow({ agents, currentId, onPick, max = 8, label, indent = false }: { agents: RailAgent[]; currentId?: string; onPick: (id: string) => void; max?: number; label: string; indent?: boolean }) {
+  const FACE = useTextAvatar(32);   // the same size as the avatars on the agent rows
   const shown = agents.slice(0, max);
   const outer = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState<{ a: RailAgent; left: number; top: number; max: number; keyboard: boolean } | null>(null);
@@ -243,7 +246,7 @@ function FaceRow({ agents, currentId, onPick, max = 8, label, indent = false }: 
             <AgentAvatar agentId={a.id} role="sidebar" size={FACE} selected={a.id === currentId} label={a.full_name || a.id} />
           </button>
         ))}
-        {agents.length > max && <span className="shrink-0 text-[11px] text-neutral-600 dark:text-neutral-400 tabular-nums">+{agents.length - max}</span>}
+        {agents.length > max && <span className="shrink-0 text-px11 text-neutral-600 dark:text-neutral-400 tabular-nums">+{agents.length - max}</span>}
       </div>
       {pill && (
         <AgentIdentityPill agentId={pill.a.id} name={pill.a.full_name || pill.a.display_name || pill.a.id} size={FACE}
@@ -275,7 +278,7 @@ function ProjectGroup({ section, project, agents, defaultOpen, currentId, onPick
   return (
     <div data-rail-group={project.slug}>
       <button type="button" onClick={flip} aria-expanded={open}
-              className="w-full flex items-center gap-1.5 px-2 pt-1 pb-0.5 text-[11px] font-medium text-neutral-700 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200">
+              className="w-full flex items-center gap-1.5 px-2 pt-1 pb-0.5 text-px11 font-medium text-neutral-700 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200">
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span className="truncate">{project.label}</span>
         <span className="text-neutral-500 dark:text-neutral-600 tabular-nums">{agents.length}</span>
@@ -399,7 +402,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
       {/* The whole column says it ONCE, so a reader does not have to infer an outage from every
           row having gone grey. The sections below are the LAST thing we were told, not now. */}
       {isDegraded(feed) && (
-        <p className="mx-2 px-2 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900 text-[11px] text-muted-foreground" role="status">
+        <p className="mx-2 px-2 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900 text-px11 text-muted-foreground" role="status">
           {feed.health === 'disconnected' ? 'Not connected to the fleet.' : 'Connection lost.'}{' '}
           {feed.lastSeenAt ? `Showing what we last saw — ${lastSeenLabel(feed.lastSeenAt)}.` : 'No data has arrived yet.'}
         </p>
@@ -421,11 +424,11 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
           <section key={key} aria-labelledby={`rail-${key}`}>
             <h2
               id={`rail-${key}`}
-              className="flex items-center gap-2 px-2 pb-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-500"
+              className="flex items-center gap-2 px-2 pb-1 text-px11 uppercase tracking-wide text-neutral-600 dark:text-neutral-500"
             >
               <span>{label}</span>
               {badge && rows.length > 0 && (
-                <span className="px-1.5 rounded-full bg-amber-400/20 text-amber-800 dark:text-amber-300 text-[10px] tabular-nums">
+                <span className="px-1.5 rounded-full bg-amber-400/20 text-amber-800 dark:text-amber-300 text-px10 tabular-nums">
                   {rows.length}
                 </span>
               )}
@@ -450,7 +453,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
             // The "More" fix in this same commit left its twin standing — fixing one site of a
             // class is not fixing the class.
             onClick={(e) => { e.stopPropagation(); setShowOther((v) => !v); }}
-            className="w-full flex items-center gap-2 px-2 py-1 text-[11px] uppercase tracking-wide text-neutral-600 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+            className="w-full flex items-center gap-2 px-2 py-1 text-px11 uppercase tracking-wide text-neutral-600 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
             aria-expanded={showOther}
           >
             <span>{showOther ? '▾' : '▸'}</span>

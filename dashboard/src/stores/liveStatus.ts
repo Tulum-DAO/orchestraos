@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import type { LiveSeat } from '../lib/liveStatusOverlay';
 import { stepPatch } from '../lib/avatarStatus';
 import { avatarHub } from '../components/avatar/agentState';
+import { useServerSettings } from './serverSettings';
 
 interface LiveStatusState {
   seats: Record<string, LiveSeat>;
@@ -53,6 +54,13 @@ function open() {
       const p = stepPatch(JSON.parse((e as MessageEvent).data), now());
       if (p) avatarHub.set(p.seat, { blurb: p.blurb, blurbAt: p.blurbAt });
     } catch { /* ignore */ }
+  });
+  // An Everyone setting changed on another dashboard (api routes/settings.ts): shown here without a reload.
+  es.addEventListener('setting', (e) => {
+    try {
+      const d = JSON.parse((e as MessageEvent).data);
+      if (d && typeof d.key === 'string') useServerSettings.getState().remote(d);
+    } catch { /* a malformed frame: ignore */ }
   });
   // The browser reconnects on its own (the server sends retry: 3000) and a new snapshot follows.
   es.onerror = () => useLiveStatusStore.setState({ seats: {} });

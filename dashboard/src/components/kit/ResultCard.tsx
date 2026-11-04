@@ -16,6 +16,8 @@ import ToolCalls from './ToolCard';
 import ResultFiles from './ResultFiles';
 import { fromPart } from '../../lib/toolCalls';
 import { formatDuration } from '../../lib/toolGroups';
+import { clockWhen } from '../../lib/messageTime';
+import { useInstallTimeZone } from '../../stores/serverSettings';
 import { newestFirst, stackHeadline, type FinishedResult, type ResultOutcome, type ResultSource, type ResultView } from '../../lib/threadKit/results';
 
 export type ResultSkin = 'modern' | 'bubbles';
@@ -26,12 +28,9 @@ const OUTCOME_WORD: Record<ResultOutcome, string> = { done: 'Done', failed: 'Fai
 /** A background command passed or failed; other work is done. */
 const outcomeWord = (o: ResultOutcome, source?: ResultSource) => (source === 'task' && o === 'done' ? 'Passed' : OUTCOME_WORD[o]);
 
-function when(at?: string, now = new Date()): string {
-  if (!at) return '';
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return '';
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+/** When it finished, as every clock label says it: the install's time zone (lib/messageTime clockWhen). */
+function when(at: string | undefined, tz: string): string {
+  return at ? clockWhen(Date.parse(at), Date.now(), tz) : '';
 }
 
 export function Outcome({ outcome, source }: { outcome: ResultOutcome; source?: ResultSource }) {
@@ -40,16 +39,17 @@ export function Outcome({ outcome, source }: { outcome: ResultOutcome; source?: 
     : outcome === 'cancelled' ? 'text-muted-foreground border-current/20'
       : 'text-success border-success/40 bg-success/10';
   return (
-    <span data-outcome={outcome} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone}`}>
+    <span data-outcome={outcome} className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-px11 font-medium ${tone}`}>
       <Icon size={11} aria-hidden /> {outcomeWord(outcome, source)}
     </span>
   );
 }
 
 function MetaLine({ r }: { r: FinishedResult }) {
-  const bits = [SOURCE_WORD[r.source], r.by, when(r.at), r.durationMs !== undefined ? formatDuration(r.durationMs) : '']
+  const tz = useInstallTimeZone();
+  const bits = [SOURCE_WORD[r.source], r.by, when(r.at, tz), r.durationMs !== undefined ? formatDuration(r.durationMs) : '']
     .filter(Boolean);
-  return <div className="text-[12px] text-muted-foreground break-words">{bits.join(' · ')}</div>;
+  return <div className="text-px12 text-muted-foreground break-words">{bits.join(' · ')}</div>;
 }
 
 function Body({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
@@ -59,7 +59,7 @@ function Body({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
   return (
     <div className="space-y-1.5 min-w-0">
       {r.error && r.outcome === 'failed' && (
-        <div data-result-error className="text-[12.5px] text-destructive break-words">{r.error}</div>
+        <div data-result-error className="text-px12h text-destructive break-words">{r.error}</div>
       )}
       {r.summary && (r.error !== r.summary) && (
         <div data-result-summary className="min-w-0 break-words">
@@ -68,13 +68,13 @@ function Body({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
       )}
       {r.detail && (
         <button type="button" onClick={() => setMore((m) => !m)} aria-expanded={more}
-          className="text-[12px] text-primary hover:underline">{more ? 'less' : 'more'}</button>
+          className="text-px12 text-primary hover:underline">{more ? 'less' : 'more'}</button>
       )}
       {(r.links.length > 0 || r.files.length > 0) && (
         <div data-result-links className="flex flex-wrap gap-1.5">
           {r.links.map((u) => (
             <a key={u} href={u} target="_blank" rel="noreferrer"
-              className="inline-flex max-w-full items-center gap-1 rounded-md border border-current/15 px-1.5 py-0.5 text-[12px] text-primary hover:underline">
+              className="inline-flex max-w-full items-center gap-1 rounded-md border border-current/15 px-1.5 py-0.5 text-px12 text-primary hover:underline">
               <Link2 size={11} aria-hidden /><span className="break-all">{u.replace(/^https?:\/\//, '')}</span>
             </a>
           ))}
@@ -85,7 +85,7 @@ function Body({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
       {r.steps && r.steps.length > 0 && (
         <div>
           <button type="button" onClick={() => setSteps((s) => !s)} aria-expanded={steps}
-            className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground">
+            className="inline-flex items-center gap-1 text-px12 text-muted-foreground hover:text-foreground">
             <ChevronDown size={12} className={steps ? 'rotate-180' : ''} aria-hidden />
             {r.steps.length} step{r.steps.length === 1 ? '' : 's'}
           </button>
@@ -112,8 +112,8 @@ function Header({ r }: { r: FinishedResult }) {
 
 function shell(skin: ResultSkin): string {
   return skin === 'modern'
-    ? 'w-full border-l-2 border-current/20 pl-3 py-1 text-[14px]'
-    : 'w-full max-w-[min(42rem,100%)] rounded-xl border border-border bg-card text-card-foreground px-3.5 py-2.5 text-[13px] shadow-sm';
+    ? 'w-full border-l-2 border-current/20 pl-3 py-1 text-px14'
+    : 'w-full max-w-[min(42rem,100%)] rounded-xl border border-border bg-card text-card-foreground px-3.5 py-2.5 text-px13 shadow-sm';
 }
 
 function Single({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
@@ -142,7 +142,7 @@ function StackRow({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
       </button>
       {/* A failure's reason shows on the row itself; the rest opens with the row. */}
       {!open && r.outcome === 'failed' && r.error && (
-        <div className="mt-1 pl-6 text-[12.5px] text-destructive break-words">{r.error}</div>
+        <div className="mt-1 pl-6 text-px12h text-destructive break-words">{r.error}</div>
       )}
       {open && <div className="mt-1.5 pl-6"><Body r={r} skin={skin} /></div>}
     </li>
@@ -153,11 +153,12 @@ function StackRow({ r, skin }: { r: FinishedResult; skin: ResultSkin }) {
  *  time; it opens to the full card. A failure is never drawn collapsed. */
 function Collapsed({ results, skin, view }: { results: FinishedResult[]; skin: ResultSkin; view: ResultView }) {
   const [open, setOpen] = useState(false);
+  const tz = useInstallTimeZone();
   if (open) {
     return (
       <div className="space-y-1">
         <button type="button" onClick={() => setOpen(false)} aria-expanded
-          className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground">
+          className="inline-flex items-center gap-1 text-px12 text-muted-foreground hover:text-foreground">
           <ChevronDown size={12} className="rotate-180" aria-hidden /> less
         </button>
         <ResultCard results={results} skin={skin} />
@@ -170,11 +171,11 @@ function Collapsed({ results, skin, view }: { results: FinishedResult[]; skin: R
   return (
     <div className="flex justify-start">
       <button type="button" data-result-collapsed data-view={view} onClick={() => setOpen(true)} aria-expanded={false}
-        className="flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-current/15 px-2.5 py-1 text-left text-[12.5px] text-muted-foreground hover:text-foreground">
+        className="flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-current/15 px-2.5 py-1 text-left text-px12h text-muted-foreground hover:text-foreground">
         <Icon size={13} className="shrink-0" aria-hidden />
         <span className="min-w-0 break-words text-foreground">{label}</span>
         {results.length === 1 && <Outcome outcome={r.outcome} source={r.source} />}
-        {results.length === 1 && when(r.at) && <span className="shrink-0">{when(r.at)}</span>}
+        {results.length === 1 && when(r.at, tz) && <span className="shrink-0">{when(r.at, tz)}</span>}
         <ChevronDown size={12} className="shrink-0" aria-hidden />
       </button>
     </div>

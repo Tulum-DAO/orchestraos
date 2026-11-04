@@ -7,6 +7,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
 import { Menu, X, Plus } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
+import { SidebarResizer } from '../components/SidebarResizer';
 import { useMatch } from 'react-router-dom';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
@@ -15,6 +16,7 @@ import { FloatingArturo } from '../components/arturo/FloatingArturo';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
+import { loadServerSettings } from '../stores/serverSettings';
 import { showArturoPill, isViewHidden, showNewAgent } from '../lib/features';
 import NotFound from '../components/NotFound';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
@@ -158,9 +160,7 @@ export function DashboardLayout() {
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
 
-  useEffect(() => {
-    initAutoDiscovery();
-  }, []);
+  useEffect(() => { initAutoDiscovery(); void loadServerSettings(); }, []);
 
   const bell = <NotificationBell />;
 
@@ -169,8 +169,9 @@ export function DashboardLayout() {
       {/* h-dvh, not h-screen: on iPhone Safari 100vh includes the strip behind the address bar, so a
           bottom-docked composer sat under it and could not be typed into (Shaw, 2026-10-11). */}
       {/* Desktop sidebar */}
-      <div className={hideDesktopSidebar ? 'hidden' : 'hidden md:block'}>
-        <Sidebar />
+      <div className={hideDesktopSidebar ? 'hidden' : 'hidden md:block relative shrink-0'}>
+        <Sidebar variant="desktop" />
+        <SidebarResizer />
       </div>
 
       {/* Mobile sidebar overlay. z 65/66: above the floating agent card (z-50, its toasts z-60), below Arturo (76). */}
@@ -187,7 +188,7 @@ export function DashboardLayout() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <Sidebar onNavigate={() => setSidebarOpen(false)} />
+        <Sidebar variant="drawer" onNavigate={() => setSidebarOpen(false)} />
       </div>
 
       {/* Main content */}

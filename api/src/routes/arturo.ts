@@ -33,7 +33,7 @@ import { Router } from 'express';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
-import { tenantScope } from '../lib/principal.js';
+import { tenantScope, installRole, type InstallRole } from '../lib/principal.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
@@ -59,6 +59,9 @@ export interface ArturoDeps {
   /** Whether the caller is an admin (the same role check /api/usage uses). Injectable so both
    *  answers are tested without identity headers; absent means that real check. */
   isAdmin?: (req: any) => boolean;
+  /** The caller's role on the install (lib/principal installRole): the install's own voice is admin-only. Injectable for
+   *  tests; absent means the real check. */
+  installRole?: (req: any) => InstallRole;
 }
 
 // Per-turn brain + page context (DEC-1790669162399904 §1.1-1.2). Shape checks only, for an early
@@ -193,6 +196,7 @@ export function defaultArturoDeps(): ArturoDeps {
       return { status: r.status, body };
     },
     isAdmin: (req) => tenantScope(req).isAdmin,
+    installRole: (req) => installRole(req),
   };
 }
 
@@ -419,8 +423,11 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   router.get('/ptt/voice', async (req, res) => {
     await forward(res, `/arturo/ptt/voice${withAgent(vendorQuery(req.query.vendor), voiceAgent(req.query.agent))}`, { method: 'GET' }, 10000);
   });
-  // Anyone who can open the dashboard may read or change any agent's voice, name and look for now: there is no
-  // per-agent ownership yet. (The gateway still scopes paired devices; this API holds a bearer with every scope.)
+  // Anyone who can open the dashboard may read or change any agent's own voice for now: there is no per-agent ownership
+  // yet. The install's voice (no agent) is every agent's default, so only an admin changes it (Settings phase 1, the same
+  // rule as PUT /api/settings/voice.defaultVoice). (The gateway still scopes paired devices; this API holds a bearer with
+  // every scope.)
+  const roleOf = deps.installRole ?? ((req: any) => installRole(req));
   router.put('/ptt/voice', async (req, res) => {
     const { vendor, voice_id, agent: rawAgent } = (req.body || {}) as Record<string, unknown>;
     if (typeof vendor !== 'string' || typeof voice_id !== 'string' || !vendor || !voice_id
@@ -431,6 +438,10 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     const agent = voiceAgent(rawAgent);
     if (rawAgent !== undefined && rawAgent !== null && rawAgent !== '' && !agent) {
       res.status(400).json({ ok: false, error: 'agent must be an agent id' });
+      return;
+    }
+    if (!agent && roleOf(req) !== 'admin') {
+      res.status(403).json({ ok: false, error: "Only an admin can change the install's voice" });
       return;
     }
     await forward(res, '/arturo/ptt/voice', {

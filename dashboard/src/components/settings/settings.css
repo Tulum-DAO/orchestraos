@@ -1,0 +1,44 @@
+/* Settings (components/settings): a centred modal on desktop, a full-screen sheet on a phone. Colours come from
+   .agent-panel-host (arturo.css), so rows look like the agent panel's. */
+.settings-host { position: fixed; inset: 0; z-index: 120; }
+.settings-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); }
+.settings-modal {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(880px, calc(100vw - 32px)); height: min(640px, 90vh);
+  display: grid; grid-template-columns: 232px minmax(0, 1fr);
+  background: var(--panel); color: var(--text); border: 1px solid var(--hair); border-radius: 16px;
+  box-shadow: 0 24px 64px var(--shadow); overflow: hidden;
+}
+.settings-nav { border-right: 1px solid var(--hair); padding: 12px; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
+.settings-search { width: 100%; flex: none; }   /* .arturo-panel-input grows (flex: 1); in the nav column it must not */
+.settings-nav-item { text-align: left; padding: 8px 10px; border-radius: 8px; color: var(--text); font-size: calc(14px * var(--ui-text-scale, 1)); }
+.settings-nav-item:hover { background: var(--card); }
+.settings-nav-item[aria-current="page"] { background: var(--card2); font-weight: 600; }
+.settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.settings-sheet {
+  position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--panel); color: var(--text);
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+}
+.settings-group { margin-bottom: 20px; }
+.settings-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.settings-scope { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: calc(11px * var(--ui-text-scale, 1));
+  padding: 1px 8px; border-radius: 999px; border: 1px solid var(--hair); color: var(--grey); }
+.settings-row .arturo-panel-field { flex-wrap: wrap; }
+.settings-stacked { flex-direction: column; align-items: stretch; padding: 8px 2px; }
+.settings-control { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+.settings-saved { display: inline-flex; align-items: center; gap: 2px; color: #16a34a; font-size: calc(12px * var(--ui-text-scale, 1)); }
+.settings-lock { display: flex; align-items: center; gap: 4px; }
+.settings-choice { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.settings-choice-opt { padding: 4px 10px; min-height: 32px; border-radius: 8px; border: 1px solid var(--hair); background: var(--card);
+  color: var(--text); font-size: calc(13px * var(--ui-text-scale, 1)); }
+.settings-choice-opt.is-on { background: var(--send-bg); color: var(--send-fg); border-color: transparent; }
+.settings-choice-opt:disabled { opacity: 0.5; }
+.settings-number { width: 5.5em; text-align: right; }
+/* A select in a row takes the width of its value (the panel caps it at 60% of a shrinking box, which cut "Marin" to "Ma"). */
+.settings-control > select.arturo-panel-value { max-width: none; }
+.settings-search-section:not(:has([data-setting])) { display: none; }
+.settings-group:not(:has([data-setting])) { display: none; }
+.arturo-panel-body:has([data-setting]) .settings-search-none { display: none; }
+.settings-search-title { font-weight: 600; margin: 4px 0 8px; font-size: calc(15px * var(--ui-text-scale, 1)); }
+.settings-preview { border: 1px solid var(--hair); border-radius: 12px; padding: 12px; margin-bottom: 16px; background: var(--canvas); }
+@media (max-width: 47.99rem) { .settings-choice-opt { min-height: 44px; } }

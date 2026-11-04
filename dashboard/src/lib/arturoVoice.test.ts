@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { voiceRowValue, pickVoice, canChangeVoice, type VoiceVendor } from './arturoVoice.ts';
+import { setInstallRole } from './myRole.ts';
 
 const ON: VoiceVendor = { id: 'openai', title: 'GPT-Live', available: true };
 const OFF: VoiceVendor = { id: 'openai', title: 'GPT-Live', available: false, reason: 'missing OPENAI_API_KEY' };
@@ -31,8 +32,10 @@ test('a refused pick rolls back to the old voice with the server\'s reason', asy
   assert.deepEqual(shown.at(-1), { current: 'marin', error: "Couldn't change the voice: 'nova' is not an openai voice" });
 });
 
-test('anyone may change the voice for now, whatever their role', () => {
-  assert.equal(canChangeVoice(), true);
+test('only an admin may change the voice; a member (the default until the server says admin) may not', () => {
+  assert.equal(canChangeVoice(), false);
+  setInstallRole('admin');
+  try { assert.equal(canChangeVoice(), true); } finally { setInstallRole('member'); }
 });
 
 test('the voice row splits: the provider is the server\'s (greyed), the voice is the agent\'s own', async () => {

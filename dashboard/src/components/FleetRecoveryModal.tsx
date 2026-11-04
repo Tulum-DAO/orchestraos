@@ -43,7 +43,7 @@ export function FleetRecoveryModal() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors
+        className="px-2.5 py-1 text-px11 font-medium rounded-md border transition-colors
                    border-tone-700 bg-tone-800 text-tone-400 hover:text-tone-200 hover:border-tone-600"
       >
         ⚡ Recovery

@@ -30,7 +30,7 @@ export default function ChoiceCard({ question, note, options, multi = false, exc
   asker?: string;
 }) {
   const q = question || note || (multi ? 'Pick all that apply' : 'Pick one');
-  const context = question && note ? <div className="text-[13px] leading-relaxed text-card-foreground/85">{note}</div> : null;
+  const context = question && note ? <div className="text-px13 leading-relaxed text-card-foreground/85">{note}</div> : null;
   const parts = choiceParts(options, multi, exclusive, q);
 
   const submit = async (answers: PartAnswer[]): Promise<string | null> => {

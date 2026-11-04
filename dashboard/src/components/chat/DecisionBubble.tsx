@@ -18,7 +18,7 @@ function MenuAnswerLine({ d }: { d: Decision }) {
   return (
     <div id={`decision-${d.id}`} data-decision-state="answered" data-menu-answer
          className="flex justify-center">
-      <div className={clsx('max-w-[92%] text-center text-[11px] text-muted-foreground px-3 py-1 rounded-full border bg-card',
+      <div className={clsx('max-w-[92%] text-center text-px11 text-muted-foreground px-3 py-1 rounded-full border bg-card',
         dismissed ? 'border-border' : 'border-info/50')}>
         <span className="text-card-foreground/85">{menuAnswerLine(d)}</span>
         {!dismissed && d.question && <span> · {previewText(d.question, 90)}</span>}

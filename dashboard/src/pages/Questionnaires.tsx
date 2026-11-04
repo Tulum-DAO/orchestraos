@@ -84,7 +84,7 @@ export default function Questionnaires() {
             <div key={q.id} className="rounded-xl border-l-4 border-l-amber-500 border border-tone-800 bg-tone-900 overflow-hidden">
               <div className="p-4 space-y-3">
                 {q.created_by && q.created_by !== 'system' && (
-                  <div className="text-[10px] font-mono font-medium text-tone-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit">
+                  <div className="text-px10 font-mono font-medium text-tone-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit">
                     from {q.created_by}
                   </div>
                 )}
@@ -155,7 +155,7 @@ export default function Questionnaires() {
               <div key={q.id} className="rounded-xl border border-tone-800 bg-tone-900/50 overflow-hidden">
                 <div className="p-4">
                   {q.created_by && q.created_by !== 'system' && (
-                    <div className="text-[10px] font-mono font-medium text-tone-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit mb-2">
+                    <div className="text-px10 font-mono font-medium text-tone-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit mb-2">
                       from {q.created_by}
                     </div>
                   )}

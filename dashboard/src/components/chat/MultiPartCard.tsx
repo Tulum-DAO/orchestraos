@@ -101,7 +101,7 @@ function Frame({ title, meta, onDismiss, dimmed, context, children, footer, id, 
       <div className="touch-compact flex items-center gap-1.5 pl-3.5 pr-2 pt-2 min-h-[2rem]">
         <ListChecks size={13} className="shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 truncate text-xs font-medium text-muted-foreground">{title}</span>
-        {meta && <span className="min-w-0 truncate text-[11px] text-muted-foreground/80">{meta}</span>}
+        {meta && <span className="min-w-0 truncate text-px11 text-muted-foreground/80">{meta}</span>}
         <span className="flex-1" />
         {onDismiss && <DismissButton onDismiss={onDismiss} />}
       </div>
@@ -187,22 +187,22 @@ function Dots({ answers, at }: { answers: PartAnswer[]; at: number }) {
 function Question({ part }: { part: MenuPart }) {
   return (
     <div className="pb-2">
-      <div className="text-[14.5px] font-semibold leading-snug">{withRefs(part.question)}</div>
-      {part.select === 'multi' && <div className="text-[11px] text-muted-foreground mt-0.5">Pick any</div>}
+      <div className="text-px14h font-semibold leading-snug">{withRefs(part.question)}</div>
+      {part.select === 'multi' && <div className="text-px11 text-muted-foreground mt-0.5">Pick any</div>}
     </div>
   );
 }
 
 function Badge({ i, on, multi }: { i: number; on: boolean; multi: boolean }) {
   return (
-    <span className={clsx('mt-px w-[22px] h-[22px] shrink-0 border flex items-center justify-center text-[11px] font-semibold',
+    <span className={clsx('mt-px w-[22px] h-[22px] shrink-0 border flex items-center justify-center text-px11 font-semibold',
       multi ? 'rounded-md' : 'rounded-full', on ? 'border-info bg-info text-info-foreground' : 'border-border text-muted-foreground')}>
       {multi && on ? <Check size={12} strokeWidth={3} /> : letter(i)}
     </span>
   );
 }
 
-const CHOSEN_ROW = 'flex items-start gap-2.5 rounded-xl border border-info/40 bg-info/5 px-2.5 py-2 text-[13.5px]';
+const CHOSEN_ROW = 'flex items-start gap-2.5 rounded-xl border border-info/40 bg-info/5 px-2.5 py-2 text-px13h';
 
 /** Typed words in an answered card: drawn as a chosen row, as plain text (never in quotes). */
 function WordsRow({ words }: { words: string }) {
@@ -366,13 +366,13 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
                   <button key={o.n} type="button" role={multi ? 'checkbox' : 'radio'} aria-checked={on} data-option={o.n}
                           disabled={phase !== 'answer' || (!!waiting && i === parts.length - 1 && !multi)}
                           onClick={() => step(choose(parts, { ...s, at: i }, o.n))}
-                          className={clsx('w-full flex items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left text-[13.5px] transition-colors disabled:cursor-default',
+                          className={clsx('w-full flex items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left text-px13h transition-colors disabled:cursor-default',
                             on ? 'border-info/60 bg-info/10' : 'border-border hover:bg-muted/60')}>
                     <Badge i={k} on={on} multi={multi} />
                     <span className="min-w-0 flex-1">
                       <span className="block font-medium leading-snug break-words">
                         {o.label}
-                        {p.lean === o.n && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">· agent leans</span>}
+                        {p.lean === o.n && <span className="ml-1.5 text-px11 font-normal text-muted-foreground">· agent leans</span>}
                       </span>
                       {o.detail && <span className="block text-xs text-muted-foreground mt-0.5">{o.detail}</span>}
                     </span>
@@ -390,7 +390,7 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
           </>
         );
       }} />
-      {note && <div className={clsx('px-3.5 pt-1 text-[11px]', problem ? 'text-warning' : 'text-muted-foreground')} data-note>{note}</div>}
+      {note && <div className={clsx('px-3.5 pt-1 text-px11', problem ? 'text-warning' : 'text-muted-foreground')} data-note>{note}</div>}
     </Frame>
   );
 }
@@ -416,7 +416,7 @@ export function AnsweredQuestionCard({ title, meta, context, parts, answers, not
       footer={paged || note ? (
         <>
           <Dots answers={answers} at={at} />
-          {note && <span className="min-w-0 truncate text-[11px] text-muted-foreground" data-answered-note>{note}</span>}
+          {note && <span className="min-w-0 truncate text-px11 text-muted-foreground" data-answered-note>{note}</span>}
           <span className="flex-1" />
           {paged && (
             <>
@@ -434,9 +434,9 @@ export function AnsweredQuestionCard({ title, meta, context, parts, answers, not
             <Question part={p} />
             <div className={clsx('space-y-1', !paged && !note && 'pb-2.5')}>
               {elsewhere ? (
-                <div className="text-[13px] italic text-muted-foreground px-1" data-elsewhere>{elsewhere}</div>
+                <div className="text-px13 italic text-muted-foreground px-1" data-elsewhere>{elsewhere}</div>
               ) : out.skipped ? (
-                <div className="text-[13px] italic text-muted-foreground px-1" data-skipped>Skipped</div>
+                <div className="text-px13 italic text-muted-foreground px-1" data-skipped>Skipped</div>
               ) : (
                 <>
                   {rows.map((o, k) => answers[i].ns.includes(o.n) && (

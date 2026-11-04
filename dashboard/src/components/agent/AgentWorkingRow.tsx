@@ -25,6 +25,7 @@ import { dotState, rowShown, workingRowFor, type WorkingRowInput } from '../../l
 import { isDegraded } from '../../lib/feedLiveness';
 import { ROW_GAP_A, canvasSizeFor, workingRowSizes } from '../../lib/workingRowLook';
 import { useAgentTyping } from '../../stores/agentTyping';
+import { useDisplay, useTextAvatar } from '../../lib/deviceSettings';
 import './agentWorking.css';
 
 export const TYPING_PHRASE = 'Typing…';
@@ -45,8 +46,11 @@ export function WorkingRowView({ agentId, name, phrase, typing, activity, avatar
 }) {
   const rec = useAgentRecord(agentId);
   const [sizes] = useState(workingRowSizes);
-  const A = avatarSize ?? sizes.avatar;
-  const T = textSize ?? sizes.text;
+  // Beside text, so it follows text size (Settings › Display): the avatar by the avatar rule, the phrase by the factor.
+  const scaledA = useTextAvatar(sizes.avatar);
+  const { textScale } = useDisplay();
+  const A = avatarSize ?? scaledA;
+  const T = textSize ?? Math.round(sizes.text * textScale * 10) / 10;
   const S = canvasSizeFor(A, LAYOUT.u);
   const avatarState: AvatarState = typing ? 'thinking' : 'working';
   const shownPhrase = typing ? TYPING_PHRASE : phrase;

@@ -118,7 +118,7 @@ export function RecentAgentChips({ currentId }: { currentId: string }) {
           title={`Switch to ${id}`}
         >
           <ActivityDot state={stateFor(id)} />
-          <span className="text-[11px] text-tone-300 truncate">{id}</span>
+          <span className="text-px11 text-tone-300 truncate">{id}</span>
         </button>
       ))}
     </div>

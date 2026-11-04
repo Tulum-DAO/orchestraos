@@ -73,14 +73,14 @@ export default function Skills() {
             <div key={`${skill.plugin_id}-${skill.id}`} className="p-4 rounded-xl border border-tone-800 bg-tone-900">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm">{skill.name}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-tone-800 text-tone-500">{skill.plugin_name}</span>
+                <span className="text-px10 px-1.5 py-0.5 rounded bg-tone-800 text-tone-500">{skill.plugin_name}</span>
               </div>
               <p className="text-xs text-tone-500 mt-1">{skill.description}</p>
-              {skill.trigger && <p className="text-[10px] text-tone-600 mt-1 italic">Trigger: {skill.trigger}</p>}
+              {skill.trigger && <p className="text-px10 text-tone-600 mt-1 italic">Trigger: {skill.trigger}</p>}
               {/* Agents with this skill */}
               <div className="flex flex-wrap gap-1 mt-2">
                 {Object.entries(agentSkills).filter(([, skills]) => (skills as string[]).includes(skill.id)).map(([agentId]) => (
-                  <span key={agentId} className="text-[10px] px-1.5 py-0.5 rounded bg-tone-800 text-tone-400">{agentId}</span>
+                  <span key={agentId} className="text-px10 px-1.5 py-0.5 rounded bg-tone-800 text-tone-400">{agentId}</span>
                 ))}
               </div>
             </div>

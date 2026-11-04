@@ -51,6 +51,11 @@ export const useAgentCallsStore = create<Store>((set) => ({
   set: (id, v) => set((s) => (s.on[id] === v ? s : { on: { ...s.on, [id]: v } })),
 }));
 
+/** Read the flag again now (after the agent's own switch is saved), so its Call button follows at once. */
+export async function refreshAgentCallsOn(agentId: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  useAgentCallsStore.getState().set(agentId, await fetchAgentCallsOn(agentId, fetchFn));
+}
+
 /** The flag for this agent, read when its page opens; false until the answer says true. */
 export function useAgentCallsOn(agentId: string): boolean {
   const on = useAgentCallsStore((s) => s.on[agentId]);
@@ -61,4 +66,29 @@ export function useAgentCallsOn(agentId: string): boolean {
     return () => { alive = false; };
   }, [agentId]);
   return on === true;
+}
+
+/** The agent's own call switch as stored (GET /api/agents/:id/settings `takes_calls`); null on an older API. */
+export function takesCallsFrom(json: unknown): boolean | null {
+  const d = json as { ok?: boolean; takes_calls?: unknown; settings?: { takes_calls?: unknown } } | null;
+  if (!d || d.ok === false) return null;
+  const v = d.takes_calls ?? d.settings?.takes_calls;
+  return typeof v === 'boolean' ? v : null;
+}
+
+export async function fetchTakesCalls(agentId: string, fetchFn: typeof fetch = fetch): Promise<boolean | null> {
+  try {
+    const r = await fetchFn(`/api/agents/${encodeURIComponent(agentId)}/settings`);
+    return r.ok ? takesCallsFrom(await r.json()) : null;
+  } catch { return null; }
+}
+
+export async function saveTakesCalls(agentId: string, on: boolean, fetchFn: typeof fetch = fetch): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const r = await fetchFn(`/api/agents/${encodeURIComponent(agentId)}/takes-calls`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }),
+    });
+    const d = await r.json().catch(() => ({})) as { ok?: boolean; error?: string };
+    return r.ok && d.ok !== false ? { ok: true } : { ok: false, error: d.error || `HTTP ${r.status}` };
+  } catch (e) { return { ok: false, error: e instanceof Error ? e.message : 'network' }; }
 }

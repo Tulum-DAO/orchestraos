@@ -87,9 +87,9 @@ export default function ConversationRail({ activeThread, onSelect, onNew }: Prop
       </div>
 
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1 min-h-0">
-        {state === 'loading' && <p className="text-[11px] text-tone-600 px-2 py-3">Loading…</p>}
-        {state === 'error' && <p className="text-[11px] text-tone-red-400/80 px-2 py-3">Couldn't load conversations.</p>}
-        {state === 'empty' && <p className="text-[11px] text-tone-600 px-2 py-3">No conversations{q ? ' match' : ' yet'}.</p>}
+        {state === 'loading' && <p className="text-px11 text-tone-600 px-2 py-3">Loading…</p>}
+        {state === 'error' && <p className="text-px11 text-tone-red-400/80 px-2 py-3">Couldn't load conversations.</p>}
+        {state === 'empty' && <p className="text-px11 text-tone-600 px-2 py-3">No conversations{q ? ' match' : ' yet'}.</p>}
         {threads.map((t) => (
           <button
             key={t.thread}
@@ -104,9 +104,9 @@ export default function ConversationRail({ activeThread, onSelect, onNew }: Prop
             <div className="flex items-center gap-1.5">
               {t.pinned && <Pin size={10} className="text-tone-amber-400 shrink-0" />}
               <span className="text-xs font-medium text-tone-200 truncate flex-1">{t.title}</span>
-              <span className="text-[10px] text-tone-600 shrink-0">{relTime(t.updatedAt)}</span>
+              <span className="text-px10 text-tone-600 shrink-0">{relTime(t.updatedAt)}</span>
             </div>
-            <p className="text-[11px] text-tone-500 truncate mt-0.5">{t.preview}</p>
+            <p className="text-px11 text-tone-500 truncate mt-0.5">{t.preview}</p>
             <div className="flex items-center gap-1 mt-1">
               {t.sourceChannels.map((c) => {
                 const Icon = CHANNEL_ICON[c];

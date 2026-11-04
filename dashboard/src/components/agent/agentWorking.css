@@ -35,7 +35,7 @@
 @keyframes agent-shimmer-win{ from{ transform:translateX(-100%); } to{ transform:translateX(250%); } }
 @keyframes agent-shimmer-copy{ from{ transform:translateX(40%); } to{ transform:translateX(-100%); } }
 .agent-working-resume{ flex:0 0 auto; margin-left:4px; padding:2px 10px; min-height:0; border-radius:999px;
-  border:1px solid var(--color-line-strong); background:transparent; color:var(--color-foreground); font:inherit; font-size:12px; cursor:pointer; }
+  border:1px solid var(--color-line-strong); background:transparent; color:var(--color-foreground); font:inherit; font-size: calc(12px * var(--ui-text-scale, 1)); cursor:pointer; }
 @media (hover:hover){ .agent-working-resume:hover{ background:var(--color-hover); } }
 @media (prefers-reduced-motion: reduce){
   .agent-shimmer-win{ display:none; }
@@ -44,14 +44,14 @@
 /* The slideout's History, Running: the agent's background jobs (AgentRunningJobs), in their own block. */
 .agent-running-jobs{ display:flex; flex-direction:column; gap:2px; margin:0; padding:0; list-style:none; }
 .agent-running-job{ display:flex; align-items:center; gap:8px; width:100%; min-height:0; padding:8px 4px; border:0; border-bottom:1px solid var(--hair);
-  background:none; color:var(--text); font:inherit; font-size:14px; text-align:left; }
+  background:none; color:var(--text); font:inherit; font-size: calc(14px * var(--ui-text-scale, 1)); text-align:left; }
 button.agent-running-job{ cursor:pointer; }
 @media (hover:hover){ button.agent-running-job:hover{ background:rgba(var(--ink),0.04); } }
 .agent-running-job-title{ flex:1 1 40%; min-width:4em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.agent-running-job-kind{ flex:0 0 auto; font-size:12px; color:var(--grey); }
-.agent-running-job-time{ flex:0 0 auto; font-size:12.5px; color:var(--grey); font-variant-numeric:tabular-nums; }
-.agent-running-job-why{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:var(--err); }
+.agent-running-job-kind{ flex:0 0 auto; font-size: calc(12px * var(--ui-text-scale, 1)); color:var(--grey); }
+.agent-running-job-time{ flex:0 0 auto; font-size: calc(12.5px * var(--ui-text-scale, 1)); color:var(--grey); font-variant-numeric:tabular-nums; }
+.agent-running-job-why{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size: calc(12.5px * var(--ui-text-scale, 1)); color:var(--err); }
 @media (max-width: 480px){ .agent-running-job-kind{ display:none; } }
 /* A failure's reason says more than its kind, and needs the room. */
 [data-status="failed"] .agent-running-job-kind{ display:none; }
-.agent-running-job-x{ flex:0 0 auto; min-height:0; padding:2px 8px; border:0; border-radius:999px; background:var(--card2); color:var(--text); font:inherit; font-size:12px; cursor:pointer; }
+.agent-running-job-x{ flex:0 0 auto; min-height:0; padding:2px 8px; border:0; border-radius:999px; background:var(--card2); color:var(--text); font:inherit; font-size: calc(12px * var(--ui-text-scale, 1)); cursor:pointer; }

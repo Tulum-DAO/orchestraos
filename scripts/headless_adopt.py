@@ -8,7 +8,7 @@ a New Agent spawn (api/src/routes/agents-new.ts, detached) and does what an oper
      (no "esc to interrupt" / "esc to cancel" on screen) on two looks 5 s apart: its first task finishes first;
   2. switch it on (headless_switch.set_switch), type /exit, wait for the pane's shell;
   3. seat_supervisor takeover: the supervisor resumes the same session in the same pane;
-  4. agent-calls.json seats.<seat>.on = true (kept options; written atomically).
+  4. agent-calls.json seats.<seat>.on = the install default (default.on, true when unset; kept options; written atomically).
 
 Any failure after step 2 leaves the switch on: every path that brings a seat back in a pane (agent-recovery.sh, red
 alert) asks launch-line first, so it comes back as its supervisor. Non-Claude seats are left alone (they stay on tmux).
@@ -60,7 +60,9 @@ def tui_idle(seat: str) -> bool:
     return "❯" in screen and not any(b in screen for b in BUSY)
 
 
-def set_calls_on(seat: str) -> None:
+def set_calls_on(seat: str) -> bool:
+    """The seat's own calls, as the install default says (agent-calls.json "default": {"on": false} turns new agents' calls
+    off; Settings › Voice & calls "New agents take calls"). Options already there are kept; written atomically."""
     p = HS.data_dir() / "state" / "agent-calls.json"
     try:
         doc = json.loads(p.read_text())
@@ -68,14 +70,17 @@ def set_calls_on(seat: str) -> None:
             doc = {"seats": {}}
     except (OSError, ValueError):
         doc = {"seats": {}}
+    dflt = doc.get("default") if isinstance(doc.get("default"), dict) else {}
+    on = dflt.get("on") is not False
     row = doc["seats"].get(seat)
     row = dict(row) if isinstance(row, dict) else {}
-    row["on"] = True
+    row["on"] = on
     row.setdefault("ack_after_s", 3)
     doc["seats"][seat] = row
     tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
     os.replace(tmp, p)
+    return on
 
 
 def adopt(seat: str, timeout: float, by: str) -> int:

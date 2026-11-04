@@ -22,12 +22,12 @@ export default function CallTranscript({ turns, name, className = '', skin }: { 
     <div ref={box} className={`overflow-y-auto overscroll-contain ${className}`} data-call-transcript
          onScroll={(e) => { const el = e.currentTarget; atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24; }}>
       {turns.length === 0 ? (
-        <p className="py-6 text-center text-[13px] text-muted-foreground">The call's words show here as you talk.</p>
+        <p className="py-6 text-center text-px13 text-muted-foreground">The call's words show here as you talk.</p>
       ) : (
         skin ? (
           <ol className={`flex flex-col gap-2.5 py-2${skin === 'modern' ? ' kit-modern' : ''}`} data-turn-skin={skin}>
             {turns.map((t, i) => {
-              const label = skin === 'modern' ? <span className="text-[11px] font-medium text-muted-foreground">{t.role === 'user' ? 'You' : name}</span> : undefined;
+              const label = skin === 'modern' ? <span className="text-px11 font-medium text-muted-foreground">{t.role === 'user' ? 'You' : name}</span> : undefined;
               const words = <RevealText text={t.text} done={t.final} />;
               return (
                 <li key={i} data-call-turn={t.role}>
@@ -40,10 +40,10 @@ export default function CallTranscript({ turns, name, className = '', skin }: { 
         <ol className="flex flex-col gap-3 py-2">
           {turns.map((t, i) => (
             <li key={i} className="flex flex-col gap-0.5" data-call-turn={t.role}>
-              <span className={`text-[11px] font-medium ${t.role === 'user' ? 'text-muted-foreground' : 'text-foreground'}`}>
+              <span className={`text-px11 font-medium ${t.role === 'user' ? 'text-muted-foreground' : 'text-foreground'}`}>
                 {t.role === 'user' ? 'You' : name}
               </span>
-              <RevealText text={t.text} done={t.final} className="text-[14px] leading-relaxed text-foreground" />
+              <RevealText text={t.text} done={t.final} className="text-px14 leading-relaxed text-foreground" />
             </li>
           ))}
         </ol>

@@ -107,7 +107,7 @@ test('the transcript scroller does not bottom-anchor with justify-end (overflow 
   assert.match(scroller[1], /overflow-y-auto/);
   assert.match(scroller[1], /min-h-0/);
   // ...the column bottom-anchors itself with an auto margin instead.
-  assert.match(view, /"mt-auto w-full max-w-\[860px\] mx-auto px-4 pt-4 space-y-2\.5"/);
+  assert.match(view, /"mt-auto w-full max-w-\[calc\(860px\+var\(--ui-col-extra,0px\)\)\] mx-auto px-4 pt-4 ui-feed-gap"/);
 });
 
 test('the transcript follows the tail only while the reader is at the bottom, and otherwise holds them still', () => {

@@ -26,8 +26,10 @@ import { serviceNoticeText, type SystemMessage } from '../../lib/systemMessages'
 import { handbackResult } from '../../lib/threadKit/results';
 import ResultCard from '../kit/ResultCard';
 import { scrubIds } from '../../lib/cardRefs';
+import { useTextAvatar } from '../../lib/deviceSettings';
 
 export default function AgentMessage({ msg }: { msg: SystemMessage }) {
+  const face20 = useTextAvatar(20);
   const viewerId = useContext(ChatAgentContext);
   const navigate = useNavigate();
   const { data } = useAgents();
@@ -61,7 +63,7 @@ export default function AgentMessage({ msg }: { msg: SystemMessage }) {
       <div data-testid="agent-message" data-sender={raw} data-service className="space-y-1.5">
         <div className="touch-compact flex justify-center px-4">
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
-            className="hit-44 max-w-full truncate text-[13px] text-muted-foreground hover:text-foreground">
+            className="hit-44 max-w-full truncate text-px13 text-muted-foreground hover:text-foreground">
             {scrubIds(serviceNoticeText(msg, full.data?.body))}
           </button>
         </div>
@@ -72,9 +74,9 @@ export default function AgentMessage({ msg }: { msg: SystemMessage }) {
 
   return (
     <div data-testid="agent-message" data-sender={raw} className="space-y-1.5">
-      <div className="touch-compact flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 px-4 text-[13px] text-muted-foreground">
+      <div className="touch-compact flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 px-4 text-px13 text-muted-foreground">
         <span>Message from</span>
-        <AgentIdentityPill variant="bare" text="inline" statusRoom={false} agentId={face.id} name={name} size={20}
+        <AgentIdentityPill variant="bare" text="inline" statusRoom={false} agentId={face.id} name={name} size={face20}
           className="hit-44 text-foreground"
           aria-label={`Open ${name}'s chat`} title={`Open ${name}'s chat`}
           onClick={() => navigate(face.href)} />
@@ -88,7 +90,7 @@ export default function AgentMessage({ msg }: { msg: SystemMessage }) {
 function Bubble({ text }: { text: string }) {
   return (
     <div className="flex justify-start">
-      <div className="max-w-[85%] min-w-0 rounded-2xl rounded-tl-sm border border-border bg-card text-card-foreground px-3.5 py-2 text-[13px] leading-relaxed break-words">
+      <div className="max-w-[85%] min-w-0 rounded-2xl rounded-tl-sm border border-border bg-card text-card-foreground px-3.5 py-2 text-px13 leading-relaxed break-words">
         <Markdown text={text} />
       </div>
     </div>

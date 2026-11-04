@@ -21,7 +21,7 @@ export default function CallChip({ onAgentPage }: { onAgentPage: string | null }
     <div className="pointer-events-none fixed inset-x-0 top-2 z-40 flex justify-center" data-call-chip>
       {/* desktop: the avatar and the time */}
       <button type="button" onClick={go} title={`Back to the call with ${name}`} aria-label={`Back to the call with ${name}`}
-              className="pointer-events-auto hidden items-center gap-2 rounded-full border border-border bg-card/95 py-1 pl-1 pr-3 text-[12px] text-foreground shadow-md backdrop-blur sm:flex">
+              className="pointer-events-auto hidden items-center gap-2 rounded-full border border-border bg-card/95 py-1 pl-1 pr-3 text-px12 text-foreground shadow-md backdrop-blur sm:flex">
         <AgentAvatar agentId={partyId} role="drawer" size={24} state={avatarStateForCall(call.phase)} label={name}
                      shape={rec.shape} color={rec.color} eyeColor={rec.eyeColor} />
         <span className="font-medium">{name}</span>
@@ -29,7 +29,7 @@ export default function CallChip({ onAgentPage }: { onAgentPage: string | null }
       </button>
       {/* phone: the time, in a green pill */}
       <button type="button" onClick={go} aria-label={`Back to the call with ${name}`}
-              className="pointer-events-auto flex items-center rounded-full bg-green-600 px-3 py-1 text-[12px] font-semibold text-white shadow-md sm:hidden">
+              className="pointer-events-auto flex items-center rounded-full bg-green-600 px-3 py-1 text-px12 font-semibold text-white shadow-md sm:hidden">
         <CallTimer />
       </button>
     </div>

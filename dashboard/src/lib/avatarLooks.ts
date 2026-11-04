@@ -5,6 +5,7 @@
  * and are `chosen: false`, which is what offers them "Pick a look".
  */
 import { SWATCHES, type AgentHub } from '../components/avatar/avatarCore.ts';
+import { isInstallAdmin } from './myRole.ts';
 
 const SHAPE_NAMES: Record<string, string> = {
   circle: 'Circle', square: 'Square', pill: 'Pill', hexagon: 'Hexagon', heart: 'Heart', droplet: 'Droplet', star: 'Star',
@@ -128,7 +129,7 @@ export async function resetToDefault(hub: AgentHub, agent: string, def: Look,
 
 /** Anyone may change any agent's look for now (no per-agent ownership yet): the one place that will decide it. */
 export function canChangeLook(): boolean {
-  return true;
+  return isInstallAdmin();
 }
 
 export const DISMISS_KEY = (agent: string) => `orchestra.avatar.pickDismissed.${agent}`;
