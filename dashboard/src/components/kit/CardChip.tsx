@@ -9,14 +9,19 @@
  *     by part, a question card, Approve and Deny) or the questionnaire's own form; once sent the popover closes, the
  *     chip turns Answered and the page stays where it was;
  *   - answered (or dismissed, expired…): the chat's own answered card, read-only, the pick shown, who, where, when.
- * "Go to card" in the popover goes to where the card lives; it is all the popover offers when the card cannot be
- * read. While open, the popover's card is Arturo's focus (lib/screenCards.ts, surface "popover").
+ * The popover draws no box of its own (CardPopFrame): the card is the surface, and it hands the card Go to card and
+ * Close (CardPopContext), which the card draws at its own top right; a waiting card's Dismiss sits left of Send.
+ * "Go to card" goes to where the card lives; it and Close are all the popover offers when the card cannot be read.
+ * Escape, a press outside or Close closes it. While open, the popover's card is Arturo's focus
+ * (lib/screenCards.ts, surface "popover").
  */
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClipboardList, KeyRound, Layers, ListChecks, ShieldCheck, SquareStack, X } from 'lucide-react';
+import { ClipboardList, KeyRound, Layers, ListChecks, ShieldCheck, SquareStack } from 'lucide-react';
+import CardPopFrame from './CardPopFrame';
+import { PopNote } from './CardPopControls';
 import ObjectChip, { type ChipTone } from './ObjectChip';
 import type { Skin } from './Markdown';
 import { chipLabel, describeCard, placeholderLabel, type CardSummary, type RefCardKind } from '../../lib/cardRefs';
@@ -25,6 +30,7 @@ import { approvalsFocusPath, answeredByLine, focusDecision } from '../../lib/dec
 import { batchAnswers } from '../../lib/drawerHistory';
 import { CardSurface } from '../../lib/threadKit/useScreenCard';
 import { isViewHidden } from '../../lib/features';
+import { placePopover, popoverKeyAction } from '../../lib/cardPop';
 import PendingApprovalCard from '../chat/PendingApprovalCard';
 import DecisionBubble from '../chat/DecisionBubble';
 import { AnsweredQuestionCard } from '../chat/MultiPartCard';
@@ -67,27 +73,17 @@ export default function CardChip({ id, skin = 'bubbles', inert }: { id: string; 
   );
 }
 
-const GAP = 8;
-const EDGE = 16;
-const ROOM = 420;
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** Beside the chip: below it when a card fits there, else above, else the screen's full height; never off the screen
- *  (a phone uses a bottom sheet). */
+/** Beside the chip (lib/cardPop placePopover), followed on resize and scroll. */
 function usePlace(anchor: React.RefObject<HTMLElement | null>): CSSProperties {
   const [style, setStyle] = useState<CSSProperties>({ visibility: 'hidden' });
   useLayoutEffect(() => {
     const place = () => {
       const a = anchor.current?.getBoundingClientRect();
       if (!a) return;
-      const vw = window.innerWidth, vh = window.visualViewport?.height ?? window.innerHeight;
-      const w = Math.min(480, vw - EDGE * 2);
-      const left = Math.max(EDGE, Math.min(a.left, vw - w - EDGE));
-      const below = vh - a.bottom - GAP - EDGE;
-      const above = a.top - GAP - EDGE;
-      // Room for a whole card (about 420px) below, else above; else the full height, over the chip.
-      setStyle(below >= ROOM ? { left, top: a.bottom + GAP, maxHeight: below }
-        : above >= ROOM ? { left, bottom: vh - a.top + GAP, maxHeight: above }
-          : { left, top: EDGE, maxHeight: vh - EDGE * 2 });
+      setStyle(placePopover(a, document.documentElement.clientWidth || window.innerWidth,
+        window.visualViewport?.height ?? window.innerHeight));
     };
     place();
     window.addEventListener('resize', place);
@@ -110,9 +106,35 @@ function CardPopover({ id, load, loading, anchor, onClose }: {
   const unified = useQuery({ queryKey: UNIFIED_KEY, queryFn: fetchUnified, enabled: waiting && !load?.questionnaire });
   const row = waiting ? unified.data?.items.find((i) => i.id === id) : undefined;
 
-  // Closes on Escape and on a press outside it (not on its own chip, whose click toggles it).
+  // Escape or Close closes it and gives focus back to the chip; a press outside closes it where the press went.
+  const close = useCallback((refocus: boolean) => {
+    onClose(); if (refocus) anchor.current?.focus({ preventScroll: true });
+  }, [onClose, anchor]);
+
+  // Opened, it takes focus (the frame, tabIndex -1), so the keyboard is in it.
+  const placed = style.visibility !== 'hidden';
+  useEffect(() => { if (placed) box.current?.focus({ preventScroll: true }); }, [placed]);
+
+  // Keys (lib/cardPop popoverKeyAction): Escape closes only the topmost popover; Tab stays inside it, also inside
+  // the agent panel, whose Tab trap would otherwise pull focus back out of this portal. The listener is on the
+  // document, before the panel's on the window, and stops what it handles. A press outside closes it (not one on
+  // its own chip, whose click toggles it).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      const el = box.current;
+      if (!el) return;
+      const pops = document.querySelectorAll('.kit-card-pop');
+      const items = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const active = document.activeElement;
+      const act = popoverKeyAction(e, { topmost: pops[pops.length - 1] === el, inside: !!active && el.contains(active),
+        atStart: active === el || active === items[0], atEnd: active === items[items.length - 1] });
+      if (!act) return;
+      e.stopPropagation();
+      if (act === 'keep') return;
+      e.preventDefault();
+      if (act === 'close') close(true);
+      else (act === 'first' ? items[0] : items[items.length - 1])?.focus();
+    };
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node | null;
       // A card opened from a chip inside this one's card is still this card's work.
@@ -122,11 +144,11 @@ function CardPopover({ id, load, loading, anchor, onClose }: {
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onDown, true);
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDown, true); };
-  }, [onClose, anchor]);
+  }, [close, onClose, anchor]);
 
-  // Sent (or dismissed): close, and let every chip and list showing this card read it again. The page stays put.
+  // Sent (or dismissed): close (focus back on the chip, which now reads Answered), and let every chip and list showing this card read it again. The page stays put.
   const answered = () => {
-    onClose();
+    close(true);
     void qc.invalidateQueries({ queryKey: cardKey(id) });
     void qc.invalidateQueries({ queryKey: UNIFIED_KEY });
     if (s?.from) void qc.invalidateQueries({ queryKey: ['agent-decisions', s.from] });
@@ -148,26 +170,22 @@ function CardPopover({ id, load, loading, anchor, onClose }: {
   };
 
   let body: React.ReactNode;
-  if (loading) body = <p className="kit-card-pop-note">Loading the card…</p>;
-  else if (!load) body = <p className="kit-card-pop-note" data-card-unavailable>This card couldn’t be loaded here.</p>;
+  if (loading) body = <PopNote className="kit-card-pop-note">Loading the card…</PopNote>;
+  else if (!load) body = <PopNote className="kit-card-pop-note" data-card-unavailable>This card couldn’t be loaded here.</PopNote>;
   else if (load.questionnaire) body = <QuestionnaireForm id={id} onAnswered={answered} />;
   else if (row) body = <PendingApprovalCard item={row} onChanged={answered} id={`card-pop-${id}`} />;
-  else if (waiting && unified.isLoading) body = <p className="kit-card-pop-note">Loading the card…</p>;
+  else if (waiting && unified.isLoading) body = <PopNote className="kit-card-pop-note">Loading the card…</PopNote>;
   else if (load.card?.batch && load.card.batch.parts.length) {
     body = <AnsweredQuestionCard title={load.card.from_agent} parts={load.card.batch.parts} answers={batchAnswers(load.card.batch)}
       note={answeredByLine(load.card)} report={{ id, kind: 'multipart', from: load.card.from_agent }} />;
   } else if (load.card) body = <DecisionBubble decision={load.card} onAnswered={answered} />;
-  else body = <p className="kit-card-pop-note" data-card-unavailable>This card couldn’t be loaded here.</p>;
+  else body = <PopNote className="kit-card-pop-note" data-card-unavailable>This card couldn’t be loaded here.</PopNote>;
 
   return createPortal(
-    <div ref={box} className="kit-card-pop" data-cap-root style={style} role="dialog" aria-label={s ? `Card: ${s.question}` : 'Card'} data-card-pop={id}>
+    <CardPopFrame id={id} label={s ? `Card: ${s.question}` : 'Card'} style={style} boxRef={box}
+      onGoTo={goTo} onClose={() => close(true)}>
       <CardSurface.Provider value="popover">{body}</CardSurface.Provider>
-      <div className="kit-card-pop-bar">
-        <span className="grow" />
-        <button type="button" className="kit-card-pop-btn" onClick={goTo} data-card-goto>Go to card</button>
-        <button type="button" className="kit-card-pop-btn" onClick={onClose} aria-label="Close"><X size={12} /></button>
-      </div>
-    </div>,
+    </CardPopFrame>,
     document.body,
   );
 }

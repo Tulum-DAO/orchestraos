@@ -6,7 +6,8 @@
  *
  * The card is its own frame: one small header line (who is asking, and the ✕), any context the caller adds (a
  * decision's text, a questionnaire's summary), the part on show at full width (the parts slide; no neighbour peeks
- * in), then progress dots on the left and pill buttons on the right.
+ * in), then progress dots on the left and pill buttons on the right. In a card's popover (CardPopContext) the
+ * header's ✕ is the popover's Close with Go to card left of it, and Dismiss is the first pill, left of Send.
  *
  *  - A click on an option answers a single-select part and slides to the next; a multi-select part takes ticks and
  *    its own Next.
@@ -29,6 +30,9 @@ import { clsx } from 'clsx';
 import { Check, ListChecks, Loader2, PenLine } from 'lucide-react';
 import { DismissButton } from './DecisionCard';
 import { withRefs } from '../kit/RefText';
+import { PopHeaderControls } from '../kit/CardPopControls';
+import { useCardPop } from '../kit/cardPopContext';
+import { PILL_MAIN, PILL_QUIET } from '../../lib/cardButtons';
 import {
   answered, back, canNext, canSkip, captureProblem, cardKey, cardNote, choose, letter, next, nothingAnswered, outcome, partRows, setWords,
   skipPart, startState, submitAnswers, takesWords, type CardState, type MenuPart, type PartAnswer, type Step,
@@ -37,9 +41,6 @@ import { answerStep, partView, type ScreenCard } from '../../lib/screenCards';
 import { useScreenCard } from '../../lib/threadKit/useScreenCard';
 import type { RefCardKind, RefCardState } from '../../lib/cardRefs';
 
-const PILL = 'hit-44 text-xs font-medium px-3 py-1 rounded-full border transition-colors disabled:opacity-40';
-const PILL_QUIET = `${PILL} border-border text-muted-foreground hover:bg-muted hover:text-foreground`;
-const PILL_MAIN = `${PILL} border-info bg-info text-info-foreground hover:bg-info/90`;
 
 /** What a card is, for the cards-on-screen context Arturo reads (lib/screenCards.ts): its id, kind and who asked.
  *  The card adds its state, the part on show and what is picked, typed or answered. */
@@ -84,15 +85,21 @@ interface FrameProps {
   /** Above the parts, for every part: a decision's text, a questionnaire's summary. */
   context?: ReactNode;
   children: ReactNode;
+  /** The footer's left: progress dots, an answered note. */
   footer?: ReactNode;
+  /** The footer's right: its pill buttons (Back, Skip, Next / Send). */
+  actions?: ReactNode;
   id?: string;
   highlighted?: boolean;
   /** The frame's element, for the card's keys and its height cap. */
   frameRef?: React.Ref<HTMLDivElement>;
 }
 
-/** The frame: one small header line, the context, the parts, and the footer (dots left, pills right). */
-function Frame({ title, meta, onDismiss, dimmed, context, children, footer, id, highlighted, frameRef }: FrameProps) {
+/** The frame: one small header line, the context, the parts, and the footer (dots left, pills right). In a popover
+ *  the header's right is the popover's Go to card and Close, and Dismiss leads the pills. */
+function Frame({ title, meta, onDismiss, dimmed, context, children, footer, actions, id, highlighted, frameRef }: FrameProps) {
+  const pop = useCardPop();
+  const footDismiss = pop && onDismiss ? <DismissButton onDismiss={onDismiss} place="footer" /> : null;
   return (
     <div ref={frameRef} id={id} data-decision-card data-multipart data-state={dimmed ? 'answered' : 'open'}
          data-focused={highlighted || undefined} tabIndex={0}
@@ -103,11 +110,19 @@ function Frame({ title, meta, onDismiss, dimmed, context, children, footer, id, 
         <span className="min-w-0 truncate text-xs font-medium text-muted-foreground">{title}</span>
         {meta && <span className="min-w-0 truncate text-px11 text-muted-foreground/80">{meta}</span>}
         <span className="flex-1" />
-        {onDismiss && <DismissButton onDismiss={onDismiss} />}
+        {pop ? <PopHeaderControls className="-mr-1.5 -mt-1" /> : onDismiss && <DismissButton onDismiss={onDismiss} />}
       </div>
       {context && <div className={clsx('px-3.5 pt-1 pb-1.5 max-h-[30vh] overflow-y-auto', dimmed && 'opacity-60')} data-context>{context}</div>}
       <div className={clsx(dimmed && 'opacity-60')}>{children}</div>
-      {footer && <div className="touch-compact flex items-center gap-2 px-3.5 pb-3 pt-1">{footer}</div>}
+      {(footer || actions || footDismiss) && (
+        <div className={clsx('touch-compact flex items-center gap-2 px-3.5 pb-3 pt-1', footDismiss && 'flex-wrap')}
+             data-card-footer={pop ? true : undefined}>
+          {footer}
+          <span className="flex-1" />
+          {footDismiss}
+          {actions}
+        </div>
+      )}
     </div>
   );
 }
@@ -193,25 +208,41 @@ function Question({ part }: { part: MenuPart }) {
   );
 }
 
+/** An option row: a 22px badge beside its label, one rule for every row so the rows of a card line up alike. The
+ *  badge sits at the top of the row, centred on the label's FIRST line (index.css .opt-badge-slot / .opt-text, from
+ *  the line's own height, so it holds at any text size): one line reads centred on the badge, more lines start level
+ *  with it and flow below. Every badge + label row uses these, so they cannot drift. */
+const OPTION_LINE = 'flex items-start gap-2.5 leading-snug';
+const OPTION_TEXT = 'opt-text min-w-0 flex-1';
+
+/** The badge's slot: one label line tall (at least the badge), the badge centred in it. */
+function BadgeSlot({ children }: { children: ReactNode }) {
+  return <span className="opt-badge-slot shrink-0 flex items-center">{children}</span>;
+}
+
 function Badge({ i, on, multi }: { i: number; on: boolean; multi: boolean }) {
   return (
-    <span className={clsx('mt-px w-[22px] h-[22px] shrink-0 border flex items-center justify-center text-px11 font-semibold',
-      multi ? 'rounded-md' : 'rounded-full', on ? 'border-info bg-info text-info-foreground' : 'border-border text-muted-foreground')}>
-      {multi && on ? <Check size={12} strokeWidth={3} /> : letter(i)}
-    </span>
+    <BadgeSlot>
+      <span className={clsx('w-[22px] h-[22px] shrink-0 border flex items-center justify-center text-px11 font-semibold',
+        multi ? 'rounded-md' : 'rounded-full', on ? 'border-info bg-info text-info-foreground' : 'border-border text-muted-foreground')}>
+        {multi && on ? <Check size={12} strokeWidth={3} /> : letter(i)}
+      </span>
+    </BadgeSlot>
   );
 }
 
-const CHOSEN_ROW = 'flex items-start gap-2.5 rounded-xl border border-info/40 bg-info/5 px-2.5 py-2 text-px13h';
+const CHOSEN_ROW = `${OPTION_LINE} rounded-xl border border-info/40 bg-info/5 px-2.5 py-2 text-px13h`;
 
 /** Typed words in an answered card: drawn as a chosen row, as plain text (never in quotes). */
 function WordsRow({ words }: { words: string }) {
   return (
     <div data-chosen data-words className={CHOSEN_ROW}>
-      <span className="mt-px w-[22px] h-[22px] shrink-0 rounded-full border border-info bg-info text-info-foreground flex items-center justify-center">
-        <PenLine size={11} strokeWidth={2.5} aria-label="your words" />
-      </span>
-      <span className="font-medium leading-snug whitespace-pre-wrap break-words min-w-0">{words}</span>
+      <BadgeSlot>
+        <span className="w-[22px] h-[22px] shrink-0 rounded-full border border-info bg-info text-info-foreground flex items-center justify-center">
+          <PenLine size={11} strokeWidth={2.5} aria-label="your words" />
+        </span>
+      </BadgeSlot>
+      <span className={clsx(OPTION_TEXT, 'font-medium whitespace-pre-wrap break-words')}>{words}</span>
     </div>
   );
 }
@@ -333,10 +364,9 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
   const one = parts.length === 1;
 
   return (
-    <Frame title={title} meta={meta} context={context} onDismiss={onDismiss} id={id} highlighted={highlighted} frameRef={frame} footer={
+    <Frame title={title} meta={meta} context={context} onDismiss={onDismiss} id={id} highlighted={highlighted} frameRef={frame}
+      footer={<Dots answers={s.answers} at={s.at} />} actions={
       <>
-        <Dots answers={s.answers} at={s.at} />
-        <span className="flex-1" />
         {phase === 'sending' ? (
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" />Sending</span>
         ) : (
@@ -366,15 +396,19 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
                   <button key={o.n} type="button" role={multi ? 'checkbox' : 'radio'} aria-checked={on} data-option={o.n}
                           disabled={phase !== 'answer' || (!!waiting && i === parts.length - 1 && !multi)}
                           onClick={() => step(choose(parts, { ...s, at: i }, o.n))}
-                          className={clsx('w-full flex items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left text-px13h transition-colors disabled:cursor-default',
+                          className={clsx('w-full flex items-center rounded-xl border px-2.5 py-2 text-left text-px13h transition-colors disabled:cursor-default',
                             on ? 'border-info/60 bg-info/10' : 'border-border hover:bg-muted/60')}>
-                    <Badge i={k} on={on} multi={multi} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-medium leading-snug break-words">
-                        {o.label}
-                        {p.lean === o.n && <span className="ml-1.5 text-px11 font-normal text-muted-foreground">· agent leans</span>}
+                    {/* The button centres its line in its own height (a phone gives every button a 44px floor), so
+                        a one-line option keeps equal space above and below; the line inside follows the one rule. */}
+                    <span className={clsx(OPTION_LINE, 'w-full min-w-0')}>
+                      <Badge i={k} on={on} multi={multi} />
+                      <span className={OPTION_TEXT}>
+                        <span className="block font-medium break-words">
+                          {o.label}
+                          {p.lean === o.n && <span className="ml-1.5 text-px11 font-normal text-muted-foreground">· agent leans</span>}
+                        </span>
+                        {o.detail && <span className="block text-xs text-muted-foreground mt-0.5">{o.detail}</span>}
                       </span>
-                      {o.detail && <span className="block text-xs text-muted-foreground mt-0.5">{o.detail}</span>}
                     </span>
                   </button>
                 );
@@ -417,13 +451,12 @@ export function AnsweredQuestionCard({ title, meta, context, parts, answers, not
         <>
           <Dots answers={answers} at={at} />
           {note && <span className="min-w-0 truncate text-px11 text-muted-foreground" data-answered-note>{note}</span>}
-          <span className="flex-1" />
-          {paged && (
-            <>
-              <button type="button" className={PILL_QUIET} disabled={at === 0} onClick={() => setAt(at - 1)}>Back</button>
-              <button type="button" className={PILL_QUIET} disabled={at === parts.length - 1} onClick={() => setAt(at + 1)}>Next</button>
-            </>
-          )}
+        </>
+      ) : undefined}
+      actions={paged ? (
+        <>
+          <button type="button" className={PILL_QUIET} disabled={at === 0} onClick={() => setAt(at - 1)}>Back</button>
+          <button type="button" className={PILL_QUIET} disabled={at === parts.length - 1} onClick={() => setAt(at + 1)}>Next</button>
         </>
       ) : undefined}>
       <Slides parts={parts} at={at} partsRef={box} cap={cap} render={(p, i) => {
@@ -442,7 +475,7 @@ export function AnsweredQuestionCard({ title, meta, context, parts, answers, not
                   {rows.map((o, k) => answers[i].ns.includes(o.n) && (
                     <div key={o.n} data-chosen className={CHOSEN_ROW}>
                       <Badge i={k} on multi={p.select === 'multi'} />
-                      <span className="font-medium leading-snug break-words min-w-0">{o.label}</span>
+                      <span className={clsx(OPTION_TEXT, 'font-medium break-words')}>{o.label}</span>
                     </div>
                   ))}
                   {out.words && <WordsRow words={out.words} />}

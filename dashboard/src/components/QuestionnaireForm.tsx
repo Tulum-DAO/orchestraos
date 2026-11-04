@@ -20,6 +20,7 @@ import { questionnaireAnswers, questionnaireBody, questionnaireParts, type PartA
 import { AnsweredQuestionCard, QuestionCard, type CardReport } from './chat/MultiPartCard';
 import { refState } from '../lib/cardRefs';
 import Markdown from './chat/Markdown';
+import { PopNote } from './kit/CardPopControls';
 
 interface LiveDetail {
   id: string;
@@ -39,9 +40,10 @@ export default function QuestionnaireForm({ id, onAnswered }: { id: string; /** 
     queryFn: () => fetchQuestionnaire<LiveDetail>(id),
   });
 
-  if (isLoading) return <p className="text-xs text-muted-foreground px-1 py-2">Loading questions…</p>;
+  // Words in place of the card (with the popover's Go to card and Close when it is in one: PopNote).
+  if (isLoading) return <PopNote className="text-xs text-muted-foreground px-1 py-2" popClassName="text-xs text-muted-foreground px-3 py-2.5">Loading questions…</PopNote>;
   if (error || !data?.questions) {
-    return <p className="text-xs text-destructive px-1 py-2">Could not load this questionnaire. Answer it on your phone or watch meanwhile.</p>;
+    return <PopNote className="text-xs text-destructive px-1 py-2" popClassName="text-xs text-destructive px-3 py-2.5">Could not load this questionnaire. Answer it on your phone or watch meanwhile.</PopNote>;
   }
 
   const parts = questionnaireParts(data.questions);

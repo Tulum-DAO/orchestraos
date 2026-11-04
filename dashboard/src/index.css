@@ -391,6 +391,12 @@ button {
   }
 }
 
+/* Option rows (components/chat/MultiPartCard.tsx): a 22px badge centred on the label's first line. 1lh is the row's
+   line (font size x leading), so this holds under the text-size setting: the shorter of the two is pushed down by
+   half the difference, the badge slot when the line is taller than the badge, the label when it is shorter. */
+.opt-badge-slot { height: max(22px, 1lh); }
+.opt-text { padding-top: max(0px, calc((22px - 1lh) / 2)); }
+
 /* Mobile touch targets */
 @media (max-width: 768px) {
   button, a, select, input {

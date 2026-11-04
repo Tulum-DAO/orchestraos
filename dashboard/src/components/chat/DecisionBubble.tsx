@@ -5,23 +5,34 @@ import DecisionQuestion, { AnsweredDecision } from './DecisionQuestion';
 import { dismissMenuCard, post } from '../../lib/api';
 import { answeredByLine, chosenText, decisionTone, menuAnswerLine, outcomeLine, previewText, type Decision } from '../../lib/decisions';
 import { refState } from '../../lib/cardRefs';
+import { PopHeaderControls } from '../kit/CardPopControls';
+import { useCardPop } from '../kit/cardPopContext';
 
 /**
  * DecisionBubble — one of the agent's approval cards, in its conversation, as a message: under the message
  * it belongs to, answerable right here, and kept, answered, as history once it is answered from anywhere. A question
  * (kind 'menu') is the one question card (DecisionQuestion); an approval keeps Approve and Deny.
  * The server state is the only truth; `onAnswered` asks the list to refresh. An answered in-agent menu
- * (`menu_answer`) is a single line instead: what was asked, and what was chosen or that it was dismissed.
+ * (`menu_answer`) is a single line instead: what was asked, and what was chosen or that it was dismissed; in a card's
+ * popover the line ends with the popover's Go to card and Close, as every popover card's top right does.
  */
 function MenuAnswerLine({ d }: { d: Decision }) {
   const dismissed = d.answer === 'dismiss';
+  const pop = useCardPop();
+  const words = (
+    <>
+      <span className="text-card-foreground/85">{menuAnswerLine(d)}</span>
+      {!dismissed && d.question && <span> · {previewText(d.question, 90)}</span>}
+    </>
+  );
   return (
     <div id={`decision-${d.id}`} data-decision-state="answered" data-menu-answer
          className="flex justify-center">
-      <div className={clsx('max-w-[92%] text-center text-px11 text-muted-foreground px-3 py-1 rounded-full border bg-card',
-        dismissed ? 'border-border' : 'border-info/50')}>
-        <span className="text-card-foreground/85">{menuAnswerLine(d)}</span>
-        {!dismissed && d.question && <span> · {previewText(d.question, 90)}</span>}
+      {/* In a popover the pill is tall and wide enough to hold the controls' 44px tap areas (the popover clips). */}
+      <div className={clsx('max-w-[92%] text-center text-px11 text-muted-foreground rounded-full border bg-card',
+        dismissed ? 'border-border' : 'border-info/50', pop ? 'flex items-center gap-2 pl-3 pr-2 py-2' : 'px-3 py-1')}>
+        {pop ? <span className="min-w-0">{words}</span> : words}
+        <PopHeaderControls />
       </div>
     </div>
   );

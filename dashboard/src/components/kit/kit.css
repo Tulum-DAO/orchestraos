@@ -113,7 +113,13 @@
 .kit-chip-pane.is-done .kit-chip-icon { color: rgb(96, 165, 250); }
 
 /* A card opened from its chip: the card at its in-chat width, floating over the page beside the chip; on a phone,
-   a sheet along the bottom with the page's 16px gutter. Only the popover scrolls, never the page sideways. */
+   a sheet along the bottom with the page's 16px gutter. The frame (CardPopFrame) draws no box: no border, background
+   or padding, and no controls (the card draws Go to card and Close in its own header, CardPopContext). The card is
+   the only surface, lifted by a popover shadow on its container, which alone scrolls (never the page sideways).
+   The shadow is --shadow-overlay's layers (index.css, light and dark) without its 1px ring: the card draws its own
+   border, and the ring beside it would double it. */
+:root { --kit-card-pop-shadow: 0 25px 50px 0 #0000000d, 0 12px 24px 0 #0000000a, 0 6px 12px 0 #00000008, 0 3px 6px 0 #00000005, 0 1.5px 3px 0 #00000005; }
+.dark { --kit-card-pop-shadow: 0 8px 28px oklch(0% 0 0 / .34); }
 .kit-card-pop {
   position: fixed;
   /* Above the drawer (70) and Arturo's pane (76), which a chip can sit in. */
@@ -121,26 +127,29 @@
   width: min(480px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  border-radius: 18px;
-  padding: 6px;
-  background: color-mix(in srgb, var(--color-background, #fff) 92%, transparent);
-  backdrop-filter: blur(6px);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px color-mix(in srgb, currentColor 10%, transparent);
   color: var(--color-foreground);
 }
-.kit-card-pop-bar { display: flex; align-items: center; gap: 8px; padding: 2px 6px 0; font-size: calc(12px * var(--ui-text-scale, 1)); }
-.kit-card-pop-bar .grow { flex: 1; }
-.kit-card-pop-btn {
-  font-size: calc(12px * var(--ui-text-scale, 1)); font-weight: 500; padding: 4px 10px; border-radius: 999px;
-  border: 1px solid color-mix(in srgb, currentColor 20%, transparent); color: inherit;
+/* It takes focus when it opens (so the keyboard is in it); no ring round the whole card for that. */
+.kit-card-pop:focus { outline: none; }
+.kit-card-pop-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-2xl, 16px);
+  box-shadow: var(--kit-card-pop-shadow);
 }
-.kit-card-pop-btn:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
-.kit-card-pop-note { padding: 10px 12px; font-size: calc(13px * var(--ui-text-scale, 1)); opacity: 0.8; }
+/* The chat row's 92% measure (AgentSide, data-agent-side) is for a chat's agent side; here the card fills the
+   popover. The card's own look is untouched. */
+.kit-card-pop-card [data-agent-side] { max-width: none; }
+/* An answered in-agent menu is one centred pill (DecisionBubble MenuAnswerLine): the popover hugs it; the container's
+   radius clamps to the pill's. */
+.kit-card-pop:has([data-menu-answer]) { width: fit-content !important; max-width: min(480px, calc(100vw - 32px)); right: auto !important; }
+.kit-card-pop-card [data-menu-answer] > div { max-width: none; }
+/* The popover's own words (loading, couldn't load), drawn on a card by CardPopControls PopNote. */
+.kit-card-pop-note { padding: 10px 12px; font-size: calc(13px * var(--ui-text-scale, 1)); color: var(--color-muted-foreground); }
 @media (max-width: 640px) {
-  .kit-card-pop { left: 16px !important; right: 16px; top: auto !important; bottom: 16px !important; width: auto; max-height: 80dvh !important; }
+  .kit-card-pop { left: 16px !important; right: 16px; top: auto !important; bottom: 16px !important; width: auto !important; max-height: 80dvh !important; }
 }
 
 /* Bubbles: a reply's prose keeps the bubble's usual measure (BUBBLES_WIDTH's 560px less the bubble's padding and
