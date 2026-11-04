@@ -3,8 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  badgePlace, badgeReserve, barOffsetTop, barOutside, liftLayout, popoverAt,
-  BADGE_HEIGHT, BADGE_OVERHANG, BAR_HEIGHT, BAR_WIDTH, CLEAR, EDGE, GAP, type Box,
+  badgePlace, badgeReserve, barOffsetTop, barOutside, barUnderLeft, liftLayout, popoverAt,
+  BADGE_HEIGHT, BADGE_OVERHANG, BAR_HEIGHT, BAR_OFFSET, BAR_WIDTH, CLEAR, EDGE, GAP, type Box,
 } from './reactionLayout.ts';
 
 const clip: Box = { left: 0, top: 0, width: 860, height: 800 };
@@ -17,7 +17,39 @@ test('hover icons go outside the bubble when the scroller has room on its outer 
   // the person's bubble on the right (85% at most): room on its left
   assert.equal(barOutside('user', { left: 860 - 16 - 400, top: 100, width: 400, height: 40 }, clip), true);
   assert.equal(barOutside('user', { left: 60, top: 100, width: 784, height: 40 }, clip), false);
-  assert.equal(barOutside('user', { left: BAR_WIDTH + GAP, top: 100, width: 400, height: 40 }, clip), true);
+  assert.equal(barOutside('user', { left: BAR_OFFSET + BAR_WIDTH + GAP, top: 100, width: 400, height: 40 }, clip), true);
+});
+
+test('outside needs room for the bar\'s whole extent: offset + bar + gap (never clipped by the x-clipped scroller)', () => {
+  const need = BAR_OFFSET + BAR_WIDTH + GAP;
+  // agent: room to the scroller's right edge
+  const agentAt = (room: number): Box => ({ left: 16, top: 100, width: 860 - 16 - room, height: 40 });
+  assert.equal(barOutside('agent', agentAt(need), clip), true);
+  assert.equal(barOutside('agent', agentAt(need - 1), clip), false);
+  assert.equal(barOutside('agent', agentAt(BAR_WIDTH + GAP), clip), false);   // the old threshold: would overflow by BAR_OFFSET
+  // user: room to the scroller's left edge
+  assert.equal(barOutside('user', { left: need, top: 100, width: 300, height: 40 }, clip), true);
+  assert.equal(barOutside('user', { left: need - 1, top: 100, width: 300, height: 40 }, clip), false);
+  // a clip box not at the origin
+  const off: Box = { left: 200, top: 0, width: 600, height: 800 };
+  assert.equal(barOutside('user', { left: 200 + need, top: 100, width: 300, height: 40 }, off), true);
+  assert.equal(barOutside('user', { left: 200 + need - 1, top: 100, width: 300, height: 40 }, off), false);
+});
+
+test('under the bubble, the hover icons never reach past the bubble\'s far edge', () => {
+  // wide bubble: from the outer edge (agent: right-flush; person: left-flush)
+  assert.equal(barUnderLeft('agent', 300), 300 - BAR_WIDTH);
+  assert.equal(barUnderLeft('user', 300), 0);
+  // exactly the bar's width: flush both ends
+  assert.equal(barUnderLeft('agent', BAR_WIDTH), 0);
+  assert.equal(barUnderLeft('user', BAR_WIDTH), 0);
+  // narrow bubble: flush with the far edge, hanging toward the middle instead of off the scroller
+  assert.equal(barUnderLeft('agent', 40), 0);                  // starts at the bubble's left, not before it
+  assert.equal(barUnderLeft('user', 40), 40 - BAR_WIDTH);      // ends at the bubble's right, not past it
+  for (const w of [0, 20, 40, 93, 94, 95, 300, 800]) {
+    assert.ok(barUnderLeft('agent', w) >= 0, `agent ${w}: never past the left edge`);
+    assert.ok(barUnderLeft('user', w) + BAR_WIDTH <= Math.max(w, BAR_WIDTH), `user ${w}: never past the right edge`);
+  }
 });
 
 test('a popover opens below what opened it, else above, never off screen', () => {
