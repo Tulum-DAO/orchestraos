@@ -410,8 +410,13 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
           <FaceRow agents={pinnedAgents} currentId={currentId} onPick={onPick} max={24} label="Pinned agents" />
         </div>
       )}
+      {/* A section shows only while it has agents in it: no empty Working / Needs you / Idle. */}
+      {SECTIONS.every(({ key }) => groups[key].length === 0) && (
+        <p className="px-2 py-1 text-xs text-neutral-500 dark:text-neutral-600">No agents running.</p>
+      )}
       {SECTIONS.map(({ key, label, badge }) => {
         const rows = groups[key];
+        if (rows.length === 0) return null;
         return (
           <section key={key} aria-labelledby={`rail-${key}`}>
             <h2
@@ -426,16 +431,10 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
               )}
               {!badge && <span className="text-neutral-500 dark:text-neutral-600 tabular-nums">{rows.length}</span>}
             </h2>
-            {rows.length === 0 ? (
-              <p className="px-2 py-1 text-xs text-neutral-500 dark:text-neutral-600">
-                {key === 'needsYou' ? 'Nothing waiting on you.' : `No ${label.toLowerCase()} agents.`}
-              </p>
-            ) : (
-              <div className="flex flex-col">
+            <div className="flex flex-col">
                 {/* From "Needs you", opening the agent also brings its open decision into view (DecisionBubble). */}
                 {renderItems(sectionItems(rows), key, key === 'needsYou' ? (id) => { focusDecision(id); onPick(id); } : onPick)}
-              </div>
-            )}
+            </div>
           </section>
         );
       })}
