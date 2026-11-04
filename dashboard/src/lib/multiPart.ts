@@ -5,10 +5,13 @@
  * choice cards. A single question is a card of one part. Each kind answers through its own route; the converters at
  * the end of this file turn the card's answers into that route's body.
  *
- * The card shows one part at a time. Picking an option answers a single-select part and moves on; a multi-select
- * part takes ticks and its own Next. Skip leaves a part unanswered and moves on (not on a required part, and not on a
- * card of one part: there the ✕ does that job). Moving on from the last part sends every answer at once, so long as
- * one part is answered. On a single-select part of a menu blocking an agent in its terminal a pick and typed words
+ * The card shows one part at a time. Picking an option answers a single-select part and moves on (on the last part
+ * of several it only selects: Submit sends); a multi-select
+ * part takes ticks and its own Next. On a card of several parts the footer is [Next] on the first part, [Back] [Next]
+ * on every middle one and [Back] [Submit] on the last, always enabled: Next on a part left
+ * unanswered skips it (there is no separate Skip), and Submit sends every answer at once, unanswered parts as skips.
+ * With nothing answered at all, Submit asks once on a card whose route takes that (a questionnaire) and says it
+ * cannot on one whose route does not (an agent's menu: emptySubmit). A card of one part keeps Send, once answered. On a single-select part of a menu blocking an agent in its terminal a pick and typed words
  * are exclusive; every other card takes both (pickAndWords). Pure, so tested here.
  */
 import { canSendWords, visibleOptions, withInputKinds } from './decisionCard.ts';
@@ -21,7 +24,8 @@ export interface MenuPart {
   options: MenuPartOption[];
   has_free_text?: boolean;
   tab_label?: string;
-  /** Must be answered: no Skip (a questionnaire's required question). */
+  /** A questionnaire's "required" flag, as emitted. It no longer stops the card moving on or sending: a
+   *  questionnaire is accepted with questions unanswered (sent as skips; the gateway takes them). */
   required?: boolean;
   /** Multi-select: the option that stands alone ("None of these"); picking it clears the rest, and the reverse. */
   exclusive?: string;
@@ -77,14 +81,16 @@ function withAnswer(s: CardState, a: PartAnswer): CardState {
   return { ...s, answers: s.answers.map((x, i) => (i === s.at ? a : x)) };
 }
 
-/** On from the part on show: to the next part, or, from the last, send — if anything is answered. */
+/** On from the part on show: to the next part, or, from the last, send. A card of several parts sends even with
+ *  nothing answered (the card then asks first, or refuses: emptySubmit); a card of one part only with its answer. */
 function moveOn(parts: MenuPart[], s: CardState): Step {
   if (s.at < parts.length - 1) return { state: { ...s, at: s.at + 1 }, submit: false };
-  return { state: s, submit: s.answers.some(answered) };
+  return { state: s, submit: parts.length > 1 || s.answers.some(answered) };
 }
 
 /** A click on an option. Single select: that option is the part's answer (replacing an earlier pick) and the card
- *  moves on. On a menu blocking an agent it clears typed words, since the replay can deliver only one of them; a
+ *  moves on; on the LAST part of a card of several parts it only selects, and Submit sends (the
+ *  last question is "back or submit"). A card of one part still sends on the pick. On a menu blocking an agent it clears typed words, since the replay can deliver only one of them; a
  *  card that takes both (pickAndWords) keeps them and sends them with the pick. Multi select: the
  *  tick toggles, in the menu's order, and the card stays; typed words are kept, since the replay types them into
  *  the write-in row and ticks the rest. */
@@ -97,7 +103,9 @@ export function choose(parts: MenuPart[], s: CardState, n: string): Step {
     const ns = part.options.map((o) => o.n).filter((x) => picked.includes(x));
     return { state: withAnswer(s, { ...a, ns, skipped: false }), submit: false };
   }
-  return moveOn(parts, withAnswer(s, { ns: [n], text: part.pickAndWords ? a.text : '', skipped: false }));
+  const picked = withAnswer(s, { ns: [n], text: part.pickAndWords ? a.text : '', skipped: false });
+  if (parts.length > 1 && s.at === parts.length - 1) return { state: picked, submit: false };
+  return moveOn(parts, picked);
 }
 
 /** Typing own words. On a single-choice part of a blocking menu the words are the answer instead of a pick, so
@@ -108,24 +116,29 @@ export function setWords(parts: MenuPart[], s: CardState, text: string): CardSta
   return withAnswer(s, { ns: single && text.trim() ? [] : a.ns, text, skipped: text.trim() ? false : a.skipped });
 }
 
-/** Next is offered once the part on show is answered (ticks, words, or an earlier pick seen again through Back). */
-export function canNext(s: CardState): boolean {
-  return answered(s.answers[s.at]);
+/** Next (Submit on the last part) is always enabled on a card of several parts; a card of one part sends once it
+ *  is answered (ticks, words, or an earlier pick). */
+export function canNext(parts: MenuPart[], s: CardState): boolean {
+  return parts.length > 1 || answered(s.answers[s.at]);
 }
 
+/** Next: on to the next part, or, from the last, send. A part moved on from unanswered is skipped (any typed blank
+ *  or untick is cleared); an answered one keeps its answer. */
 export function next(parts: MenuPart[], s: CardState): Step {
-  return canNext(s) ? moveOn(parts, s) : { state: s, submit: false };
+  if (!canNext(parts, s)) return { state: s, submit: false };
+  return moveOn(parts, answered(s.answers[s.at]) ? s : withAnswer(s, skip()));
 }
 
-/** Skip is offered on an optional part of a card with more than one part. */
-export function canSkip(parts: MenuPart[], s: CardState): boolean {
-  return parts.length > 1 && !parts[s.at]?.required;
-}
+/** The footer's pills on the part on show (the popover's Dismiss leads them; MultiPartCard). Several parts: Back
+ *  past the first, then Next, or Submit on the last; always enabled. One part: Send where a pick alone does not
+ *  send (a pick-any part, or one that takes words), enabled once answered; none where a pick IS the send. */
+export interface Footer { back: boolean; main: 'Next' | 'Submit' | 'Send' | null; enabled: boolean }
 
-/** Skip: this part stays unanswered (any earlier pick on it is cleared) and the card moves on. */
-export function skipPart(parts: MenuPart[], s: CardState): Step {
-  if (!canSkip(parts, s)) return { state: s, submit: false };
-  return moveOn(parts, withAnswer(s, skip()));
+export function cardFooter(parts: MenuPart[], s: CardState): Footer {
+  const part = parts[s.at];
+  if (parts.length > 1) return { back: s.at > 0, main: s.at === parts.length - 1 ? 'Submit' : 'Next', enabled: true };
+  const offered = !!part && (part.select === 'multi' || answered(s.answers[s.at]) || takesWords(part));
+  return { back: false, main: offered ? 'Send' : null, enabled: canNext(parts, s) };
 }
 
 /** Back shows the part before, with its answer still marked. */
@@ -133,16 +146,25 @@ export function back(s: CardState): CardState {
   return { ...s, at: Math.max(0, s.at - 1) };
 }
 
-/** Skipping the last part with nothing answered sends nothing: the card says so instead. */
 export function nothingAnswered(s: CardState): boolean {
   return !s.answers.some(answered);
+}
+
+/** A send with nothing answered at all. A card whose route takes it (`allowEmpty`: a questionnaire, every question
+ *  then recorded as skipped) asks once ('confirm': "Submit with no answers?") and sends on the second press; one
+ *  whose route cannot ('refuse': an agent's multi-part menu, whose screen needs at least one part answered) says so
+ *  and stays open. Anything answered: 'send'. */
+export function emptySubmit(s: CardState, o: { allowEmpty: boolean; confirmed: boolean }): 'send' | 'confirm' | 'refuse' {
+  if (!nothingAnswered(s)) return 'send';
+  if (!o.allowEmpty) return 'refuse';
+  return o.confirmed ? 'send' : 'confirm';
 }
 
 export type SubmitAnswer = { part: number; ns: string[]; text?: string } | { part: number; skipped: true };
 
 /** The submit body's answers: every part, in order. A part left unanswered goes as an explicit skip, which the
- *  gateway records as skipped and steps past on the agent's screen (the card can only move past a part by answering
- *  or skipping it). */
+ *  gateway records as skipped and steps past on the agent's screen (the card moves past a part by answering it, or
+ *  by Next / Submit without an answer, which skips it). */
 export function submitAnswers(parts: MenuPart[], answers: PartAnswer[]): SubmitAnswer[] {
   return parts.map((p, i) => {
     const a = answers[i];
@@ -391,13 +413,13 @@ export function questionnaireAnswers(parts: MenuPart[], questions: Questionnaire
 }
 
 /** The questionnaire submit body (POST /api/questionnaires/:id/answers): {n: {option_n?, answer_text?} |
- *  {skipped: true}}. A required part left unanswered is left out (the gateway then names it as missing). */
+ *  {skipped: true}}. Every part left unanswered, required or not, goes as a skip: a questionnaire is accepted
+ *  partly answered (the gateway records the skips and tells the asking agent). */
 export function questionnaireBody(parts: MenuPart[], answers: PartAnswer[]): Record<string, { option_n?: string; answer_text?: string; skipped?: true }> {
   const out: Record<string, { option_n?: string; answer_text?: string; skipped?: true }> = {};
   parts.forEach((p, i) => {
     const body = singleBody(answers[i]);
-    if (body) out[String(p.index)] = body;
-    else if (!p.required) out[String(p.index)] = { skipped: true };
+    out[String(p.index)] = body ?? { skipped: true };
   });
   return out;
 }

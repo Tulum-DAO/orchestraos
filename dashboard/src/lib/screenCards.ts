@@ -239,8 +239,9 @@ export function resolvePicks(part: MenuPart, picks: string[]): { ns: string[]; u
   return { ns, unknown };
 }
 
-/** The card's own step for an answer on the part on show, exactly what the same taps and typing would do (so a
- *  multi-part card moves to its next part, and the last part sends); or why it cannot be applied. */
+/** The card's own step for an answer on the part on show, what the same taps and typing would do (so a multi-part
+ *  card moves to its next part); on the last part Arturo's answer also sends, as the tap and then Submit would (a
+ *  pick there only selects); or why it cannot be applied. */
 export function answerStep(parts: MenuPart[], st: CardState, a: ScreenAnswer): Step | { error: string } {
   const part = parts[st.at];
   if (!part) return { error: 'That card has nothing to answer.' };
@@ -258,7 +259,9 @@ export function answerStep(parts: MenuPart[], st: CardState, a: ScreenAnswer): S
   if (ns.length > 1) return { error: 'Pick one option on this question.' };
   if (ns.length && words && !part.pickAndWords) return { error: 'This question takes a pick or words, not both.' };
   const s = words ? setWords(parts, st, words) : st;
-  return ns.length ? choose(parts, s, ns[0]) : next(parts, s);
+  if (!ns.length) return next(parts, s);
+  const r = choose(parts, s, ns[0]);
+  return r.submit || s.at < parts.length - 1 ? r : next(parts, r.state);
 }
 
 // ---- The store ------------------------------------------------------------------------------------------------------

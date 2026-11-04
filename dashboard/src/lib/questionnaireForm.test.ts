@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isLiveQuestionnaire, questionnaireSummary, SUMMARY_MAX } from './questionnaireForm';
 import {
-  canSkip, partRows, questionnaireAnswers, questionnaireBody, questionnaireParts, skip as skipped, takesWords,
+  cardFooter, partRows, questionnaireAnswers, questionnaireBody, questionnaireParts, skip as skipped, takesWords,
   type QuestionnaireQuestion,
 } from './multiPart';
 
@@ -46,11 +46,15 @@ test('answers carry what was given (a pick, words, or both); an optional questio
   assert.deepEqual(body, { '1': { answer_text: 'Thursday' }, '2': { skipped: true }, '3': { option_n: '1' } });
 });
 
-test('a required question is never sent as a skip, and the card offers no Skip on it', () => {
+test('a partial questionnaire goes: every unanswered question, required or not, is sent as a skip', () => {
   const parts = questionnaireParts(Q);
-  assert.deepEqual(questionnaireBody(parts, [skipped(), skipped(), skipped()]), { '2': { skipped: true } });
-  assert.equal(canSkip(parts, { answers: [], at: 0 }), false);
-  assert.equal(canSkip(parts, { answers: [], at: 1 }), true);
+  assert.deepEqual(questionnaireBody(parts, [skipped(), skipped(), skipped()]),
+    { '1': { skipped: true }, '2': { skipped: true }, '3': { skipped: true } });
+  assert.deepEqual(questionnaireBody(parts, [{ ns: [], text: '', skipped: false }, skipped(), { ns: ['2'], text: '', skipped: false }]),
+    { '1': { skipped: true }, '2': { skipped: true }, '3': { option_n: '2' } });
+  // A required question still has Next (no answer needed to move on).
+  assert.deepEqual(cardFooter(parts, { answers: parts.map(() => ({ ns: [], text: '', skipped: false })), at: 0 }),
+    { back: false, main: 'Next', enabled: true });
 });
 
 test('a saved draft answer is preloaded; a stored skip shows as skipped', () => {
@@ -72,7 +76,8 @@ test('a saved draft holding a hidden chat option or an unknown option is not car
   ];
   const parts = questionnaireParts(qs);
   const answers = questionnaireAnswers(parts, qs);
-  assert.deepEqual(questionnaireBody(parts, answers), { '3': { option_n: '1' } });   // 1 and 2 shown as unanswered
+  // 1 and 2 shown as unanswered, so sent as skips (which also clear the bad draft on the server)
+  assert.deepEqual(questionnaireBody(parts, answers), { '1': { skipped: true }, '2': { skipped: true }, '3': { option_n: '1' } });
 });
 
 test('the context above the questions is the summary (notes are appended to it); empty or title-only shows nothing', () => {

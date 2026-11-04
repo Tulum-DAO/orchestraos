@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  answerFromStored, back, canNext, canSkip, captureProblem, cardKey, cardNote, choose, decisionParts, questionnaireAnswers,
+  answerFromStored, back, canNext, captureProblem, cardFooter, cardKey, emptySubmit, cardNote, choose, decisionParts, questionnaireAnswers,
   questionnaireBody, questionnaireParts, type QuestionnaireQuestion, onePart, singleBody, fromAskUserQuestion, letter, matchBatchRecord, next, nothingAnswered, outcome, partRows,
-  setWords, skipPart, startState, submitAnswers, takesWords, type CardState, type MenuPart, type Step,
+  setWords, startState, submitAnswers, takesWords, type CardState, type MenuPart, type Step,
 } from './multiPart.ts';
 
 const PARTS: MenuPart[] = [
@@ -23,8 +23,9 @@ function run(steps: ((s: CardState) => Step | CardState)[]) {
   return { s, sent };
 }
 const pick = (n: string) => (s: CardState) => choose(PARTS, s, n);
-const skipIt = (s: CardState) => skipPart(PARTS, s);
 const nextIt = (s: CardState) => next(PARTS, s);
+/** Next on a part left unanswered: it is skipped (there is no separate Skip). */
+const skipIt = nextIt;
 
 test("rows leave out the CLI's own write-in row; badges are letters; words only where the part has a write-in", () => {
   assert.deepEqual(partRows(PARTS[0]).map((o) => o.label), ['Blue', 'Green']);
@@ -33,19 +34,19 @@ test("rows leave out the CLI's own write-in row; badges are letters; words only 
   assert.equal(takesWords(PARTS[1]), false);
 });
 
-test('answer all three: a pick moves on, ticks wait for Next, the last pick sends once', () => {
-  const { s, sent } = run([pick('2'), pick('1'), pick('3'), nextIt, pick('2')]);
+test('answer all three: a pick moves on, ticks wait for Next, Submit sends once', () => {
+  const { s, sent } = run([pick('2'), pick('1'), pick('3'), nextIt, pick('2'), nextIt]);
   assert.equal(s.at, 2);
   assert.deepEqual(sent, [[{ part: 0, ns: ['2'] }, { part: 1, ns: ['1', '3'] }, { part: 2, ns: ['2'] }]]);
 });
 
-test('skip 1, answer 2 and 3: the skipped part goes empty', () => {
-  const { sent } = run([skipIt, pick('2'), nextIt, pick('1')]);
+test('Next on 1 unanswered, answer 2 and 3: the skipped part goes empty', () => {
+  const { sent } = run([skipIt, pick('2'), nextIt, pick('1'), nextIt]);
   assert.deepEqual(sent, [[{ part: 0, skipped: true }, { part: 1, ns: ['2'] }, { part: 2, ns: ['1'] }]]);
 });
 
-test('answer only 3: sends at once with the first two empty', () => {
-  const { sent } = run([skipIt, skipIt, pick('1')]);
+test('answer only 3: Submit sends with the first two empty', () => {
+  const { sent } = run([skipIt, skipIt, pick('1'), nextIt]);
   assert.deepEqual(sent, [[{ part: 0, skipped: true }, { part: 1, skipped: true }, { part: 2, ns: ['1'] }]]);
 });
 
@@ -54,31 +55,78 @@ test('Back and change 1: the old pick is still marked, the new one replaces it, 
   assert.equal(s.at, 0);
   assert.deepEqual(s.answers[0].ns, ['1']);              // still marked
   assert.equal(sent.length, 0);
-  const after = run([pick('1'), pick('2'), nextIt, back, back, pick('2'), nextIt, pick('1')]);
+  const after = run([pick('1'), pick('2'), nextIt, back, back, pick('2'), nextIt, pick('1'), nextIt]);
   assert.deepEqual(after.sent, [[{ part: 0, ns: ['2'] }, { part: 1, ns: ['2'] }, { part: 2, ns: ['1'] }]]);
 });
 
-test('a multi-select part never moves on from a tick, and Next waits for one', () => {
+test('a multi-select part never moves on from a tick; Next with no tick moves on and skips it', () => {
   const { s } = run([pick('1'), pick('3')]);
   assert.equal(s.at, 1);
-  assert.equal(canNext(s), true);
+  assert.equal(canNext(PARTS, s), true);
   const untick = run([pick('1'), pick('3'), pick('3')]);
-  assert.equal(canNext(untick.s), false);
-  assert.equal(next(PARTS, untick.s).state.at, 1);
+  assert.equal(canNext(PARTS, untick.s), true);
+  const on = next(PARTS, untick.s).state;
+  assert.equal(on.at, 2);
+  assert.equal(on.answers[1].skipped, true);
 });
 
-test('skipping everything sends nothing', () => {
+test('the footer per position: first [Next], middle [Back][Next], last [Back][Submit], always enabled', () => {
+  const s0 = startState(PARTS);
+  assert.deepEqual(cardFooter(PARTS, s0), { back: false, main: 'Next', enabled: true });
+  assert.deepEqual(cardFooter(PARTS, { ...s0, at: 1 }), { back: true, main: 'Next', enabled: true });
+  assert.deepEqual(cardFooter(PARTS, { ...s0, at: 2 }), { back: true, main: 'Submit', enabled: true });
+  // Nothing answered anywhere: still enabled at every step.
+  assert.equal(canNext(PARTS, s0), true);
+  assert.equal(next(PARTS, s0).state.at, 1);
+});
+
+test('a card of one part keeps its rules: Send, enabled once answered, no Back', () => {
+  const one = onePart('Ship it?', [{ n: '1', label: 'Yes' }, { n: '2', label: 'Other', input_kind: 'free_text' }], { words: true });
+  const s0 = startState(one);
+  assert.deepEqual(cardFooter(one, s0), { back: false, main: 'Send', enabled: false });
+  assert.deepEqual(cardFooter(one, setWords(one, s0, 'soon')), { back: false, main: 'Send', enabled: true });
+  assert.deepEqual(next(one, s0), { state: s0, submit: false });
+  const pickOnly = onePart('Ok?', [{ n: '1', label: 'Yes' }], { words: false });
+  assert.equal(cardFooter(pickOnly, startState(pickOnly)).main, null);       // a pick IS the send
+});
+
+test('a pick on the last of several parts selects and waits for Submit; on a card of one part it sends', () => {
+  const s = run([nextIt, nextIt]).s;
+  const r = choose(PARTS, s, '2');
+  assert.deepEqual([r.submit, r.state.at, r.state.answers[2].ns], [false, 2, ['2']]);
+  assert.equal(choose(PARTS, r.state, '1').state.answers[2].ns[0], '1');      // a second pick replaces it
+  assert.equal(cardKey(PARTS, s, 'b')!.submit, false);                        // a letter key selects too
+  assert.equal(next(PARTS, r.state).submit, true);                            // Submit sends
+  const one = onePart('Ok?', [{ n: '1', label: 'Yes' }], { words: false });
+  assert.equal(choose(one, startState(one), '1').submit, true);              // one part: the pick sends
+});
+
+test('Submit on the last part with parts unanswered sends them as skips', () => {
+  const { sent } = run([pick('2'), nextIt, nextIt]);
+  assert.deepEqual(sent, [[{ part: 0, ns: ['2'] }, { part: 1, skipped: true }, { part: 2, skipped: true }]]);
+  // Going Back over a skipped part and answering it replaces the skip.
+  const again = run([nextIt, nextIt, back, pick('1'), nextIt, pick('2'), nextIt]);
+  assert.deepEqual(again.sent, [[{ part: 0, skipped: true }, { part: 1, ns: ['1'] }, { part: 2, ns: ['2'] }]]);
+});
+
+test('Submit with nothing answered: a questionnaire asks once, then sends every part skipped; a menu refuses', () => {
   const { s, sent } = run([skipIt, skipIt, skipIt]);
-  assert.equal(sent.length, 0);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0], [{ part: 0, skipped: true }, { part: 1, skipped: true }, { part: 2, skipped: true }]);
   assert.equal(nothingAnswered(s), true);
+  assert.equal(emptySubmit(s, { allowEmpty: true, confirmed: false }), 'confirm');
+  assert.equal(emptySubmit(s, { allowEmpty: true, confirmed: true }), 'send');
+  assert.equal(emptySubmit(s, { allowEmpty: false, confirmed: true }), 'refuse');
+  const one = run([pick('1'), skipIt, skipIt]).s;
+  assert.equal(emptySubmit(one, { allowEmpty: false, confirmed: false }), 'send');
 });
 
 test('on a single-choice part a pick and own words are exclusive: picking clears the words, typing clears the pick', () => {
-  const alone = run([(s) => setWords(PARTS, s, ' teal '), nextIt, skipIt, pick('2')]);
+  const alone = run([(s) => setWords(PARTS, s, ' teal '), nextIt, skipIt, pick('2'), nextIt]);
   assert.deepEqual(alone.sent[0][0], { part: 0, ns: [], text: 'teal' });
-  const pickAfterWords = run([(s) => setWords(PARTS, s, 'darker'), pick('1'), skipIt, pick('2')]);
+  const pickAfterWords = run([(s) => setWords(PARTS, s, 'darker'), pick('1'), skipIt, pick('2'), nextIt]);
   assert.deepEqual(pickAfterWords.sent[0][0], { part: 0, ns: ['1'] });
-  const wordsAfterPick = run([pick('1'), back, (s) => setWords(PARTS, s, 'darker'), nextIt, skipIt, pick('2')]);
+  const wordsAfterPick = run([pick('1'), back, (s) => setWords(PARTS, s, 'darker'), nextIt, skipIt, pick('2'), nextIt]);
   assert.deepEqual(wordsAfterPick.sent[0][0], { part: 0, ns: [], text: 'darker' });
 });
 
@@ -162,10 +210,9 @@ const MENU = onePart('Ship the sample?', [
   { n: '1', label: 'Yes' }, { n: '2', label: 'No' }, { n: '3', label: 'Other', input_kind: 'free_text' },
 ], { words: true, lean: '1' });
 
-test('a single question is a card of one part: a pick sends at once, there is no Skip, the write-in row is the field', () => {
+test('a single question is a card of one part: a pick sends at once, there is no Back, the write-in row is the field', () => {
   assert.deepEqual(partRows(MENU[0]).map((o) => o.label), ['Yes', 'No']);
-  assert.equal(canSkip(MENU, startState(MENU)), false);
-  assert.equal(skipPart(MENU, startState(MENU)).state.answers[0].skipped, false);
+  assert.equal(cardFooter(MENU, startState(MENU)).back, false);
   const r = choose(MENU, startState(MENU), '2');
   assert.equal(r.submit, true);
   assert.deepEqual(singleBody(r.state.answers[0]), { option_n: '2' });
@@ -198,7 +245,9 @@ test('keys while the card has focus: A–Z pick on the part on show, Return move
   assert.equal(cardKey(PARTS, s0, 'a', { inField: true }), null);
   assert.equal(cardKey(PARTS, s0, 'Enter', { onButton: true }), null);
   assert.equal(cardKey(PARTS, s0, 'a', { modifier: true }), null);
-  assert.equal(cardKey(PARTS, s0, 'Enter')!.state.at, 0);             // nothing answered: Return does not move on
+  assert.equal(cardKey(PARTS, s0, 'Enter')!.state.at, 1);             // nothing answered: Return moves on, skipping it
+  assert.equal(cardKey(PARTS, s0, 'Enter')!.state.answers[0].skipped, true);
+  assert.equal(cardKey(MENU, startState(MENU), 'Enter')!.submit, false); // a card of one part waits for an answer
   const answered1 = choose(PARTS, s0, '1').state;
   assert.equal(cardKey(PARTS, back(answered1), 'Enter')!.state.at, 1);
 });

@@ -1,7 +1,9 @@
 /**
  * QuestionnaireForm: a LIVE (QuestionnaireStore) questionnaire answered natively on the web, as the one question card
- * (components/chat/MultiPartCard's QuestionCard): one question at a time, a pick moves on, Skip leaves an optional
- * question unanswered (a required one has no Skip), and answering the last question sends them all.
+ * (components/chat/MultiPartCard's QuestionCard): one question at a time, a pick moves on, Next moves on without an
+ * answer (that question is skipped, required or not: a questionnaire is accepted partly answered),
+ * and Submit on the last question sends them all. With nothing answered Submit asks once, then sends every question
+ * as skipped (allowEmpty).
  *
  * Drawn on its own, as every other card is: no panel around it (pages/Questionnaires.tsx, pages/Inbox.tsx). The ✕
  * closes it unanswered (POST /api/questionnaires/:id/discard, the gateway's discard).
@@ -9,7 +11,7 @@
  * Reads GET /api/questionnaires/:id (questions[] with their menus and any saved draft) and sends
  * POST /api/questionnaires/:id/answers, which the API forwards to the gateway's own submit: the same validation and
  * the same resume of the asking agent as an answer from the phone or watch. A skipped question goes as
- * {skipped: true} and is stored as skipped; at least one question must be answered. Legacy file questionnaires keep
+ * {skipped: true} and is stored as skipped. Legacy file questionnaires keep
  * their iframe (pages/Questionnaires.tsx, pages/Inbox.tsx).
  */
 import { useState } from 'react';
@@ -98,7 +100,7 @@ export default function QuestionnaireForm({ id, onAnswered }: { id: string; /** 
     <div data-testid="qnr-form">
       <QuestionCard key={data.id} title={title} meta={meta} context={context} parts={parts}
         initial={questionnaireAnswers(parts, data.questions)} onSubmit={submit} onDismiss={dismiss} dismissed={dismissed}
-        report={report} />
+        allowEmpty report={report} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-"""A questionnaire may SKIP optional questions: at least one answered, skips sent explicitly.
+"""A questionnaire may SKIP any question, required or not, with the skip sent explicitly.
 
 The shared question card sends a question the person chose to leave unanswered as
 {"skipped": true}. These tests run the REAL gateway route (POST /questionnaires/{id}/submit on
@@ -82,21 +82,48 @@ def test_skipped_optional_questions_are_recorded_as_skipped(qnr):
     assert machine["answers"][1]["skipped"] is True and "skipped" not in machine["answers"][0]
 
 
-def test_a_required_question_cannot_be_skipped(qnr):
-    st, body = _submit(qnr, {"1": {"skipped": True}, "3": {"option_n": "1"}})
-    assert st == 400 and body["error"] == "q1: this question needs an answer and cannot be skipped"
+def test_a_required_question_can_be_skipped(qnr):
+    """A questionnaire is accepted without every question answered. A question
+    marked required is skipped like any other when the person moves past it."""
+    st, body = _submit(qnr, {"1": {"skipped": True}, "2": {"skipped": True}, "3": {"option_n": "1"}})
+    assert st == 200 and body["applied"] is True, body
+    a = _answers(qnr)
+    assert a[1] == {"option_n": None, "answer_text": None, "state": "skipped"}
+    assert a[3]["state"] == "final"
+    assert "1. Which colour? \u2192 skipped" in QR.digest(qnr["store"].get(qnr["id"]))
+    assert len(qnr["delivered"]) == 1
+
+
+def test_a_required_question_simply_left_out_still_blocks(qnr):
+    """An app that leaves a required question OUT (neither answered nor skipped) is told which one
+    is missing, as before: only an explicit skip passes it."""
+    st, body = _submit(qnr, {"3": {"option_n": "1"}})
+    assert st == 200 and body["applied"] is False and body["missing"] == [1], body
     assert qnr["store"].get(qnr["id"])["status"] == "pending"
 
 
-def test_nothing_answered_is_refused_and_nothing_kept(tmp_path, monkeypatch):
-    """Every question optional and every one skipped: refused, and no skip is left behind."""
+def test_every_question_skipped_is_accepted_and_delivered(qnr):
+    """Submit with nothing answered (the card asks once first): every question is recorded as
+    skipped and the asking agent is told so."""
+    st, body = _submit(qnr, {"1": {"skipped": True}, "2": {"skipped": True}, "3": {"skipped": True}})
+    assert st == 200 and body["applied"] is True, body
+    row = qnr["store"].get(qnr["id"])
+    assert row["status"] == "submitted"
+    assert all(q["answer"]["state"] == "skipped" for q in row["questions"])
+    assert len(qnr["delivered"]) == 1
+
+
+def test_nothing_sent_at_all_is_refused_and_nothing_kept(tmp_path, monkeypatch):
+    """Every question optional and NOTHING sent (no answers, no skips): refused as before."""
     _gateway_auth(monkeypatch, tmp_path)
     db = str(tmp_path / "all-optional.db")
     store = QuestionnaireStore(db_path=db); store.migrate()
     qid = store.create(from_agent="dev-demo", title="All optional",
                        questions=[{**q, "optional": True} for q in QUESTIONS])
     monkeypatch.setattr(G, "QuestionnaireStore", lambda: QuestionnaireStore(db_path=db))
-    st, body = _submit({"id": qid}, {"1": {"skipped": True}, "2": {"skipped": True}, "3": {"skipped": True}})
+    st, body = _submit({"id": qid}, {})
+    assert st == 400 and body["error"] == "nothing answered: answer at least one question"
+    st, body = _submit({"id": qid}, {"1": {"skipped": True}})
     assert st == 400 and body["error"] == "nothing answered: answer at least one question"
     row = store.get(qid)
     assert row["status"] == "pending" and all(q["answer"] is None for q in row["questions"])

@@ -11,10 +11,16 @@
  *
  *  - A click on an option answers a single-select part and slides to the next; a multi-select part takes ticks and
  *    its own Next.
- *  - Skip leaves the part unanswered and slides on. Back shows the part before with its answer still marked;
+ *  - Several parts: [Next] on the first, [Back] [Next] between, [Back] [Submit] on the last, always enabled. Next on
+ *    a part left unanswered skips it (no separate Skip). Back shows the part before with its answer still marked;
  *    picking again replaces it.
- *  - Moving on from the last part sends every answer at once (no confirm step: that last pick is the confirm).
+ *  - A pick on the last of several parts only selects it; Submit (or Return) there sends every answer at once,
+ *    unanswered parts as skips. With nothing answered at all a card that may send that (`allowEmpty`, a questionnaire) asks once,
+ *    "Submit with no answers?"; one that may not (an agent's menu) says so and stays open.
  *  - Once sent, the card stays, dimmed, showing only what was chosen per part, paged with Back and Next.
+ *  - Swipe pages too, on every card of several parts, open or answered (hooks/useSwipeNav, lib/swipeNav): a finger
+ *    or a trackpad swipe left is Next, right is Back, by the buttons' own rules; never Submit (the last question
+ *    only bounces). The part on show follows the finger a little; the new part number is announced (aria-live).
  *
  * Height: every part is laid out in the same grid cell, so the card is as tall as its TALLEST part (no jump between
  * parts, no space below the tallest), and grows with the words field. It is capped so the whole card fits the
@@ -34,11 +40,14 @@ import { PopHeaderControls } from '../kit/CardPopControls';
 import { useCardPop } from '../kit/cardPopContext';
 import { PILL_MAIN, PILL_QUIET } from '../../lib/cardButtons';
 import {
-  answered, back, canNext, canSkip, captureProblem, cardKey, cardNote, choose, letter, next, nothingAnswered, outcome, partRows, setWords,
-  skipPart, startState, submitAnswers, takesWords, type CardState, type MenuPart, type PartAnswer, type Step,
+  answered, back, captureProblem, cardFooter, cardKey, cardNote, choose, emptySubmit, letter, next, outcome, partRows, setWords,
+  startState, submitAnswers, takesWords, type CardState, type MenuPart, type PartAnswer, type Step,
 } from '../../lib/multiPart';
 import { answerStep, partView, type ScreenCard } from '../../lib/screenCards';
 import { useScreenCard } from '../../lib/threadKit/useScreenCard';
+import { useMotionReduced } from '../../lib/motion';
+import { SLIDE_EASE, SLIDE_MS, useSwipeNav } from '../../hooks/useSwipeNav';
+import { swipeTouch } from '../../lib/swipeNav';
 import type { RefCardKind, RefCardState } from '../../lib/cardRefs';
 
 
@@ -87,7 +96,7 @@ interface FrameProps {
   children: ReactNode;
   /** The footer's left: progress dots, an answered note. */
   footer?: ReactNode;
-  /** The footer's right: its pill buttons (Back, Skip, Next / Send). */
+  /** The footer's right: its pill buttons (Back, Next / Submit / Send). */
   actions?: ReactNode;
   id?: string;
   highlighted?: boolean;
@@ -167,24 +176,34 @@ function usePartCap(frame: React.RefObject<HTMLDivElement | null>, parts: React.
 }
 
 /** Every part in the same grid cell, so the row is as tall as the tallest part; the one on show slides in, the rest
- *  sit beside it, clipped, and can be neither seen nor reached. */
+ *  sit beside it, clipped, and can be neither seen nor reached. With several parts the area is the swipe area: its
+ *  vertical scroll and zoom stay the browser's (pan-y pinch-zoom, on the area for the gaps and on every part, each
+ *  its own scroll container: lib/swipeNav swipeTouch), and the grid is the track a drag moves. */
 function Slides({ parts, at, render, partsRef, cap }: {
   parts: MenuPart[]; at: number; render: (p: MenuPart, i: number) => ReactNode;
   partsRef: React.Ref<HTMLDivElement>; cap: number | null;
 }) {
+  const reduced = useMotionReduced();
+  const slide = reduced ? 'none' : `transform ${SLIDE_MS}ms ${SLIDE_EASE}`;
+  const touch = swipeTouch(parts.length);
   return (
-    <div ref={partsRef} className="overflow-hidden" data-parts>
-      <div className="grid">
+    <div ref={partsRef} className="overflow-hidden" data-parts style={touch}>
+      <div className="grid" data-swipe-track>
         {parts.map((p, i) => (
           <div key={p.index} data-part={i} data-current={i === at || undefined} inert={i !== at} aria-hidden={i !== at || undefined}
-               className="[grid-area:1/1] min-w-0 flex flex-col px-3.5 pt-1 pb-1 overflow-y-auto overscroll-contain transition-transform duration-300 ease-out motion-reduce:transition-none"
-               style={{ transform: `translateX(${(i - at) * 100}%)`, maxHeight: cap ? `${cap}px` : 'calc(100dvh - 12rem)' }}>
+               className="[grid-area:1/1] min-w-0 flex flex-col px-3.5 pt-1 pb-1 overflow-y-auto overscroll-contain"
+               style={{ ...touch, transform: `translateX(${(i - at) * 100}%)`, transition: slide, maxHeight: cap ? `${cap}px` : 'calc(100dvh - 12rem)' }}>
             {render(p, i)}
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+/** The part on show, said aloud when it changes (by a button, a key or a swipe). */
+function PartAnnounce({ at, count }: { at: number; count: number }) {
+  return <span className="sr-only" aria-live="polite" aria-atomic="true">{count > 1 ? `Question ${at + 1} of ${count}` : ''}</span>;
 }
 
 function Dots({ answers, at }: { answers: PartAnswer[]; at: number }) {
@@ -282,6 +301,9 @@ export interface QuestionCardProps {
   waiting?: string | null;
   /** A standing hint under the parts. */
   hint?: string | null;
+  /** The card's route takes a send with nothing answered (every part skipped): a questionnaire. The card asks once
+   *  first. Without it (an agent's menu) Submit with nothing answered says the agent needs one answer. */
+  allowEmpty?: boolean;
   /** Shown under an answered card: who answered, where, when. */
   answeredNote?: ReactNode;
   id?: string;
@@ -292,10 +314,12 @@ export interface QuestionCardProps {
 
 /** The answer area, framed: takes the answers one part at a time and sends them all at the end. */
 export function QuestionCard({ title, meta, context, parts, initial, onSubmit, onDismiss, dismissed, waiting, hint,
-  answeredNote, id, highlighted, report }: QuestionCardProps) {
+  allowEmpty = false, answeredNote, id, highlighted, report }: QuestionCardProps) {
   const [s, setS] = useState<CardState>(() => ({ ...startState(parts), ...(initial ? { answers: initial } : {}) }));
   const [phase, setPhase] = useState<'answer' | 'sending' | 'done'>('answer');
   const [problem, setProblem] = useState<string | null>(null);
+  /** Submit was pressed with nothing answered: 'confirm' (press again to send it all skipped) or 'refuse'. */
+  const [empty, setEmpty] = useState<'confirm' | 'refuse' | null>(null);
   const sent = useRef(false);
   const frame = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -310,7 +334,12 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
     sent.current = false;
     setProblem(err); setPhase('answer');
   };
-  const step = (r: Step) => { setS(r.state); setProblem(null); if (r.submit) void send(r.state); };
+  const step = (r: Step) => {
+    setS(r.state); setProblem(null);
+    if (!r.submit) { setEmpty(null); return; }
+    const gate = emptySubmit(r.state, { allowEmpty, confirmed: empty === 'confirm' });
+    if (gate === 'send') { setEmpty(null); void send(r.state); } else setEmpty(gate);
+  };
   const open = phase === 'answer';
 
   // On screen for Arturo: the part on show and what is picked or typed; an answer he hands back takes the same step
@@ -343,6 +372,13 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
     return () => card.removeEventListener('keydown', onKey);
   }, [phase, dismissed]);
 
+  // Swipe: Next and Back by the buttons' rules (never Submit: swipeStep stops at the last part).
+  useSwipeNav(box, { at: s.at, count: parts.length, enabled: open && !dismissed, go: (d) => {
+    if (d === 'back') { step({ state: back(s), submit: false }); return; }
+    const r = next(parts, s);
+    if (!r.submit) step(r);
+  } });
+
   if (dismissed) {
     return (
       <Frame title={title} meta={meta} dimmed id={id} highlighted={highlighted} frameRef={frame}>
@@ -355,13 +391,12 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
                                  note={answeredNote} id={id} highlighted={highlighted} report={report} />;
   }
 
-  const part = parts[s.at];
   const last = s.at === parts.length - 1;
-  const a = s.answers[s.at];
-  // Skip on the last part with nothing answered would send nothing; the card says so instead.
-  const emptyNote = last && a?.skipped && nothingAnswered(s) ? 'Nothing to send yet: answer a part, or dismiss the question.' : null;
+  const foot = cardFooter(parts, s);
+  const emptyNote = !last || !empty ? null : empty === 'confirm'
+    ? 'Nothing is answered. Submit again to send it with every question skipped.'
+    : 'Answer at least one part first: the agent’s screen can’t take an empty answer. Or dismiss the question.';
   const note = cardNote({ phase, problem, emptyNote, waiting, hint });
-  const one = parts.length === 1;
 
   return (
     <Frame title={title} meta={meta} context={context} onDismiss={onDismiss} id={id} highlighted={highlighted} frameRef={frame}
@@ -371,11 +406,10 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
           <span className="text-xs text-muted-foreground flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" />Sending</span>
         ) : (
           <>
-            {s.at > 0 && <button type="button" className={PILL_QUIET} onClick={() => step({ state: back(s), submit: false })}>Back</button>}
-            {canSkip(parts, s) && <button type="button" className={PILL_QUIET} disabled={!!waiting && last} onClick={() => step(skipPart(parts, s))}>Skip</button>}
-            {(part.select === 'multi' || canNext(s) || (one && takesWords(part))) && (
-              <button type="button" className={PILL_MAIN} disabled={!canNext(s) || (last && !!waiting)} onClick={() => step(next(parts, s))}>
-                {last ? 'Send' : 'Next'}
+            {foot.back && <button type="button" className={PILL_QUIET} onClick={() => step({ state: back(s), submit: false })}>Back</button>}
+            {foot.main && (
+              <button type="button" className={PILL_MAIN} disabled={!foot.enabled || (last && !!waiting)} onClick={() => step(next(parts, s))}>
+                {foot.main === 'Submit' && empty === 'confirm' ? 'Submit with no answers' : foot.main}
               </button>
             )}
           </>
@@ -415,7 +449,7 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
               })}
               {takesWords(p) && (
                 <WordsField value={ans.text} disabled={phase !== 'answer'}
-                            onChange={(v) => setS((x) => setWords(parts, { ...x, at: i }, v))}
+                            onChange={(v) => { setEmpty(null); setS((x) => setWords(parts, { ...x, at: i }, v)); }}
                             onEnter={() => step(next(parts, { ...s, at: i }))}
                             placeholder={rows.length ? 'Or type your own answer' : 'Your answer'}
                             label={`Your own answer to ${p.question}`} />
@@ -424,6 +458,7 @@ export function QuestionCard({ title, meta, context, parts, initial, onSubmit, o
           </>
         );
       }} />
+      <PartAnnounce at={s.at} count={parts.length} />
       {note && <div className={clsx('px-3.5 pt-1 text-px11', problem ? 'text-warning' : 'text-muted-foreground')} data-note>{note}</div>}
     </Frame>
   );
@@ -444,6 +479,7 @@ export function AnsweredQuestionCard({ title, meta, context, parts, answers, not
   const cap = usePartCap(frame, box);
   useScreenCard(frame, report ? screenCard(report, parts, report.state ?? 'answered', { answers, at },
     elsewhere ? null : answerLine(parts, answers)) : null);
+  useSwipeNav(box, { at, count: parts.length, enabled: true, go: (d) => setAt(d === 'next' ? at + 1 : at - 1) });
   const paged = parts.length > 1;
   return (
     <Frame title={title} meta={meta} context={context} dimmed id={id} highlighted={highlighted} frameRef={frame}
@@ -485,6 +521,7 @@ export function AnsweredQuestionCard({ title, meta, context, parts, answers, not
           </div>
         );
       }} />
+      <PartAnnounce at={at} count={parts.length} />
     </Frame>
   );
 }
