@@ -103,7 +103,8 @@ function ReplyWords({ text, skin }: { text: string; skin: Skin }) {
 function Unfinished({ text, parts, skin }: { text: string; parts?: MessagePart[]; skin: Skin }) {
   const c = parts?.length ? completeParts(parts) : null;
   const t = c ? null : completeText(text);
-  return <>{c ? (c.parts.length > 0 && <Parts parts={c.parts} skin={skin} />) : t!.text && <MessageText text={t!.text} skin={skin} />}</>;
+  // Each bubble is sized by the whole live text it belongs to (a fence or table row still held back widens it now).
+  return <>{c ? (c.parts.length > 0 && <Parts parts={c.parts} skin={skin} widthFrom={parts} />) : t!.text && <MessageText text={t!.text} skin={skin} widthFrom={text} />}</>;
 }
 
 /** Whether Unfinished draws anything (a complete paragraph or part): if not, the live row is left out entirely, so
@@ -113,12 +114,12 @@ function hasFinished(text: string, parts?: MessagePart[]): boolean {
 }
 
 /** A reply's text and tool runs, in the order they happened. Indices are stable: parts only ever grow at the end. */
-function Parts({ parts, skin }: { parts: MessagePart[]; skin: Skin }) {
+function Parts({ parts, skin, widthFrom }: { parts: MessagePart[]; skin: Skin; widthFrom?: MessagePart[] }) {
   return (
     <div className="turn-parts">
       {parts.map((p, i) => p.kind === 'tools'
-        ? <ToolCard key={i} calls={p.calls} skin={skin} />
-        : <MessageText key={i} text={p.text} skin={skin} />)}
+        ? <ToolCard key={i} calls={p.calls} skin={skin} look={skin === 'bubbles' ? 'lines' : 'card'} />
+        : <MessageText key={i} text={p.text} skin={skin} widthFrom={widthFrom?.[i]?.kind === 'text' ? widthFrom[i].text : undefined} />)}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fromBlock, fromPart, callLabel, iconKey, callDetail, hasDetail, runSummary } from './toolCalls.ts';
+import { fromBlock, fromPart, callLabel, iconKey, callDetail, hasDetail, runSummary, callCode, callLine, liveCall, runTimes } from './toolCalls.ts';
 import type { ToolBlock } from './transcript.ts';
 
 const block = (over: Partial<ToolBlock>): ToolBlock =>
@@ -65,4 +65,49 @@ test('the run header says how long it worked and what it did', () => {
   assert.match(s.headline, /edited 1 file/);
   assert.equal(s.tone, 'done');
   assert.equal(runSummary([fromBlock(block({ key: 'r' }))]).lead, 'Working');
+});
+
+test("a call's code block (Bubbles' thin lines): its input as written and what came back, copied together", () => {
+  const bash = fromBlock(block({ input: { command: 'ls -la /srv' }, result: 'a\nb' }));
+  assert.deepEqual(callCode(bash), { input: '$ ls -la /srv', output: 'a\nb', copy: '$ ls -la /srv\n\na\nb' });
+  const edit = fromBlock(block({ tool: 'Edit', input: { file_path: '/a.ts', old_string: 'x' }, result: 'ok' }));
+  assert.equal(callCode(edit).input, JSON.stringify({ file_path: '/a.ts', old_string: 'x' }, null, 2));
+  const todo = fromBlock(block({ tool: 'TodoWrite', input: { todos: [{ content: 'one', status: 'completed' }, { content: 'two', status: 'in_progress' }, { content: 'three', status: 'pending' }] }, result: '' }));
+  assert.equal(callCode(todo).input, '✓ one\n◐ two\n○ three');
+  assert.equal(callCode(todo).copy, '✓ one\n◐ two\n○ three');
+  // Arturo's call has no input object: its argument words, and its result without sentences meant for the model
+  const a = fromPart({ callId: 'c1', name: 'list_agents', status: 'ok', argsSummary: 'all', summary: '3 agents' } as never);
+  assert.equal(callCode(a).input, a.chip);
+  assert.equal(callCode(a).output, '3 agents');
+  // an empty result: just the input
+  assert.equal(callCode(fromBlock(block({ result: '' }))).copy, '$ ls');
+});
+
+test("a call's thin line: its name and a short summary (a file as its short path)", () => {
+  assert.deepEqual(callLine(fromBlock(block({ input: { command: 'D=/home/orchestra/x; ls $D' }, result: '' }))), { label: 'Bash', detail: 'D=/home/orchestra/x; ls $D' });
+  assert.deepEqual(callLine(fromBlock(block({ tool: 'Read', input: { file_path: '/srv/sample/deep/a.ts' }, result: 'x' }))).label, 'Read');
+  assert.ok(callLine(fromBlock(block({ tool: 'Read', input: { file_path: '/srv/sample/deep/a.ts' }, result: 'x' }))).detail.endsWith('a.ts'));
+});
+
+test('the live step of a run: the call still going (the last one), else none', () => {
+  const done = fromBlock(block({ key: 'k1', result: 'x' }));
+  const going = fromBlock(block({ key: 'k2', input: { command: 'npm test' } }));
+  assert.equal(liveCall([done, going])?.id, 'k2');
+  assert.equal(liveCall([done]), undefined);
+  // an interrupted run has nothing still going
+  assert.equal(liveCall([done, going], true), undefined);
+});
+
+test("a run's times: when it started, and when it ended if it took more than a minute; a live run only its start", () => {
+  const c = (key: string, ts?: string, resultTs?: string, running = false) =>
+    fromBlock(block({ key, ...(ts ? { ts } : {}), ...(resultTs ? { resultTs } : {}), result: running ? undefined : 'x' }));
+  assert.deepEqual(runTimes([c('a', '2026-11-02T10:12:00Z', '2026-11-02T10:12:20Z'), c('b', '2026-11-02T10:12:30Z', '2026-11-02T10:12:50Z')]),
+    { start: '2026-11-02T10:12:00Z' });
+  assert.deepEqual(runTimes([c('a', '2026-11-02T10:12:00Z', '2026-11-02T10:13:00Z'), c('b', '2026-11-02T10:16:00Z', '2026-11-02T10:17:05Z')]),
+    { start: '2026-11-02T10:12:00Z', end: '2026-11-02T10:17:05Z' });
+  // still going: the start only
+  assert.deepEqual(runTimes([c('a', '2026-11-02T10:12:00Z', '2026-11-02T10:15:00Z'), c('b', '2026-11-02T10:16:00Z', undefined, true)]),
+    { start: '2026-11-02T10:12:00Z' });
+  // a runtime that gives no per-call times: none, never a guess
+  assert.equal(runTimes([c('a'), c('b')]), null);
 });

@@ -26,14 +26,15 @@
 @media (pointer: fine) {
   .rx-badges { top: 0; transform: translateY(-50%); }   /* centre line on the top border */
   [data-rx-anchor][data-has-badges] { margin-top: 15px; }
-  /* an agent reply has no bubble, so its "border" is the top of its words: lift it off them by the badge's lower
-     half, so the badge sits just above the first line instead of over it (the same 15px of room overall) */
-  [data-rx-anchor="agent"][data-has-badges] { margin-top: 4px; padding-top: 11px; }
+  /* Modern's agent reply has no bubble, so its "border" is the top of its words: lift it off them by the badge's lower
+     half, so the badge sits just above the first line instead of over it (the same 15px of room overall). A bubble
+     (the person's; the agent's in Bubbles, data-rx-bubble) has a real border to straddle and takes the 15px above. */
+  [data-rx-anchor="agent"]:not([data-rx-bubble])[data-has-badges] { margin-top: 4px; padding-top: 11px; }
 }
 @media (pointer: coarse) {
   .rx-badges { bottom: 0; transform: translateY(50%); }   /* centre line on the bottom border */
   [data-rx-anchor][data-has-badges] { margin-bottom: 15px; }
-  [data-rx-anchor="agent"][data-has-badges] { margin-bottom: 8px; padding-bottom: 7px; }   /* clear of the last line */
+  [data-rx-anchor="agent"]:not([data-rx-bubble])[data-has-badges] { margin-bottom: 8px; padding-bottom: 7px; }   /* Modern: clear of the last line */
   /* Accepted trade-off (as iMessage): a long-press on a bubble is the reaction hold, not text selection or a link's
      menu (Copy is in the hold's menu). Only while a hold is in progress or its sheet is up (Reactions.tsx holdOn): no selection or callout under the
      finger. Otherwise text selection and a link's long-press stay the system's own. */
@@ -106,7 +107,8 @@
   box-shadow: 0 14px 36px rgb(0 0 0 / 0.38); animation: rx-lift 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .rx-lifted > [data-user-words] { max-width: none; }   /* the copy is already the bubble's own width */
-.rx-lifted[data-side="agent"] { background: var(--background); color: var(--foreground); padding: 6px 8px; }
+.rx-lifted > [data-agent-bubble] { max-width: none; }
+.rx-lifted[data-bare] { background: var(--background); color: var(--foreground); padding: 6px 8px; }
 .rx-lifted[data-clipped]::after {
   content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 32px;
   background: linear-gradient(to bottom, transparent, var(--background));

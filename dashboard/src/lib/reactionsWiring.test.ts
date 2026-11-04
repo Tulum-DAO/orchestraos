@@ -39,7 +39,25 @@ test('every bubble of the agent chat carries the slot: the person\'s (both skins
   assert.match(src('components/kit/Turns.tsx'), /data-user-words="bubbles" \{\.\.\.anchorProps\(slot, 'user'\)\}/);
   assert.match(src('components/kit/Turns.tsx'), /data-user-words="modern" \{\.\.\.anchorProps\(slot, 'user'\)\}/);
   assert.match(src('components/chat/TranscriptCards.tsx'), /<div className=\{BUBBLES_USER\} \{\.\.\.anchorProps\(slot, 'user'\)\}>/);
-  assert.match(src('components/kit/Message.tsx'), /<ReactionAnchor><MessageText text=\{text\} skin="bubbles" \/><\/ReactionAnchor>/);
+  // the agent's reply carries the slot on its own bubble (MessageText `reactions`), not on a wrapper round its words
+  const msg = src('components/kit/Message.tsx');
+  assert.match(msg, /<MessageText text=\{text\} skin="bubbles" reactions \/>/);
+  assert.doesNotMatch(msg, /<ReactionAnchor>/);
+  assert.match(msg, /\{\.\.\.anchorProps\(s, 'agent'\)\} data-rx-bubble=\{s \? '' : undefined\}/);
+  assert.match(msg, /\{s && <><SlotBar side="agent" \/><SlotBadges side="agent" \/><\/>\}/);
+});
+
+test('an agent bubble is measured as itself (its border is real); only Modern\'s bare reply measures its words', () => {
+  assert.match(src('components/kit/ReactionBadges.tsx'), /side === 'agent' && !anchor\.hasAttribute\('data-rx-bubble'\) \? wordsBox\(anchor\) : anchor\.getBoundingClientRect\(\)/);
+  assert.match(src('components/kit/Reactions.tsx'), /side === 'agent' && !el\.hasAttribute\('data-rx-bubble'\) \? wordsBox\(el\) : boxOfEl\(el\)/);
+  const css = src('components/kit/reactions.css');
+  // the bubble gets the same 15px of room as the person's; the lift-off-the-words padding is only for Modern's bare reply
+  assert.doesNotMatch(css, /\[data-rx-anchor="agent"\]\[data-has-badges\] \{/);
+  assert.match(css, /\[data-rx-anchor="agent"\]:not\(\[data-rx-bubble\]\)\[data-has-badges\] \{ margin-top: 4px; padding-top: 11px; \}/);
+  // the phone hold lifts the bubble as it is (no extra padding or background round it)
+  const rx = src('components/kit/Reactions.tsx');
+  assert.match(rx, /const bare = side === 'agent' && skin !== 'bubbles';/);
+  assert.match(css, /\.rx-lifted > \[data-agent-bubble\] \{ max-width: none; \}/);
 });
 
 test('desktop or phone is (pointer: coarse), never a width; badges straddle the border at the inner corner', () => {
@@ -113,7 +131,7 @@ test('a phone gets a hidden React button; the system long-press is held back onl
   const badges = src('components/kit/ReactionBadges.tsx');
   assert.match(badges, /className="rx-sr-react" aria-haspopup="dialog"/);
   assert.match(badges, /aria-pressed=\{slot\.coarse \? undefined : g\.mine\}/);
-  assert.doesNotMatch(badges, /w-fit/);           // an agent reply keeps its own width
+  assert.doesNotMatch(badges, /w-fit/);           // Modern's bare reply keeps its own width (the bubble sizes itself)
   const css = src('components/kit/reactions.css');
   assert.match(css, /\[data-rx-anchor\]\[data-rx-holding\] \{ -webkit-touch-callout: none;/);
   assert.doesNotMatch(css, /\[data-rx-anchor\] \{ -webkit-touch-callout/);

@@ -413,7 +413,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {!loading && (entries.length > 0 || pending.length > 0 || liveText) && (
           <ReactionsContext.Provider value={reactionsCtx}>
             <ThreadView rows={threadRows} skin={modern ? 'modern' : 'bubbles'} times={modern} stick={follow} liveText={liveText}
-              renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} />}
+              renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} look={modern ? 'card' : 'lines'} />}
               onDecisionAnswered={() => void decisionsQ.refetch()} />
             <ReactionNotice />
           </ReactionsContext.Provider>

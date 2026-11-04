@@ -129,7 +129,7 @@ export function ReactionRow({ reactRef, side, list, text, skin, children }: {
   const slot: ReactionSlot = {
     side, groups, coarse, copyText, open: !!menu, barAt, press: coarse ? hold.handlers : null,
     onEnter: (el) => {
-      const box = side === 'agent' ? wordsBox(el) : boxOfEl(el);
+      const box = side === 'agent' && !el.hasAttribute('data-rx-bubble') ? wordsBox(el) : boxOfEl(el);
       const top = barOffsetTop(side, box, clipBoxOf(el));
       // Outside: centred beside the words. Under (no room outside): under the END of the words, not the column's edge.
       setBarAt(top !== null
@@ -328,7 +328,9 @@ function LiftSheet({ at, view, side, skin, text, mine, onPick, onMore, onClose }
   const l = liftLayout(at, view, QUICK.height, HOLD_MENU.height);
   const quickLeft = popoverAt(at, QUICK, view, { align: side === 'agent' ? 'start' : 'end' }).left;
   const menuLeft = popoverAt(at, HOLD_MENU, view, { align: side === 'agent' ? 'start' : 'end' }).left;
-  const pad = side === 'agent' ? 8 : 0;
+  // Modern's bare reply is lifted on a padded backing; a bubble (the person's, the agent's in Bubbles) as it is.
+  const bare = side === 'agent' && skin !== 'bubbles';
+  const pad = bare ? 8 : 0;
   return createPortal(
     <div ref={ref} className="rx-lift touch-compact" role="dialog" aria-modal="true" aria-label="React to message"
       data-leaving={leaving ? '' : undefined} onKeyDown={trap}
@@ -341,7 +343,7 @@ function LiftSheet({ at, view, side, skin, text, mine, onPick, onMore, onClose }
       </div>
       {/* A copy of the message, not the message: the thread under the dim is never moved. No slot: no badges, no hold. */}
       <ReactionSlotContext.Provider value={null}>
-        <div className={`rx-lifted ${skin === 'modern' ? 'kit-modern' : ''}`} data-side={side} data-clipped={l.clipped ? '' : undefined}
+        <div className={`rx-lifted ${skin === 'modern' ? 'kit-modern' : ''}`} data-side={side} data-bare={bare ? '' : undefined} data-clipped={l.clipped ? '' : undefined}
           style={{ left: at.left - pad, top: l.bubbleTop - pad, width: at.width + 2 * pad, maxHeight: l.bubbleHeight + 2 * pad }}>
           {side === 'user'
             ? <UserWords skin={skin === 'modern' ? 'modern' : 'bubbles'}>{withRefs(text, skin)}</UserWords>

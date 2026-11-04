@@ -23,43 +23,55 @@ const CODE_COLLAPSE_LINES = 14;
 const keepTouch = (e: TouchEvent) => e.stopPropagation();
 const touchProps = { onTouchStart: keepTouch, onTouchMove: keepTouch, onTouchEnd: keepTouch };
 
-/** A fenced block: a dark box in either theme (as code reads in an editor, and as Arturo's page draws it), so its
- *  chrome keeps the dark palette on purpose. */
-function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+/** The box code is drawn in, in the app's theme (the --bui-* tokens: light on a light page, dark on a dark one;
+ *  ), or always dark (`dark`: Arturo's pane, which is dark in either theme): a title bar with its label, then (at the right) what the caller adds (a
+ *  fold control) and a Copy button that is always shown and copies `copyText` whole, even while the code is folded.
+ *  A fenced block uses it, and so does a tool call's code block in Bubbles' thin lines (kit/ToolCard.tsx). */
+export function CodeFrame({ label, copyText, copyLabel = 'Copy code', tools, dark = false, className = '', children }: {
+  label: string; copyText: string; copyLabel?: string; tools?: ReactNode; dark?: boolean; className?: string; children: ReactNode;
+}) {
+  return (
+    <div className={`${dark ? 'dark ' : ''}rounded-md border border-line-strong bg-inset text-ink overflow-hidden ${className}`} data-code-frame>
+      <div className="touch-compact flex items-center gap-2 px-2.5 py-1 bg-field border-b border-line-strong">
+        <span className="text-[10px] font-mono text-ink-3">{label}</span>
+        <span className="ml-auto" />
+        {tools}
+        <Copy text={copyText} label={copyLabel} size={12}
+              className="-mr-1 text-ink-3 hover:text-ink hover:bg-hover-2" />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** A fenced block: long ones fold, Copy takes the whole block. */
+function CodeBlock({ code, lang, dark = false }: { code: string; lang?: string; dark?: boolean }) {
   const lines = code.replace(/\n$/, '').split('\n');
   const long = lines.length > CODE_COLLAPSE_LINES;
   const [open, setOpen] = useState(!long);
   const shown = open ? lines : lines.slice(0, CODE_COLLAPSE_LINES);
   return (
-    <div className="my-1.5 rounded-md border border-neutral-800 bg-neutral-950 overflow-hidden">
-      {/* The title bar: the language, then (at the right) the fold control and a copy button, which copies the
-          whole block even while it is folded. */}
-      <div className="touch-compact flex items-center gap-2 px-2.5 py-1 bg-neutral-900/60 border-b border-neutral-800">
-        <span className="text-[10px] font-mono text-neutral-500">{lang || 'code'}</span>
-        <span className="ml-auto" />
-        {long && (
-          <button
-            onClick={() => setOpen((o) => !o)}
-            className="text-[10px] text-blue-400 hover:text-blue-300"
-          >
-            {open ? 'Collapse' : `Show ${lines.length} lines`}
-          </button>
-        )}
-        <Copy text={lines.join('\n')} label="Copy code" size={12}
-              className="-mr-1 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800" />
-      </div>
+    <CodeFrame className="my-1.5" label={lang || 'code'} copyText={lines.join('\n')} dark={dark}
+      tools={long && (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="text-[10px] text-bui-accent-ink hover:opacity-80"
+        >
+          {open ? 'Collapse' : `Show ${lines.length} lines`}
+        </button>
+      )}>
       <pre className="kit-code-scroll px-3 py-2 overflow-x-auto text-[12px] leading-relaxed" {...touchProps}>
-        <code className="font-mono text-neutral-200 whitespace-pre">{shown.join('\n')}</code>
+        <code className="font-mono text-ink whitespace-pre">{shown.join('\n')}</code>
       </pre>
       {long && !open && (
         <button
           onClick={() => setOpen(true)}
-          className="w-full text-center py-1 text-[10px] text-neutral-500 hover:text-neutral-300 bg-neutral-900/40 border-t border-neutral-800"
+          className="w-full text-center py-1 text-[10px] text-ink-3 hover:text-ink-2 bg-field border-t border-line-strong"
         >
           … {lines.length - CODE_COLLAPSE_LINES} more lines
         </button>
       )}
-    </div>
+    </CodeFrame>
   );
 }
 
@@ -141,7 +153,7 @@ export default function Markdown({ text, skin = 'bubbles' }: { text: string; ski
     const key = `b${bi}`;
     switch (b.t) {
       case 'code':
-        return <CodeBlock key={key} code={b.code} lang={b.lang} />;
+        return <CodeBlock key={key} code={b.code} lang={b.lang} dark={skin === 'pane'} />;
       case 'heading': {
         const cls = b.level <= 1 ? 'text-[1.15em] font-semibold' : b.level === 2 ? 'text-[1.05em] font-semibold' : 'font-medium';
         return <div key={key} className={`${cls} ${strong} mt-2 mb-1`}>{renderInline(b.text, key, skin)}</div>;

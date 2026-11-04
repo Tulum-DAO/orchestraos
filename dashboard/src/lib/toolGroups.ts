@@ -138,17 +138,15 @@ export function summarizeTurn(all: WorkItem[], opts: { interrupted?: boolean } =
   const cmdRunning = by('command', 'running').length;
   if (cmdRunning > 0) clauses.push(`running ${plural(cmdRunning, 'command', 'commands')}`);
 
-  // Reads and searches only matter when nothing outranks them.
-  if (clauses.length === 0) {
-    const read = workClause(by('read', 'ok'), 'read', 'read');
-    if (read) clauses.push(read);
-    const searched = by('search', 'ok').length;
-    if (searched > 0) clauses.push(`searched ${plural(searched, 'time', 'times')}`);
-  }
-  if (clauses.length === 0) {
-    const used = items.filter((it) => it.status === 'ok').length;
-    if (used > 0) clauses.push(`used ${plural(used, 'tool', 'tools')}`);
-  }
+  // Reads and searches come after what outranks them, but are always named: the headline accounts for every call
+  // in the run, so opening it never shows more than it said (review, 2026-11-02: "ran 2 commands" over 3 entries).
+  const read = workClause(by('read', 'ok'), 'read', 'read');
+  if (read) clauses.push(read);
+  const searched = by('search', 'ok').length;
+  if (searched > 0) clauses.push(`searched ${plural(searched, 'time', 'times')}`);
+  // Anything else that succeeded: "used N tools" alone, "used N other tools" after the named work.
+  const used = by('other', 'ok').length;
+  if (used > 0) clauses.push(clauses.length ? `used ${plural(used, 'other tool', 'other tools')}` : `used ${plural(used, 'tool', 'tools')}`);
 
   // Failures not already reported inside the command clause.
   const otherFailed = failed - cmdFailed;

@@ -4,9 +4,10 @@
  *  - ThinkingCard     (collapsed by default)
  *  - ToolCard         (tool_use + paired result, collapsible; long output scrolls)
  *  - ToolGroupCard    (two or more consecutive calls folded to one line per turn)
- * Assistant prose is the thread kit's Message (components/kit/Message.tsx).
+ * Assistant prose is the thread kit's Message (components/kit/Message.tsx): its card bubble on the left.
  */
-import { BUBBLES_USER } from '../../lib/chatSkin';
+import { BUBBLES_USER, BUBBLES_WIDTH } from '../../lib/chatSkin';
+import { MESSAGE_TIME_TONE, messageTimeLabel } from '../../lib/messageTime';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { ChevronRight, ChevronDown, FileText } from 'lucide-react';
@@ -133,18 +134,11 @@ export function relativeAgo(ts?: string): string {
  * datetime on hover. Absent ts renders NOTHING rather than a guessed time.
  */
 export function MessageTime({ ts, align = 'left' }: { ts?: string; align?: 'left' | 'right' }) {
-  if (!ts) return null;
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return null;
-  const ageS = (Date.now() - d.getTime()) / 1000;
-  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  const label = ageS < 60 ? 'just now' : hhmm;
+  const t = messageTimeLabel(ts);
+  if (!t) return null;
   return (
-    <span
-      className={`block mt-0.5 text-[10px] text-tone-600 ${align === 'right' ? 'text-right' : 'text-left'}`}
-      title={d.toLocaleString()}
-    >
-      {label}
+    <span className={`block mt-0.5 ${MESSAGE_TIME_TONE} ${align === 'right' ? 'text-right' : 'text-left'}`} title={t.title}>
+      {t.label}
     </span>
   );
 }
@@ -250,7 +244,7 @@ export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'qu
   const waiting = kind === 'held' || kind === 'queued';
   return (
     <div className="flex flex-col items-end" data-testid="pending-bubble" data-pending-kind={kind}>
-      <div className={clsx('max-w-[85%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words',
+      <div className={clsx(BUBBLES_WIDTH, 'rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words',
         waiting ? 'bg-blue-600/25 text-white/70' : 'bg-blue-600/50 text-white/85')}>
         {withRefs(text)}
       </div>
@@ -353,14 +347,17 @@ function answeredQuestion(block: ToolBlock, records?: BatchRecord[]) {
   );
 }
 
-export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; density?: ToolDensity }) {
+/** How a tool run is drawn: the kit card, or Bubbles' thin lines (kit/ToolCard.tsx). */
+export type ToolLook = 'card' | 'lines';
+
+export function ToolCard({ block, density = 'normal', look = 'card' }: { block: ToolBlock; density?: ToolDensity; look?: ToolLook }) {
   const records = useBatchRecords();
   const asked = answeredQuestion(block, records);
   if (asked) return asked;
   // The kit's one tool card (components/kit/ToolCard.tsx), shared with Arturo's page.
   return (
     <div className="flex justify-start">
-      <ToolCalls calls={[fromBlock(block)]} density={density} />
+      <ToolCalls calls={[fromBlock(block)]} density={density} look={look} />
     </div>
   );
 }
@@ -369,20 +366,20 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
  * A turn's tool calls folded to ONE line, e.g. "Worked for 1m 8s — edited 2 files, ran 3 commands". Opening it lists
  * each call (with the thinking between them), and each call opens again to its input and output.
  */
-export function ToolGroupCard({ group, interrupted = false, density = 'normal' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity }) {
+export function ToolGroupCard({ group, interrupted = false, density = 'normal', look = 'card' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity; look?: ToolLook }) {
   // Answered questions are drawn as their cards under the folded line, not folded into it.
   const records = useBatchRecords();
   const asked = group.children.flatMap((c) => (c.kind === 'tool' ? [answeredQuestion(c, records)] : [])).filter(Boolean);
   const children = asked.length ? group.children.filter((c) => !(c.kind === 'tool' && answeredQuestion(c, records))) : group.children;
   const entries: ToolRunEntry[] = children.map((c) => c.kind === 'tool'
     ? { kind: 'call', call: fromBlock(c) }
-    : { kind: 'note', key: c.key, node: <RenderNodeView node={c} density={density} /> });
+    : { kind: 'note', key: c.key, node: <RenderNodeView node={c} density={density} look={look} /> });
   const calls = entries.flatMap((e) => (e.kind === 'call' ? [e.call] : []));
   return (
     <>
       {calls.length > 0 && (
         <div className="flex justify-start">
-          <ToolCalls calls={calls} entries={entries} interrupted={interrupted} density={density} />
+          <ToolCalls calls={calls} entries={entries} interrupted={interrupted} density={density} look={look} />
         </div>
       )}
       {asked}
@@ -391,14 +388,14 @@ export function ToolGroupCard({ group, interrupted = false, density = 'normal' }
 }
 
 /** Like RenderNodeView, plus the folded tool group. */
-export function GroupedNodeView({ node, interrupted, density = 'normal' }: { node: GroupedNode; interrupted?: boolean; density?: ToolDensity }) {
+export function GroupedNodeView({ node, interrupted, density = 'normal', look = 'card' }: { node: GroupedNode; interrupted?: boolean; density?: ToolDensity; look?: ToolLook }) {
   return node.kind === 'tool_group'
-    ? <ToolGroupCard group={node} interrupted={interrupted} density={density} />
-    : <RenderNodeView node={node} density={density} />;
+    ? <ToolGroupCard group={node} interrupted={interrupted} density={density} look={look} />
+    : <RenderNodeView node={node} density={density} look={look} />;
 }
 
 /** Dispatch a RenderNode to the right primitive. */
-export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode; density?: ToolDensity }) {
+export function RenderNodeView({ node, density = 'normal', look = 'card' }: { node: RenderNode; density?: ToolDensity; look?: ToolLook }) {
   switch (node.kind) {
     case 'user': {
       if (node.isSystem) return <UserSystem text={node.text} />;
@@ -444,7 +441,7 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
     case 'thinking':
       return <ThinkingCard text={node.text} />;
     case 'tool':
-      return <ToolCard block={node} density={density} />;
+      return <ToolCard block={node} density={density} look={look} />;
     default:
       return null;
   }

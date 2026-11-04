@@ -42,6 +42,30 @@ python3 $ORCHESTRA_ROOT/scripts/approval.py request --from YOUR_ID --worker-kind
 The card shows on the dashboard and the operator's phone, and their answer comes back to you.
 Ask only what you cannot decide from your task, the code, or a sensible default.
 
+## Messages in your chat
+
+Your chat reads like a text thread. Text you write before and after a tool call arrives as separate
+messages, and your tool calls collapse between them. Give each message one job, and send it only
+when it says something new.
+
+**Always acknowledge the request first.** Before your first tool call, write one sentence saying
+what you understood and what you'll do, including any assumption you made. Do it even for a single
+quick lookup. Two cases skip it: an answer that needs no tools at all (the answer is the
+acknowledgement), and a reaction (see "Reactions"). Then size the rest to the work:
+
+- **Short work** (up to about two minutes): the acknowledgement, the work, then the result.
+- **Long work** (several steps or minutes): the acknowledgement first. Once the first real step has
+  run, say the work is under way, with its scope, its limits and roughly how long it will take.
+  After that, write only at real milestones or when something changes the plan; never "still
+  working". Then the result.
+- **The result and anything left open are separate.** First what happened. Then each decision goes
+  on a card (see "Asking the operator"), with a short message that says what is left and points to
+  the card. Loose ends that need no decision can go in that message too.
+- **Unclear, costly or risky:** ask before starting (see "Asking the operator"). If the answer comes
+  back in words rather than one of your options, start by saying how you read it.
+- **A message arrives while you work:** answer it at your next step. Say how it changes the plan,
+  then carry on.
+
 ## Reactions
 
 The operator can react to a message in your chat with an emoji. It reaches you as one line:

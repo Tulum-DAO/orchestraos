@@ -11,8 +11,9 @@
  *   SlotBar         desktop hover icons on the bubble's outer side, vertically centred: 🙂 react, Copy, … (more).
  *                   On a phone: a "React" button hidden until focused, so a screen reader (or a keyboard) can open
  *                   the hold's sheet without holding.
- *   ReactionAnchor  an agent's reply has no bubble of its own: a plain block around its words (its width and layout
- *                   unchanged), whose words' extent (reactionsContext wordsBox) places the badges and icons.
+ *   ReactionAnchor  Modern's agent reply has no bubble of its own: a plain block around its words (its width and
+ *                   layout unchanged), whose words' extent (reactionsContext wordsBox) places the badges and icons.
+ *                   In Bubbles the reply's own bubble is the anchor (kit/Message.tsx MessageText, `data-rx-bubble`).
  *
  * Kept apart from Reactions.tsx (the menus) so the bubbles that import it (Turns, Message, TranscriptCards) never
  * import the menus that draw those bubbles again.
@@ -50,7 +51,8 @@ export function SlotBadges({ side }: { side: ReactSide }) {
     const anchor = el?.parentElement;
     if (!el || !anchor || !count) return;
     const measure = () => {
-      const a = side === 'agent' ? wordsBox(anchor) : anchor.getBoundingClientRect();
+      // A bubble (the person's, the agent's) is its own box; only Modern's bare reply is measured by its words.
+      const a = side === 'agent' && !anchor.hasAttribute('data-rx-bubble') ? wordsBox(anchor) : anchor.getBoundingClientRect();
       const box = anchor.getBoundingClientRect();
       const clip = clipBoxOf(anchor);
       const rel = { left: a.left - clip.left, top: a.top - clip.top, width: a.width, height: a.height };
@@ -123,7 +125,7 @@ export function SlotBar({ side }: { side: ReactSide }) {
   );
 }
 
-/** An agent's reply in a plain block (no width of its own: the reply sizes exactly as without it), carrying its badges
+/** Modern: an agent's reply in a plain block (no width of its own: the reply sizes exactly as without it), carrying its badges
  *  and hover icons. No slot: just the words. */
 export function ReactionAnchor({ children }: { children: ReactNode }) {
   const slot = useReactionSlot();

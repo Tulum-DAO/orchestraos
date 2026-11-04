@@ -7,7 +7,7 @@
  * todo list, file chips, the whole input and output) with Arturo's per-tool icons and running rows.
  */
 import type { ToolBlock } from './transcript';
-import { toolSummary, toolFilePath } from './transcript';
+import { shortPath, toolSummary, toolFilePath } from './transcript';
 import type { ToolPart, ToolStatus } from './turnParts';
 import { toolChip, toolLabel, toolResultLines } from './toolDisplay';
 import { todoItems, isCommandTool, type TodoItem } from './toolCardDetail';
@@ -128,4 +128,45 @@ export function runSummary(calls: ToolCallView[], interrupted = false): {
   const tone = s.running > 0 ? 'running' : s.interrupted > 0 ? 'stopped'
     : s.failed > 0 && s.failed === calls.length ? 'failed' : 'done';
   return { lead, headline: s.headline, tone };
+}
+
+/** Bubbles' thin line for one call (components/kit/ToolCard.tsx ToolLines): the tool's name and a short summary of
+ *  what it was given (a file as its short path). */
+export function callLine(c: ToolCallView): { label: string; detail: string } {
+  return { label: callLabel(c.name), detail: c.filePath ? shortPath(c.filePath) : c.chip };
+}
+
+/** What a call's code block shows, and what its Copy takes: the input as written (a command as `$ command`, a todo
+ *  list as its marks, anything else as its JSON, Arturo's as its argument words) and what came back (Arturo's
+ *  without the sentences meant for the model). */
+export function callCode(c: ToolCallView): { input: string; output: string; copy: string } {
+  const inp = c.input ?? {};
+  const input = c.todos.length
+    ? c.todos.map((t) => `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : '○'} ${t.content}`).join('\n')
+    : isCommandTool(c.name) && typeof inp.command === 'string' ? `$ ${inp.command}`
+    : Object.keys(inp).length ? JSON.stringify(inp, null, 2)
+    : c.chip;
+  const output = c.arturo ? toolResultLines(c.result).join('\n') : c.result;
+  return { input, output, copy: [input, output].filter(Boolean).join('\n\n') };
+}
+
+/** The call a run is on right now (its live step: the last one still going), or none; an interrupted run has none. */
+export function liveCall(calls: ToolCallView[], interrupted = false): ToolCallView | undefined {
+  if (interrupted) return undefined;
+  for (let i = calls.length - 1; i >= 0; i--) if (calls[i].status === 'running') return calls[i];
+  return undefined;
+}
+
+/** When a run happened, for its thin line (kit/ToolCard.tsx): when its first call started and, once it is over and
+ *  took more than a minute, when its last one ended. Calls with no time (a runtime that does not say) are left out;
+ *  none with a time: null, never a guess. */
+export function runTimes(calls: ToolCallView[]): { start: string; end?: string } | null {
+  const ms = (t?: string) => (t ? Date.parse(t) : NaN);
+  const starts = calls.filter((c) => Number.isFinite(ms(c.ts)));
+  if (!starts.length) return null;
+  const first = starts.reduce((a, c) => (ms(c.ts) < ms(a.ts) ? c : a));
+  if (calls.some((c) => c.status === 'running')) return { start: first.ts! };
+  let end: string | undefined;
+  for (const c of calls) for (const t of [c.ts, c.endTs]) if (Number.isFinite(ms(t)) && (!end || ms(t) > ms(end))) end = t;
+  return end && ms(end) - ms(first.ts) > 60_000 ? { start: first.ts!, end } : { start: first.ts! };
 }
