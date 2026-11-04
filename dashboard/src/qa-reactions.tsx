@@ -48,8 +48,8 @@ const run = (n: number, tool: string, input: Record<string, unknown>, result?: s
 const TOOLS: ChatItem[] = [
   say(11, 'user', 'Is the deploy healthy? Check the box.'),
   say(12, 'assistant', 'Checking the box now.'),
-  ...run(13, 'Bash', { command: 'D=/home/sam/orchestraos; cd $D && git log --oneline -3' }, 'f3662c9 fix(dashboard): no Typing or live bubble\n355a970 fix(reactions): the wake watcher snapshots\n49fd99e fix(arturo): ChatMirror never notes a reaction wake'),
-  ...run(15, 'Read', { file_path: '/home/sam/orchestraos/dashboard/package.json' }, '{\n  "name": "dashboard",\n  "private": true,\n  "version": "0.0.0"\n}'),
+  ...run(13, 'Bash', { command: 'D=/home/orchestra/orchestraos; cd $D && git log --oneline -3' }, 'f3662c9 fix(dashboard): no Typing or live bubble\n355a970 fix(reactions): the wake watcher snapshots\n49fd99e fix(arturo): ChatMirror never notes a reaction wake'),
+  ...run(15, 'Read', { file_path: '/home/orchestra/orchestraos/dashboard/package.json' }, '{\n  "name": "dashboard",\n  "private": true,\n  "version": "0.0.0"\n}'),
   ...run(17, 'Bash', { command: 'curl -sf http://127.0.0.1:8080/health | jq .' }, '{\n  "ok": true,\n  "api": "up",\n  "web": "up"\n}'),
   say(19, 'assistant', 'All green. The summary:\n\n| check | state | note |\n|---|---|---|\n| api | ok | 12ms |\n| web | ok | served from dist |\n| git | clean | f3662c9 |'),
   say(20, 'user', 'And the last log lines?'),

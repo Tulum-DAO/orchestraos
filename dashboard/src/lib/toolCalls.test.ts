@@ -84,7 +84,7 @@ test("a call's code block (Bubbles' thin lines): its input as written and what c
 });
 
 test("a call's thin line: its name and a short summary (a file as its short path)", () => {
-  assert.deepEqual(callLine(fromBlock(block({ input: { command: 'D=/home/sam/x; ls $D' }, result: '' }))), { label: 'Bash', detail: 'D=/home/sam/x; ls $D' });
+  assert.deepEqual(callLine(fromBlock(block({ input: { command: 'D=/home/orchestra/x; ls $D' }, result: '' }))), { label: 'Bash', detail: 'D=/home/orchestra/x; ls $D' });
   assert.deepEqual(callLine(fromBlock(block({ tool: 'Read', input: { file_path: '/srv/sample/deep/a.ts' }, result: 'x' }))).label, 'Read');
   assert.ok(callLine(fromBlock(block({ tool: 'Read', input: { file_path: '/srv/sample/deep/a.ts' }, result: 'x' }))).detail.endsWith('a.ts'));
 });

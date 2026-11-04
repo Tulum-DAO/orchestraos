@@ -311,7 +311,7 @@ function CallCode({ call, skin }: { call: ToolCallView; skin: Skin }) {
   );
 }
 
-/** One call as a thin line ("Bash · D=/home/sam/…"), opening to its code block. Still running: its spinner (or the
+/** One call as a thin line ("Bash · D=/home/orchestra/…"), opening to its code block. Still running: its spinner (or the
  *  background job it launched, live), nothing to open yet. `top`: the run is this one call (no middle level). */
 function CallLine({ call, skin, top = false, className }: { call: ToolCallView; skin: Skin; top?: boolean; className?: string }) {
   const [open, setOpen] = useState(false);
