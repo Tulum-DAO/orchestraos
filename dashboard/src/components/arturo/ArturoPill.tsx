@@ -21,6 +21,8 @@ import { arturoTurn } from '../../lib/arturoStream';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { applyScreenAnswer, focusOf, getScreen, screenLabel, screenPayload, subscribeScreen } from '../../lib/screenCards';
 import JobTray from './JobTray';
+import { composerKeyAction, composerKeys, keyArgs } from '../../lib/composerGate';
+import { useDeviceSetting } from '../../lib/deviceSettings';
 import { useStickToBottom } from '../../lib/useStickToBottom';
 import RoundAction from '../kit/RoundAction';
 import { roundView } from '../../lib/roundAction';
@@ -107,6 +109,7 @@ export function ArturoPill() {
   const setOpen = useArturoUi((st) => st.setOpen);
   const setExchanges = useArturoUi((st) => st.setExchanges);
   const [draft, setDraft] = useState('');
+  const [sendShortcut] = useDeviceSetting('sendShortcut');   // Settings › General › Send shortcut
   const aname = useAssistantName();
   const [turns, setTurns] = useState<PillTurn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -495,7 +498,9 @@ export function ArturoPill() {
           </div>
         )}
         <textarea ref={ta} rows={1} value={draft} placeholder={`Ask ${aname}…`} onChange={(e) => { setDraft(e.target.value); growTa(); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
+          onKeyDown={(e) => {
+            if (composerKeyAction({ ...keyArgs(e), ...composerKeys('arturoPill', sendShortcut) }) === 'send') { e.preventDefault(); void send(); }
+          }} />
         <div className="ctrl-row">
           {/* The page-context CARD lives HERE, in place of the old "Arturo" chip: it sits
               with the composer because it describes what the NEXT message carries, not

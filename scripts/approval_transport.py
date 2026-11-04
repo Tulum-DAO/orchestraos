@@ -23,6 +23,14 @@ from approval_schema import ApprovalStore
 def notify(rid: str, store: ApprovalStore | None = None):
     store = store or ApprovalStore()
     mode = APPROVAL_TRANSPORT
+    # Settings › Notifications, before ANY transport (ntfy, APNs, the fallback): a card the person does not want now is
+    # stamped and not sent (approval_notify._policy_gate; ntfy's own notify() asks again, which is harmless).
+    row = store.get(rid)
+    if row and row.get("status") == "pending":
+        from approval_notify import _policy_gate
+        import notify_policy
+        if _policy_gate("approval", row, store) != notify_policy.OK:
+            return None
 
     if mode == "ntfy":
         from approval_notify import notify as ntfy_notify

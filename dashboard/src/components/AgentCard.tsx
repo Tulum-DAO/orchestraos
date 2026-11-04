@@ -22,7 +22,8 @@ import { GenChip } from './GenChip';
 import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
-import { canStopTurn } from '../lib/composerGate';
+import { canStopTurn, composerKeyAction, composerKeys, keyArgs } from '../lib/composerGate';
+import { useDeviceSetting } from '../lib/deviceSettings';
 import { AGENT_CARD_TITLE_CLASS } from '../lib/agentCardTitle';
 import { stepFrom } from '../lib/liveStep';
 import { StepLine } from './chat/StepLine';
@@ -106,6 +107,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   const [outputLines, setOutputLines] = useState<string[]>([]);
   const [, setOutputLoading] = useState(false);
   const [injectText, setInjectText] = useState('');
+  const [sendShortcut] = useDeviceSetting('sendShortcut');   // Settings › General › Send shortcut
   const [injecting, setInjecting] = useState(false);
   const [injectResult, setInjectResult] = useState<string | null>(null);
   // Success is a BOOLEAN, not a string comparison. The styling below used to test
@@ -586,7 +588,8 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 rows={2}
                 className="flex-1 bg-tone-950 border border-tone-800 rounded-lg px-2.5 py-1.5 text-xs text-tone-300 placeholder-tone-600 resize-none focus:outline-none focus:border-tone-600"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  // Cmd/Ctrl+Enter sends until this device picks a Send shortcut (Settings › General).
+                  if (composerKeyAction({ ...keyArgs(e), ...composerKeys('agentCard', sendShortcut) }) === 'send') {
                     e.preventDefault();
                     handleSend();
                   }

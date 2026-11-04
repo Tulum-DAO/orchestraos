@@ -14,6 +14,19 @@ import sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from approval_config import DB_PATH
 
 
+def _add_column(c, sql):
+    """One additive ALTER. Two processes can both see a column missing and both add it (the second gets
+    "duplicate column name"): that is the column being there, which is what was wanted. Returns True if this call
+    added it. Any other error is raised."""
+    try:
+        c.execute(sql)
+        return True
+    except sqlite3.OperationalError as e:
+        if "duplicate column" in str(e).lower():
+            return False
+        raise
+
+
 def _now():
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -135,10 +148,12 @@ class QuestionnaireStore:
             # Additive columns (same discipline as ApprovalStore.migrate).
             existing = {r[1] for r in c.execute("PRAGMA table_info(questionnaires)").fetchall()}
             if "notified_at" not in existing:   # ntfy push stamp (spec §5)
-                c.execute("ALTER TABLE questionnaires ADD COLUMN notified_at TEXT")
-            for col in ("last_attempt_at", "escalated_at"):   # SLA spec 2026-08-14
+                _add_column(c, "ALTER TABLE questionnaires ADD COLUMN notified_at TEXT")
+            # notify_skipped: why a push did not go (Settings › Notifications: suppressed / held by quiet hours),
+            # the same audit column approval_requests has. Nullable, additive.
+            for col in ("last_attempt_at", "escalated_at", "notify_skipped"):   # SLA spec 2026-08-14
                 if col not in existing:
-                    c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
+                    _add_column(c, f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
             if "real_attempts" not in existing:   # G3 answer-resume spec 2026-08-18:
                 # resume_attempts becomes the EVERY-attempt counter (busy/no-head
                 # refusals included — zero-attempts-while-pending impossible by
@@ -146,21 +161,22 @@ class QuestionnaireStore:
                 # WATCHDOG_MAX_ATTEMPTS keeps gating on REAL failed injects,
                 # never on busy minutes (3 busy beats must not read as
                 # "delivered 3x with no ack").
-                c.execute("ALTER TABLE questionnaires ADD COLUMN real_attempts "
+                added = _add_column(c, "ALTER TABLE questionnaires ADD COLUMN real_attempts "
                           "INTEGER NOT NULL DEFAULT 0")
                 # Backfill: historically every counted attempt WAS a real one.
-                c.execute("UPDATE questionnaires SET real_attempts=resume_attempts")
+                if added:   # another process added it first: it backfilled too
+                    c.execute("UPDATE questionnaires SET real_attempts=resume_attempts")
             # Card RETIRE columns ride the SAME operator arm as approval_requests (gm msg_3f3a4d05:
             # one arm, both tables). Unarmed: nothing is added and retire() refuses.
             import approval_schema
             if approval_schema.armed(approval_schema.RETIRE_MIGRATION):
                 for col in approval_schema.RETIRE_COLS:
                     if col not in existing:
-                        c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
+                        _add_column(c, f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
             if approval_schema.armed(PROVENANCE_MIGRATION):
                 for col, coltype in PROVENANCE_COLS:
                     if col not in existing:
-                        c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} {coltype}")
+                        _add_column(c, f"ALTER TABLE questionnaires ADD COLUMN {col} {coltype}")
             c.commit()
         finally:
             c.close()

@@ -41,9 +41,9 @@ export function Info({ label, children }: { label: string; children: ReactNode }
   );
 }
 
-export function Switch({ on, labelledBy, disabled, onToggle, data }: { on: boolean; labelledBy: string; disabled: boolean; onToggle: () => void; data: string }) {
+export function Switch({ on, labelledBy, describedBy, disabled, onToggle, data }: { on: boolean; labelledBy: string; describedBy?: string; disabled: boolean; onToggle: () => void; data: string }) {
   return (
-    <button type="button" role="switch" aria-checked={on} aria-labelledby={labelledBy} disabled={disabled} onClick={onToggle}
+    <button type="button" role="switch" aria-checked={on} aria-labelledby={labelledBy} aria-describedby={describedBy} disabled={disabled} onClick={onToggle}
             className={`rotation-switch${on ? ' is-on' : ''}`} data-rotation-switch={data}>
       <span className="rotation-switch-knob" />
     </button>

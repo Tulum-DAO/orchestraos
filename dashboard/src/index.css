@@ -708,14 +708,16 @@ button.agent-pill.is-bare:focus-visible { background: var(--agent-pill-bg); --la
    wins (an unlayered rule would beat every utility whatever its specificity). */
 @layer utilities { :where(.ui-feed-gap > :not(:last-child)) { margin-block-end: calc(0.625rem * var(--ui-gap, 1)); } }
 
-/* Settings › Display › Timestamps: "On hover" keeps message and tool-line times hidden until their row is hovered or
-   focused (the full date stays in the title). Only where something can hover: on a touch screen it is "Always". */
+/* Settings › General › Timestamps: "On hover" keeps message and tool-line times hidden until their row is hovered or
+   focused (the full date stays in the title). Only where something can hover: on a touch screen it is "Always".
+   "Off" leaves them out everywhere. */
 @media (hover: hover) {
   html[data-timestamps="hover"] [data-msg-time] { opacity: 0; transition: opacity 0.15s; }
   html[data-timestamps="hover"] :hover > [data-msg-time],
   html[data-timestamps="hover"] :focus-within > [data-msg-time],
   html[data-timestamps="hover"] [data-msg-time]:hover { opacity: 1; }
 }
+html[data-timestamps="off"] [data-msg-time] { display: none; }
 
 /* Settings › Display › Motion = Reduced: every CSS animation and transition finishes at once, whatever the OS says. */
 html[data-motion="reduced"] *, html[data-motion="reduced"] *::before, html[data-motion="reduced"] *::after {

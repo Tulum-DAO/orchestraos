@@ -118,3 +118,18 @@ def _guard_prod_registry_unmutated():
         f"HERMETICITY LEAK: this test changed the seats of a REAL data dir: {changed}. Point ORCHESTRA_DIR "
         f"(and rotate_agent.REGISTRY_PATH / ORCHESTRA_DIR-derived store paths) at a tmp sandbox. A leaked "
         f"always_on row pages pulse forever and can become a recovery target.")
+
+
+# Settings › Notifications (notify_policy.py): every push in a test would otherwise read the operator's prefs.json in
+# whatever data dir the run resolves, and orchestra.toml's zone, so a person's own quiet hours on the machine running
+# the suite could hold a test's push. Each test gets an empty data dir and a fixed config (operator, UTC). Tests of
+# notify_policy itself pass data_dir/config explicitly, or restore the real readers they captured at import.
+@pytest.fixture(autouse=True)
+def _notify_policy_hermetic(monkeypatch, tmp_path_factory):
+    try:
+        import notify_policy
+    except ImportError:
+        return
+    empty = tmp_path_factory.mktemp("notify-prefs")
+    monkeypatch.setattr(notify_policy, "_data_dir", lambda: empty)
+    monkeypatch.setattr(notify_policy, "_config", lambda: {"operator": {"id": "operator", "timezone": ""}})

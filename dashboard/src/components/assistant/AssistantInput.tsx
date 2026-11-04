@@ -7,6 +7,8 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { Send, Square } from 'lucide-react';
+import { composerKeyAction, composerKeys, keyArgs } from '../../lib/composerGate';
+import { useDeviceSetting } from '../../lib/deviceSettings';
 
 interface Props {
   onSend: (text: string) => void;
@@ -17,6 +19,7 @@ interface Props {
 
 export default function AssistantInput({ onSend, onCancel, streaming, disabled }: Props) {
   const [text, setText] = useState('');
+  const [sendShortcut] = useDeviceSetting('sendShortcut');   // Settings › General › Send shortcut
 
   const submit = () => {
     const t = text.trim();
@@ -36,7 +39,8 @@ export default function AssistantInput({ onSend, onCancel, streaming, disabled }
           disabled={disabled}
           className="flex-1 bg-tone-950 border border-tone-800 rounded-lg px-3 py-2 text-sm text-tone-300 placeholder-tone-600 resize-none focus:outline-none focus:border-tone-600 disabled:opacity-50"
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            // Cmd/Ctrl+Enter sends until this device picks a Send shortcut (Settings › General).
+            if (composerKeyAction({ ...keyArgs(e), ...composerKeys('assistant', sendShortcut) }) === 'send') {
               e.preventDefault();
               submit();
             }

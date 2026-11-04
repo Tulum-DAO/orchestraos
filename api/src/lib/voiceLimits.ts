@@ -1,5 +1,5 @@
 /**
- * voiceLimits.ts — the install's daily voice limit (Settings › Voice & calls), in
+ * voiceLimits.ts — the install's daily voice limit (Settings › Server › Voice & calls), in
  *   <data dir>/state/voice-limits.json   {"daily_cap_min": 120}
  * services/arturo/voice_usage.py reads it on every check (no restart); VOICE_DAILY_CAP_MIN stays its fallback.
  */

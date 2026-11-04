@@ -80,7 +80,7 @@ test('the panel\'s Row, Info and Switch live in one place, shared with Settings'
 });
 
 test('settings rows: saved tick, revert with the reason, lock for non-admins, delayed-effect note, changed-by line', () => {
-  const kit = read('components/settings/SettingsKit.tsx');
+  const kit = read('components/settings/SettingsKit.tsx') + read('components/settings/SavedSlot.tsx');
   for (const marker of ['data-setting-saved', 'data-setting-error', 'data-setting-locked', 'data-setting-note', 'data-setting-changed', 'data-scope']) {
     assert.match(kit, new RegExp(marker), marker);
   }
@@ -88,28 +88,32 @@ test('settings rows: saved tick, revert with the reason, lock for non-admins, de
   assert.match(hook, /revertRow\(useServerSettings\.getState\(\)\.rows\[key\], shown, before\)/, 'a refused save puts the old value back (unless a newer one came in)');
 });
 
-test('General: Appearance and emoji tone (This device), default chat style (You), time zone (Everyone)', () => {
+test('General: theme, text size and emoji tone, agent steps, timestamps (This device), chat style (You); no time zone', () => {
   const g = read('components/settings/sections/GeneralSection.tsx');
-  assert.match(g, /scope="device"/); assert.match(g, /scope="user"/); assert.match(g, /scope="everyone"/);
-  for (const k of ['general.defaultChatStyle', 'general.timeZone']) assert.match(g, new RegExp(k.replace('.', '\\.')));
+  assert.match(g, /general\.defaultChatStyle/); assert.doesNotMatch(g, /general\.timeZone/);
   assert.match(g, /useTheme\(\)/); assert.match(g, /writeTone\(/);
+  assert.match(read('components/settings/sections/ServerSection.tsx'), /scope="everyone"[\s\S]*general\.timeZone/);
 });
 
-test('Display: preview first, then every row on this device; message and sidebar width only on desktop; reset confirms', () => {
+test('Display: preview first, then its rows on this device; message and sidebar width only on desktop; reset confirms', () => {
   const d = read('components/settings/sections/DisplaySection.tsx');
   assert.match(d, /<DisplayPreview \/>/);
-  for (const k of ['textScale', 'spacing', 'messageWidth', 'toolDetail', 'timestamps', 'motion']) assert.match(d, new RegExp(`k="${k}"`), k);
+  for (const k of ['spacing', 'messageWidth', 'motion']) assert.match(d, new RegExp(`k="${k}"`), k);
   assert.match(d, /\{desktop && <DeviceChoiceRow k="messageWidth"/);
   assert.match(d, /\{desktop && <SidebarWidthRow \/>\}/);
   assert.match(d, /<ConfirmButton[\s\S]*?resetDisplay\(\)/);
+  // the preview is the real thread now (lib/displayPage.test.ts), plus its sidebar row
   const p = read('components/settings/sections/DisplayPreview.tsx');
-  for (const m of ['BUBBLES_USER', 'BUBBLES_AGENT', 'data-msg-time', 'useTextAvatar(20)', 'useTextAvatar(32)']) assert.match(p, new RegExp(m.replace(/[()]/g, '\\$&')), m);
+  for (const m of ['<ThreadView ', 'GroupedNodeView', 'useTextAvatar(32)']) assert.match(p, new RegExp(m.replace(/[()]/g, '\\$&')), m);
 });
 
-test('Voice & calls: provider, default voice, new agents take calls, daily limit (Everyone); mic, transcript, colour (This device)', () => {
+test('Server › Voice & calls: provider, default voice, new agents take calls, daily limit (Everyone); Voice: mic, colour (This device; no Call transcript)', () => {
+  const s = read('components/settings/sections/ServerVoiceSection.tsx');
+  for (const k of ['voice.provider', 'voice.defaultVoice', 'voice.newAgentsTakeCalls', 'voice.dailyLimitMin']) assert.match(s, new RegExp(k.replace('.', '\\.')));
+  assert.match(read('lib/voicePage.ts'), /Not available on this install/);
   const v = read('components/settings/sections/VoiceSection.tsx');
-  for (const k of ['voice.provider', 'voice.defaultVoice', 'voice.newAgentsTakeCalls', 'voice.dailyLimitMin']) assert.match(v, new RegExp(k.replace('.', '\\.')));
-  for (const s of ['setMicMode', 'setTranscriptMode', 'setAccentVoice', 'Not available on this install']) assert.match(v, new RegExp(s));
+  for (const m of ['setMicMode', 'setAccentVoice']) assert.match(v, new RegExp(m));
+  assert.doesNotMatch(v, /setTranscriptMode|Call transcript/);
 });
 
 test('Agents: default model (inline picker), auto-compact, compact at (stepper), show compaction, safety limits read-only', () => {
@@ -138,8 +142,8 @@ test('the agent panel keeps only the agent\'s own settings and links to Settings
   assert.doesNotMatch(p, /DevicePage/);
   assert.match(p, /<TakesCalls agentId=\{agentId\} \/>/);
   assert.match(p, /label="Server settings"/);
-  assert.match(p, /openSettings\('general'\)/);
-  assert.match(p, /openSettings\('voice'\)/);
+  assert.match(p, /openSettings\('server'\)/);
+  assert.match(p, /openSettings\('server-voice'\)/);
   assert.doesNotMatch(read('lib/arturoPanel.ts'), /'device'/);
   const home = read('pages/ArturoHome.tsx');
   assert.doesNotMatch(home, /Open brain/);

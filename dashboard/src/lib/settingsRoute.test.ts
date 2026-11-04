@@ -5,9 +5,9 @@ import {
   closeSettingsTarget, backgroundPath, isSettingsShortcut, isMacPlatform, settingsShortcutLabel, matchesQuery, SCOPE_LABEL,
 } from './settingsRoute.ts';
 
-test('phase 1 shows General, Display, Voice & calls, Agents; the later categories are listed but hidden', () => {
-  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice & calls', 'Agents']);
-  assert.deepEqual(SETTINGS_SECTIONS.filter((s) => !s.visible).map((s) => s.id), ['models', 'keys', 'notifications', 'people', 'system']);
+test('shows General, Display, Voice, Agents, Notifications, then the install\'s Voice & calls and Time zone last; the later categories are listed but hidden', () => {
+  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Voice & calls', 'Time zone']);
+  assert.deepEqual(SETTINGS_SECTIONS.filter((s) => !s.visible).map((s) => s.id), ['models', 'keys', 'people', 'system']);
 });
 
 test('paths: /settings is the list, /settings/<section> a section; unknown or hidden sections open General', () => {

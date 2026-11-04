@@ -13,15 +13,21 @@
  *   state/agent-defaults.json            agents.defaultModel
  *   state/seat-settings-default.json     agents.autoCompact, agents.compactAt, agents.showCompaction
  *   built in + [rotation]                agents.safetyLimits (read-only)
+ *   state/users/<you>/prefs.json         notifications.level, .agentOverrides, .quietHours (notify_level,
+ *                                        notify_agents, quiet_hours; lib/notifyPolicy.ts). The server's push path
+ *                                        reads the same file (scripts/notify_policy.py, approval_notify.py).
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import * as toml from 'toml';
 import { readUserPrefs, writeUserPref } from './userPrefs.js';
+import { trustsIdentityHeaders } from './principal.js';
 import { readTomlString, setTomlStringChecked, isTimeZone, writeFileKeepingMode } from './tomlEdit.js';
 import { agentCallsDefault, writeAgentCallsDefault } from './agentCallGate.js';
 import { readVoiceLimit, writeVoiceLimit, validDailyLimit, DEFAULT_DAILY_LIMIT, DAILY_LIMIT_MAX } from './voiceLimits.js';
 import { BUILTIN_MODELS, MODEL_ID_RE, readDefaultModels, writeDefaultModel } from './agentDefaults.js';
+import { DEFAULT_NOTIFY_LEVEL, NOTIFY_LEVELS, inQuietHours, isLevel, readOverrides, readQuietHours, validOverrides, validQuietHours } from './notifyPolicy.js';
 import { BUILTIN, COMPACT_MAX, COMPACT_MIN, GUARD_PCT, readInstallDefault, validSetting, writeInstallDefault, type SettingField } from './seatSettings.js';
 
 export interface GatewayClient {
@@ -33,8 +39,9 @@ export interface SettingsCtx {
   /** Who is making the change, as "Changed by" names them (lib/principal changedBy: the Tailscale login). */
   by?: string;
 }
-export type SectionId = 'general' | 'voice' | 'agents';
-export interface Choice { value: string; label: string; available: boolean; reason?: string }
+export type SectionId = 'general' | 'voice' | 'agents' | 'notifications';
+/** `description`: the option's one-line word (the voice service's own copy for a provider), when there is one. */
+export interface Choice { value: string; label: string; available: boolean; reason?: string; description?: string }
 export interface ReadResult { value: unknown; source: 'store' | 'builtin'; choices?: Choice[]; detail?: string | null }
 export interface SettingEntry {
   key: string;
@@ -91,6 +98,36 @@ function contextCeilingPct(ctx: SettingsCtx): number {
   } catch { return 80; }
 }
 
+/** Whether this server can push at all: the ntfy token approval_notify.py needs (approval_config.py NTFY_TOKEN_FILE). */
+export function serverPushSetUp(): boolean {
+  const f = process.env.NTFY_TOKEN_FILE || path.join(os.homedir(), '.config', 'jarvis', 'ntfy-token');
+  try { return fs.readFileSync(f, 'utf-8').trim().length > 0; } catch { return false; }
+}
+
+const tomlKey = (c: SettingsCtx, section: string, key: string) => { try { return readTomlString(configText(c), section, key); } catch { return null; } };
+
+/** What the level and quiet-hours rows say about where they apply, naming every path on this install they do not
+ *  reach: the watch app makes its own alert for every new card (it polls /pending-approvals and posts a local
+ *  notification) and does not read these; Telegram, when [notify] channel is telegram, is install-wide and pings
+ *  every card; and with identity headers trusted, the server's pushes follow the operator's file, not this person's. */
+/** Telegram is on when the sender can send: scripts/tg-notify.sh reads <data dir>/.env.telegram (every card ping,
+ *  red alerts, the permission backstop use it), or the config names telegram as the channel (agent-state.ts). */
+function telegramOn(c: SettingsCtx): boolean {
+  return fs.existsSync(path.join(c.dataDir, '.env.telegram')) || tomlKey(c, 'notify', 'channel') === 'telegram';
+}
+
+export function notifyDetail(c: SettingsCtx): string {
+  const parts = [serverPushSetUp()
+    ? 'The watch app still alerts for every card itself; it does not read this yet.'
+    : "This server doesn't send pushes yet, so for now this changes nothing. The watch app alerts for every card itself."];
+  if (telegramOn(c)) parts.push("Telegram messages go to the install's chat for every card and don't follow this.");
+  const operator = tomlKey(c, 'operator', 'id') || 'operator';
+  if (trustsIdentityHeaders() && c.user !== operator) parts.push(`This server's pushes follow ${operator}'s choices, not yours.`);
+  return parts.join(' ');
+}
+
+const installZone = (c: SettingsCtx) => tomlKey(c, 'operator', 'timezone') ?? '';
+
 function install(key: string, field: SettingField, label: string): SettingEntry {
   return {
     key, section: 'agents', scope: 'everyone', admin: true,
@@ -140,7 +177,9 @@ export const SETTINGS: readonly SettingEntry[] = [
         return {
           value: typeof b.vendor === 'string' ? b.vendor : null, source: 'store',
           choices: rows.map((r) => ({ value: String(r.id), label: String(r.title || r.id), available: r.available === true,
-            ...(r.available === true ? {} : { reason: 'Not available on this install' }) })),
+            ...(r.available === true ? {} : { reason: 'Not available on this install' }),
+            // services/arturo/voice_vendor.py VENDOR_COPY: blank means none.
+            ...(typeof r.subtitle === 'string' && r.subtitle.trim() ? { description: r.subtitle.trim() } : {}) })),
         };
       } catch (e) { return { value: null, source: 'store', choices: [], detail: unreachable(e) }; }
     },
@@ -205,6 +244,39 @@ export const SETTINGS: readonly SettingEntry[] = [
   install('agents.autoCompact', 'auto_compact', 'Auto-compact'),
   install('agents.compactAt', 'compact_at', 'Compact at'),
   install('agents.showCompaction', 'show_compaction', 'Show compaction messages'),
+  {
+    key: 'notifications.level', section: 'notifications', scope: 'user', admin: false,
+    store: 'state/users/<you>/prefs.json notify_level',
+    note: 'Nothing alerts yet when an agent finishes, fails or misses a call, so All and Needs me act the same for now.',
+    validate: oneOf(NOTIFY_LEVELS, 'Pick All, Needs me or Nothing'),
+    read: async (c) => {
+      const v = readUserPrefs(c.dataDir, c.user).notify_level;
+      return isLevel(v) ? { value: v, source: 'store', detail: notifyDetail(c) } : { value: DEFAULT_NOTIFY_LEVEL, source: 'builtin', detail: notifyDetail(c) };
+    },
+    write: async (c, v) => writeUserPref(c.dataDir, c.user, 'notify_level', v),
+  },
+  {
+    key: 'notifications.agentOverrides', section: 'notifications', scope: 'user', admin: false,
+    store: 'state/users/<you>/prefs.json notify_agents',
+    validate: validOverrides,
+    read: async (c) => {
+      const raw = readUserPrefs(c.dataDir, c.user).notify_agents;
+      return { value: readOverrides(raw), source: raw === undefined ? 'builtin' : 'store' };
+    },
+    // No overrides left: the key goes, so the file says only what was chosen.
+    write: async (c, v) => writeUserPref(c.dataDir, c.user, 'notify_agents', Object.keys(v as object).length ? v : null),
+  },
+  {
+    key: 'notifications.quietHours', section: 'notifications', scope: 'user', admin: false,
+    store: 'state/users/<you>/prefs.json quiet_hours',
+    validate: validQuietHours,
+    read: async (c) => {
+      const q = readQuietHours(readUserPrefs(c.dataDir, c.user).quiet_hours);
+      if (!q) return { value: null, source: 'builtin', detail: notifyDetail(c) };
+      return { value: q, source: 'store', detail: `${inQuietHours(q, new Date(), installZone(c)) ? 'Quiet now. ' : ''}${notifyDetail(c)}` };
+    },
+    write: async (c, v) => writeUserPref(c.dataDir, c.user, 'quiet_hours', v === null ? null : { from: (v as { from: string }).from, to: (v as { to: string }).to }),
+  },
   {
     key: 'agents.safetyLimits', section: 'agents', scope: 'everyone', admin: false, readOnly: true,
     store: `built in (${GUARD_PCT}%) and orchestra.toml [rotation] ctx_ceiling_pct`,

@@ -62,7 +62,7 @@ def tui_idle(seat: str) -> bool:
 
 def set_calls_on(seat: str) -> bool:
     """The seat's own calls, as the install default says (agent-calls.json "default": {"on": false} turns new agents' calls
-    off; Settings › Voice & calls "New agents take calls"). Options already there are kept; written atomically."""
+    off; Settings › Server › Voice & calls "New agents take calls"). Options already there are kept; written atomically."""
     p = HS.data_dir() / "state" / "agent-calls.json"
     try:
         doc = json.loads(p.read_text())

@@ -5,7 +5,7 @@
  * Never touches window or document at import (node tests import modules that import this).
  */
 import { useSyncExternalStore } from 'react';
-import { applyDisplay, readDisplay, writeDisplay, textAvatarPx, DISPLAY_DEFAULTS, DISPLAY_KEYS, type Display } from './displaySettings.ts';
+import { applyDisplay, readDisplay, writeDisplay, textAvatarPx, DISPLAY_DEFAULTS, DISPLAY_KEYS, DISPLAY_RESET_KEYS, type Display } from './displaySettings.ts';
 
 const EVENT = 'orchestra:display';
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -35,11 +35,13 @@ export function previewSidebarWidth(px: number): void {
   if (typeof document !== 'undefined') document.documentElement.style.setProperty('--sidebar-w', `${px}px`);
 }
 
-/** Settings › Display "Reset display settings": every Display row back to its default on this device. */
+/** Settings › Display "Reset display settings": the rows shown on Display back to their defaults on this device
+ *  (DISPLAY_RESET_KEYS); General's text size, agent steps and timestamps, and the send keys, stay. */
 export function resetDisplay(): void {
   const s = storage();
-  for (const k of Object.keys(DISPLAY_KEYS) as (keyof Display)[]) writeDisplay(s, k, DISPLAY_DEFAULTS[k]);
-  publish({ ...DISPLAY_DEFAULTS });
+  const next: Record<string, unknown> = { ...display() };
+  for (const k of DISPLAY_RESET_KEYS) { writeDisplay(s, k, DISPLAY_DEFAULTS[k]); next[k] = DISPLAY_DEFAULTS[k]; }
+  publish(next as unknown as Display);
 }
 
 /** Apply what this device has stored (main.tsx before the first render; the QA harness too). */

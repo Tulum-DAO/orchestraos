@@ -8,7 +8,8 @@ import { Plus, Paperclip, X, ClipboardList, MoreHorizontal, AudioLines } from 'l
 import RoundAction from '../kit/RoundAction';
 import { roundView } from '../../lib/roundAction';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
-import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction, composerKeys, keyArgs } from '../../lib/composerGate';
+import { useDeviceSetting } from '../../lib/deviceSettings';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 import { COMPOSER_ACCEPT, newFiles, pasteAttachesFiles, attachmentMarkers } from '../../lib/composerFiles';
@@ -96,6 +97,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   // Text, held pastes and attached files live in the agent's draft (stores/composerDrafts.ts), so they survive
   // this box being unmounted: switching the page to Dev, or to another agent and back.
   const { draft: stored, setText: setInternalText, setFiles: setPendingFiles, setPastes } = useComposerDraft(agentId);
+  const [sendShortcut] = useDeviceSetting('sendShortcut');   // Settings › General › Send shortcut
   const internalText = stored.text;
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
@@ -635,11 +637,11 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             onKeyDown={(e) => {
               // BEHAVIOUR CHANGE (2026-10-09): Enter sends, Shift+Enter is a newline. It used to be
               // Cmd/Ctrl+Enter only, which still sends. Touch keyboards keep Enter as a newline.
+              // Settings › General › Send shortcut can make Enter a newline too (Cmd/Ctrl+Enter sends).
               const action = composerKeyAction({
-                key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey,
-                isComposing: e.nativeEvent.isComposing,
-                coarse: typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches,
+                ...keyArgs(e),
                 canStop: !!onStop && !!canStop,
+                ...composerKeys('agentChat', sendShortcut),
               });
               if (action === 'send') { e.preventDefault(); handleSend(); }
               else if (action === 'stop') { e.preventDefault(); void handleStop(); }

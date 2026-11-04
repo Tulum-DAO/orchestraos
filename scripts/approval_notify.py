@@ -8,6 +8,60 @@ from approval_config import (NTFY_BASE, NTFY_APPROVALS_TOPIC, NTFY_ANSWERS_TOPIC
                              TAILSCALE_STATUS_TIMEOUT_S, ESCALATION_DIGEST_MAX_SINGLES)
 from approval_schema import ApprovalStore
 from questionnaire_schema import QuestionnaireStore
+import notify_policy
+
+
+#: More cards than this held by quiet hours go out as ONE summary push when they end, not one push each.
+QUIET_SUMMARY_OVER = 3
+SUPPRESSED_PREFIX = "suppressed:"
+HELD_PREFIX = "held:quiet"
+
+
+def _stamp_skip(store, table, rid, value, *, over_held=False):
+    """Write notify_skipped (the audit stamp; stamp_outrun_skips' 'answered-before-push' never overwrites it). A
+    suppression may replace a quiet-hours hold; nothing replaces a suppression. Best effort: a DB without the
+    column (not migrated yet) only loses the stamp."""
+    import sqlite3
+    cond = ("(notify_skipped IS NULL OR notify_skipped LIKE 'held:quiet%')" if over_held else "notify_skipped IS NULL")
+    c = store._conn()
+    try:
+        c.execute(f"UPDATE {table} SET notify_skipped=? WHERE id=? AND {cond}", [value, rid])
+        c.commit()
+    except sqlite3.OperationalError as e:
+        print(f"[approval_notify] could not stamp {rid} {value}: {e}", file=sys.stderr)
+    finally:
+        c.close()
+
+
+def _policy_gate(kind, row, store):
+    """Settings › Notifications (notify_policy.py): may this card be pushed now? A card is always something waiting on
+    the person ("needs_me"). Returns the decision and stamps the row:
+      ok          push it
+      suppressed  notify_skipped = 'suppressed:<level>@<ts>': handled, never pushed later (the backstop skips it),
+                  so switching back to All does not flood old cards
+      quiet       notify_skipped = 'held:quiet@<ts>', notified_at left empty: the backstop pushes it once quiet
+                  hours end (one summary push when more than QUIET_SUMMARY_OVER waited)
+    Telegram is install-wide and does not ask (Settings says so when it is on)."""
+    from datetime import datetime, timezone
+    agent = (row or {}).get("from_agent")
+    d = notify_policy.decision("needs_me", agent)
+    if d == notify_policy.OK:
+        return d
+    table = "approval_requests" if kind == "approval" else "questionnaires"
+    ts = datetime.now(timezone.utc).isoformat()
+    if d == notify_policy.SUPPRESSED:
+        _stamp_skip(store, table, row["id"], f"{SUPPRESSED_PREFIX}{notify_policy.current_level(agent)}@{ts}", over_held=True)
+    else:
+        _stamp_skip(store, table, row["id"], f"{HELD_PREFIX}@{ts}")
+    return d
+
+
+def _suppressed(row):
+    return str((row or {}).get("notify_skipped") or "").startswith(SUPPRESSED_PREFIX)
+
+
+def _held(row):
+    return str((row or {}).get("notify_skipped") or "").startswith(HELD_PREFIX)
 
 def _http_post(url, headers, data):
     req = urllib.request.Request(url, data=data.encode() if isinstance(data, str) else data,
@@ -53,6 +107,8 @@ def notify(rid, store=None):
     row = store.get(rid)
     if not row or row["status"] != "pending":
         return
+    if _policy_gate("approval", row, store) != notify_policy.OK:
+        return
     token = ntfy_token()
     if not token:                                   # never silently push without auth
         raise RuntimeError("ntfy token missing (~/.config/jarvis/ntfy-token) — refusing to push unauthenticated")
@@ -76,6 +132,8 @@ def notify_questionnaire(qid, store=None):
     store = store or QuestionnaireStore()
     row = store.get(qid)
     if not row or row["status"] != "pending":
+        return
+    if _policy_gate("qnr", row, store) != notify_policy.OK:
         return
     token = ntfy_token()
     if not token:                                   # never silently push without auth
@@ -449,6 +507,12 @@ def refire_on_return(store, qstore, status, state_path=None, publish=None, now=N
             if rid not in rows:
                 continue                                  # answered/vanished — drop
             kind, row = rows[rid]
+            d = _policy_gate("approval" if kind == "approval" else "qnr", row, store if kind == "approval" else qstore)
+            if d == notify_policy.SUPPRESSED:
+                continue                                  # the person does not want it: dropped, never re-fired
+            if d == notify_policy.QUIET:
+                remaining.append(rid)                     # quiet hours: asked again on a later beat
+                continue
             try:
                 payload = build_payload(row, ntfy_token() or "") if kind == "approval" else build_qnr_payload(row)
                 ok = bool(publish(payload))
@@ -483,6 +547,33 @@ def stamp_outrun_skips(store=None):
         c.close()
 
 
+def quiet_summary_payload(n):
+    return {"topic": NTFY_APPROVALS_TOPIC, "title": "OrchestraOS", "message": f"{n} things waited during quiet hours",
+            "priority": 4}
+
+
+def quiet_summary(store, qstore, publish=None):
+    """Quiet hours have ended for more than QUIET_SUMMARY_OVER held cards: ONE push saying how many waited, and every
+    one of them marked sent (they are all in the app). Fewer go out one by one through the normal loop. Returns the
+    ids covered by the summary ([] when none was sent)."""
+    held = [("approval", r) for r in store.pending_to_notify() if not r.get("notified_at") and _held(r)]
+    held += [("qnr", q) for q in qstore.list_pending() if not q.get("notified_at") and _held(q)]
+    due = [(k, r) for k, r in held if notify_policy.decision("needs_me", r.get("from_agent")) == notify_policy.OK]
+    if len(due) <= QUIET_SUMMARY_OVER:
+        return []
+    publish = publish or _default_ntfy_publish
+    try:
+        ok = bool(publish(quiet_summary_payload(len(due))))
+    except Exception as e:  # noqa: BLE001 — retried on the next beat
+        print(f"[approval_notify] quiet-hours summary failed: {e}", file=sys.stderr)
+        ok = False
+    if not ok:
+        return []
+    for k, r in due:
+        (store if k == "approval" else qstore).set_notified(r["id"])
+    return [r["id"] for _, r in due]
+
+
 def cron_backstop(store=None, qstore=None, tg_send=None, tg_state_path=None,
                   tailnet_status=None, tailnet_state_path=None, ntfy_publish=None, now=None):
     """Notify NEW pending rows once; backstop covers MISSED pushes only.
@@ -504,9 +595,10 @@ def cron_backstop(store=None, qstore=None, tg_send=None, tg_state_path=None,
     # loop below makes on the same beat.
     status = tailnet_status if tailnet_status is not None else phone_tailnet_status(now=now)
     pre_pushed = _already_pushed_ids(store, qstore)
+    quiet_summary(store, qstore, publish=ntfy_publish)
     for row in store.pending_to_notify():
-        if row.get("notified_at"):
-            continue                                  # already pushed once — never re-spam
+        if row.get("notified_at") or _suppressed(row):
+            continue                                  # pushed once, or the person did not want it — never re-spam
         try:
             notify(row["id"], store=store)
         except Exception as e:  # noqa: BLE001 — never let one bad row kill the sweep
@@ -515,7 +607,7 @@ def cron_backstop(store=None, qstore=None, tg_send=None, tg_state_path=None,
     # unstamped) — the container card re-surfaces via the priority-sorted queue,
     # so re-pushing every cron run would just be spam.
     for q in qstore.list_pending():
-        if q.get("notified_at"):
+        if q.get("notified_at") or _suppressed(q):
             continue
         try:
             notify_questionnaire(q["id"], store=qstore)

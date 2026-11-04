@@ -206,3 +206,35 @@ test('a change that saved still answers 200 when the change log cannot be writte
     writeFileSync(logPath, kept);
   }
 });
+
+test('Notifications rows are You: a member saves them, each goes to their own prefs.json, nothing is pushed to everyone', async () => {
+  role = 'member';
+  try {
+    const before = published.length;
+    const rows = (await get()).rows.filter((r: any) => r.section === 'notifications');
+    assert.deepEqual(rows.map((r: any) => [r.key, r.scope, r.editable]),
+      [['notifications.level', 'user', true], ['notifications.agentOverrides', 'user', true], ['notifications.quietHours', 'user', true]]);
+    assert.deepEqual(rows.map((r: any) => r.value), ['all', {}, null], 'untouched: today\'s behaviour');
+    assert.equal((await put('notifications.level', 'needs_me')).status, 200);
+    assert.equal((await put('notifications.agentOverrides', { 'dev-a': 'nothing' })).status, 200);
+    const q = await put('notifications.quietHours', { from: '22:00', to: '07:00' });
+    assert.deepEqual([q.status, q.body.row.value], [200, { from: '22:00', to: '07:00' }]);
+    const prefs = JSON.parse(readFileSync(join(d, 'state', 'users', 'operator', 'prefs.json'), 'utf-8'));
+    assert.equal(prefs.notify_level, 'needs_me');
+    assert.deepEqual(prefs.notify_agents, { 'dev-a': 'nothing' });
+    assert.deepEqual(prefs.quiet_hours, { from: '22:00', to: '07:00' });
+    assert.equal(published.length, before);
+    assert.deepEqual(logLines().at(-1), { key: 'notifications.quietHours', scope: 'user', by: 'sam@example.com', at: '2026-11-03T10:00:00.000Z', value: { from: '22:00', to: '07:00' } });
+    // bad input is refused with the reason and leaves the file alone
+    assert.deepEqual((await put('notifications.level', 'loud')).body, { ok: false, error: 'Pick All, Needs me or Nothing' });
+    assert.equal((await put('notifications.quietHours', { from: '22:00', to: '22:00' })).status, 400);
+    assert.equal((await put('notifications.agentOverrides', { 'dev-a': 'loud' })).status, 400);
+    // off again: the keys go
+    assert.equal((await put('notifications.quietHours', null)).status, 200);
+    assert.equal((await put('notifications.agentOverrides', {})).status, 200);
+    const after = JSON.parse(readFileSync(join(d, 'state', 'users', 'operator', 'prefs.json'), 'utf-8'));
+    assert.equal('quiet_hours' in after, false);
+    assert.equal('notify_agents' in after, false);
+    assert.equal(after.notify_level, 'needs_me');
+  } finally { role = 'admin'; }
+});

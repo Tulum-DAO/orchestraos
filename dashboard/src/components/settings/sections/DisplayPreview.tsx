@@ -1,28 +1,32 @@
-/** Settings › Display: a small live picture of what the rows change (a person's bubble, an agent's reply with its
- *  face, a tool line, a time, a sidebar row). It reads the same variables as the app, so it changes as rows change. */
+/** Settings' live preview (General under Text size, and Display): a tiny fixed conversation drawn by the real chat, the
+ *  agent chat's own ThreadView and its node primitives (TranscriptCards GroupedNodeView), in the skin Settings › General
+ *  › Chat style picks (Bubbles or Modern), with Show agent steps and Timestamps as they are on this device, then a
+ *  sidebar row. It reads the same variables and settings as the app, so it changes as soon as a row does: the chat
+ *  style (the server row, shown at once as it saves), agent steps (a run starts open on Detailed; the thread is drawn
+ *  again when it changes, as a run reads it once when it mounts) and timestamps (data-timestamps on <html>).
+ *  Sandboxed: its rows are fixed (lib/settingsPreview.ts), nothing is fetched, streamed or sent, there are no reactions
+ *  and it is inert, so no click, key or focus reaches it. */
+import { useMemo } from 'react';
 import { AgentAvatar } from '../../avatar/AgentAvatar';
 import { ARTURO_ID } from '../../avatar/agentState';
-import { BUBBLES_AGENT, BUBBLES_USER } from '../../../lib/chatSkin';
-import { MESSAGE_TIME_TONE } from '../../../lib/messageTime';
-import { useTextAvatar } from '../../../lib/deviceSettings';
+import ThreadView from '../../kit/ThreadView';
+import { GroupedNodeView } from '../../chat/TranscriptCards';
+import { useDeviceSetting, useTextAvatar } from '../../../lib/deviceSettings';
+import { previewRows, previewSkin } from '../../../lib/settingsPreview';
+import { useServerSettings } from '../../../stores/serverSettings';
 
 export function DisplayPreview() {
-  const face = useTextAvatar(20);
+  const skin = previewSkin(useServerSettings((s) => s.rows['general.defaultChatStyle']?.value));
+  const [steps] = useDeviceSetting('toolDetail');
+  const rows = useMemo(() => previewRows(skin), [skin]);
   const rowFace = useTextAvatar(32);
+  const modern = skin === 'modern';
   return (
-    <div className="settings-preview" aria-label="Preview" data-display-preview>
-      <div className="ui-feed-gap">
-        <div className="flex flex-col items-end">
-          <div className={BUBBLES_USER}>Is the deploy done?</div>
-          <span className={`block mt-0.5 ${MESSAGE_TIME_TONE} text-right`} data-msg-time>10:02</span>
-        </div>
-        <div className="flex items-start gap-2">
-          <AgentAvatar agentId={ARTURO_ID} role="activity" size={face} label="Agent" />
-          <div className="min-w-0">
-            <div className={BUBBLES_AGENT}>Yes, it finished at 10:02 and every check is green.</div>
-            <div className="text-px12 text-muted-foreground mt-1">Ran Bash · npm test <span className={MESSAGE_TIME_TONE} data-msg-time>10:01</span></div>
-          </div>
-        </div>
+    <div className="settings-preview" aria-label="Preview" data-display-preview data-preview-skin={skin} data-preview-steps={steps} inert>
+      {/* The agent chat column's own classes: the row gap, and Modern's colour variables. */}
+      <div key={`${skin}:${steps}`} className={`ui-feed-gap${modern ? ' kit-modern' : ''}`} data-preview-thread>
+        <ThreadView rows={rows} skin={skin} times={modern}
+          renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} look={modern ? 'card' : 'lines'} />} />
       </div>
       <div className="mt-3 flex items-center gap-2 px-2 py-[calc(6px*var(--ui-gap,1))] min-h-8 rounded bg-neutral-100 dark:bg-neutral-900 text-sm">
         <AgentAvatar agentId={ARTURO_ID} role="sidebar" size={rowFace} label="Agent" />

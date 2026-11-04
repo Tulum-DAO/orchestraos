@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { agentRowsFrom } from '../lib/api';
-import { useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { TopBar } from '../components/agent/TopBar';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
@@ -25,6 +25,7 @@ import { useChatStyle, loadPrefs, chooseStyle, styleBeforeDev } from '../lib/age
 import { asChip, chipNeedsYou } from '../lib/agentChip';
 import { useHeadlessDev } from '../hooks/useHeadlessDev';
 import HeadlessDevBanner from '../components/agent/HeadlessDevBanner';
+import { wantsAgentPanel } from '../lib/agentsPage';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
@@ -35,6 +36,16 @@ export default function AgentPage() {
   const chosenMode: 'chat' | 'dev' = useChatStyle(agentId) === 'dev' ? 'dev' : 'chat';
   useEffect(() => { void loadPrefs(agentId); }, [agentId]);
   const [panelOpen, setPanelOpen] = useState(false);
+  // Settings › Agents links an agent to its own panel: its page, with the panel open (lib/agentsPage.ts). Once per
+  // navigation, so closing the panel keeps it closed.
+  const location = useLocation();
+  const [panelFor, setPanelFor] = useState<string | null>(null);
+  if (wantsAgentPanel(location.state) && panelFor !== location.key) { setPanelFor(location.key); setPanelOpen(true); }
+  // …then clear that state (same page, replaced), so Back or a reload doesn't open the panel again.
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (wantsAgentPanel(location.state)) navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null });
+  }, [location.state, location.pathname, location.search, location.hash, navigate]);
   const gearRef = useRef<HTMLButtonElement>(null);
   // Bring back a seat that fell over: its last session where it left off when that session can still be
   // resumed, else a fresh start as its next generation (with a briefing on what it last did). Answers once it is
