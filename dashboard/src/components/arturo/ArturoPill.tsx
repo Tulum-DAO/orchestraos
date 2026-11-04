@@ -38,6 +38,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import { Mic, MicOff, X, History, Focus, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentImages, type Attachment } from '../../lib/arturoUpload';
+import '../kit/panel.css';
 import './arturo.css';
 import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, cardRefusal, isStarting, waitForArturo, STARTING_TEXT, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type CardAnswer, type ChoiceCard, type SendState } from '../../lib/arturo';
 import {

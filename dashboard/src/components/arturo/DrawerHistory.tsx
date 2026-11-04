@@ -90,15 +90,15 @@ export function DrawerHistory({ agentId, isArturo, name, subagents, onClose }: {
   return (
     <CardSurface.Provider value="history">
     <div className="dh" data-drawer-history-section>
-      <h3 className="arturo-panel-section">Running</h3>
+      <h3 className="panel-section">Running</h3>
       {isArturo ? <ArturoRunning /> : <AgentRunningJobs agentId={agentId} onClose={onClose} fallback={<AgentRunning subagents={subagents} name={name} />} />}
 
-      {decisionsQ.isLoading ? <p className="arturo-panel-empty">Loading…</p>
-        : decisionsQ.isError && !decisionsQ.data ? <p className="arturo-panel-empty" data-drawer-history>Couldn't read {name}'s cards.</p>
+      {decisionsQ.isLoading ? <p className="panel-empty">Loading…</p>
+        : decisionsQ.isError && !decisionsQ.data ? <p className="panel-empty" data-drawer-history>Couldn't read {name}'s cards.</p>
         : items.length === 0 ? (
           <>
-            <h3 className="arturo-panel-section">Waiting</h3>
-            <p className="arturo-panel-empty" data-drawer-history>Nothing is waiting for you.</p>
+            <h3 className="panel-section">Waiting</h3>
+            <p className="panel-empty" data-drawer-history>Nothing is waiting for you.</p>
           </>
         ) : (
           <div data-drawer-history>
@@ -125,8 +125,8 @@ export function DrawerHistory({ agentId, isArturo, name, subagents, onClose }: {
 
             {filter.state !== 'resolved' && (
               <>
-                <h3 className="arturo-panel-section">Waiting{waiting.length ? ` · ${waiting.length}` : ''}</h3>
-                {waiting.length === 0 ? <p className="arturo-panel-empty">Nothing is waiting for you.</p> : (
+                <h3 className="panel-section">Waiting{waiting.length ? ` · ${waiting.length}` : ''}</h3>
+                {waiting.length === 0 ? <p className="panel-empty">Nothing is waiting for you.</p> : (
                   <div className="dh-list" data-history-group="waiting">
                     {waiting.map((it, i) => (
                       <WaitingCard key={it.id} item={it} now={now} startOpen={i === 0} onAnswered={refresh} onGoTo={goTo} />
@@ -138,8 +138,8 @@ export function DrawerHistory({ agentId, isArturo, name, subagents, onClose }: {
 
             {filter.state !== 'waiting' && (
               <>
-                <h3 className="arturo-panel-section">Resolved{resolved.length ? ` · ${resolved.length}` : ''}</h3>
-                {resolved.length === 0 ? <p className="arturo-panel-empty">Nothing resolved yet.</p> : (
+                <h3 className="panel-section">Resolved{resolved.length ? ` · ${resolved.length}` : ''}</h3>
+                {resolved.length === 0 ? <p className="panel-empty">Nothing resolved yet.</p> : (
                   <div className="dh-list" data-history-group="resolved">
                     {page.shown.map((it) => <ResolvedCard key={it.id} item={it} now={now} onAnswered={refresh} onGoTo={goTo} />)}
                   </div>
@@ -273,7 +273,7 @@ function ChoiceAnswered({ item }: { item: HistoryItem }) {
 /** An agent's subagents: counted by its status row; they have no cancel route, so there is no Cancel. */
 function AgentRunning({ subagents, name }: { subagents?: number; name: string }) {
   const rows = runningRows({ subagents, name });
-  if (!rows.length) return <p className="arturo-panel-empty" data-history-running>Nothing running beside {name}'s own turn.</p>;
+  if (!rows.length) return <p className="panel-empty" data-history-running>Nothing running beside {name}'s own turn.</p>;
   return (
     <ul className="arturo-panel-jobs" data-history-running>
       {rows.map((r) => (
@@ -311,9 +311,9 @@ function ArturoRunning() {
     const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [rows.length]);
-  if (!thread) return <p className="arturo-panel-empty" data-history-running>No conversation open.</p>;
-  if (jobs === null) return <p className="arturo-panel-empty">Loading…</p>;
-  if (!rows.length) return <p className="arturo-panel-empty" data-history-running>Nothing running in this conversation.</p>;
+  if (!thread) return <p className="panel-empty" data-history-running>No conversation open.</p>;
+  if (jobs === null) return <p className="panel-empty">Loading…</p>;
+  if (!rows.length) return <p className="panel-empty" data-history-running>Nothing running in this conversation.</p>;
   const cancel = async (id: string) => {
     setCancelling(id); setProblem(null);
     const ok = await cancelJob(thread, id);
@@ -330,14 +330,14 @@ function ArturoRunning() {
             <span className="dh-running-end">
               <span className="arturo-panel-meta tabular-nums">{r.detail}</span>
               {r.cancellable && (
-                <button type="button" className="arturo-panel-link" disabled={cancelling === r.id} aria-label={`Cancel ${r.title}`}
+                <button type="button" className="panel-link" disabled={cancelling === r.id} aria-label={`Cancel ${r.title}`}
                         onClick={() => void cancel(r.id)}>Cancel</button>
               )}
             </span>
           </li>
         ))}
       </ul>
-      {problem && <p className="arturo-panel-error" role="alert">{problem}</p>}
+      {problem && <p className="panel-error" role="alert">{problem}</p>}
     </>
   );
 }
@@ -355,11 +355,11 @@ function ArturoConversations() {
   }, []);
   return (
     <>
-      <h3 className="arturo-panel-section">Latest conversations</h3>
-      {rows === null ? <p className="arturo-panel-empty">Loading…</p>
-        : rows.length === 0 ? <p className="arturo-panel-empty">No conversations yet.</p>
+      <h3 className="panel-section">Latest conversations</h3>
+      {rows === null ? <p className="panel-empty">Loading…</p>
+        : rows.length === 0 ? <p className="panel-empty">No conversations yet.</p>
         : (
-          <div className="arturo-panel-list arturo-panel-list-tight" data-history-conversations>
+          <div className="panel-list panel-list-tight" data-history-conversations>
             {rows.map((r) => (
               <div key={r.key} className="arturo-panel-history-row">
                 <span className="arturo-panel-history-label">{r.label}</span>

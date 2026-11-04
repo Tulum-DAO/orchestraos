@@ -1,41 +1,15 @@
 /* Arturo home + pill — the phone shell from .workspace/agent-page-v2/mockup (S1–S6).
    One thin header, provider-accent glow, one composer. No legacy chrome.
 
-   Colours are variables, set twice: light here, dark under .dark (the app's Appearance choice). The dark set
-   is the original palette, value for value. Scoped to the shell, not :root, because --card and --accent are
-   also app-wide theme tokens that Arturo shadows inside its own page.
-   --ink is the colour translucent fills, lines and greys are made of (white on dark, black on light), so
-   rgba(var(--ink), a) keeps each dark alpha exactly; --tNN are text alphas, the same numbers in dark and
-   raised in light where black at that alpha would fall below WCAG AA (4.5:1) on Arturo's light surfaces. */
-/* The variables also go on .agent-panel-host: the agent panel (ArturoPanel) opens on every agent page, outside
-   Arturo's shell, and needs the same colours there. */
-.arturo-shell, .agent-panel-host{
-  --accent:#d97757;
-  --canvas:#fff; --panel:#f7f7f7; --card:#f2f2f2; --card2:#e9e9e9; --bubble:#efefef;
-  --text:#111; --text2:#1c1b1a; --greet:#2a2724; --ink:0,0,0;
-  --hair:rgba(0,0,0,0.08); --hair-top:var(--border); --grey:rgba(0,0,0,0.6); --grey2:rgba(0,0,0,0.55);
-  --t35:.55; --t40:.55; --t45:.55; --t50:.58; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
-  --shadow:rgba(0,0,0,0.08); --send-bg:#111; --send-fg:#fff; --err:#b91c1c; --err-soft:#b91c1c;
-  --arturo-line:#e2e2e2; --arturo-raise:#f7f7f7; --arturo-line-hi:#cfcfcf;
-  --call-surface:var(--panel); --call-bubble:#fff; --call-bubble-line:var(--hair);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable","Helvetica Neue",Arial,sans-serif;
-  -webkit-font-smoothing:antialiased;
-}
+   The colour variables (--canvas, --panel, --card, --text, --ink, --tNN…) on .arturo-shell and .agent-panel-host, and
+   the panel kit (.panel-bar, .panel-row, .panel-field…) the slide-out shares with Settings, are in
+   components/kit/panel.css. This file is Arturo's own. */
 .arturo-shell{
   position:fixed; inset:0; background:var(--canvas); color:var(--text); overflow:hidden;
   /* clip, not just hide: a hidden box can still be scrolled by the browser (a focused control off to
      the side), which shifts the whole page; a clipped one cannot. */
   overflow:clip;
   display:flex; flex-direction:column;
-}
-.dark .arturo-shell, .dark .agent-panel-host, .arturo-onboard-shell{
-  --canvas:#000; --panel:#141414; --card:#1c1c1c; --card2:#232323; --bubble:#262626;
-  --text:#fff; --text2:#f1efec; --greet:#ece7e2; --ink:255,255,255;
-  --hair:rgba(255,255,255,0.08); --hair-top:rgba(255,255,255,0.1); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38);
-  --t35:.35; --t40:.40; --t45:.45; --t50:.5; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
-  --shadow:rgba(0,0,0,0.4); --send-bg:#fff; --send-fg:#111; --err:#ff8a8a; --err-soft:#fca5a5;
-  --arturo-line:#2a2a2a; --arturo-raise:#171717; --arturo-line-hi:#3a3a3a;
-  --call-bubble:#1c1c1c; --call-bubble-line:transparent;
 }
 /* Inside the dashboard layout (the sidebar beside it) Arturo fills the content column instead of the
    window, like an agent chat: the layout's <main> already adds the notch and home-bar insets, so the
@@ -339,16 +313,10 @@
 .arturo-panel-sheet{ position:fixed; inset:0; z-index:70; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
 @media (prefers-reduced-motion: reduce){ .arturo-panel, .arturo-panel-scrim{ transition:none; } }
 .arturo-panel-status{ font-size: calc(12.5px * var(--ui-text-scale, 1)); color:var(--grey); margin:0 2px; }
-.arturo-panel-icon{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; color:var(--foreground); background:none; border:0; border-radius:10px; }
-@media (hover:hover){ button.arturo-panel-icon:hover{ background:var(--muted); } }
-.arturo-panel-body{ flex:1 1 auto; min-height:0; overflow-y:auto; padding:14px 16px 24px; }
-.arturo-panel-empty{ font-size: calc(13px * var(--ui-text-scale, 1)); color:var(--grey2); margin:6px 0; }
 .arturo-panel-meta{ font-size: calc(11.5px * var(--ui-text-scale, 1)); color:var(--grey2); flex:0 0 auto; }
 .arturo-panel-facts{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; }
 .arturo-panel-facts li{ padding:12px 0 8px; border-bottom:1px solid var(--hair); }
 .arturo-panel-facts p{ margin:0 0 4px; font-size: calc(13.5px * var(--ui-text-scale, 1)); line-height:1.4; }
-.arturo-panel-section{ font-size: calc(12px * var(--ui-text-scale, 1)); font-weight:600; color:var(--grey); text-transform:uppercase; letter-spacing:.06em; margin:4px 0 8px; }
-.arturo-panel-section:not(:first-child){ margin-top:20px; }
 .arturo-panel-day{ font-size: calc(12px * var(--ui-text-scale, 1)); color:var(--grey2); margin:12px 0 4px; }
 .arturo-panel-jobs{ list-style:none; margin:0; padding:0; }
 .arturo-panel-jobs li, .arturo-panel-thread{ display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; padding:8px 10px; margin:0 -10px; border-radius:10px; font-size: calc(13.5px * var(--ui-text-scale, 1)); }
@@ -356,53 +324,13 @@
 .arturo-panel-thread:hover{ background:var(--card); }
 .arturo-panel-thread.is-current{ background:var(--card2); color:var(--text); }
 /* Phone sheet: its own bar (back, title, Done) and a front list of 52px rows. */
-.arturo-panel-sheet .arturo-panel-icon{ width:44px; height:44px; }
-.arturo-panel-done{ background:none; border:0; color:var(--text); font-size: calc(15px * var(--ui-text-scale, 1)); font-weight:600; font-family:inherit; padding:0 12px; height:44px; border-radius:10px; }
-.arturo-panel-list{ margin-top:12px; border-top:1px solid var(--hair); }
-.arturo-panel-row{ width:100%; height:52px; min-height:52px; display:flex; align-items:center; justify-content:space-between; background:none; border:0; border-bottom:1px solid var(--hair); color:var(--text); font-size: calc(15.5px * var(--ui-text-scale, 1)); font-family:inherit; padding:0 2px; text-align:left; }
-.arturo-panel-row svg{ color:var(--grey2); }
-/* One bar for every page: back (or nothing) at the left, the page's name centred, close at the right. */
-.arturo-panel-bar{ height:53px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px; border-bottom:1px solid var(--hair); }
-.arturo-panel-title{ font-size: calc(16px * var(--ui-text-scale, 1)); font-weight:600; margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.arturo-panel-bar > :last-child{ min-width:36px; }
-/* Memory: add, correct, confirm. Blue is the primary action, as in the composer. */
+.arturo-panel-sheet .panel-icon{ width:44px; height:44px; }
+/* Memory: add, correct, confirm (the blue primary action is .panel-primary, kit/panel.css). */
 .arturo-panel-add{ display:flex; gap:8px; margin-bottom:6px; }
-.arturo-panel-input{ flex:1 1 auto; min-width:0; background:var(--card); border:1px solid var(--hair); border-radius:10px; color:var(--text); font:inherit; font-size: max(var(--field-min, 0px), calc(14px * var(--ui-text-scale, 1))); padding:8px 10px; outline:0; }
-.arturo-panel-input:focus{ border-color:rgba(var(--ink),0.3); }
-.arturo-panel-textarea{ display:block; width:100%; box-sizing:border-box; min-height:64px; resize:vertical; line-height:1.4; }
-.arturo-panel-primary{ flex:0 0 auto; background:#2563eb; color:#fff; border:0; border-radius:10px; padding:0 14px; min-height:36px; font:inherit; font-size: calc(14px * var(--ui-text-scale, 1)); font-weight:600; cursor:pointer; }
-.arturo-panel-primary:hover{ background:#3b82f6; }
-.arturo-panel-primary:disabled{ opacity:0.4; cursor:default; background:#2563eb; }
 .arturo-panel-actions{ display:flex; align-items:center; justify-content:flex-end; gap:4px; margin-top:6px; }
-.arturo-panel-link{ background:none; border:0; color:var(--grey); font:inherit; font-size: calc(12.5px * var(--ui-text-scale, 1)); padding:4px 8px; border-radius:8px; cursor:pointer; }
-.arturo-panel-link:hover{ color:var(--text); background:var(--card); }
-.arturo-panel-link:disabled{ opacity:0.4; }
-.arturo-panel-error{ font-size: calc(13px * var(--ui-text-scale, 1)); color:var(--err-soft); margin:6px 0; }
-/* Settings: a label at the left, its value at the right, one 52px row each. */
-.arturo-panel-field{ min-height:52px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--hair); font-size: calc(15px * var(--ui-text-scale, 1)); padding:0 2px; }
-.arturo-panel-value{ min-width:0; max-width:60%; background:none; border:0; color:var(--grey); font:inherit; font-size: calc(15px * var(--ui-text-scale, 1)); text-align:right; outline:0; padding:6px 0; }
-.arturo-panel-value:focus{ color:var(--text); }
-select.arturo-panel-value{ cursor:pointer; text-align-last:right; font-size: max(var(--field-min, 0px), calc(15px * var(--ui-text-scale, 1))); }
-select.arturo-panel-value option{ background:var(--panel); color:var(--text); }
-.arturo-panel-swatch{ width:32px; height:32px; padding:0; border:1px solid var(--hair); border-radius:8px; background:none; cursor:pointer; }
-/* Each row's current value, grey at the right before the chevron; it gives way (ellipsis) before the label does. */
-.arturo-panel-row{ gap:12px; }
-.arturo-panel-row > span:first-child{ flex:0 0 auto; }
-.arturo-panel-rowend{ display:flex; align-items:center; gap:6px; min-width:0; }
-.arturo-panel-rowvalue{ min-width:0; color:var(--grey); font-size: calc(15px * var(--ui-text-scale, 1)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.arturo-panel-row:disabled{ color:var(--grey2); cursor:default; }
-.arturo-panel-row:disabled .arturo-panel-rowvalue{ color:var(--grey2); }
 /* A status line that reports a problem is a link to the page that fixes it. */
 .arturo-panel-status.is-fix{ display:flex; align-items:center; gap:4px; background:none; border:0; padding:0; font-family:inherit; text-align:left; color:var(--text); cursor:pointer; }
 .arturo-panel-status.is-fix svg{ flex:0 0 auto; color:var(--grey2); }
-.arturo-panel-note{ font-size: calc(13px * var(--ui-text-scale, 1)); line-height:1.45; color:var(--grey); margin:12px 2px 0; }
-/* Voice: the check marks the provider and the voice in use, in the primary-action blue. */
-.arturo-panel-list-tight{ margin-top:0; }
-.arturo-panel-check, .arturo-panel-row .arturo-panel-check{ flex:0 0 auto; color:#3b82f6; }
-.arturo-panel-field.is-disabled{ color:var(--grey2); }
-.arturo-panel-section + .arturo-panel-list, .arturo-panel-section + .arturo-panel-error{ margin-top:0; }
-/* A voice row someone without admin rights sees: readable at full strength, just not tappable. */
-.arturo-panel-row.arturo-panel-choice:disabled{ color:var(--text); }
 
 /* A voice call in the feed (ArturoCallCard): one inset card a step off the page, a little narrower than the
    conversation and centred, holding the call's turns as bubbles. The caller's bubbles are Arturo's typed ones

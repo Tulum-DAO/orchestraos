@@ -163,7 +163,7 @@ test('ChoiceList: arrows move focus only (every pick saves an install-wide row);
 
 test('the provider row with no list from the voice service says so instead of an empty box', () => {
   const s = server();
-  assert.match(s, /!options\.length \? <span className="arturo-panel-rowvalue" data-provider-none>Couldn't load providers<\/span>/);
+  assert.match(s, /!options\.length \? <span className="panel-rowvalue" data-provider-none>Couldn't load providers<\/span>/);
 });
 
 test('Settings › Voice points to Server › Voice & calls for the provider and limits, and opens it', () => {

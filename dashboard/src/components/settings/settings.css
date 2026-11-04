@@ -1,5 +1,5 @@
 /* Settings (components/settings): a centred modal on desktop, a full-screen sheet on a phone. Colours come from
-   .agent-panel-host (arturo.css), so rows look like the agent panel's. */
+   .agent-panel-host and the rows are the panel kit (components/kit/panel.css, .panel-*), shared with the agent panel. */
 .settings-host { position: fixed; inset: 0; z-index: 120; }
 .settings-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); }
 .settings-modal {
@@ -10,7 +10,7 @@
   box-shadow: 0 24px 64px var(--shadow); overflow: hidden;
 }
 .settings-nav { border-right: 1px solid var(--hair); padding: 12px; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
-.settings-search { width: 100%; flex: none; }   /* .arturo-panel-input grows (flex: 1); in the nav column it must not */
+.settings-search { width: 100%; flex: none; }   /* .panel-input grows (flex: 1); in the nav column it must not */
 .settings-nav-item { text-align: left; padding: 8px 10px; border-radius: 8px; color: var(--text); font-size: calc(14px * var(--ui-text-scale, 1)); }
 .settings-nav-item:hover { background: var(--card); }
 .settings-nav-item[aria-current="page"] { background: var(--card2); font-weight: 600; }
@@ -23,7 +23,7 @@
 .settings-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .settings-scope { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: calc(11px * var(--ui-text-scale, 1));
   padding: 1px 8px; border-radius: 999px; border: 1px solid var(--hair); color: var(--grey); }
-.settings-row .arturo-panel-field { flex-wrap: wrap; }
+.settings-row .panel-field { flex-wrap: wrap; }
 .settings-stacked { flex-direction: column; align-items: stretch; padding: 8px 2px; }
 .settings-control { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
 .settings-saved { display: inline-flex; align-items: center; gap: 2px; color: #16a34a; font-size: calc(12px * var(--ui-text-scale, 1)); }
@@ -35,10 +35,10 @@
 .settings-choice-opt:disabled { opacity: 0.5; }
 .settings-number { width: 5.5em; text-align: right; }
 /* A select in a row takes the width of its value (the panel caps it at 60% of a shrinking box, which cut "Marin" to "Ma"). */
-.settings-control > select.arturo-panel-value { max-width: none; }
+.settings-control > select.panel-value { max-width: none; }
 .settings-search-section:not(:has([data-setting])) { display: none; }
 .settings-group:not(:has([data-setting])) { display: none; }
-.arturo-panel-body:has([data-setting]) .settings-search-none { display: none; }
+.panel-body:has([data-setting]) .settings-search-none { display: none; }
 .settings-search-title { font-weight: 600; margin: 4px 0 8px; font-size: calc(15px * var(--ui-text-scale, 1)); }
 .settings-preview { border: 1px solid var(--hair); border-radius: 12px; padding: 12px; margin-bottom: 16px; background: var(--canvas); }
 @media (max-width: 47.99rem) { .settings-choice-opt { min-height: 44px; } }
@@ -46,7 +46,7 @@
 /* The category list's label above the install's own categories (the install's name, or "Server"). */
 .settings-nav-group { margin: 14px 10px 2px; font-size: calc(11px * var(--ui-text-scale, 1)); font-weight: 600; letter-spacing: .06em;
   text-transform: uppercase; color: var(--grey); }
-.arturo-panel-list .settings-nav-group { margin: 20px 2px 6px; }
+.panel-list .settings-nav-group { margin: 20px 2px 6px; }
 
 /* A page in the OpenBot layout (General): a one-line intro, then a label above a rounded card; each row is its title
    and one grey description on the left, the control on the right, with hairlines between rows. */
@@ -58,12 +58,12 @@
 .settings-card { background: var(--settings-card); border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; }
 .settings-card > .settings-row { padding: 12px 14px; }
 .settings-card > .settings-row + .settings-row { border-top: 1px solid var(--hair); }
-.settings-card .arturo-panel-field { border-bottom: 0; min-height: 0; padding: 0; gap: 16px; flex-wrap: nowrap; }
-.settings-card .arturo-panel-field.settings-stacked { gap: 10px; }
+.settings-card .panel-field { border-bottom: 0; min-height: 0; padding: 0; gap: 16px; flex-wrap: nowrap; }
+.settings-card .panel-field.settings-stacked { gap: 10px; }
 .settings-card .settings-control { flex: none; max-width: 60%; }
 .settings-card .settings-stacked .settings-control { max-width: none; justify-content: flex-start; }
-.settings-card .arturo-panel-note { margin: 8px 0 0; }
-.settings-card .arturo-panel-error { margin: 8px 0 0; }
+.settings-card .panel-note { margin: 8px 0 0; }
+.settings-card .panel-error { margin: 8px 0 0; }
 .settings-card .settings-choice-opt:not(.is-on) { background: var(--panel); }
 .settings-card .settings-preview { margin: 12px 0 0; }
 .settings-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
@@ -71,7 +71,7 @@
 .settings-row-desc { font-size: calc(13px * var(--ui-text-scale, 1)); line-height: 1.4; color: var(--grey); }
 /* A phone (and a narrow window): the control goes under the text, so neither is squeezed. */
 @media (max-width: 47.99rem) {
-  .settings-card .arturo-panel-field { flex-direction: column; align-items: stretch; gap: 10px; }
+  .settings-card .panel-field { flex-direction: column; align-items: stretch; gap: 10px; }
   .settings-card .settings-control { max-width: none; justify-content: flex-start; }
 }
 

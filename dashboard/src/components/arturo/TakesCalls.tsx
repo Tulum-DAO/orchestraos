@@ -26,15 +26,15 @@ export function TakesCalls({ agentId }: { agentId: string }) {
   };
   return (
     <div data-takes-calls>
-      <div className="arturo-panel-field">
+      <div className="panel-field">
         <span className="settings-row-titleline"><span id={`takes-calls-${agentId}`}>Takes calls</span><SavedSlot on={status.kind === 'saved'} /></span>
         <span className="settings-control">
           <Switch on={on === true} labelledBy={`takes-calls-${agentId}`} disabled={on === null || !admin} onToggle={() => void toggle()} data="takes-calls" />
         </span>
       </div>
-      {status.kind === 'error' && <p className="arturo-panel-error" role="alert">{status.text}</p>}
-      {!admin && <p className="arturo-panel-note">{ADMIN_LOCK_NOTE}</p>}
-      <p className="arturo-panel-note">When on, a call to this agent is with the agent itself. Applies to new calls.</p>
+      {status.kind === 'error' && <p className="panel-error" role="alert">{status.text}</p>}
+      {!admin && <p className="panel-note">{ADMIN_LOCK_NOTE}</p>}
+      <p className="panel-note">When on, a call to this agent is with the agent itself. Applies to new calls.</p>
     </div>
   );
 }

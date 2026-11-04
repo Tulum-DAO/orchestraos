@@ -21,9 +21,9 @@ function ProviderRow() {
   return <SettingRow id={PROVIDER} label="Voice provider" keywords={['provider', 'vendor', 'gpt-live', 'openai', 'hume', 'elevenlabs']} stacked
     status={status} locked={locked} note={row?.note} detail={row?.detail ?? (loadError ? `Couldn't load settings: ${loadError}` : null)}
     changedBy={row?.scope === 'everyone' ? row.changedBy : null} changedAt={row?.changedAt}
-    control={!row ? <span className="arturo-panel-rowvalue">…</span>
+    control={!row ? <span className="panel-rowvalue">…</span>
       // No list from the voice service (unreachable, or an older one): say so, not an empty box. The detail says why.
-      : !options.length ? <span className="arturo-panel-rowvalue" data-provider-none>Couldn't load providers</span>
+      : !options.length ? <span className="panel-rowvalue" data-provider-none>Couldn't load providers</span>
       : <ChoiceList labelledBy={`setting-${PROVIDER}`} value={typeof row.value === 'string' ? row.value : null}
                     options={options} disabled={!row.editable} onChange={(v) => void save(v)} />} />;
 }

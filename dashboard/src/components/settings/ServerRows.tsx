@@ -10,7 +10,7 @@ import { withCurrent, type SettingRow as Row, type SelectOption } from '../../li
 interface Common { k: string; label: string; keywords?: readonly string[]; description?: string;
   /** Shown under the row (Agents: "N of M use their own"). */
   below?: ReactNode }
-const loading = <span className="arturo-panel-rowvalue">…</span>;
+const loading = <span className="panel-rowvalue">…</span>;
 /** The control's aria-describedby: the row's description, when it has one (SettingRow gives it this id). */
 const descOf = (k: string, description?: string) => (description ? descIdOf(k) : undefined);
 const numText = (v: unknown) => (typeof v === 'number' ? String(v) : '');
@@ -33,7 +33,7 @@ export function ServerSelectRow({ k, label, keywords, description, options }: Co
   const list = row ? withCurrent(typeof options === 'function' ? options(row) : options, row.value) : [];
   return <SettingRow id={k} label={label} description={description} keywords={keywords} status={status} locked={locked} {...common(row, loadError)}
     control={row ? (
-      <select className="arturo-panel-value" aria-labelledby={`setting-${k}`} aria-describedby={descOf(k, description)} value={typeof row.value === 'string' ? row.value : ''}
+      <select className="panel-value" aria-labelledby={`setting-${k}`} aria-describedby={descOf(k, description)} value={typeof row.value === 'string' ? row.value : ''}
               disabled={!row.editable} onChange={(e) => void save(e.target.value)}>
         {list.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
       </select>
@@ -64,7 +64,7 @@ export function ServerNumberRow({ k, label, keywords, description, below, min, m
     control={row ? (
       <span className="settings-control">
         {stepper && <button type="button" className="rotation-step" aria-label="Lower" aria-describedby={descOf(k, description)} disabled={!row.editable || n === null || n <= min} onClick={() => { if (n !== null) void save(n - 1); }}><Minus size={14} /></button>}
-        <input value={draft ?? numText(row.value)} inputMode="numeric" className="arturo-panel-input settings-number"
+        <input value={draft ?? numText(row.value)} inputMode="numeric" className="panel-input settings-number"
                aria-labelledby={`setting-${k}`} aria-describedby={descOf(k, description)} disabled={!row.editable} data-setting-input={k}
                onFocus={(e) => setDraft((d) => d ?? e.target.value)} onChange={(e) => setDraft(e.target.value)}
                onBlur={(e) => commit(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />

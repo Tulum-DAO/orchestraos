@@ -94,7 +94,7 @@ test('every text field sized in a stylesheet wraps its size in max(var(--field-m
 
 test('the fields the review found are covered: Arturo composer, its panel inputs and selects, the emoji search', () => {
   const all = cssFiles(SRC).flatMap((f) => rules(readFileSync(f, 'utf-8'), relative(SRC, f)));
-  for (const sel of ['.arturo-composer textarea', '.arturo-pill-panel textarea', '.arturo-panel-input', '.arturo-edit-input', '.rx-search', 'select.arturo-panel-value']) {
+  for (const sel of ['.arturo-composer textarea', '.arturo-pill-panel textarea', '.panel-input', '.arturo-edit-input', '.rx-search', 'select.panel-value']) {
     const r = all.find((x) => x.selector.trim() === sel && /font-size/.test(x.body));
     assert.ok(r, `${sel} has a size`);
     assert.match(r!.body, /font-size\s*:\s*max\(var\(--field-min, 0px\),/, sel);

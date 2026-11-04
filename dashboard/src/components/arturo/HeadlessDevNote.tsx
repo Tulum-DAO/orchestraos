@@ -10,5 +10,5 @@ export function HeadlessDevNote({ agentId }: { agentId: string }) {
   const headless = useDevInfoStore((s) => s.info[agentId]?.headless);
   useEffect(() => { if (headless === undefined) void loadDevInfo(agentId); }, [agentId, headless]);
   if (!headless) return null;
-  return <p className="arturo-panel-note" data-headless-dev-note>{DEV_NOTE}</p>;
+  return <p className="panel-note" data-headless-dev-note>{DEV_NOTE}</p>;
 }

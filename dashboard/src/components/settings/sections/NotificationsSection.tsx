@@ -22,7 +22,7 @@ import { Switch } from '../../arturo/PanelRows';
 import { useServerSetting } from '../useServerSetting';
 import { SettingsQuery, descIdOf } from '../settingsState';
 
-const loading = <span className="arturo-panel-rowvalue">…</span>;
+const loading = <span className="panel-rowvalue">…</span>;
 const OVERRIDES = 'notifications.agentOverrides';
 
 /** "Choose for one agent", then one row per agent with its own setting. An agent picked here is listed at once with no
@@ -45,7 +45,7 @@ function AgentOverrides() {
       description="Give one agent its own setting. It wins over the one above."
       status={changed === OVERRIDES ? status : { kind: 'idle' }} detail={row?.detail ?? (loadError ? `Couldn't load settings: ${loadError}` : null)}
       control={row ? (
-        <select className="arturo-panel-value" aria-labelledby={`setting-${OVERRIDES}`} aria-describedby={descIdOf(OVERRIDES)} value=""
+        <select className="panel-value" aria-labelledby={`setting-${OVERRIDES}`} aria-describedby={descIdOf(OVERRIDES)} value=""
                 disabled={!row.editable || !pick.length} data-notify-add onChange={(e) => { if (e.target.value) { setChanged(null); setAdding(e.target.value); } }}>
           <option value="">{pick.length ? 'Add an agent…' : 'No other agents'}</option>
           {pick.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -57,7 +57,7 @@ function AgentOverrides() {
         status={changed === o.id ? status : { kind: 'idle' }}
         control={<>
           <Choice<NotifyLevel> labelledBy={`setting-${id}`} value={o.level} options={LEVEL_OPTIONS} disabled={!row?.editable} onChange={(v) => set(o.id, v)} />
-          <button type="button" className="arturo-panel-link" aria-label={`Remove ${o.name}`} data-notify-remove={o.id} disabled={!row?.editable}
+          <button type="button" className="panel-link" aria-label={`Remove ${o.name}`} data-notify-remove={o.id} disabled={!row?.editable}
                   onClick={() => (o.id === adding ? setAdding(null) : remove(o.id))}><X size={16} aria-hidden /></button>
         </>} />;
     })}
@@ -73,7 +73,7 @@ function QuietHoursRow() {
   const time = (end: 'from' | 'to', label: string) => quiet && (
     <label className="settings-control" data-quiet-end={end}>
       <span>{label}</span>
-      <input type="time" className="arturo-panel-input" value={quiet[end]} disabled={!row?.editable} aria-describedby={descIdOf(k)}
+      <input type="time" className="panel-input" value={quiet[end]} disabled={!row?.editable} aria-describedby={descIdOf(k)}
              onChange={(e) => {
                const r = changeQuiet(quiet, end, e.target.value);
                if (r.ok) void save(r.value); else if (r.error) flash({ kind: 'error', text: r.error });

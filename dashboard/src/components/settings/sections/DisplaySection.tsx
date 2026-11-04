@@ -24,8 +24,8 @@ function SidebarWidthRow() {
   return <SettingRow id="display.sidebarWidth" label="Sidebar width" keywords={['sidebar', 'width', 'drag', 'narrow', 'wide', 'automatic', 'custom']} status={status}
     description="Drag the sidebar's edge to make it wider or narrower on this device. Automatic follows the text size; double-click the edge to go back."
     control={<>
-      <span className="arturo-panel-rowvalue" data-sidebar-width={width ?? 'auto'}>{width === null ? 'Automatic' : 'Custom'}</span>
-      {width !== null && <button type="button" className="arturo-panel-link" onClick={() => { set(null); flash({ kind: 'saved' }); }}>Use automatic</button>}
+      <span className="panel-rowvalue" data-sidebar-width={width ?? 'auto'}>{width === null ? 'Automatic' : 'Custom'}</span>
+      {width !== null && <button type="button" className="panel-link" onClick={() => { set(null); flash({ kind: 'saved' }); }}>Use automatic</button>}
     </>} />;
 }
 

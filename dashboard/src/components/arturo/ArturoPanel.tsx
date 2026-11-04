@@ -37,6 +37,7 @@ import { applyNote, fetchAgentModel, switchAgentModel, switchableModels, switchN
 import ModelPicker from '../kit/ModelPicker';
 import { agentModelTitle } from '../../lib/modelTitle';
 import { renameAgent } from '../../lib/railAgents';
+import '../kit/panel.css';
 import './arturo.css';
 import { fetchJobs, elapsed, type ArturoJob } from '../../lib/arturoJobs';
 import { currentThread } from '../../lib/arturoCurrent';
@@ -251,25 +252,25 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
 
   // Desktop closes with an X at the right; the phone sheet with Done, and its chevron closes at the root.
   const bar = (
-    <div className="arturo-panel-bar">
+    <div className="panel-bar">
       {page ? (
-        <button type="button" data-panel-back className="arturo-panel-icon" aria-label="Back" onClick={back}>
+        <button type="button" data-panel-back className="panel-icon" aria-label="Back" onClick={back}>
           <ChevronLeft size={22} />
         </button>
       ) : !desktop ? (
-        <button type="button" className="arturo-panel-icon" aria-label="Close" onClick={onClose}>
+        <button type="button" className="panel-icon" aria-label="Close" onClick={onClose}>
           <ChevronLeft size={22} />
         </button>
-      ) : <span className="arturo-panel-icon" aria-hidden />}
-      <h2 className="arturo-panel-title">{title}</h2>
+      ) : <span className="panel-icon" aria-hidden />}
+      <h2 className="panel-title">{title}</h2>
       {page === 'edit' ? (
-        <button type="button" className="arturo-panel-done" onClick={() => void editDone()} disabled={editBusy}>Done</button>
+        <button type="button" className="panel-done" onClick={() => void editDone()} disabled={editBusy}>Done</button>
       ) : desktop ? (
-        <button type="button" className="arturo-panel-icon" aria-label="Close" onClick={onClose}>
+        <button type="button" className="panel-icon" aria-label="Close" onClick={onClose}>
           <X size={20} />
         </button>
       ) : (
-        <button type="button" className="arturo-panel-done" onClick={onClose}>Done</button>
+        <button type="button" className="panel-done" onClick={onClose}>Done</button>
       )}
     </div>
   );
@@ -285,7 +286,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
     ? <DrawerHistory agentId={agentId} isArturo={isArturo} name={aname} subagents={agent?.subagents} onClose={onClose} />
     : s === 'library' ? <DrawerLibrary agentId={agentId} name={aname} />
     : (
-      <div className="arturo-panel-list" data-drawer-setup>
+      <div className="panel-list" data-drawer-setup>
         {isArturo
           ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
           : <Row id="model" label="Model" value={agentModelTitle(model) ?? ''} onOpen={push} />}
@@ -300,14 +301,14 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   const content = (
     <>
       {bar}
-      <div className="arturo-panel-body" key={page ?? 'root'}>
+      <div className="panel-body" key={page ?? 'root'}>
         {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} agentId={isArturo ? undefined : agentId} onProvider={() => toSettings(() => openSettings('server-voice'))} />
           : page === 'memory' ? <MemoryPage />
           : page === 'activity' ? (isArturo ? <ActivityPage /> : <SubagentsPage running={agent?.subagents} name={aname} />)
           : page === 'style' ? <StylePage agentId={agentId} />
           : page === 'model' ? <ModelPage agentId={agentId} onChanged={setModel} onClose={onClose} />
           : page === 'settings' ? (
-            <div className="arturo-panel-list">
+            <div className="panel-list">
               <Row id="name" label="Name" value={aname} onOpen={push} />
               {isArturo && <Row id="brain" label="Brain" value={brain} onOpen={push} />}
             </div>
@@ -351,7 +352,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
                   <div role="tabpanel" data-drawer-section={tab}>{sectionBody(tab)}</div>
                 </>
               ) : (
-                <div className="arturo-panel-list" data-drawer-rows>
+                <div className="panel-list" data-drawer-rows>
                   {sections.map((s) => <Row key={s} id={s} label={SECTION_LABEL[s]} value={sectionValue(s)} onOpen={push} />)}
                 </div>
               )}
@@ -361,7 +362,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
     </>
   );
 
-  // .agent-panel-host carries the panel's colours (arturo.css), so it looks the same on an agent page as on Arturo's.
+  // .agent-panel-host carries the panel's colours (kit/panel.css), so it looks the same on an agent page as on Arturo's.
   if (!desktop) {
     return (
       <div className="agent-panel-host">
@@ -449,7 +450,7 @@ function InlineName({ name: aname, save }: { name: string; save: SaveName }) {
                if (e.key === 'Enter') { e.preventDefault(); ref.current?.blur(); }
                else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setDraft(null); setError(null); requestAnimationFrame(() => ref.current?.blur()); }
              }} />
-      {error && <p className="arturo-panel-error arturo-face-error" role="alert">{error}</p>}
+      {error && <p className="panel-error arturo-face-error" role="alert">{error}</p>}
     </>
   );
 }
@@ -472,20 +473,20 @@ function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone
       </button>
       <form onSubmit={(e) => { e.preventDefault(); onDone(); }}>
         <label className="arturo-edit-label" htmlFor="arturo-edit-name">Name</label>
-        <input id="arturo-edit-name" className="arturo-panel-input arturo-edit-input" value={draft} maxLength={NAME_MAX}
+        <input id="arturo-edit-name" className="panel-input arturo-edit-input" value={draft} maxLength={NAME_MAX}
                readOnly={!canName} onChange={(e) => onDraft(e.target.value)} data-edit-name />
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-      {!canName && <p className="arturo-panel-note">Only an admin can rename the assistant.</p>}
-      <h3 className="arturo-panel-section">Appearance</h3>
-      <div className="arturo-panel-list">
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      {!canName && <p className="panel-note">Only an admin can rename the assistant.</p>}
+      <h3 className="panel-section">Appearance</h3>
+      <div className="panel-list">
         <Row id="avatar" label="Avatar" value={`${shapeName(rec.shape)} · ${colorName(rec.color)}`} onOpen={onAvatar} />
         {/* The server's provider: set for the whole install in Settings › Server › Voice & calls, so this row opens it there.
             The voice is this agent's own, tappable as ever. Two short lines, never cut off. */}
-        <button type="button" className="arturo-panel-row" data-voice-provider onClick={onProvider}>
+        <button type="button" className="panel-row" data-voice-provider onClick={onProvider}>
           <span>Provider</span>
-          <span className="arturo-panel-rowend">
-            <span className="arturo-panel-rowvalue" style={{ whiteSpace: 'normal', textAlign: 'right', padding: '6px 0' }}>
+          <span className="panel-rowend">
+            <span className="panel-rowvalue" style={{ whiteSpace: 'normal', textAlign: 'right', padding: '6px 0' }}>
               <span style={{ display: 'block' }}>{provider}</span>
               {provider && provider !== 'Not set up' ? <span style={{ display: 'block', fontSize: 'calc(12px * var(--ui-text-scale, 1))' }}>{PROVIDER_SCOPE_NOTE}</span> : null}
             </span>
@@ -545,38 +546,38 @@ function VoicePage({ health, onPicked, agentId, onProvider }: {
   };
   return (
     <>
-      <h3 className="arturo-panel-section">Provider</h3>
-      <div className="arturo-panel-list arturo-panel-list-tight">
-        <button type="button" className="arturo-panel-row" data-voice-provider onClick={onProvider}>
+      <h3 className="panel-section">Provider</h3>
+      <div className="panel-list panel-list-tight">
+        <button type="button" className="panel-row" data-voice-provider onClick={onProvider}>
           <span>{GPT_LIVE} (OpenAI)</span>
-          <span className="arturo-panel-rowend">
-            <span className="arturo-panel-rowvalue">{PROVIDER_SCOPE_NOTE}</span>
+          <span className="panel-rowend">
+            <span className="panel-rowvalue">{PROVIDER_SCOPE_NOTE}</span>
             <ChevronRight size={18} />
           </span>
         </button>
       </div>
-      {available === false && <p className="arturo-panel-note">Add an OpenAI key to use {GPT_LIVE}.</p>}
+      {available === false && <p className="panel-note">Add an OpenAI key to use {GPT_LIVE}.</p>}
       {available && (
         <>
-          <h3 className="arturo-panel-section">Voice</h3>
-          {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-          {voices === undefined ? <p className="arturo-panel-empty">Loading…</p>
-            : voices === null ? <p className="arturo-panel-empty">Couldn't load the voices.</p>
+          <h3 className="panel-section">Voice</h3>
+          {error && <p className="panel-error" role="alert">{error}</p>}
+          {voices === undefined ? <p className="panel-empty">Loading…</p>
+            : voices === null ? <p className="panel-empty">Couldn't load the voices.</p>
             : (
-              <div className="arturo-panel-list arturo-panel-list-tight" role="radiogroup" aria-label="Voice">
+              <div className="panel-list panel-list-tight" role="radiogroup" aria-label="Voice">
                 {voices.map((v) => (
                   <button key={v.id} type="button" role="radio" aria-checked={v.id === current} data-voice={v.id}
-                          disabled={!editable} className="arturo-panel-row arturo-panel-choice" onClick={() => pick(v.id)}>
+                          disabled={!editable} className="panel-row panel-choice" onClick={() => pick(v.id)}>
                     <span>{v.title}</span>
-                    {v.id === current ? <Check size={18} className="arturo-panel-check" /> : null}
+                    {v.id === current ? <Check size={18} className="panel-check" /> : null}
                   </button>
                 ))}
               </div>
             )}
           {agentId && scope === 'agent' && editable && (
-            <button type="button" className="arturo-panel-link" onClick={useDefault}>Use the default voice</button>
+            <button type="button" className="panel-link" onClick={useDefault}>Use the default voice</button>
           )}
-          <p className="arturo-panel-note">
+          <p className="panel-note">
             {!editable ? `${named(ADMIN_ONLY_NOTE, aname)}.`
               : agentId && scope !== 'agent' ? 'Using the default voice. Pick one to give this agent its own. Applies from your next call.'
               : 'Applies from your next call.'}
@@ -594,20 +595,20 @@ function StylePage({ agentId }: { agentId: string }) {
   const error = useAgentPrefsStore((s) => s.errors[agentId]);
   return (
     <>
-      <div className="arturo-panel-list arturo-panel-list-tight" role="radiogroup" aria-label="Chat style">
+      <div className="panel-list panel-list-tight" role="radiogroup" aria-label="Chat style">
         {styleOptions(agentId).map((o) => (
           <button key={o.id} type="button" role="radio" aria-checked={o.id === style} data-style={o.id}
-                  disabled={!o.available} className="arturo-panel-row arturo-panel-choice"
+                  disabled={!o.available} className="panel-row panel-choice"
                   onClick={() => { if (o.id !== style) void chooseStyle(agentId, o.id); }}>
             <span>{o.label}</span>
-            {o.id === style ? <Check size={18} className="arturo-panel-check" />
-              : o.reason ? <span className="arturo-panel-rowvalue">{o.reason}</span> : null}
+            {o.id === style ? <Check size={18} className="panel-check" />
+              : o.reason ? <span className="panel-rowvalue">{o.reason}</span> : null}
           </button>
         ))}
       </div>
       <HeadlessDevNote agentId={agentId} />
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-      <p className="arturo-panel-note">Saved for you on every device. Dev is the agent's live terminal.</p>
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      <p className="panel-note">Saved for you on every device. Dev is the agent's live terminal.</p>
     </>
   );
 }
@@ -623,8 +624,8 @@ function ModelPage({ agentId, onChanged, onClose }: { agentId: string; onChanged
     void fetchAgentModel(agentId).then((m) => { if (alive) setInfo(m); });
     return () => { alive = false; };
   }, [agentId]);
-  if (info === undefined) return <p className="arturo-panel-empty">Loading…</p>;
-  if (info === null) return <p className="arturo-panel-empty">Couldn't read this agent's model.</p>;
+  if (info === undefined) return <p className="panel-empty">Loading…</p>;
+  if (info === null) return <p className="panel-empty">Couldn't read this agent's model.</p>;
   const why = pickRefusal(info, { providerId: info.runtime ?? '', modelLabel: '' });
   const pick = (id: string, label: string) => {
     if (busy || id === info.model) return;
@@ -641,12 +642,12 @@ function ModelPage({ agentId, onChanged, onClose }: { agentId: string; onChanged
   };
   return (
     <>
-      {why ? <p className="arturo-panel-note">{why}</p> : (
+      {why ? <p className="panel-note">{why}</p> : (
         <ModelPicker variant="inline" value={{ providerId: info.runtime ?? '', modelId: info.model ?? '' }}
           agentModels={{ providerId: info.runtime ?? '', models: switchableModels(info) }} note={applyNote(info)} onBeforeNewAgent={onClose}
           onValueChange={(p) => pick(p.modelId, p.modelLabel)} />
       )}
-      {notice && <p className={notice.tone === 'error' ? 'arturo-panel-error' : 'arturo-panel-note'} role="status">{notice.text}</p>}
+      {notice && <p className={notice.tone === 'error' ? 'panel-error' : 'panel-note'} role="status">{notice.text}</p>}
     </>
   );
 }
@@ -655,8 +656,8 @@ function ModelPage({ agentId, onChanged, onClose }: { agentId: string; onChanged
 function SubagentsPage({ running, name }: { running?: number; name: string }) {
   return (
     <div className="arturo-panel-activity">
-      <h3 className="arturo-panel-section">Running</h3>
-      <p className="arturo-panel-empty">
+      <h3 className="panel-section">Running</h3>
+      <p className="panel-empty">
         {running ? `${name} has ${running} subagent${running === 1 ? '' : 's'} working.` : `Nothing running beside ${name}'s own turn.`}
       </p>
     </div>
@@ -683,11 +684,11 @@ function AgentNamePage({ agentId, name, save }: { agentId: string; name: string;
     <div>
       <form className="arturo-panel-add" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <input value={text} onChange={(e) => { setText(e.target.value); setSaved(false); }} aria-label="Agent name"
-               maxLength={40} className="arturo-panel-input" data-name-input />
-        <button type="submit" className="arturo-panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>
+               maxLength={40} className="panel-input" data-name-input />
+        <button type="submit" className="panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-      <p className="arturo-panel-note" role="status">
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      <p className="panel-note" role="status">
         {saved ? 'Saved. Its old name still reaches it.' : `Shown everywhere this agent appears. Its id stays ${agentId}.`}
       </p>
     </div>
@@ -704,12 +705,12 @@ function BrainPage({ health, brain }: { health: ArturoHealth | null; brain: stri
     : null;
   return (
     <>
-      <div className="arturo-panel-list">
+      <div className="panel-list">
         <Info label="Default brain">{brain || '…'}</Info>
         <Info label="Status">{panelStatus(health, brain, aname).text.split(' · ')[0]}</Info>
       </div>
-      {why && <p className="arturo-panel-note">{why}</p>}
-      <p className="arturo-panel-note">Change the brain for a message from the chip under the composer.</p>
+      {why && <p className="panel-note">{why}</p>}
+      <p className="panel-note">Change the brain for a message from the chip under the composer.</p>
     </>
   );
 }
@@ -735,14 +736,14 @@ function NamePage() {
     <div>
       <form className="arturo-panel-add" onSubmit={(e) => { e.preventDefault(); save(); }}>
         <input value={text} onChange={(e) => { setText(e.target.value); setSaved(false); }} aria-label="Assistant name"
-               maxLength={NAME_MAX} readOnly={!editable} className="arturo-panel-input" data-name-input />
-        {editable && <button type="submit" className="arturo-panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>}
+               maxLength={NAME_MAX} readOnly={!editable} className="panel-input" data-name-input />
+        {editable && <button type="submit" className="panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>}
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
+      {error && <p className="panel-error" role="alert">{error}</p>}
       {editable && aname !== DEFAULT_ASSISTANT_NAME && (
-        <button type="button" className="arturo-panel-link" onClick={reset} disabled={busy}>Use the default name ({DEFAULT_ASSISTANT_NAME})</button>
+        <button type="button" className="panel-link" onClick={reset} disabled={busy}>Use the default name ({DEFAULT_ASSISTANT_NAME})</button>
       )}
-      <p className="arturo-panel-note" role="status">
+      <p className="panel-note" role="status">
         {!editable ? 'Only an admin can rename the assistant.'
           : saved ? `Saved. Every device now calls it ${aname}.`
           : 'Shown on every device and used in what it says about itself. Letters, numbers and spaces.'}
@@ -787,23 +788,23 @@ function MemoryPage() {
     <div>
       <form className="arturo-panel-add" onSubmit={(e) => { e.preventDefault(); void add(); }}>
         <input value={newText} onChange={(e) => setNewText(e.target.value)} aria-label="New fact"
-               placeholder={`Add something ${aname} should know`} className="arturo-panel-input" />
-        <button type="submit" className="arturo-panel-primary" disabled={!newText.trim() || busy === 'new'}>Add</button>
+               placeholder={`Add something ${aname} should know`} className="panel-input" />
+        <button type="submit" className="panel-primary" disabled={!newText.trim() || busy === 'new'}>Add</button>
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-      {facts === null ? (!error && <p className="arturo-panel-empty">Loading…</p>)
-        : facts.length === 0 ? <p className="arturo-panel-empty">Nothing remembered yet.</p>
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      {facts === null ? (!error && <p className="panel-empty">Loading…</p>)
+        : facts.length === 0 ? <p className="panel-empty">Nothing remembered yet.</p>
         : (
           <ul className="arturo-panel-facts">
             {facts.map((f) => (
               <li key={f.id}>
                 {editing?.id === f.id ? (
                   <>
-                    <textarea value={editing.text} aria-label="Edit fact" className="arturo-panel-input arturo-panel-textarea"
+                    <textarea value={editing.text} aria-label="Edit fact" className="panel-input panel-textarea"
                               onChange={(e) => setEditing({ id: f.id, text: e.target.value })} />
                     <div className="arturo-panel-actions">
-                      <button type="button" className="arturo-panel-link" onClick={() => setEditing(null)}>Cancel</button>
-                      <button type="button" className="arturo-panel-primary" disabled={!editing.text.trim() || busy === f.id} onClick={() => void save()}>Save</button>
+                      <button type="button" className="panel-link" onClick={() => setEditing(null)}>Cancel</button>
+                      <button type="button" className="panel-primary" disabled={!editing.text.trim() || busy === f.id} onClick={() => void save()}>Save</button>
                     </div>
                   </>
                 ) : (
@@ -815,8 +816,8 @@ function MemoryPage() {
                         {f.freshness?.stale ? ' · may be out of date' : ''}
                       </span>
                       <span className="flex-1" />
-                      <button type="button" className="arturo-panel-link" onClick={() => setEditing({ id: f.id, text: f.text })}>Edit</button>
-                      <button type="button" className="arturo-panel-link" disabled={busy === f.id}
+                      <button type="button" className="panel-link" onClick={() => setEditing({ id: f.id, text: f.text })}>Edit</button>
+                      <button type="button" className="panel-link" disabled={busy === f.id}
                               onClick={() => void run(f.id, () => factsApi.markFresh(f.id), 'Could not update that')}>Still true</button>
                     </div>
                   </>
@@ -838,8 +839,8 @@ function ActivityPage() {
     void loadJobs().then((j) => { if (alive) setJobs(j); });
     return () => { alive = false; };
   }, []);
-  if (!hasThread) return <p className="arturo-panel-empty">No conversation open.</p>;
-  if (jobs === null) return <p className="arturo-panel-empty">Loading…</p>;
+  if (!hasThread) return <p className="panel-empty">No conversation open.</p>;
+  if (jobs === null) return <p className="panel-empty">Loading…</p>;
   const running = jobs.filter((j) => j.status === 'running');
   const recent = jobs.filter((j) => j.status !== 'running');
   const list = (js: ArturoJob[]) => (
@@ -854,10 +855,10 @@ function ActivityPage() {
   );
   return (
     <div className="arturo-panel-activity">
-      <h3 className="arturo-panel-section">Running</h3>
-      {running.length ? list(running) : <p className="arturo-panel-empty">Nothing running in this conversation.</p>}
-      <h3 className="arturo-panel-section">Recent</h3>
-      {recent.length ? list(recent) : <p className="arturo-panel-empty">No background jobs yet.</p>}
+      <h3 className="panel-section">Running</h3>
+      {running.length ? list(running) : <p className="panel-empty">Nothing running in this conversation.</p>}
+      <h3 className="panel-section">Recent</h3>
+      {recent.length ? list(recent) : <p className="panel-empty">No background jobs yet.</p>}
     </div>
   );
 }

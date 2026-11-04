@@ -301,8 +301,10 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
                className={`flex-1 min-w-0 bg-transparent text-sm text-tone-100 placeholder:text-tone-500 outline-none ${sheet ? 'py-2.5' : 'py-1'}`} />
         {p.loading && p.rows.length > 0 && <span className="text-px10 text-tone-500 shrink-0">checking…</span>}
       </div>
+      {/* The popover and the phone sheet keep a wheel or swipe at the end of the list to themselves; in place on a settings
+          page (inline) it carries on to the page, or the page would not scroll under the pointer. */}
       <div role="tabpanel" id={tabPanelId} aria-labelledby={entry ? `${p.idBase}-tab-${entry.id}` : undefined}
-           className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+           className={`flex-1 min-h-0 overflow-y-auto${p.layout === 'inline' ? '' : ' overscroll-contain'}`}>
         {p.loading && p.rows.length === 0 && <p className="px-4 py-4 text-xs text-tone-500">Checking providers…</p>}
         {p.error && <p className="px-4 py-3 text-xs text-tone-red-400" role="alert">Could not load providers: {p.error}</p>}
         {p.replaceBody ?? (!p.error && (p.rows.length > 0 || !p.loading) && <>{banner}{list}</>)}

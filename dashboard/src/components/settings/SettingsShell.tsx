@@ -17,7 +17,7 @@ import { ServerVoiceSection } from './sections/ServerVoiceSection';
 import { AgentsSection } from './sections/AgentsSection';
 import { NotificationsSection } from './sections/NotificationsSection';
 import { ServerSection } from './sections/ServerSection';
-import '../arturo/arturo.css';
+import '../kit/panel.css';
 import './settings.css';
 
 const DESKTOP_QUERY = '(min-width: 48rem)';
@@ -78,7 +78,7 @@ function closeWith(navigate: NavigateFunction, state: unknown): void {
 }
 
 function SearchBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return <input type="search" className="arturo-panel-input settings-search" placeholder="Search settings" aria-label="Search settings"
+  return <input type="search" className="panel-input settings-search" placeholder="Search settings" aria-label="Search settings"
                 value={value} onChange={(e) => onChange(e.target.value)} data-settings-search />;
 }
 
@@ -91,7 +91,7 @@ function SearchResults({ query, desktop }: { query: string; desktop: boolean }) 
           {view(s.id, desktop)}
         </section>
       ))}
-      <p className="arturo-panel-empty settings-search-none">Nothing matches “{query.trim()}”.</p>
+      <p className="panel-empty settings-search-none">Nothing matches “{query.trim()}”.</p>
     </SettingsQuery.Provider>
   );
 }
@@ -155,22 +155,22 @@ export function SettingsShell({ section }: { section: SectionId | null }) {
     return (
       <div className="settings-host agent-panel-host">
         <div ref={ref} role="dialog" aria-modal="true" aria-label="Settings" className="settings-sheet" data-settings tabIndex={-1} onKeyDown={onDialogKey}>
-          <div className="arturo-panel-bar">
-            <button type="button" className="arturo-panel-icon" aria-label={atList ? 'Close' : 'Back'} data-settings-back
+          <div className="panel-bar">
+            <button type="button" className="panel-icon" aria-label={atList ? 'Close' : 'Back'} data-settings-back
                     onClick={() => (atList ? close() : go(null))}>
               <ChevronLeft size={22} />
             </button>
-            <h2 className="arturo-panel-title">{atList ? 'Settings' : sectionLabel(current)}</h2>
-            <button type="button" className="arturo-panel-done" onClick={close}>Done</button>
+            <h2 className="panel-title">{atList ? 'Settings' : sectionLabel(current)}</h2>
+            <button type="button" className="panel-done" onClick={close}>Done</button>
           </div>
-          <div className="arturo-panel-body">
+          <div className="panel-body">
             {atList ? (
               <>
                 <SearchBox value={query} onChange={setQuery} />
                 {searching ? <SearchResults query={query} desktop={false} /> : (
-                  <div className="arturo-panel-list mt-3">
+                  <div className="panel-list mt-3">
                     <CategoryList render={(s) => (
-                      <button type="button" className="arturo-panel-row" data-settings-nav={s.id} onClick={() => go(s.id)}>
+                      <button type="button" className="panel-row" data-settings-nav={s.id} onClick={() => go(s.id)}>
                         <span>{s.label}</span>
                         <ChevronRight size={18} />
                       </button>
@@ -202,12 +202,12 @@ export function SettingsShell({ section }: { section: SectionId | null }) {
           </nav>
         </div>
         <div className="settings-main">
-          <div className="arturo-panel-bar">
-            <span className="arturo-panel-icon" aria-hidden />
-            <h2 className="arturo-panel-title">{searching ? 'Search' : sectionLabel(current)}</h2>
-            <button type="button" className="arturo-panel-icon" aria-label="Close" onClick={close}><X size={20} /></button>
+          <div className="panel-bar">
+            <span className="panel-icon" aria-hidden />
+            <h2 className="panel-title">{searching ? 'Search' : sectionLabel(current)}</h2>
+            <button type="button" className="panel-icon" aria-label="Close" onClick={close}><X size={20} /></button>
           </div>
-          <div className="arturo-panel-body">
+          <div className="panel-body">
             {searching ? <SearchResults query={query} desktop /> : <div data-settings-section={current}>{view(current, true)}</div>}
           </div>
         </div>
