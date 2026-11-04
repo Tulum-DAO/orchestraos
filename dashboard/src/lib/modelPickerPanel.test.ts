@@ -11,15 +11,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { buildProviderRows, type ProviderAvailability } from './modelSelectorFilter.ts';
 import { buildPickerModels, nameAndTag, type PickerModel } from './modelPicker.ts';
 import { modelPurpose, PURPOSE_TABLE } from './modelPurpose.ts';
-import { EFFORT, effortLabel, effortLevels, type RuntimeEffort } from './modelEffort.ts';
+import { EFFORT, effortLabel, effortLevels, effortStop, type RuntimeEffort } from './modelEffort.ts';
 import {
   browseRows, canPick, contextControl, contextChoices, familiesFor, familyOf, initialTab, isRuntimeDefault, navKey, olderKey,
   otherRuntimeNote, pickableKeys, pillName, pillText, railEntries, railKey, resolveFamily, ringDash, rowReason, scopeFor, statusWords,
-  usageFor, visibleRows,
+  usageFor, visibleRows, railLabel, showsDefaultMark,
 } from './modelPickerPanel.ts';
-import { applyNote } from './agentModel.ts';
+import { agentEffortLevels, applyNote } from './agentModel.ts';
 import { newAgentHref, newAgentRuntimeParam } from './newAgent.ts';
 import ModelPickerPanel, { type ModelPickerPanelProps } from '../components/kit/ModelPickerPanel.tsx';
+import { sliderCommit, sliderDraft, sliderMove, sliderSync } from './stopSlider.ts';
+import { StopSlider, type StopSliderProps } from '../components/kit/StopSlider.tsx';
 
 (globalThis as { React?: typeof React }).React = React;
 
@@ -150,11 +152,10 @@ test('effort: each runtime its own levels, and a control only where a level is r
   assert.equal(pillText('Opus 5', 'Medium'), 'Opus 5 · Medium');
   assert.equal(pillText('Opus 5', null), 'Opus 5');
   assert.equal(pillText(null, 'Medium'), 'Choose a model');
-  // The panel draws the radiogroup only when handed levels, and none otherwise.
+  // The panel draws the slider only when handed levels, and none otherwise.
   assert.doesNotMatch(render({}), /data-model-effort/);
   const html = render({ effort: { levels: EFFORT.codex.levels, value: 'medium', onChange: () => {} } });
-  assert.match(html, /role="radiogroup"/);
-  assert.match(html, /role="radio" aria-checked="true"[^>]*data-effort="medium"/);
+  assert.match(html, /type="range"[^>]*aria-valuetext="Medium"/);
 });
 
 // ── keyboard ──
@@ -211,8 +212,7 @@ test('usage ring: the limit nearest to running out; no ring without a number; th
   const html = render({});
   assert.match(html, /data-usage-ring="74"/);
   assert.equal((html.match(/data-usage-ring=/g) ?? []).length, 1, 'only Claude reports a number');
-  assert.match(html, /Claude<\/span><span[^>]*>· signed in<span[^>]*> · 74% of weekly used/);
-  assert.match(html, /v2\.1\.295/, 'the CLI version, small, in the header');
+  assert.match(html, /aria-label="Claude: signed in, 74% of weekly used, CLI v2\.1\.295"/, 'status, usage and version on the rail mark');
 });
 
 // ── unavailable provider ──
@@ -252,9 +252,9 @@ test('rows: purpose words, the runtime\'s "default", a check and a filled radio 
 test('"Use the default brain" stays first for Arturo; the note says when a pick applies', () => {
   const html = render({ defaultRow: { key: '__default__', selected: true, onPick: () => {} } });
   assert.ok(html.indexOf('Use the default brain') < html.indexOf('data-model-option="claude:'));
-  assert.match(render({ note: 'Applies from your next message' }), /data-model-picker-note[^>]*>Applies from your next message</);
+  assert.match(render({ note: "Applies from this agent's next rotation" }), /data-model-picker-note[^>]*>Applies from this agent&#x27;s next rotation</);
   const info = { runtime: 'claude', model: 'opus', allowed: [], models: [] };
-  assert.equal(applyNote({ ...info, how: 'live' }), 'Applies from your next message');
+  assert.equal(applyNote({ ...info, how: 'live' }), null, 'the usual timing is not said every time');
   assert.equal(applyNote({ ...info, how: 'next_rotation' }), "Applies from this agent's next rotation");
   assert.equal(applyNote({ ...info, how: null }), null);
   assert.equal(applyNote(null), null);
@@ -343,15 +343,7 @@ function render(over: Partial<ModelPickerPanelProps>): string {
   return renderToStaticMarkup(React.createElement(ModelPickerPanel, props));
 }
 
-test('effort as a default can be put back to the CLI\'s own: a "CLI default" choice first, null when picked', async () => {
-  const { effortChoices, effortFromChoice } = await import('./modelEffort.ts');
-  const plain = effortChoices(EFFORT.codex.levels, false);
-  assert.deepEqual(plain.map((l) => l.id), ['low', 'medium', 'high', 'xhigh']);
-  const withDefault = effortChoices(EFFORT.codex.levels, true);
-  assert.deepEqual(withDefault[0], { id: '', label: 'CLI default' });
-  assert.equal(withDefault.length, 5);
-  assert.equal(effortFromChoice(''), null);
-  assert.equal(effortFromChoice('high'), 'high');
+test('effort as a default can be put back to the CLI\'s own: a "CLI default" toggle beside the slider, null when on', async () => {
   const { readFileSync } = await import('node:fs');
   const a = readFileSync(new URL('../components/settings/sections/AgentsSection.tsx', import.meta.url), 'utf8');
   assert.match(a, /effortClearable/);
@@ -413,7 +405,7 @@ test('grouping: one row per family, named by its newest version; the rest under 
   const b = browseRows(CAT, 'claude', { value: { providerId: 'claude', modelId: 'claude-sonnet-5' }, scope: ANY, defaultId: 'claude-opus-5-5' });
   assert.deepEqual(b.rows.map((r) => r.kind), ['family', 'family', 'family', 'family', 'older']);
   assert.equal(b.olderOpen, false);
-  assert.deepEqual(b.rows.find((r) => r.kind === 'older'), { kind: 'older', key: olderKey('claude'), providerId: 'claude', count: 4, open: false });
+  assert.deepEqual(b.rows.find((r) => r.kind === 'older'), { kind: 'older', key: olderKey('claude'), providerId: 'claude', open: false });
   // Opened: one row per concrete older model, sizes included.
   const open = browseRows(CAT, 'claude', { value: null, scope: ANY, olderOpen: true });
   assert.deepEqual(names(open.rows.flatMap((r) => (r.kind === 'model' ? [r.model] : []))), ['Opus 5 · 200K', 'Opus 4.8 · 200K', 'Opus 4.6 · 200K', 'Fable 5']);
@@ -443,22 +435,17 @@ test('context: 200K | 1M for a family offered in two sizes; a family pick keeps 
   const arturo = buildPickerModels(buildProviderRows(CATALOG), null, { forArturo: true });
   const aOpus = familiesFor(arturo, 'claude')[0];
   assert.equal(resolveFamily(aOpus, '1M', ANY).id, 'claude-opus-5-5', 'never resolves to a model it cannot use');
-  const aCtl = contextControl(browseRows(arturo, 'claude', { value: { providerId: 'claude', modelId: 'claude-opus-5-5' }, scope: ANY }),
-    { providerId: 'claude', modelId: 'claude-opus-5-5' }, ANY)!;
-  assert.equal(aCtl.choices[1].disabled, true);
-  assert.match(aCtl.choices[1].title ?? '', /agents/i);
-  // Said on a visible line under the control (a phone has no hover), and tied to the button.
-  const aHtml = render({ context: { ...aCtl, onChange: () => {} } });
-  assert.match(aHtml, /data-context="1M"[^>]*aria-describedby="t-context-why"|aria-describedby="t-context-why"[^>]*data-context="1M"/);
-  assert.match(aHtml, /id="t-context-why"[^>]*data-model-context-reason[^>]*>1M: Only for agents/);
-  assert.doesNotMatch(render({ context: { ...ctl, onChange: () => {} } }), /data-model-context-reason/, 'nothing greyed: no reason line');
+  // Arturo's brain can't use the 1M Opus: one usable size left, so no Context control at all (never a dimmed size).
+  assert.equal(contextControl(browseRows(arturo, 'claude', { value: { providerId: 'claude', modelId: 'claude-opus-5-5' }, scope: ANY }),
+    { providerId: 'claude', modelId: 'claude-opus-5-5' }, ANY), null);
   // The panel draws it beside Effort, in the same style.
   const html = render({ context: { choices: ctl.choices, value: '1M', onChange: () => {} }, effort: { levels: EFFORT.claude.levels, value: 'high', onChange: () => {} } });
   assert.match(html, /data-model-context(?:(?!data-model-effort).)*role="radiogroup"/);
+  assert.match(html, /data-model-effort(?:(?!role="radiogroup").)*type="range"/, 'Effort is a slider, not a segmented control');
   assert.match(html, />Context</);
   assert.match(html, /role="radio" aria-checked="true"[^>]*data-context="1M"/);
   assert.match(html, /role="radio" aria-checked="false"[^>]*data-context="200K"[^>]*>200K</);
-  assert.ok(html.indexOf('data-model-context') < html.indexOf('data-effort='), 'Context, then Effort');
+  assert.ok(html.indexOf('data-model-context') < html.indexOf('data-model-effort'), 'Context, then Effort');
   assert.doesNotMatch(render({}), /data-model-context/);
 });
 
@@ -475,14 +462,14 @@ test('an older model in use stays visible and ticked: "Older versions" opens on 
   assert.deepEqual(navKey('Enter', { tabs: ['claude'], tab: 'claude', keys, active: olderKey('claude'), query: '' }), { kind: 'pick', key: olderKey('claude') });
   // Drawn: the disclosure is open, and the older row is the one in use (tinted, checked).
   const html = renderCat({ value, browse: b });
-  assert.match(html, /aria-label="Older versions \(4\), shown"[^>]*data-model-older="claude"/);
+  assert.match(html, /aria-label="Older versions, shown"[^>]*data-model-older="claude"/);
   assert.doesNotMatch(html, /data-model-older="claude"[^>]*aria-expanded/, 'aria-expanded is not an option state: the name says it');
   assert.match(html, /data-model-option="claude:claude-opus-4-8"[^>]*class="[^"]*bg-tone-800 [^"]*font-medium(?:(?!data-model-option).)*In use/);
   assert.equal((html.match(/aria-label="In use"/g) ?? []).length, 1);
   assert.match(html, /Older versions/);
   // Closed (a newer model in use): the older rows are not drawn, the disclosure is.
   const closed = renderCat({ value: { providerId: 'claude', modelId: 'claude-sonnet-5' } });
-  assert.match(closed, /aria-label="Older versions \(4\), hidden"[^>]*data-model-older="claude"/);
+  assert.match(closed, /aria-label="Older versions, hidden"[^>]*data-model-older="claude"/);
   assert.doesNotMatch(closed, /data-model-option="claude:claude-opus-4-8"/);
   assert.equal((closed.match(/role="option"[^>]*data-model-option="claude:/g) ?? []).length, 4, 'one row per family');
 });
@@ -597,4 +584,379 @@ test('review wiring: the disclosure keeps focus in the search box; a size pick i
   assert.match(panel, /data-model-older=\{r\.providerId\}[^>]*onMouseDown=\{\(e\) => e\.preventDefault\(\)\}/);
   const src = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
   assert.match(src, /if \(scope\.kind === 'agent'\) close\(\);/, "the agent's model updates after the switch: close rather than show a stale size");
+});
+
+// ── declutter ("go ahead, use the slider for effort") ──
+
+test('declutter 1: the header is the provider name only; status, usage (with "as of") and version are on the rail mark', () => {
+  const html = render({});
+  assert.match(html, /data-model-picker-header="claude"[^>]*><span[^>]*>Claude<\/span><\/div>/, 'the name, nothing else');
+  const header = html.slice(html.indexOf('data-model-picker-header'), html.indexOf('role="combobox"'));
+  assert.doesNotMatch(header, /signed in|weekly|v2\.1\.295/);
+  // The full words, stale reading included, in the mark's title and aria-label.
+  const stale = [{ provider: 'claude', window: 'weekly', used_pct: 50, stale: true, as_of: 1_793_612_401 }];
+  const [claude] = railEntries(ROWS, stale, ANY, new Date(1_793_700_000_000));
+  assert.match(railLabel(claude), /^Claude: signed in, 50% of weekly used \(as of .+\), CLI v2\.1\.295$/);
+  const at = render({ entries: [claude, ...railEntries(ROWS, [], ANY).slice(1)] });
+  assert.match(at, /data-rail="claude"/);
+  assert.match(at, /title="Claude: signed in, 50% of weekly used \(as of [^"]+\), CLI v2\.1\.295"/);
+  assert.equal(railLabel(railEntries(ROWS, [], ANY)[1]), 'Codex: not signed in');
+  // A provider that needs action keeps its banner.
+  assert.match(render({ tab: 'codex', onSignIn: () => {} }), /data-model-picker-banner="codex"/);
+});
+
+test('declutter 2: "default" marks only where the picker sets a default (Settings, Arturo), not in an agent', () => {
+  assert.equal(showsDefaultMark(ANY), true);
+  assert.equal(showsDefaultMark(scopeFor({ providerId: 'claude' })), false);
+  assert.match(render({}), /data-default-pill/);
+  assert.doesNotMatch(render({ scope: scopeFor({ providerId: 'claude' }) }), /data-default-pill/);
+});
+
+test('declutter 3: Context offers only sizes usable here (fewer than 2: no control, no reason line); effort only the agent\'s levels', () => {
+  const rows = buildProviderRows(CATALOG);
+  const own = { providerId: 'claude', models: [pm('claude-opus-5-5', 'Opus 5.5', 200_000), pm('claude-sonnet-5', 'Sonnet 5', 200_000)] };
+  const ms = buildPickerModels(rows, own);
+  const agent = scopeFor(own);
+  const value = { providerId: 'claude', modelId: 'claude-opus-5-5' };
+  assert.equal(contextControl(browseRows(ms, 'claude', { value, scope: agent }), value, agent), null, '1M not allowed for this agent: no control');
+  const both = contextControl(browseRows(CAT, 'claude', { value, scope: ANY }), value, ANY)!;
+  assert.deepEqual(both.choices.map((c) => c.id), ['200K', '1M']);
+  assert.ok(both.choices.every((c) => !('disabled' in c)), 'never a dimmed size');
+  const panel = readFileSync(new URL('../components/kit/ModelPickerPanel.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(panel, /data-model-context-reason|context-why/);
+  // Effort: the agent's own levels when the gateway names them.
+  const info = { runtime: 'claude', model: 'opus', how: 'live', effort_how: 'live', allowed: [], models: [] };
+  assert.deepEqual(agentEffortLevels({ ...info, effort_levels: ['low', 'high', 'turbo'] })?.map((l) => l.id), ['low', 'high']);
+  assert.deepEqual(agentEffortLevels(info)?.map((l) => l.id), ['low', 'medium', 'high', 'xhigh', 'max'], 'no list: the runtime\'s');
+  const picker = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
+  assert.match(picker, /effortLevels\?: EffortLevel\[\] \| null/);
+  const composer = readFileSync(new URL('../components/agent/Composer.tsx', import.meta.url), 'utf8');
+  assert.match(composer, /effortLevels=\{agentEffortLevels\(agentModel\)\}/);
+});
+
+test('declutter 4: no permanent "Applies from your next message"; an unusual timing still says so', () => {
+  const info = { runtime: 'claude', model: 'opus', allowed: [], models: [] };
+  assert.equal(applyNote({ ...info, how: 'live' }), null);
+  assert.equal(applyNote({ ...info, how: 'next_rotation' }), "Applies from this agent's next rotation");
+  assert.doesNotMatch(render({ note: null }), /data-model-picker-note/);
+  assert.doesNotMatch(readFileSync(new URL('./agentModel.ts', import.meta.url), 'utf8'), /'Applies from your next message'/);
+});
+
+test('rail-all-providers: every configured provider has a rail tab, signed in or not, installed or not; the unusable ones dimmed with their reason', () => {
+  const all = railEntries(ROWS, USAGE, ANY);
+  assert.deepEqual(all.map((e) => e.id), ['claude', 'codex', 'gemini', 'grok']);
+  const html = render({});
+  for (const id of ['claude', 'codex', 'gemini', 'grok']) assert.match(html, new RegExp(`data-rail="${id}"`), `${id} has a rail tab`);
+  const tab = (id: string) => html.match(new RegExp(`<button[^>]*data-rail="${id}"[^>]*>`))![0];
+  assert.match(tab('codex'), /aria-label="Codex: not signed in"/);
+  assert.match(tab('codex'), /opacity-60/, 'not signed in: dimmed');
+  assert.match(tab('gemini'), /aria-label="Gemini: not installed"/);
+  assert.match(tab('gemini'), /opacity-60/, 'not installed: dimmed');
+  assert.doesNotMatch(tab('claude'), /opacity-60/);
+  assert.doesNotMatch(tab('grok'), /opacity-60/);
+  // The agent's picker too: every provider, the others with the scope reason.
+  const agent = scopeFor({ providerId: 'claude' });
+  const ah = render({ scope: agent, entries: railEntries(ROWS, USAGE, agent) });
+  for (const id of ['claude', 'codex', 'gemini', 'grok']) assert.match(ah, new RegExp(`data-rail="${id}"`));
+  // The container passes the whole rail; no hiding helpers left.
+  const src = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
+  assert.match(src, /const entries = useMemo\(\(\) => railEntries\(rows, usage, scope\), \[rows, usage, scope\]\);/);
+  assert.doesNotMatch(src, /shownEntries|hiddenEntries/);
+  const lib = readFileSync(new URL('./modelPickerPanel.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(lib, /export function (shownEntries|hiddenEntries)/);
+});
+
+test('rail-all-providers: a signed-out provider\'s banner says so with Sign in; its models are listed, dimmed, unpickable', () => {
+  const models = buildPickerModels(ROWS);
+  const browse = browseRows(models, 'codex', { value: { providerId: 'claude', modelId: 'opus' }, scope: ANY, defaultId: null });
+  const html = render({ tab: 'codex', browse, onSignIn: () => {} });
+  assert.match(html, /data-model-picker-header="codex"[^>]*><span[^>]*>Codex<\/span><\/div>/, 'header: the name only');
+  assert.match(html, /data-model-picker-banner="codex"[^>]*><span>Codex is not signed in on this machine\.<\/span>/);
+  assert.match(html, /data-model-connect="codex"[^>]*>Sign in<\/button>/);
+  assert.match(html, /GPT-6 Astra/, 'its models are shown');
+  assert.match(html, /role="option"[^>]*aria-disabled="true"(?:(?!role="option").)*GPT-6 Astra/, 'dimmed: aria-disabled');
+  assert.equal(canPick(byName(models, 'GPT-6 Astra'), ANY), false, 'not signed in: not pickable');
+  assert.deepEqual(pickableKeys(browse.rows, ANY), [], 'Enter skips them');
+  // Not installed: says so, Sign in opens the Connect sheet (which installs).
+  const gb = browseRows(models, 'gemini', { value: null, scope: ANY, defaultId: null });
+  const g = render({ tab: 'gemini', browse: gb, onSignIn: () => {} });
+  assert.match(g, /Gemini is not installed on this machine\./);
+  assert.match(g, /data-model-connect="gemini"/);
+  assert.match(g, /Gemini 3\.1 Pro/);
+});
+
+test('rail-all-providers: with no Connect flow (deployment has it off) the banner gives the CLI\'s own sign-in / install', () => {
+  const models = buildPickerModels(ROWS);
+  const c = render({ tab: 'codex', browse: browseRows(models, 'codex', { value: null, scope: ANY }), onSignIn: null });
+  assert.doesNotMatch(c, /data-model-connect=/);
+  assert.match(c, /data-model-banner-signin-note="codex"[^>]*>Sign in from the CLI on this machine: <code[^>]*>codex login --device-auth<\/code>/);
+  const g = render({ tab: 'gemini', browse: browseRows(models, 'gemini', { value: null, scope: ANY }), onSignIn: null });
+  assert.match(g, /data-model-banner-install="gemini"/);
+});
+
+test('rail-all-providers: search covers every provider\'s models again; "+" is add a provider (as before the declutter)', () => {
+  const models = buildPickerModels(ROWS);
+  assert.deepEqual([...new Set(visibleRows(models, 'fast', 'claude').map((m) => m.providerId))], ['claude', 'gemini'], 'a signed-out / not-installed provider\'s models are searched too');
+  assert.equal(visibleRows.length, 3, 'no provider filter parameter');
+  const src = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
+  assert.match(src, /visibleRows\(models, query, shownTab\)/);
+  assert.match(src, /onAddProvider=\{showAddProvider\(\) \? \(\) => setAdding\(true\) : null\}/, '"+" only where the deployment can add a provider');
+  assert.match(src, /<AddProviderPanel rows=\{rows\} /, 'the add panel covers every provider not usable yet');
+  assert.match(render({ onAddProvider: () => {} }), /aria-label="Add a provider" title="Add a provider"/);
+});
+
+test('declutter 6: Effort is an N-stop slider: the level named beside "Effort", aria-valuetext, a CLI-default toggle in Settings', () => {
+  const levels = EFFORT.claude.levels;
+  assert.deepEqual(effortStop(levels, 'high'), { index: 2, name: 'High', unset: false });
+  assert.deepEqual(effortStop(levels, null), { index: 2, name: 'CLI default', unset: true }, 'unset: the middle stop, said as CLI default');
+  assert.deepEqual(effortStop(EFFORT.codex.levels, null).index, 1);
+  assert.deepEqual(effortStop(levels, 'turbo'), { index: 2, name: 'CLI default', unset: true });
+  const html = render({ effort: { levels, value: 'high', onChange: () => {} } });
+  assert.match(html, /data-model-effort[^>]*>.*>Effort<.*data-effort-name="High"/);
+  assert.match(html, /type="range"[^>]*min="0"[^>]*max="4"[^>]*step="1"[^>]*value="2"/);
+  assert.match(html, /type="range"[^>]*aria-labelledby="t-effort"[^>]*aria-valuetext="High"/);
+  assert.equal((html.match(/data-effort-tick=/g) ?? []).length, 5, 'one tick per level');
+  assert.doesNotMatch(html, /data-effort-cli-default/, 'no CLI default outside Settings');
+  const codex = render({ effort: { levels: EFFORT.codex.levels, value: 'low', onChange: () => {} } });
+  assert.match(codex, /max="3"/, 'N stops: the runtime\'s own levels');
+  const unset = render({ effort: { levels, value: null, clearable: true, onChange: () => {} } });
+  assert.match(unset, /data-effort-cli-default[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-effort-cli-default/);
+  assert.match(unset, /aria-valuetext="CLI default"/);
+  assert.doesNotMatch(unset, /data-effort-name=/, 'the pressed toggle says it; no second "CLI default" beside Effort');
+  const set = render({ effort: { levels, value: 'max', clearable: true, onChange: () => {} } });
+  assert.match(set, /data-effort-cli-default[^>]*aria-pressed="false"|aria-pressed="false"[^>]*data-effort-cli-default/);
+  const src = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
+  assert.match(src, /clearable: effortClearable/);
+});
+
+test('declutter 7: Context and Effort share one footer line (Context left, Effort right), wrapping when narrow', () => {
+  const two = contextControl(browseRows(CAT, 'claude', { value: { providerId: 'claude', modelId: 'claude-opus-5-5' }, scope: ANY }), { providerId: 'claude', modelId: 'claude-opus-5-5' }, ANY)!;
+  const html = render({ context: { ...two, onChange: () => {} }, effort: { levels: EFFORT.claude.levels, value: 'high', onChange: () => {} } });
+  assert.equal((html.match(/data-model-picker-footer/g) ?? []).length, 1);
+  assert.match(html, /data-model-picker-footer[^>]*class="[^"]*flex-wrap|class="[^"]*flex-wrap[^"]*"[^>]*data-model-picker-footer/);
+  assert.ok(html.indexOf('data-model-context') < html.indexOf('data-model-effort'));
+  assert.match(html, /class="[^"]*ml-auto[^"]*"[^>]*data-model-effort|data-model-effort[^>]*class="[^"]*ml-auto/);
+  assert.doesNotMatch(render({ effort: null, context: null }), /data-model-picker-footer/, 'nothing applies: no footer');
+});
+
+test('declutter 8: purpose words come from the table, else the CLI\'s own description; never invented', () => {
+  assert.equal(modelPurpose('claude', 'Fable 5.1'), null, 'no source: no words');
+  assert.equal(modelPurpose('claude', 'Fable 5.1', 'For your toughest challenges'), 'For your toughest challenges');
+  assert.equal(modelPurpose('claude', 'Fable 5.1', 'Fable 5.1 · Most capable for your hardest tasks'), 'Most capable for your hardest tasks', 'the name head is dropped');
+  assert.equal(modelPurpose('claude', 'Opus 5.5', 'For complex work and everyday tasks'), 'Deep work · long tasks', 'the approved table first');
+  assert.equal(modelPurpose('claude', 'Fable 5.1', '  '), null);
+  const ms = buildPickerModels(buildProviderRows([{ ...PROVIDERS[0], models: [{ ...pm('fable', 'Fable 5.1'), description: 'For your toughest challenges' }] }]));
+  assert.equal(ms[0].description, 'For your toughest challenges', 'the probe\'s description reaches the row');
+  const html = renderToStaticMarkup(React.createElement(ModelPickerPanel, {
+    layout: 'popover', idBase: 'f', rows: ROWS, entries: railEntries(ROWS, [], ANY), shown: [], scope: ANY, value: null,
+    browse: browseRows(ms, 'claude', { value: null, scope: ANY }), tab: 'claude', onTab: () => {}, query: '', onQuery: () => {},
+    active: null, onActive: () => {}, onPick: () => {}, renderMark: (id) => React.createElement('i', null, id),
+  }));
+  assert.match(html, /data-purpose="true">For your toughest challenges</);
+});
+
+test('declutter 9: "Older versions" has no count', () => {
+  const html = renderCat({ value: { providerId: 'claude', modelId: 'claude-sonnet-5' } });
+  assert.match(html, /data-model-older="claude"(?:(?!role="option").)*>Older versions<\/span><\/div>/);
+  assert.doesNotMatch(html, /Older versions \(\d+\)/);
+});
+
+test('declutter keeps: no per-row radio, tinted row + check, scope reasons in search', () => {
+  const agent = scopeFor({ providerId: 'claude' });
+  const models = buildPickerModels(ROWS);
+  const html = render({ scope: agent, query: 'grok', shown: visibleRows(models, 'grok', 'claude') });
+  assert.match(html, /data-model-reason="true">Needs a new agent on Grok</);
+  assert.doesNotMatch(render({}), /type="radio"/);
+  assert.match(render({}), /aria-selected="true"[^>]*class="[^"]*bg-tone-800[^"]*"(?:(?!role="option").)*In use/);
+});
+
+test('declutter 6: the slider keeps its own ←/→, Home/End: the panel\'s keys come only from the search box', () => {
+  const src = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
+  assert.match(src, /if \(e\.key !== 'Escape' && el !== inputRef\.current\) return;/);
+  assert.doesNotMatch(src, /el\.tagName !== 'INPUT'/, 'the range input is an INPUT too');
+});
+
+// ── review of 53d6154 (coordinator, 2026-11-03) ──
+
+/** Drive the slider's rules as the component does: a change per stop crossed, a commit on release. */
+function drive(prop: number, unset: boolean, steps: (number | 'pointer' | 'key' | 'blur' | 'activate')[]) {
+  const calls: number[] = [];
+  let d = sliderDraft(prop);
+  for (const s of steps) {
+    if (typeof s === 'number') { d = sliderMove(d, s); continue; }
+    const r = sliderCommit(d, prop, unset, s);
+    d = r.draft;
+    if (r.call !== null) calls.push(r.call);
+  }
+  return { calls, shown: d.shown };
+}
+
+test('review 1: a drag across 3 stops sends ONE pick, on release; the thumb stays where it was let go', () => {
+  const drag = drive(1, false, [2, 3, 4, 'pointer']);
+  assert.deepEqual(drag.calls, [4], 'exactly one onIndex, the stop let go on');
+  assert.equal(drag.shown, 4, 'no snap back while the switch is on its way');
+  // Holding an arrow key: a change per repeat, one call after the key comes up.
+  assert.deepEqual(drive(0, false, [1, 2, 3, 'key']).calls, [3]);
+  // Back where it started, or a release with no move: nothing sent.
+  assert.deepEqual(drive(2, false, [3, 2, 'pointer']).calls, []);
+  assert.deepEqual(drive(2, false, ['pointer']).calls, []);
+  // A blur after the release sends nothing more; a blur mid-move (focus leaves) commits.
+  assert.deepEqual(drive(1, false, [3, 'pointer', 'blur']).calls, [3]);
+  assert.deepEqual(drive(1, false, [3, 'blur']).calls, [3]);
+  // The prop catching up (or moving elsewhere) re-syncs the thumb.
+  assert.equal(sliderSync(sliderMove(sliderDraft(1), 3), 1, 3).shown, 3);
+  assert.equal(sliderSync(sliderDraft(1), 1, 0).shown, 0);
+  assert.equal(sliderSync(sliderMove(sliderDraft(1), 3), 1, 1).shown, 3, 'same prop: a drag in progress is kept');
+  const src = readFileSync(new URL('../components/kit/StopSlider.tsx', import.meta.url), 'utf8');
+  for (const ev of ['onPointerUp', 'onKeyUp', 'onBlur']) assert.match(src, new RegExp(`${ev}=\\{`), `commits on ${ev}`);
+  assert.match(src, /useState/);
+});
+
+test('review 2: the hollow (unset) thumb can be picked where it rests: release, Enter or Space', () => {
+  assert.deepEqual(drive(2, true, ['pointer']).calls, [2], 'pointer up on the hollow thumb');
+  assert.deepEqual(drive(2, true, ['activate']).calls, [2], 'Enter / Space');
+  assert.deepEqual(drive(2, true, ['pointer', 'pointer']).calls, [2], 'once, not again before the prop catches up');
+  assert.deepEqual(drive(2, true, ['key']).calls, [], 'a Tab key coming up on it picks nothing');
+  assert.deepEqual(drive(2, true, ['blur']).calls, [], 'tabbing through picks nothing');
+  assert.deepEqual(drive(2, false, ['activate']).calls, [], 'a set level: Enter / Space change nothing');
+  assert.deepEqual(drive(2, true, [3, 'pointer']).calls, [3]);
+  const src = readFileSync(new URL('../components/kit/StopSlider.tsx', import.meta.url), 'utf8');
+  assert.match(src, /e\.key === 'Enter' \|\| e\.key === ' '/);
+});
+
+test('rail-all-providers: the search box says "Search all models" again (it searches every provider)', () => {
+  const html = render({});
+  assert.match(html, /placeholder="Search all models" aria-label="Search all models"/);
+});
+
+test('review 4: "+" panel: a signed-out provider with no connect action says how to sign in from its CLI', () => {
+  const src = readFileSync(new URL('../components/kit/ModelPicker.tsx', import.meta.url), 'utf8');
+  assert.match(src, /signinCommand\(r\.provider\.id\)/);
+  assert.match(src, /Sign in from the CLI on this machine/);
+  assert.match(src, /data-model-add-signin-note/);
+});
+
+test('review 5: the hover title is React state, never a direct DOM write', () => {
+  const src = readFileSync(new URL('../components/kit/StopSlider.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /\.title = /);
+  assert.match(src, /title=\{hoverName \?\? valueText\}/);
+});
+
+// ── re-review of 71a28ba (coordinator, 2026-11-03) ──
+
+/**
+ * A component harness with no DOM (the dashboard has none): StopSlider runs as itself, its own useState / useRef
+ * through React 19's hook dispatcher, re-rendered until its render-phase updates settle, as React does; events are
+ * its own handlers called with a minimal event. Props change through rerender(), as a parent would.
+ */
+type Handler = (e: unknown) => void;
+function mountSlider(first: StopSliderProps) {
+  const internals = (React as unknown as Record<string, { H: unknown }>).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  const slots: unknown[] = [];
+  let at = 0;
+  let dirty = false;
+  const dispatcher = {
+    useState(init: unknown) {
+      const k = at++;
+      if (!(k in slots)) slots[k] = typeof init === 'function' ? (init as () => unknown)() : init;
+      const set = (v: unknown) => {
+        const next = typeof v === 'function' ? (v as (p: unknown) => unknown)(slots[k]) : v;
+        if (!Object.is(next, slots[k])) { slots[k] = next; dirty = true; }
+      };
+      return [slots[k], set];
+    },
+    useRef(v: unknown) { const k = at++; if (!(k in slots)) slots[k] = { current: v }; return slots[k]; },
+  };
+  let props = first;
+  let tree: React.ReactNode = null;
+  const render = () => {
+    const prev = internals.H;
+    internals.H = dispatcher;
+    try {
+      let n = 0;
+      do { dirty = false; at = 0; tree = (StopSlider as (p: StopSliderProps) => React.ReactNode)(props); } while (dirty && ++n < 25);
+      assert.ok(n < 25, 'render settles');
+    } finally { internals.H = prev; }
+  };
+  const input = (): { props: Record<string, unknown> } => {
+    const walk = (node: unknown): { props: Record<string, unknown> } | null => {
+      if (!node || typeof node !== 'object') return null;
+      if (Array.isArray(node)) { for (const c of node) { const f = walk(c); if (f) return f; } return null; }
+      const el = node as { type?: unknown; props?: Record<string, unknown> };
+      if (el.type === 'input') return el as { props: Record<string, unknown> };
+      return walk(el.props?.children);
+    };
+    const f = walk(tree);
+    assert.ok(f, 'the range input');
+    return f!;
+  };
+  const fire = (name: string, e: Record<string, unknown> = {}) => {
+    const h = input().props[name] as Handler | undefined;
+    assert.ok(h, `${name} handler`);
+    h({ preventDefault() {}, currentTarget: { value: String(e.value ?? ''), getBoundingClientRect: () => ({ left: 0, width: 0 }) }, ...e });
+    render();
+  };
+  render();
+  return {
+    rerender(next: Partial<StopSliderProps>) { props = { ...props, ...next }; render(); },
+    fire,
+    value: () => Number(input().props.value),
+    move: (i: number) => fire('onChange', { value: i }),
+  };
+}
+
+const LEVELS = ['Low', 'Medium', 'High', 'Extra high', 'Max'];
+
+test('re-review: after a prop change, the hollow thumb picks the middle stop (no stale draft from the last drag)', () => {
+  const calls: number[] = [];
+  const s = mountSlider({ stops: LEVELS, index: 2, valueText: 'High', onIndex: (i) => calls.push(i), labelledBy: 'x' });
+  s.move(3); s.move(4); s.fire('onPointerUp');
+  assert.deepEqual(calls, [4], 'the drag to Max: one pick');
+  s.rerender({ index: 4, valueText: 'Max' });            // the switch landed
+  s.rerender({ index: 2, valueText: 'CLI default', unset: true });   // "CLI default" pressed
+  assert.equal(s.value(), 2, 'the hollow thumb on the middle stop');
+  s.fire('onPointerUp');
+  assert.deepEqual(calls, [4, 2], 'a tap on the hollow thumb picks the middle stop');
+});
+
+test('re-review: a refused pick reverts, and the same stop can be tried again', () => {
+  const calls: number[] = [];
+  const s = mountSlider({ stops: LEVELS, index: 2, valueText: 'High', onIndex: (i) => calls.push(i), labelledBy: 'x' });
+  s.move(4); s.fire('onPointerUp');
+  s.rerender({ index: 4, valueText: 'Max' });            // optimistic
+  s.rerender({ index: 2, valueText: 'High' });           // refused: reverted
+  assert.equal(s.value(), 2, 'the thumb follows the revert');
+  s.move(4); s.fire('onPointerUp');
+  assert.deepEqual(calls, [4, 4], 'the retry goes out');
+  // Even with no prop change at all (a refusal that never moved the value), moving there again sends again.
+  const c2: number[] = [];
+  const t = mountSlider({ stops: LEVELS, index: 2, valueText: 'High', onIndex: (i) => c2.push(i), labelledBy: 'x' });
+  t.move(4); t.fire('onPointerUp'); t.move(3); t.move(4); t.fire('onPointerUp');
+  assert.deepEqual(c2, [4, 4]);
+  assert.deepEqual(drive(2, false, [4, 'pointer', 3, 4, 'pointer']).calls, [4, 4]);
+});
+
+test('re-review: a drag across stops is one pick in the component too; a cancelled pointer commits', () => {
+  const calls: number[] = [];
+  const s = mountSlider({ stops: LEVELS, index: 0, valueText: 'Low', onIndex: (i) => calls.push(i), labelledBy: 'x' });
+  s.move(1); s.move(2); s.move(3);
+  assert.equal(s.value(), 3, 'the thumb follows at once');
+  s.fire('onPointerUp'); s.fire('onBlur');
+  assert.deepEqual(calls, [3]);
+  s.move(4); s.fire('onPointerCancel');
+  assert.deepEqual(calls, [3, 4], 'pointer cancel commits like pointer up');
+  // Unset, Enter on the hollow thumb.
+  const u: number[] = [];
+  const h = mountSlider({ stops: LEVELS, index: 2, valueText: 'CLI default', unset: true, onIndex: (i) => u.push(i), labelledBy: 'x' });
+  h.fire('onKeyDown', { key: 'Enter' });
+  assert.deepEqual(u, [2]);
+});
+
+test('re-review: the composer sets effort at once; a refused pick re-reads the real level (lib/liveSwitch.ts), nothing guessed', () => {
+  const src = readFileSync(new URL('../components/agent/Composer.tsx', import.meta.url), 'utf8');
+  const on = src.slice(src.indexOf('const onEffort'), src.indexOf('const voiceRef'));
+  assert.match(on, /live\.pick\(\{ effort: \{ id: level, label \} \}\)/, 'through the sequencer: shown at once, one request out');
+  assert.match(src, /agentModel: AgentModelInfo \| null = serverModel && \{ \.\.\.serverModel, \.\.\.live\.shown \}/);
+  assert.match(src, /resync: refreshModel/, 'a failure re-reads');
+  assert.doesNotMatch(src, /effortAfter/);
 });

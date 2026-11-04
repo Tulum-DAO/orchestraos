@@ -4,10 +4,10 @@ import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
 import { useAssistantName } from '../../lib/assistantName';
 import {
-  agentEffortLevels, applyNote, effortNotice, fetchAgentModel, switchAgentModel, modelLabel as labelFor, pickRefusal,
-  switchNotice, switchableModels,
-  type AgentModelInfo, type SwitchNotice,
+  agentEffortLevels, applyNote, fetchAgentModel, switchAgentModel, modelLabel as labelFor, pickRefusal, switchableModels,
+  type AgentModelInfo,
 } from '../../lib/agentModel';
+import { useLiveSwitch } from '../../hooks/useLiveSwitch';
 import ModelPicker from '../kit/ModelPicker';
 import { agentModelTitle } from '../../lib/modelTitle';
 import { useComposerDraft } from '../../stores/composerDrafts';
@@ -33,9 +33,12 @@ interface ComposerProps {
   canStop?: boolean;
   /** Interrupt the turn: the Esc key, same path as the Dev-mode ActionBar. */
   onStop?: () => Promise<unknown>;
+  /** The agent's status (the seat row's, live status over it): its turn ending re-reads a model / effort pick kept for
+   *  the turn end (lib/liveSwitch.ts, turn end). */
+  status?: string;
 }
 
-export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, onStop }: ComposerProps) {
+export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, onStop, status }: ComposerProps) {
   const aname = useAssistantName();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -43,16 +46,28 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   // The agent's draft (stores/composerDrafts.ts): kept when the page switches to Dev or to another agent.
   const { draft: { text: draft }, setText: setDraft } = useComposerDraft(agentId);
   // The model this agent runs, from the gateway; picking another switches it (lib/agentModel.ts).
-  // Both kept with the agent they belong to, so opening another agent never shows this one's model.
+  // Kept with the agent it belongs to, so opening another agent never shows this one's model.
   const [modelOf, setModelOf] = useState<{ id: string; info: AgentModelInfo | null } | null>(null);
-  const [noticeOf, setNoticeOf] = useState<{ id: string; notice: SwitchNotice } | null>(null);
-  const agentModel = modelOf?.id === agentId ? modelOf.info : null;
-  const notice = noticeOf?.id === agentId ? noticeOf.notice : null;
-  const setNotice = useCallback((n: SwitchNotice | null) => setNoticeOf(n ? { id: agentId, notice: n } : null), [agentId]);
-  const refreshModel = useCallback(() => {
-    void fetchAgentModel(agentId).then((info) => setModelOf({ id: agentId, info }));
-  }, [agentId]);
-  useEffect(() => { refreshModel(); }, [refreshModel]);
+  const serverModel = modelOf?.id === agentId ? modelOf.info : null;
+  const refreshModel = useCallback(
+    () => fetchAgentModel(agentId).then((info) => { setModelOf({ id: agentId, info }); return info; }), [agentId]);
+  useEffect(() => { void refreshModel(); }, [refreshModel]);
+  // Every pick (a model row, a size, an effort) goes through the agent's live-switch sequencer (hooks/useLiveSwitch.ts),
+  // shared with any other picker open on it: one request out per agent, the latest pick waiting behind it (a model
+  // change and an effort sent one after the other, never in one request), the newest pick shown at once and only the
+  // newest outcome said. A failure, or any model change, re-reads the agent's real model and effort; nothing is guessed.
+  const live = useLiveSwitch(agentId, {
+    send: switchAgentModel,
+    resync: refreshModel,
+    // The fallback an effort goes with when the gateway accepted no model since the last read: the model still waiting
+    // to be switched to, if any, so it never cancels that switch.
+    baseModel: serverModel?.pending?.model ?? serverModel?.model ?? null,
+    // Its turn ending re-reads a pick the gateway kept for then: applied, or why not.
+    status,
+  });
+  const { notice, say: setNotice } = live;
+  // What the picker shows: the server's answer with the newest pick over it.
+  const agentModel: AgentModelInfo | null = serverModel && { ...serverModel, ...live.shown };
   useEffect(() => {
     if (notice?.tone !== 'ok') return;
     const t = setTimeout(() => setNotice(null), 6000);
@@ -65,31 +80,16 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   const onPick = (pick: { providerId: string; modelId: string; modelLabel: string }) => {
     const refused = pickRefusal(agentModel, pick);
     if (refused) { setNotice({ tone: 'error', text: refused }); return; }
-    setNotice({ tone: 'wait', text: `Switching to ${pick.modelLabel}…` });
-    void switchAgentModel(agentId, pick.modelId).then(({ status, body }) => {
-      setNotice(switchNotice(status, body, pick.modelLabel));
-      // A confirmed live switch shows at once. The seat's record catches up a few seconds later, and a read
-      // made before then still names the old model, so the re-read waits.
-      if (status === 200 && body.ok && body.switching === 'switched' && agentModel) {
-        setModelOf({ id: agentId, info: { ...agentModel, model: pick.modelId } });
-        setTimeout(refreshModel, 8000);
-      } else {
-        refreshModel();
-      }
-    });
+    live.pick({ model: { id: pick.modelId, label: pick.modelLabel } });
   };
   // Effort: only where the gateway says a picked level reaches this agent (lib/agentModel.ts agentEffortLevels).
+  // The slider sends one pick on release; it shows at once, and stays unless the switch fails and the re-read says
+  // otherwise.
   const effortOn = agentEffortLevels(agentModel) !== null;
   const onEffort = (level: string | null) => {
     if (!agentModel?.model || !level) return;
     const label = agentEffortLevels(agentModel)?.find((l) => l.id === level)?.label ?? level;
-    setNotice({ tone: 'wait', text: `Setting ${label} effort…` });
-    // The model still waiting to be switched to, if any: an effort pick never cancels that switch.
-    void switchAgentModel(agentId, agentModel.pending?.model ?? agentModel.model, level).then(({ status, body }) => {
-      setNotice(effortNotice(status, body, label));
-      if (status === 200 && body.ok) setModelOf({ id: agentId, info: { ...agentModel, effort: level } });
-      else refreshModel();
-    });
+    live.pick({ effort: { id: level, label } });
   };
   const voiceRef = useRef<VoiceControlsHandle>(null);
   const [inCall, setInCall] = useState(false);
@@ -188,6 +188,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
               value={agentModel?.runtime && agentModel.model ? { providerId: agentModel.runtime, modelId: agentModel.model } : null}
               onValueChange={onPick} note={applyNote(agentModel)} returnFocus={() => menuButtonRef.current}
               effort={effortOn ? agentModel?.effort ?? null : null} onEffortChange={effortOn ? onEffort : undefined}
+              effortLevels={agentEffortLevels(agentModel)}
               agentModels={agentModel?.runtime ? { providerId: agentModel.runtime, models: switchableModels(agentModel) } : null} />
           }
           trailing={

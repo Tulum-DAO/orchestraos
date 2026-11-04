@@ -25,6 +25,8 @@ export interface ProviderModel {
   /** A model only agents can use (the 1M Opus versions): Arturo's brain picker lists it dimmed, with the reason. */
   seat_only?: boolean;
   seat_only_reason?: string;
+  /** The CLI's own description of the model, when its catalog probe reads one ("For your toughest challenges"). */
+  description?: string;
 }
 
 export interface ProviderAvailability {

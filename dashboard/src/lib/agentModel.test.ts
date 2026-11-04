@@ -85,7 +85,7 @@ test('effort: offered for an agent only where the gateway says a level reaches i
 test('an effort pick sends the model still waiting to be switched to, so it never cancels that switch', async () => {
   const { readFileSync } = await import('node:fs');
   const c = readFileSync(new URL('../components/agent/Composer.tsx', import.meta.url), 'utf8');
-  assert.match(c, /switchAgentModel\(agentId, agentModel\.pending\?\.model \?\? agentModel\.model, level\)/);
+  assert.match(c, /baseModel: serverModel\?\.pending\?\.model \?\? serverModel\?\.model \?\? null/);
 });
 
 test('a model switch whose kept effort could not be set again says so', () => {

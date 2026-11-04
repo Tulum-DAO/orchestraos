@@ -236,6 +236,7 @@ export default function AgentPage() {
               subagents={(seatRow as { subagents?: number } | undefined)?.subagents}
               canStop={canStop}
               onStop={stopTurn}
+              status={seatStatus}
             />
             </div>
           </div>

@@ -33,6 +33,8 @@ export interface PickerModel {
   capabilities: ProviderCapabilities;
   /** Why it can't be picked here (shown dimmed, never hidden); absent: it can. */
   unavailable?: string;
+  /** The CLI's own description of the model, from its catalog probe (lib/modelPurpose.ts uses it as purpose words). */
+  description?: string;
 }
 
 export interface PickerGroup {
@@ -156,6 +158,7 @@ export function pickerModelsFor(providerId: string, providerLabel: string, sourc
       const keep = isShortId(same.id) && !isShortId(id) ? id : same.id;
       same.id = keep; same.key = `${providerId}:${keep}`;
       same.aliases = [...ids].filter((x) => x !== keep);
+      if (!same.description && s.description) same.description = s.description;
       continue;
     }
     const family = name.toLowerCase().split(/[\s\-()]+/).filter((w) => w && !/^\d/.test(w));
@@ -165,6 +168,7 @@ export function pickerModelsFor(providerId: string, providerLabel: string, sourc
       aliases: s.id !== id ? [s.id] : [],
       keywords: [...new Set([...family, ...(PROVIDER_WORDS[providerId] ?? [providerId]), providerLabel.toLowerCase(), ...nick])],
       capabilities: s.capabilities ?? { text: true, image: false, audio: false, video: false, context_window: null },
+      ...(s.description ? { description: s.description } : {}),
     });
   }
   return out;
