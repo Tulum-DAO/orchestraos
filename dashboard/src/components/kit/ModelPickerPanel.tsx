@@ -28,6 +28,7 @@ import {
 import type { ProviderRow } from '../../lib/modelSelectorFilter';
 import { StopSlider } from './StopSlider';
 import { cliFor, installCommand, signinCommand } from '../../lib/providerConnect';
+import { connectButtonLabel } from '../../lib/providerConnectFlow';
 
 export type PanelLayout = 'popover' | 'sheet' | 'inline';
 export type MarkRenderer = (providerId: string, label: string, size: number, dim?: boolean) => ReactNode;
@@ -159,7 +160,7 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
           {p.onSignIn ? (
             <button type="button" onClick={() => p.onSignIn!(entry.id)} data-model-connect={entry.id}
                     className={`self-start ${target} px-3 rounded-lg border border-tone-700 text-tone-100 hover:bg-tone-800`}>
-              Sign in
+              {connectButtonLabel(entry.id, entry.label, installed)}
             </button>
           ) : installed ? (
             // No sign-in flow here (the deployment has it off): the CLI's own way, on this machine.

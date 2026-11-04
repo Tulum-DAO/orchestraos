@@ -141,8 +141,11 @@ test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack w
   assert.match(src('components/WebTerminal.tsx'), /if \(!container\.contains\(e\.target as Node\)\) return;\s*e\.preventDefault\(\);/);
 });
 
-test('provider login terminal stays pinned to the visible bottom of its scrollable sheet', () => {
+test('the Connect sheet is content height: capped, never a fixed tall box or a pinned terminal', () => {
+  // "a bit too tall". It was h-[94vh] whatever it held, plus a 62vh terminal block.
   const modal = src('components/agent/ProviderConnectModal.tsx');
-  assert.match(modal, /h-\[94vh\] min-h-0 flex flex-col overflow-hidden/);
-  assert.match(modal, /sticky bottom-0 shrink-0 h-\[min\(62vh,calc\(94vh-12rem\)\)\] min-h-\[220px\]/);
+  assert.match(modal, /max-h-\[min\(85dvh,560px\)\] flex flex-col overflow-hidden/);
+  assert.match(modal, /min-h-0 overflow-y-auto/);
+  assert.doesNotMatch(modal, /h-\[94vh\]|h-\[min\(62vh/);
+  assert.doesNotMatch(modal, /sticky bottom-0/);
 });

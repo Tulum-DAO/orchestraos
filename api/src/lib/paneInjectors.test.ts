@@ -172,5 +172,8 @@ test('every send-keys left in api/src is pane control or another machine\'s seat
     'routes/auth.ts': 3,
     // Another machine's seat over SSH: out of the local gateway's reach.
     'services/cross-machine.ts': 1,
+    // A provider sign-in (lib/providerConnect): the API's own login-<cli> session running the CLI's sign-in, never a
+    // seat's pane. Gemini's code typed literally (charset-checked), then Enter; Enter once on agy's login menu.
+    'lib/providerConnect/productionDeps.ts': 2,
   });
 });
