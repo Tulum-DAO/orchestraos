@@ -42,12 +42,12 @@ test('a call opens to a code block whose Copy is always shown (the code block ch
   assert.match(card, /callCode\(call\)/);
 });
 
-test("a run still going shows its live step on the line; Bubbles' threads ask for lines, Modern keeps the card", () => {
+test("a run still going shows its live step on the line; every chat style asks for lines", () => {
   const card = src('components/kit/ToolCard.tsx');
   assert.match(card, /liveCall\(calls, interrupted\)/);
-  assert.match(src('components/kit/ThreadView.tsx'), /<ToolCard key=\{i\} calls=\{p\.calls\} skin=\{skin\} look=\{skin === 'bubbles' \? 'lines' : 'card'\} \/>/);
+  assert.match(src('components/kit/ThreadView.tsx'), /<ToolCard key=\{i\} calls=\{p\.calls\} skin=\{skin\} look="lines" \/>/);
   const chat = src('components/chat/TranscriptChatView.tsx');
-  assert.match(chat, /<GroupedNodeView node=\{node\} interrupted=\{interrupted\} look=\{modern \? 'card' : 'lines'\} \/>/);
+  assert.match(chat, /<GroupedNodeView node=\{node\} interrupted=\{interrupted\} look="lines" \/>/);
   const cards = src('components/chat/TranscriptCards.tsx');
   assert.match(cards, /<ToolCalls calls=\{calls\} entries=\{entries\} interrupted=\{interrupted\} density=\{density\} look=\{look\} \/>/);
   assert.match(cards, /<ToolCalls calls=\{\[fromBlock\(block\)\]\} density=\{density\} look=\{look\} \/>/);

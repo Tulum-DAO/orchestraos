@@ -14,7 +14,7 @@
  * LiveText is the hook for words still being written that the thread does not hold yet (a live-text stream): the view
  * draws it as a streaming reply at the end of the thread, until a message with the same key arrives.
  */
-import { groupCalls, hasVoiceCallMarker } from './calls';
+import { groupCalls, hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from './calls';
 import { agentItem, threadFromArturo, type ArturoTurnLike, type MessagePart, type ThreadItem, type ThreadMessage } from './thread';
 import { hasPasteMarkers } from '../pastedText';
 import { machineKindOf } from '../systemMessages';
@@ -82,19 +82,30 @@ export function arturoRows(turns: ArturoTurnLike[], live: boolean, by?: string):
 }
 
 /** In the Modern style, an agent's plain message as a message the view draws itself: the operator's own words (not
- *  the session prompt, a machine line, a call marker, a paste or a queued message, which keep their own cards) and
- *  the agent's replies (not one carrying pasted text). Anything else: null, drawn by the chat's own primitive. */
+ *  the session prompt, a machine line, a paste or a queued message, which keep their own cards) and the agent's
+ *  replies (not one carrying pasted text). Anything else: null, drawn by the chat's own primitive. A line with a call
+ *  marker (an ended call's summary, words said on a call) is a message too: the view draws its words and its call
+ *  card in Modern (modernUserParts), not the Bubbles row the chat's primitive draws. */
 export function modernMessage(node: GroupedNode): ThreadMessage | null {
   if (node.kind === 'assistant') {
     if (hasPasteMarkers(node.text)) return null;
   } else if (node.kind === 'user') {
-    if (node.isSystem || node.machine || node.queued || machineKindOf(node.text) || hasVoiceCallMarker(node.text)
-        || hasPasteMarkers(node.text)) return null;
+    if (node.isSystem || node.machine || node.queued || machineKindOf(node.text) || hasPasteMarkers(node.text)) return null;
   } else return null;
   const item = agentItem(node);
   if (!item || item.kind !== 'message') return null;
   // A file sent with it (not an uploaded image) keeps the chat's bubble, which shows it as a chip.
   return item.attachments?.some((a) => a.kind !== 'image' || !a.url) ? null : item;
+}
+
+/** A part of the operator's line as the Modern style draws it: its words, or a call (its marker, drawn as the call
+ *  card where it sat). A call's ending line ("Call ended (vc_…).") is chrome, never drawn. No marker: the line whole. */
+export type ModernUserPart = { kind: 'words'; text: string } | { kind: 'call'; callId: string };
+
+export function modernUserParts(text: string): ModernUserPart[] {
+  return parseVoiceSegments(text).flatMap((s): ModernUserPart[] => (s.kind === 'voicecall'
+    ? [{ kind: 'call', callId: s.callId }]
+    : isCallEndedLine(s.text) || !s.text.trim() ? [] : [{ kind: 'words', text: s.text }]));
 }
 
 /** The ref a reaction to this node is stored under, or undefined when it cannot be reacted to: only the operator's

@@ -95,12 +95,13 @@ test('live text on an agent page is drawn until the transcript holds its message
 
 import { modernMessage } from './threadKit/view.ts';
 
-test('in Modern an agent\'s plain messages are drawn as messages; machine lines, pastes, calls and the rest keep their cards', () => {
+test('in Modern an agent\'s plain messages are drawn as messages, call rows too; machine lines, pastes and the rest keep their cards', () => {
   const at = '2026-10-30T10:00:00Z';
   const user = (text: string, extra: Record<string, unknown> = {}) => ({ kind: 'user', key: `u-${text.length}`, text, ts: at, ...extra }) as never;
   const reply = modernMessage({ kind: 'assistant', key: 'a1', text: 'Done: the sample is ready.', ts: at } as never);
   assert.deepEqual([reply?.role, reply?.text, reply?.at, reply?.copyText], ['assistant', 'Done: the sample is ready.', at, 'Done: the sample is ready.']);
   assert.equal(modernMessage(user('Please check the example'))?.role, 'user');
+  assert.equal(modernMessage(user('Call summary\n[voice-call: vc_sample_call01 /data/x.json]'))?.role, 'user');
   const image = modernMessage(user('[IMAGE: /x/state/uploads/shot.png] look at this'));
   assert.deepEqual([image?.text, image?.attachments?.[0]?.url], ['look at this', '/uploads/shot.png']);
   for (const n of [
@@ -109,7 +110,6 @@ test('in Modern an agent\'s plain messages are drawn as messages; machine lines,
     user('the session prompt', { isSystem: true }),
     user('waiting', { queued: true }),
     user('[FILE: /tmp/notes.txt] read this'),
-    user('Call summary\n[voice-call: vc_sample_call01 /data/x.json]'),
     { kind: 'thinking', key: 't', text: 'hmm' },
     { kind: 'tool_group', key: 'g', children: [] },
   ]) assert.equal(modernMessage(n as never), null, JSON.stringify(n).slice(0, 60));

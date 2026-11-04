@@ -1,0 +1,322 @@
+{
+ "agent": "gm",
+ "source": "an agent's transcript via GET /api/agents/gm/transcript, text items 2026-10-28T19:45Z on, replies cut to their first line, data dir scrubbed",
+ "items": [
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Give me a test card",
+   "ts": "2026-10-28T19:45:29.000Z",
+   "uuid": "00000000-0000-4000-8000-034000120104",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Up — `apr_demo3896_88331904`, top of your Approvals page.",
+   "ts": "2026-10-28T19:45:37.000Z",
+   "uuid": "00000000-0000-4000-8000-313313114232",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "[MSG from approval-loop | normal] (sent 0m ago) Approval apr_demo3896_88331904 discarded — Read /tmp/agent-msg-msg_demo4514_27158521.md and act on it. To reply: python3 <repo>/msg_stor",
+   "ts": "2026-10-28T19:45:58.000Z",
+   "uuid": "00000000-0000-4000-8000-230221134200",
+   "machine": "relay",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "You dismissed it rather than answering — which is itself a useful result: that's the third path through a card (answer / ignore / dismiss), and the dismiss noti",
+   "ts": "2026-10-28T19:46:10.000Z",
+   "uuid": "00000000-0000-4000-8000-344331232403",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "give me another test card",
+   "ts": "2026-10-28T19:46:34.000Z",
+   "uuid": "00000000-0000-4000-8000-321300400344",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "`apr_demo9494_08030747` is up — same three options plus write-in, low risk, 24h expiry.",
+   "ts": "2026-10-28T19:46:41.000Z",
+   "uuid": "00000000-0000-4000-8000-243004411313",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "[DECISION ANSWERED apr_demo9494_08030747] 'TEST CARD #3 — nothing depends on this. Pick any option.' -> Other / Write-in... — note: test. Act on it, then run: python3 <repo>/scripts/ap",
+   "ts": "2026-10-28T20:00:08.000Z",
+   "uuid": "00000000-0000-4000-8000-213212441121",
+   "machine": "decision",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Write-in path confirmed too — your free text (\"test\") came through attached to the answer, not just the option number. Acked.",
+   "ts": "2026-10-28T20:00:14.000Z",
+   "uuid": "00000000-0000-4000-8000-002214304312",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Drained — duplicate receipt for the card I'd already handled. Inbox back to 0.",
+   "ts": "2026-10-28T20:00:20.000Z",
+   "uuid": "00000000-0000-4000-8000-304422434211",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Voice call ended: FYI, handled by Arturo: operator tested the voice connection and asked what Arturo can do, including whether it can interrupt.\nArturo explained its capabilities and confirmed it was listening; no agents or research started. Nothing left open.\n[voice-call: vc_6908513068862124 <data-dir>/state/voice-calls/vc_6908513068862124.json]",
+   "ts": "2026-10-29T21:09:22.000Z",
+   "uuid": "00000000-0000-4000-8000-342201321234",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Done reading the log. Short version: **interruption worked; the transcript is losing Arturo's replies.**",
+   "ts": "2026-10-29T21:09:56.000Z",
+   "uuid": "00000000-0000-4000-8000-101413134332",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "[MSG from message-router | medium] (sent 0m ago) [DOWN] seat-a: agent process is gone, 1 message(s) held (0m) — Read /tmp/agent-msg-msg_demo3466_49854729.md and act on it. To reply: python3 <repo>",
+   "ts": "2026-10-30T05:20:10.000Z",
+   "uuid": "00000000-0000-4000-8000-003032031041",
+   "machine": "relay",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "The router reported `seat-a` as down. I left it that way, since it looks like your own test seat.",
+   "ts": "2026-10-30T05:20:38.000Z",
+   "uuid": "00000000-0000-4000-8000-113042044223",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "[MSG from approval-loop | normal] (sent 0m ago) Approval apr_demo2821_99020202 discarded — Read /tmp/agent-msg-msg_demo1469_09182231.md and act on it. To reply: python3 <repo>/msg_stor",
+   "ts": "2026-10-31T01:34:02.000Z",
+   "uuid": "00000000-0000-4000-8000-410213043312",
+   "machine": "relay",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "You dismissed the onboarding questionnaire card. Noted. I won't raise it again.",
+   "ts": "2026-10-31T01:34:07.000Z",
+   "uuid": "00000000-0000-4000-8000-234400101421",
+   "audience": "agent"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "No, bring it back up again",
+   "ts": "2026-10-31T01:36:01.000Z",
+   "uuid": "00000000-0000-4000-8000-100241421404",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "It's back on your Approvals page as `apr_demo3210_75632025`, with the same four options as before. The note at the top says you asked for it again.",
+   "ts": "2026-10-31T01:36:12.000Z",
+   "uuid": "00000000-0000-4000-8000-323001322230",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Give me a paragraph",
+   "ts": "2026-10-31T02:11:27.000Z",
+   "uuid": "00000000-0000-4000-8000-201414412103",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Morning light came in low across the harbor, catching the masts of the boats still tied up from the night before. A few gulls worked the edge of the water, and ",
+   "ts": "2026-10-31T02:11:31.000Z",
+   "uuid": "00000000-0000-4000-8000-010003302413",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Voice call ended: FYI, handled by Arturo: brief audio check call; operator confirmed they could be heard and remarked it was weird, with no further topic raised.\nNothing left open.\n[voice-call: vc_2184028174006295 <data-dir>/state/voice-calls/vc_2184028174006295.json]",
+   "ts": "2026-10-31T22:55:46.000Z",
+   "uuid": "00000000-0000-4000-8000-111310430211",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "That was a 9-second audio check, and nothing in it is for me.",
+   "ts": "2026-10-31T22:55:53.000Z",
+   "uuid": "00000000-0000-4000-8000-234203224430",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Weird\n[voice-call: vc_client_108666099675 <data-dir>/state/voice-calls/vc_client_108666099675.json]",
+   "ts": "2026-10-31T22:55:54.000Z",
+   "uuid": "00000000-0000-4000-8000-343431021411",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "I only got the one word, \"Weird,\" and I can't recover any more of that call. It came from the dashboard's own voice button, not through Arturo. The `<data-dir>`",
+   "ts": "2026-10-31T22:56:16.000Z",
+   "uuid": "00000000-0000-4000-8000-241402112113",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Voice call ended: FYI, handled by Arturo: Operator called to check in on an unspecified matter; call ended before the topic was stated.\nArturo took no action yet. The subject of the check-in is still open.\n[voice-call: vc_2207098611142290 <data-dir>/state/voice-calls/vc_2207098611142290.json]",
+   "ts": "2026-10-31T22:57:07.000Z",
+   "uuid": "00000000-0000-4000-8000-303130043402",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "This was an 8-second call: \"just checking in on something,\" and it ended before you said what. Nothing for me to act on.",
+   "ts": "2026-10-31T22:57:11.000Z",
+   "uuid": "00000000-0000-4000-8000-442122324432",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "hello",
+   "ts": "2026-11-01T07:16:32.000Z",
+   "uuid": "00000000-0000-4000-8000-020100110221",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Hello. What's up?",
+   "ts": "2026-11-01T07:16:35.000Z",
+   "uuid": "00000000-0000-4000-8000-014234410430",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "just checking in",
+   "ts": "2026-11-01T07:17:03.000Z",
+   "uuid": "00000000-0000-4000-8000-401314042021",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "It's quiet. My inbox is empty and nothing is in flight.",
+   "ts": "2026-11-01T07:17:10.000Z",
+   "uuid": "00000000-0000-4000-8000-000210003324",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Give me a menu l",
+   "ts": "2026-11-01T20:30:36.000Z",
+   "uuid": "00000000-0000-4000-8000-214433343142",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "The test menu worked. You picked **Option A — looks right**, and it came back to me.",
+   "ts": "2026-11-01T20:32:12.000Z",
+   "uuid": "00000000-0000-4000-8000-303221203100",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Voice call ended: FYI, handled by Arturo: brief connection check, the operator confirmed Arturo could hear them.\nNo agents, research, or questions started. Nothing left open.\n[voice-call: vc_3573973524829153 <data-dir>/state/voice-calls/vc_3573973524829153.json]",
+   "ts": "2026-11-01T23:40:58.000Z",
+   "uuid": "00000000-0000-4000-8000-303202204120",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "That was a 2.6-second audio check. Arturo heard you and answered, and there's nothing in it for me.",
+   "ts": "2026-11-01T23:41:04.000Z",
+   "uuid": "00000000-0000-4000-8000-320231310403",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "Voice call ended: FYI, handled by Arturo: brief audio check at the start of the call, the operator confirmed Arturo could hear them clearly.\nNo agents, research, or questions for the GM were started. Nothing left open.\n[voice-call: vc_8497013932744528 <data-dir>/state/voice-calls/vc_8497013932744528.json]",
+   "ts": "2026-11-01T23:41:40.000Z",
+   "uuid": "00000000-0000-4000-8000-110320342203",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "That was another 3-second audio check, heard and answered. Nothing for me.",
+   "ts": "2026-11-01T23:41:44.000Z",
+   "uuid": "00000000-0000-4000-8000-321210430313",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "/effort high",
+   "ts": "2026-11-04T02:39:28.000Z",
+   "uuid": "00000000-0000-4000-8000-104412113304",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "/effort medium",
+   "ts": "2026-11-04T02:39:45.000Z",
+   "uuid": "00000000-0000-4000-8000-100310322403",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "user",
+   "text": "hello",
+   "ts": "2026-11-04T03:01:03.000Z",
+   "uuid": "00000000-0000-4000-8000-120400042001",
+   "audience": "user"
+  },
+  {
+   "kind": "text",
+   "role": "assistant",
+   "text": "Hello. Nothing has changed since you were last here. My inbox is empty, the same six cards are waiting, and the seats are as you left them. What's up?",
+   "ts": "2026-11-04T03:01:09.000Z",
+   "uuid": "00000000-0000-4000-8000-132421343330",
+   "audience": "user"
+  }
+ ]
+}
