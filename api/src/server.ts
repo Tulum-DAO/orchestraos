@@ -54,6 +54,7 @@ import agentSendRouter, { defaultAgentSendDeps, postAgentMessage } from './route
 import { startReactionWake, messageTextIn } from './services/reaction-wake.js';
 import { reactionStore } from './lib/reactions-store.js';
 import runtimesAvailableRouter from './routes/runtimes-available.js';
+import providerConnectRouter, { connectManager, startConnectLoop } from './routes/provider-connect.js';
 import factsRouter from './routes/facts.js';
 import chatHistoryRouter from './routes/chat-history.js';
 import reactionsRouter from './routes/reactions.js';
@@ -237,6 +238,7 @@ app.use('/api/agent-state', agentStateRouter);
 app.use('/api/inspect-feedback', inspectFeedbackRouter);
 app.use('/api/telemetry', telemetryRouter); // Build B: read-only telemetry query/stream (INERT — no cron/systemd)
 app.use('/api/runtimes', runtimesAvailableRouter);
+app.use('/api/providers', providerConnectRouter); // install + sign in to a provider with no terminal (admin only; routes/provider-connect.ts)
 app.use('/api/facts', factsRouter);
 app.use('/api/chat-history', chatHistoryRouter); // the /chat-history page's list + thread reads (router existed, was never mounted)
 app.use('/api/reactions', reactionsRouter); // message reactions: GET/PUT/DELETE + /stream SSE (routes/reactions.ts)
@@ -334,6 +336,7 @@ if (!process.env.NODE_TEST_CONTEXT) startLibraryIndex(process.env.ORCHESTRA_DIR 
 
 // The web terminal's list of login shells (lib/loginShells.ts): drop entries whose tmux session is gone or that
 // expired, now and every 30 s, so a shell that ended is no longer attachable.
+if (!process.env.NODE_TEST_CONTEXT) startConnectLoop(connectManager);
 if (!process.env.NODE_TEST_CONTEXT) startLoginShellSweeper(process.env.ORCHESTRA_DIR || loadConfig().dataDir, loginShellSessionExists);
 
 // A 60 s memory heartbeat so a supervisor restart leaves a trend in the API log
