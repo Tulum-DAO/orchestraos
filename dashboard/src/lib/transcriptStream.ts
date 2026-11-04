@@ -56,12 +56,14 @@ export function liveTextOf(ev: LiveTextEvent | null, items: readonly object[]): 
   if (!ev || !Array.isArray(ev.blocks) || !ev.blocks.length) return null;
   const landed = new Set<string>();
   for (const it of items) { const u = (it as { uuid?: unknown }).uuid; if (typeof u === 'string') landed.add(u); }
-  const text = ev.blocks.filter((b) => !(b.uuid && landed.has(b.uuid))).map((b) => b.text).filter((t) => t.trim()).join('\n\n');
+  const blocks = ev.blocks.filter((b) => !(b.uuid && landed.has(b.uuid)) && b.text.trim()).map((b) => ({ uuid: b.uuid, text: b.text }));
+  const text = blocks.map((b) => b.text).join('\n\n');
   if (!text.trim()) return null;
   // Answering a reaction wake: NO_REPLY, a "no reply" phrase or an emoji is hidden once written (the server drops it),
   // so while the words could still become one, nothing is live: no "Typing…", no live bubble (lib/wakeQuiet.ts).
   if (answeringWake(items) && couldBeQuiet(text)) return null;
-  return { text };
+  // Each block is drawn (and revealed, and handed off to its transcript row) on its own.
+  return { text, blocks, ...(ev.done ? { done: true } : {}) };
 }
 
 export interface TranscriptStreamHandlers {

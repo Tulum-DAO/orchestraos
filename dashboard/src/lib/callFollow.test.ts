@@ -17,8 +17,10 @@ test('the reveal splits words with their trailing space, and releases them in qu
 
 test('a burst catches up within ~300 ms at a shorter stagger; the end drains fast; nothing shown ever changes', () => {
   assert.equal(staggerFor(1, false), STAGGER_MS);
-  assert.equal(staggerFor(100, false), MIN_STAGGER_MS);
+  assert.ok(staggerFor(29, false) >= MIN_STAGGER_MS, 'a burst of a line or two: about 9 ms apart or slower');
+  assert.ok(staggerFor(100, false) * 100 <= CATCH_UP_MS + 1, 'a bigger burst still catches up within ~300 ms');
   assert.ok(staggerFor(20, false) * 20 <= CATCH_UP_MS + 1);
+  assert.equal(staggerFor(5, true), MIN_STAGGER_MS, 'the end drains at the fast pace');
   const q = new RevealQueue();
   q.set(Array.from({ length: 30 }, (_, i) => `w${i}`).join(' '));
   let t = 0;

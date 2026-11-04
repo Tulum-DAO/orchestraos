@@ -30,14 +30,18 @@
  * live menu) and passes a handle; the view follows whenever what it draws changes, before the paint, so a new message
  * is never drawn once at the old position and then jumped.
  *
- * WORDS STILL BEING WRITTEN (lib/threadKit/paragraphs.ts): Modern and the pane show them word by word; Bubbles a
- * paragraph at a time, the paragraph still being written held back behind the working indicator. The same rule for a
- * reply still streaming in the thread and for the live overlay below.
+ * WORDS STILL BEING WRITTEN, in every skin: revealed word by word as they arrive, each fading in (components/kit/
+ * StreamMarkdown.tsx, lib/revealStore.ts; SMOOTH_STREAM_SPEC.md). In Bubbles the bubble grows with them
+ * (nothing is held back a paragraph at a time any more). The same for a reply still streaming in the
+ * thread (by its key, a text part by its key and index) and for the live overlay below.
  *
- * LIVE TEXT (the hook for a live-text stream): pass `liveText` = { key?, text, parts? } and the view draws it as a
- * streaming reply at the end of the thread, following the bottom, until a row with that key is in the thread (the
- * finished turn replaces it in place). Nothing else changes: the overlay is not part of the thread, so Copy, the
- * send states and the cards-on-screen context ignore it.
+ * LIVE TEXT (the hook for a live-text stream): pass `liveText` = { key?, text, parts?, blocks?, done? } and the view
+ * draws it as a streaming reply at the end of the thread, following the bottom, until a row with that key is in the
+ * thread (the finished turn replaces it in place). An agent's live text comes in blocks: each is drawn as its own
+ * reply, laid out exactly as its finished row will be (the time and Copy line under it held as blank space), and
+ * hands off on its own when its row lands: the row carries on the same reveal (found by the block's uuid), so nothing
+ * shown fades again or moves. Nothing else changes: the overlay is not part of the thread, so Copy, the send states
+ * and the cards-on-screen context ignore it.
  *
  * Every card it draws keeps reporting into the cards-on-screen context (lib/screenCards.ts) through its own renderer.
  */
@@ -46,7 +50,7 @@ import ToolCard from './ToolCard';
 import CallCard from './CallCard';
 import ResultCard from './ResultCard';
 import Markdown from './Markdown';
-import { MessageActions, MessageText, type Skin } from './Message';
+import { MessageActions, MessageText, type RevealAs, type Skin } from './Message';
 import { ReactionAnchor } from './ReactionBadges';
 import { ReactionRow } from './Reactions';
 import { useReactionsCtx } from './reactionsContext';
@@ -61,8 +65,10 @@ import type { GroupedNode } from '../../lib/toolGroups';
 import { sendStateLabel, type SendState } from '../../lib/arturo';
 import { hasVoiceCallMarker, isCallEndedLine, parseVoiceSegments } from '../../lib/threadKit/calls';
 import { rowReactions, showLive, type LiveText, type NodeRow, type ThreadRow } from '../../lib/threadKit/view';
-import { completeParts, completeText } from '../../lib/threadKit/paragraphs';
+import type { LiveBlock } from '../../lib/threadKit/liveBlocks';
 import type { MessagePart, ThreadMessage } from '../../lib/threadKit/thread';
+import { revealReady } from '../../lib/threadKit/streamMarkdown';
+import { aliasReveal, findReveal, revealEntry } from '../../lib/revealStore';
 
 export interface ThreadViewCall {
   /** When this page's live call started (ms), for the running clock. */
@@ -87,8 +93,8 @@ function NodeSlot({ children }: { children: ReactNode }) {
 }
 
 /** A reply's words when it has no ordered parts: an ended call's marker is its call card, never the raw marker. */
-function ReplyWords({ text, skin }: { text: string; skin: Skin }) {
-  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} />;
+function ReplyWords({ text, skin, reveal }: { text: string; skin: Skin; reveal?: RevealAs }) {
+  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} />;
   return (
     <div className={skin === 'modern' ? 'txt' : undefined}>
       {parseVoiceSegments(text).map((seg, i) => seg.kind === 'voicecall'
@@ -98,30 +104,51 @@ function ReplyWords({ text, skin }: { text: string; skin: Skin }) {
   );
 }
 
-/** Words still being written, in Bubbles (an agent's chat): the complete paragraphs only. While the next one is
- *  written nothing is drawn here: the agent's working row above the composer says "Typing…" (AgentWorkingRow). */
-function Unfinished({ text, parts, skin }: { text: string; parts?: MessagePart[]; skin: Skin }) {
-  const c = parts?.length ? completeParts(parts) : null;
-  const t = c ? null : completeText(text);
-  // Each bubble is sized by the whole live text it belongs to (a fence or table row still held back widens it now).
-  return <>{c ? (c.parts.length > 0 && <Parts parts={c.parts} skin={skin} widthFrom={parts} />) : t!.text && <MessageText text={t!.text} skin={skin} widthFrom={text} />}</>;
-}
-
-/** Whether Unfinished draws anything (a complete paragraph or part): if not, the live row is left out entirely, so
- *  nothing in the thread moves until there are words to show. */
-function hasFinished(text: string, parts?: MessagePart[]): boolean {
-  return parts?.length ? completeParts(parts).parts.length > 0 : !!completeText(text).text;
-}
-
-/** A reply's text and tool runs, in the order they happened. Indices are stable: parts only ever grow at the end. */
-function Parts({ parts, skin, widthFrom }: { parts: MessagePart[]; skin: Skin; widthFrom?: MessagePart[] }) {
+/** A reply's text and tool runs, in the order they happened. Indices are stable: parts only ever grow at the end.
+ *  `revealKey`: its text parts are revealed (by `<key>:p<index>`); `streaming`: still being written (a text part is
+ *  finished once a tool run follows it; one with no word to show yet is not drawn). Tool runs are drawn as ever. */
+function Parts({ parts, skin, revealKey, streaming = false }: { parts: MessagePart[]; skin: Skin; revealKey?: string; streaming?: boolean }) {
   return (
     <div className="turn-parts">
-      {parts.map((p, i) => p.kind === 'tools'
-        ? <ToolCard key={i} calls={p.calls} skin={skin} look={skin === 'bubbles' ? 'lines' : 'card'} />
-        : <MessageText key={i} text={p.text} skin={skin} widthFrom={widthFrom?.[i]?.kind === 'text' ? widthFrom[i].text : undefined} />)}
+      {parts.map((p, i) => {
+        if (p.kind === 'tools') return <ToolCard key={i} calls={p.calls} skin={skin} look={skin === 'bubbles' ? 'lines' : 'card'} />;
+        const done = !streaming || i < parts.length - 1;
+        if (streaming && !revealReady(p.text, done)) return null;
+        return <MessageText key={i} text={p.text} skin={skin} reveal={revealKey ? { key: `${revealKey}:p${i}`, done, live: streaming } : undefined} />;
+      })}
     </div>
   );
+}
+
+/** A finished reply's reveal: under its own key, or (Arturo's turns stream as parts) its one text part's. */
+function finishedReveal(m: ThreadMessage): RevealAs {
+  return { key: findReveal(m.key, m.text) || !findReveal(`${m.key}:p0`, m.text) ? m.key : `${m.key}:p0`, done: true };
+}
+
+/** Any time: the held line's words are never seen, only its height. */
+const HELD_TS = '2026-01-01T12:00:00Z';
+
+/** One block of the live overlay, laid out as its finished row will be: in Bubbles the chat's Message (the bubble,
+ *  then its time and Copy line), in Modern the reply and its actions line. The line under it is held as blank space
+ *  (it shows when the row lands), so a block below never moves at the hand-off. */
+function LiveBlockRow({ id, text, done, skin, times, anchored }: { id: string; text: string; done: boolean; skin: Skin; times?: boolean; anchored?: boolean }) {
+  const words = <MessageText text={text} skin={skin} reveal={{ key: id, done, live: true }} />;
+  if (skin === 'pane') return <div className="row arturo" data-live-text>{words}</div>;
+  const held = (
+    <div className="invisible" aria-hidden data-live-actions>
+      <MessageActions copyText={text} skin={skin} meta={skin === 'bubbles' || times ? <MessageTime ts={HELD_TS} /> : undefined} />
+    </div>
+  );
+  if (skin === 'bubbles') {
+    return (
+      <div className="flex justify-start group" data-live-text>
+        <div className="w-full min-w-0">{words}{held}</div>
+      </div>
+    );
+  }
+  // Modern: a row that can be reacted to holds its words in the reaction anchor (ReactionAnchor, a block the words are
+  // measured in): the live words sit in the same box, so they wrap where the finished row's will.
+  return <div className="turn-assistant" data-live-text>{anchored ? <div className="relative">{words}</div> : words}{held}</div>;
 }
 
 function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean }) {
@@ -129,8 +156,9 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
     return (
       <div className="row arturo group" data-thread-key={m.key}>
         {m.pending ? <div className="bubble thinking">Thinking…</div>
-          : m.parts ? <Parts parts={m.parts} skin={skin} />
-          : <ReplyWords text={m.text} skin={skin} />}
+          : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
+          : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
+          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} />}
         {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="meta">ran {m.toolNames.join(', ')}</div>}
         {!m.pending && !m.streaming && m.copyText && <MessageActions copyText={m.copyText} skin={skin} />}
         {extras?.(m)}
@@ -141,9 +169,9 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
   return (
     <div className={assistantTurnClass(skin)} data-thread-key={m.key}>
       {m.pending ? <span className="thinking" aria-label="thinking" />
-        : m.streaming && skin === 'bubbles' ? <Unfinished text={m.text} parts={m.parts} skin={skin} />
-        : m.parts ? <Parts parts={m.parts} skin={skin} />
-        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} /></ReactionAnchor>}
+        : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
+        : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
+        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} /></ReactionAnchor>}
       {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="tools">ran {m.toolNames.join(', ')}</div>}
       {!m.pending && !m.streaming && (m.copyText || times) && (
         <MessageActions copyText={m.copyText} skin={skin} meta={times ? <MessageTime ts={m.at} /> : undefined} />
@@ -250,6 +278,14 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
   noteText?: (message: ThreadMessage) => string;
 }) {
   const live = showLive(rows, liveText) ? liveText! : null;
+  // The overlay's blocks, each with its id (an agent's live text) and whether its words are all in; a block whose
+  // transcript uuid is known is findable by it, so its row carries on its reveal when it lands.
+  const blocks = !live || live.parts?.length ? [] : (live.blocks?.length ? live.blocks : [{ text: live.text } as LiveBlock])
+    .map((b, i, all) => ({ id: b.id ?? b.uuid ?? (live.key ? `${live.key}:${i}` : `live:${i}`), uuid: b.uuid ?? null, text: b.text,
+      // a block is finished when the turn is, when another follows it, or once it has its uuid (the server names a
+      // block only when it is closed)
+      done: !!live.done || i < all.length - 1 || !!b.uuid }));
+  for (const b of blocks) if (b.uuid) aliasReveal(b.uuid, revealEntry(b.id));
   // The chat's reactions (TranscriptChatView provides them; Arturo's page and pane do not): a message row that can be
   // reacted to is drawn inside its ReactionRow, which adds no element of its own.
   const rx = useReactionsCtx();
@@ -311,14 +347,13 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
         }
         return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} />;
       })}
-      {live && (skin !== 'bubbles' || hasFinished(live.text, live.parts)) && (
+      {live?.parts?.length ? (
         <div className={skin === 'bubbles' ? 'flex justify-start' : skin === 'pane' ? 'row arturo' : 'turn-assistant'} data-live-text>
           <div className={skin === 'bubbles' ? 'turn-assistant w-full min-w-0' : undefined}>
-            {skin === 'bubbles' ? <Unfinished text={live.text} parts={live.parts} skin={skin} />
-              : live.parts?.length ? <Parts parts={live.parts} skin={skin} /> : <MessageText text={live.text} skin={skin} />}
+            <Parts parts={live.parts} skin={skin} revealKey={live.key ?? 'live'} streaming={!live.done} />
           </div>
         </div>
-      )}
+      ) : blocks.map((b) => revealReady(b.text, b.done) && <LiveBlockRow key={b.id} id={b.id} text={b.text} done={b.done} skin={skin} times={times} anchored={!!rx} />)}
     </>
   );
 }

@@ -12,12 +12,14 @@ import { Fragment, useState, type ReactNode, type TouchEvent } from 'react';
 import Copy from './Copy';
 import { parseBlocks, parseInline, tableLayout, tableShares, type Block, type Inline } from '../../lib/threadKit/markdown';
 import { isCardId } from '../../lib/cardRefs';
+import { CODE_FOLD_LINES } from '../../lib/threadKit/streamMarkdown';
 import { withRefs } from './RefText';
+import { headingClass, inlineCodeClass, linkClass, revealAttrs } from './markdownLook';
 import './kit.css';
 
 export type Skin = 'bubbles' | 'modern' | 'pane';
 
-const CODE_COLLAPSE_LINES = 14;
+const CODE_COLLAPSE_LINES = CODE_FOLD_LINES;
 
 /** A touch that starts in a table or a code scroller stays there: it starts no swipe of the thread's or the page's. */
 const keepTouch = (e: TouchEvent) => e.stopPropagation();
@@ -27,11 +29,15 @@ const touchProps = { onTouchStart: keepTouch, onTouchMove: keepTouch, onTouchEnd
  *  ), or always dark (`dark`: Arturo's pane, which is dark in either theme): a title bar with its label, then (at the right) what the caller adds (a
  *  fold control) and a Copy button that is always shown and copies `copyText` whole, even while the code is folded.
  *  A fenced block uses it, and so does a tool call's code block in Bubbles' thin lines (kit/ToolCard.tsx). */
-export function CodeFrame({ label, copyText, copyLabel = 'Copy code', tools, dark = false, className = '', children }: {
-  label: string; copyText: string; copyLabel?: string; tools?: ReactNode; dark?: boolean; className?: string; children: ReactNode;
+export function CodeFrame({ label, copyText, copyLabel = 'Copy code', tools, dark = false, className = '', reveal, children }: {
+  label: string; copyText: string; copyLabel?: string; tools?: ReactNode; dark?: boolean; className?: string;
+  /** A streamed reply (StreamMarkdown): the reveal unit the frame fades in with (its first line). */
+  reveal?: number;
+  children: ReactNode;
 }) {
   return (
-    <div className={`${dark ? 'dark ' : ''}rounded-md border border-line-strong bg-inset text-ink overflow-hidden ${className}`} data-code-frame>
+    <div className={`${dark ? 'dark ' : ''}rounded-md border border-line-strong bg-inset text-ink overflow-hidden ${className}${reveal !== undefined ? ' rv' : ''}`} data-code-frame
+         {...revealAttrs(reveal, true)}>
       <div className="touch-compact flex items-center gap-2 px-2.5 py-1 bg-field border-b border-line-strong">
         <span className="text-[10px] font-mono text-ink-3">{label}</span>
         <span className="ml-auto" />
@@ -44,29 +50,37 @@ export function CodeFrame({ label, copyText, copyLabel = 'Copy code', tools, dar
   );
 }
 
-/** A fenced block: long ones fold, Copy takes the whole block. */
-function CodeBlock({ code, lang, dark = false }: { code: string; lang?: string; dark?: boolean }) {
+/** A fenced block: long ones fold, Copy takes the whole block. Streamed (`units`, StreamMarkdown): each line is a
+ *  reveal unit and the frame fades in with the first; a block that grows past the fold folds as it streams, as the
+ *  finished one is drawn, and its "more lines" row is a unit of its own. */
+export function CodeBlock({ code, lang, dark = false, units }: { code: string; lang?: string; dark?: boolean; units?: { lines: number[]; fold: number | null } }) {
   const lines = code.replace(/\n$/, '').split('\n');
   const long = lines.length > CODE_COLLAPSE_LINES;
-  const [open, setOpen] = useState(!long);
+  // Folded while long until the reader opens it (a block that grows long while it streams folds then).
+  const [opened, setOpen] = useState<boolean | null>(null);
+  const open = opened ?? !long;
   const shown = open ? lines : lines.slice(0, CODE_COLLAPSE_LINES);
+  const fold = units?.fold ?? undefined;
   return (
-    <CodeFrame className="my-1.5" label={lang || 'code'} copyText={lines.join('\n')} dark={dark}
+    <CodeFrame className="my-1.5" label={lang || 'code'} copyText={lines.join('\n')} dark={dark} reveal={units?.lines[0]}
       tools={long && (
         <button
-          onClick={() => setOpen((o) => !o)}
-          className="text-[10px] text-bui-accent-ink hover:opacity-80"
+          onClick={() => setOpen(!open)}
+          className={`text-[10px] text-bui-accent-ink hover:opacity-80${fold !== undefined ? ' rv' : ''}`} {...revealAttrs(fold, true)}
         >
           {open ? 'Collapse' : `Show ${lines.length} lines`}
         </button>
       )}>
       <pre className="kit-code-scroll px-3 py-2 overflow-x-auto text-[12px] leading-relaxed" {...touchProps}>
-        <code className="font-mono text-ink whitespace-pre">{shown.join('\n')}</code>
+        <code className="font-mono text-ink whitespace-pre">{units
+          ? shown.map((l, i) => <span key={i} className={units.lines[i] !== undefined ? 'rv' : undefined} {...revealAttrs(units.lines[i])}>{i < shown.length - 1 ? `${l}\n` : l}</span>)
+          : shown.join('\n')}</code>
       </pre>
       {long && !open && (
         <button
           onClick={() => setOpen(true)}
-          className="w-full text-center py-1 text-[10px] text-ink-3 hover:text-ink-2 bg-field border-t border-line-strong"
+          className={`w-full text-center py-1 text-[10px] text-ink-3 hover:text-ink-2 bg-field border-t border-line-strong${fold !== undefined ? ' rv' : ''}`}
+          {...revealAttrs(fold, true)}
         >
           … {lines.length - CODE_COLLAPSE_LINES} more lines
         </button>
@@ -82,18 +96,14 @@ function renderInline(text: string, keyBase: string, skin: Skin): ReactNode[] {
       case 'code':
         // A card id an agent quoted as code is still a reference to the card: its chip, never the id.
         if (isCardId(p.text)) return <Fragment key={key}>{withRefs(p.text.trim(), skin, key)}</Fragment>;
-        // Modern: the page's own `code` style (Arturo's .txt code), so his replies keep their look.
-        return skin === 'modern' ? <code key={key}>{p.text}</code>
-          : skin === 'pane' ? <code key={key} className="px-1 py-0.5 rounded bg-white/10 text-[0.92em] font-mono">{p.text}</code>
-            : <code key={key} className="px-1 py-0.5 rounded bg-tone-800 text-[0.92em] font-mono text-tone-amber-200">{p.text}</code>;
+        return <code key={key} className={inlineCodeClass(skin)}>{p.text}</code>;
       case 'bold':
         return <strong key={key} className="font-semibold">{withRefs(p.text, skin, key)}</strong>;
       case 'italic':
         return <em key={key}>{withRefs(p.text, skin, key)}</em>;
       case 'link':
         return (
-          <a key={key} href={p.href} target="_blank" rel="noopener noreferrer"
-             className={`underline underline-offset-2 decoration-1 hover:opacity-80 break-words ${skin === 'pane' ? 'text-blue-400' : 'text-blue-600 dark:text-blue-400'}`}>
+          <a key={key} href={p.href} target="_blank" rel="noopener noreferrer" className={linkClass(skin)}>
             {p.text}
           </a>
         );
@@ -108,7 +118,7 @@ type TableBlock = Extract<Block, { t: 'table' }>;
 
 /** A table by the iOS rules (kit.css): header bold with a rule under it, light row and column lines, a rounded
  *  border, alignment marks respected, every cell wrapping. */
-export function MarkdownTable({ block, keyBase, skin }: { block: TableBlock; keyBase: string; skin: Skin }) {
+export function MarkdownTable({ block, keyBase, skin, reveal }: { block: TableBlock; keyBase: string; skin: Skin; reveal?: number }) {
   const wide = tableLayout(block) === 'scroll';
   const n = block.head.length;
   // Up to four columns: each column's floor is its longest word (at most an equal share), the rest shared by its
@@ -118,7 +128,7 @@ export function MarkdownTable({ block, keyBase, skin }: { block: TableBlock; key
     ? fit.columns.map((c) => `minmax(min(calc(${(c.word * 1.15 + 0.5).toFixed(2)}ch + 20px), ${(100 / n).toFixed(3)}%), ${c.weight}fr)`).join(' ')
     : `repeat(${n}, max-content)`;
   return (
-    <div className="kit-table-box" data-md-table data-columns={n} data-wide={wide ? '' : undefined}
+    <div className={`kit-table-box${reveal !== undefined ? ' rv' : ''}`} {...revealAttrs(reveal, true)} data-md-table data-columns={n} data-wide={wide ? '' : undefined}
          style={fit ? { width: `min(100%, ${fit.ch}ch)` } : undefined} {...touchProps}>
       <table className="kit-table" role="table" style={{ gridTemplateColumns: columns }}>
         <thead role="rowgroup">
@@ -155,8 +165,7 @@ export default function Markdown({ text, skin = 'bubbles' }: { text: string; ski
       case 'code':
         return <CodeBlock key={key} code={b.code} lang={b.lang} dark={skin === 'pane'} />;
       case 'heading': {
-        const cls = b.level <= 1 ? 'text-[1.15em] font-semibold' : b.level === 2 ? 'text-[1.05em] font-semibold' : 'font-medium';
-        return <div key={key} className={`${cls} ${strong} mt-2 mb-1`}>{renderInline(b.text, key, skin)}</div>;
+        return <div key={key} className={`${headingClass(b.level)} ${strong} mt-2 mb-1`}>{renderInline(b.text, key, skin)}</div>;
       }
       case 'list': {
         const items = b.items.map((it, idx) => <li key={idx} className={body}>{renderInline(it, `${key}-${idx}`, skin)}</li>);

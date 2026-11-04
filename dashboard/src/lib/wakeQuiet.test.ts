@@ -43,11 +43,11 @@ test('answeringWake: the newest user TEXT is a reaction wake (tool results do no
 
 test('liveTextOf: answering a wake, quiet-so-far words are not live (no Typing, no live bubble); real words are', () => {
   for (const t of ['NO_R', 'NO_REPLY', '👍', '(no rep']) assert.equal(liveTextOf(ev(t), [msg, reply, wake] as never), null, t);
-  assert.deepEqual(liveTextOf(ev('Glad it works'), [msg, reply, wake] as never), { text: 'Glad it works' });
+  assert.deepEqual(liveTextOf(ev('Glad it works'), [msg, reply, wake] as never)?.text, 'Glad it works');
 });
 
 test('liveTextOf: answering a normal message, a reply starting "No" (or NO_REPLY) still shows', () => {
-  assert.deepEqual(liveTextOf(ev('No'), [reply, msg] as never), { text: 'No' });
-  assert.deepEqual(liveTextOf(ev('NO_REPLY'), [wake, msg] as never), { text: 'NO_REPLY' });
-  assert.deepEqual(liveTextOf(ev('👍'), [msg] as never), { text: '👍' });
+  assert.deepEqual(liveTextOf(ev('No'), [reply, msg] as never)?.text, 'No');
+  assert.deepEqual(liveTextOf(ev('NO_REPLY'), [wake, msg] as never)?.text, 'NO_REPLY');
+  assert.deepEqual(liveTextOf(ev('👍'), [msg] as never)?.text, '👍');
 });

@@ -1,9 +1,8 @@
 /**
- * paragraphs.ts — how a reply that is still being written is shown, by skin (one live source, two presentations):
- *
- *   Modern   word by word, as the words arrive.
- *   Bubbles  a paragraph at a time: only what is complete shows; the paragraph still being written is held back,
- *            with the working indicator in its place, until it is finished.
+ * paragraphs.ts — where the complete paragraphs of a reply still being written end. The streamed reply's reveal
+ * (lib/threadKit/streamMarkdown.ts) plans what is before that point once, as finished blocks, and reads only the
+ * rest again as words arrive. (Bubbles used to show only the complete paragraphs; since 2026-11-02 every skin shows
+ * the words as they arrive.)
  *
  * A paragraph is complete at a blank line; at the start of the next block (a heading, a list, a table or a code
  * fence ends the plain text before it); a list or a table when a line that is not part of it follows; a code fence

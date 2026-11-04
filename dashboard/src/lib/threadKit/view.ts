@@ -22,6 +22,7 @@ import { isInterrupted, type GroupedNode } from '../toolGroups';
 import type { Decision, FeedEntry } from '../decisions';
 import type { PendingKind } from '../pendingSends';
 import { resolveRef, type ReactionMap, type StoredReaction } from '../reactionState';
+import type { LiveBlock } from './liveBlocks';
 
 export interface CallRow {
   kind: 'call'; key: string; callId: string | null; turns: ArturoTurnLike[]; live: boolean; startTs?: number; endTs?: number;
@@ -50,8 +51,10 @@ export interface PendingRow { kind: 'pending'; key: string; text: string; pendin
 export type ThreadRow = ThreadItem | CallRow | NodeRow | DecisionRow | PendingRow;
 
 /** Words being written live, before the thread holds them. `key` is the message they will become, when known: once
- *  a row with that key is in the thread, the overlay is not drawn. */
-export interface LiveText { key?: string; text: string; parts?: MessagePart[] }
+ *  a row with that key is in the thread, the overlay is not drawn. `blocks`: the same words per block (an agent's
+ *  live text), each drawn as its own reply and handed off on its own when its transcript row (`uuid`) lands; `id` is
+ *  its stable id across frames (lib/threadKit/liveBlocks.ts). `done`: no more words are coming. */
+export interface LiveText { key?: string; text: string; parts?: MessagePart[]; blocks?: LiveBlock[]; done?: boolean }
 
 /** The key a turn's message gets (thread.ts threadFromArturo: `t<id>`, else its index). */
 export const turnKey = (t: ArturoTurnLike, index: number) => `t${t.id ?? index}`;

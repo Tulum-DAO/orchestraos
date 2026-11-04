@@ -109,7 +109,7 @@ test('live words, the live tail and older pages: each drawn once, the live words
   const finished = all[all.length - 1];
   const words: LiveTextEvent = { agent_id: 'pm-demo', message_id: 'msg_example', text: '', done: false,
     blocks: [{ uuid: finished.uuid, text: 'Already a line.' }, { uuid: null, text: 'Still writing' }] };
-  assert.deepEqual(liveTextOf(words, live as never), { text: 'Still writing' });
+  assert.deepEqual(liveTextOf(words, live as never), { text: 'Still writing', blocks: [{ uuid: null, text: 'Still writing' }] });
   assert.deepEqual(liveTextOf(words, list as never), liveTextOf(words, live as never), 'the pages change nothing about the live words');
 });
 
