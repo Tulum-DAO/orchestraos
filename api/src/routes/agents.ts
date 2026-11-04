@@ -31,6 +31,7 @@ import { getProjectsKnowledge } from '../services/state-reader.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
+import { MODEL_PUT_TIMEOUT_MS, parseModelPut } from '../lib/agentModelPut.js';
 import { headlessSeats } from '../services/status-stream.js';
 import { headlessInDev, paneHoldsSupervisor, PANE_IS_SUPERVISOR } from '../lib/paneGuard.js';
 import { agentCallGoesToSeat, agentCallSwitch, liveEngine, writeAgentCallSwitch } from '../lib/agentCallGate.js';
@@ -932,17 +933,17 @@ async function gatewayKey(session: string, key: string, confirm: boolean, expect
 // Helper: the gateway's /agent-model (scripts/agent_model.py has the rules). GET lists the models this
 // agent can switch to; PUT switches it: live where the CLI allows, else at its next rotation, and a busy
 // agent's switch waits for its turn to end. A person picked it, so the request says so (X-Actor).
-async function gatewayModel(session: string, model?: string): Promise<{ status: number; body: any }> {
+async function gatewayModel(session: string, model?: string, effort?: string): Promise<{ status: number; body: any }> {
   const token = readGatewayToken();
   if (!token) throw new Error('gateway token unavailable');
   const put = model !== undefined;
   const resp = await fetch(put ? `${GATEWAY_URL}/agent-model` : `${GATEWAY_URL}/agent-model?session=${encodeURIComponent(session)}`, {
     method: put ? 'PUT' : 'GET',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': 'operator:web' },
-    ...(put ? { body: JSON.stringify({ session, model }) } : {}),
-    // A live switch waits for the CLI to confirm it ("Set model to …"); under the dashboard proxy's 30 s, so the
-    // picker hears an answer rather than a dropped connection.
-    signal: AbortSignal.timeout(put ? 28000 : 10000),
+    ...(put ? { body: JSON.stringify({ session, model, ...(effort ? { effort } : {}) }) } : {}),
+    // A live switch waits for the CLI to confirm it ("Set model to …", then "Set effort level to …"); under the
+    // dashboard proxy's own wait for this route, so the picker hears an answer rather than a dropped connection.
+    signal: AbortSignal.timeout(put ? MODEL_PUT_TIMEOUT_MS : 10000),
   });
   const body: any = await resp.json().catch(() => ({}));
   return { status: resp.status, body };
@@ -1316,7 +1317,7 @@ router.post('/:id/dev', async (req: Request, res: Response) => {
 });
 
 // GET /api/agents/:id/model — the model this agent runs and the ones it can switch to (each with a reason when
-// it cannot). PUT {model} switches it. Both proxy the gateway's /agent-model and pass its status through, so the
+// it cannot). PUT {model, effort?} switches it. Both proxy the gateway's /agent-model and pass its status through, so the
 // picker can say what happened: switched (200), waiting for the turn to end (202), not offered (422), busy (503).
 function modelSession(req: Request, res: Response): string | null {
   const registry = getRegistry() as any;
@@ -1342,12 +1343,13 @@ router.get('/:id/model', async (req: Request, res: Response) => {
 });
 
 router.put('/:id/model', async (req: Request, res: Response) => {
-  const model = (req.body || {}).model;
-  if (typeof model !== 'string' || !model.trim()) { res.status(400).json({ ok: false, error: 'model required' }); return; }
+  // {model, effort?}: an effort level (lib/agentModelPut.ts) is applied too, Claude by /effort, Codex in its picker.
+  const put = parseModelPut(req.body);
+  if ('error' in put) { res.status(400).json({ ok: false, error: put.error }); return; }
   const session = modelSession(req, res);
   if (!session) return;
   try {
-    const r = await gatewayModel(session, model.trim());
+    const r = await gatewayModel(session, put.model, put.effort);
     res.status(r.status).json(r.body);
   } catch (err: any) {
     res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });

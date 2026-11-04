@@ -233,6 +233,14 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
         for path, obj in ((p, reg), (sp, meta)):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(obj, indent=2) + "\n"); os.replace(tmp, path)
+    # Its effort level goes too (scripts/agent_effort.py, kept by lineage name): a seat made later under
+    # the same name starts on the default, never on this one's level. A resume by hand starts on the
+    # CLI's own default. Never fails the retire.
+    try:
+        from scripts import agent_effort as AE
+        AE.put(AE.store_path(str(st.data_dir)), AE.root_of(seat, {"agents": {seat: row or {}}}), None)
+    except Exception:  # noqa: BLE001
+        pass
     # Stop the seat's OWN session only: its row's tmux_session (the seat name when there is no row),
     # and never one another registered seat says is its own.
     target = (row or {}).get("tmux_session") or (meta.get(seat) or {}).get("tmux_session") or seat

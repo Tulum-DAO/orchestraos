@@ -479,7 +479,9 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
     if not valid_model_id(model):
         return 400, {"ok": False, "error": "bad model id"}
     with host_model_lock(settings_path):
-        if not recover_pending(settings_path):
+        from scripts import agent_effort as AE     # here: agent_effort imports this module
+        # An effort switch that died mid-way is put back too, whichever switch runs next.
+        if not recover_pending(settings_path) or not AE.recover_pending(settings_path):
             return 500, {"ok": False, "error": "a previous switch left the host default model unrestored"}
         try:
             before = read_model_key(settings_path)

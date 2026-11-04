@@ -29,9 +29,11 @@ interface Props {
   taken?: Set<string>;
   /** Called after a seat is created, so the caller can refetch its agent list. */
   onCreated?: (id: string) => void;
+  /** Open on this runtime when it is signed in (the model picker's "Start a new agent with …"). */
+  initialRuntime?: string | null;
 }
 
-export default function NewAgentModal({ open, onClose, taken, onCreated }: Props) {
+export default function NewAgentModal({ open, onClose, taken, onCreated, initialRuntime }: Props) {
   const [phase, setPhase] = useState<Phase>('probing');
   const [rows, setRows] = useState<RuntimeRow[]>([]);
   const [runtime, setRuntime] = useState<string>('');
@@ -67,7 +69,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
     setRows(probed);
     const authed = authedRuntimes(probed);
     if (authed.length > 0) {
-      setRuntime(authed[0].id);
+      setRuntime((authed.find((r) => r.id === initialRuntime) ?? authed[0]).id);
       setPhase('name');
       return;
     }

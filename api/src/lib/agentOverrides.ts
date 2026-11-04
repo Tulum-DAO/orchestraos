@@ -23,6 +23,7 @@ export const OVERRIDE_FIELDS: Readonly<Record<string, SettingField>> = {
 
 export const NOT_COUNTED: Readonly<Record<string, string>> = {
   'agents.defaultModel': 'An agent keeps the model it was made with; none follows the default afterwards, so there is nothing to count.',
+  'agents.defaultEffort': 'An agent keeps the effort it was made with (or the one picked for it since); none follows the default afterwards, so there is nothing to count.',
 };
 
 export interface AgentOverride { id: string; value: boolean | number }

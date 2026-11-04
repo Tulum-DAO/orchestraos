@@ -10,7 +10,7 @@
  *   gateway /arturo/ptt/vendor, /voice   voice.provider, voice.defaultVoice (the Arturo service owns those files)
  *   state/agent-calls.json default.on    voice.newAgentsTakeCalls
  *   state/voice-limits.json              voice.dailyLimitMin
- *   state/agent-defaults.json            agents.defaultModel
+ *   state/agent-defaults.json            agents.defaultModel, agents.defaultEffort
  *   state/seat-settings-default.json     agents.autoCompact, agents.compactAt, agents.showCompaction
  *   built in + [rotation]                agents.safetyLimits (read-only)
  *   state/users/<you>/prefs.json         notifications.level, .agentOverrides, .quietHours (notify_level,
@@ -26,7 +26,7 @@ import { trustsIdentityHeaders } from './principal.js';
 import { readTomlString, setTomlStringChecked, isTimeZone, writeFileKeepingMode } from './tomlEdit.js';
 import { agentCallsDefault, writeAgentCallsDefault } from './agentCallGate.js';
 import { readVoiceLimit, writeVoiceLimit, validDailyLimit, DEFAULT_DAILY_LIMIT, DAILY_LIMIT_MAX } from './voiceLimits.js';
-import { BUILTIN_MODELS, MODEL_ID_RE, readDefaultModels, writeDefaultModel } from './agentDefaults.js';
+import { BUILTIN_MODELS, EFFORT_LEVELS, MODEL_ID_RE, readDefaultEfforts, readDefaultModels, writeDefaultEffort, writeDefaultModel } from './agentDefaults.js';
 import { DEFAULT_NOTIFY_LEVEL, NOTIFY_LEVELS, inQuietHours, isLevel, readOverrides, readQuietHours, validOverrides, validQuietHours } from './notifyPolicy.js';
 import { BUILTIN, COMPACT_MAX, COMPACT_MIN, GUARD_PCT, readInstallDefault, validSetting, writeInstallDefault, type SettingField } from './seatSettings.js';
 
@@ -240,6 +240,22 @@ export const SETTINGS: readonly SettingEntry[] = [
       return { value: { ...BUILTIN_MODELS, ...stored }, source: Object.keys(stored).length ? 'store' : 'builtin' };
     },
     write: async (c, v) => { const o = v as { runtime: string; model: string }; writeDefaultModel(c.dataDir, o.runtime, o.model); },
+  },
+  {
+    // The effort a new agent starts on, per runtime that has levels (Claude, Codex). None: the CLI's own default.
+    key: 'agents.defaultEffort', section: 'agents', scope: 'everyone', admin: true,
+    store: 'state/agent-defaults.json efforts',
+    note: 'Applies to agents made from now on',
+    validate: (v) => {
+      const o = v as { runtime?: unknown; effort?: unknown } | null;
+      if (!o || typeof o !== 'object' || typeof o.runtime !== 'string' || !EFFORT_LEVELS[o.runtime]) return 'Pick a runtime that has effort levels';
+      return o.effort === null || (typeof o.effort === 'string' && EFFORT_LEVELS[o.runtime].includes(o.effort)) ? null : 'Pick a level from the list';
+    },
+    read: async (c) => {
+      const stored = readDefaultEfforts(c.dataDir);
+      return { value: stored, source: Object.keys(stored).length ? 'store' : 'builtin' };
+    },
+    write: async (c, v) => { const o = v as { runtime: string; effort: string | null }; writeDefaultEffort(c.dataDir, o.runtime, o.effort); },
   },
   install('agents.autoCompact', 'auto_compact', 'Auto-compact'),
   install('agents.compactAt', 'compact_at', 'Compact at'),

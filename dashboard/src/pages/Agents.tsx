@@ -23,7 +23,8 @@ import { isFleetMember } from '../lib/topologyLines';
 import { getRecentAgents, loadAndMergeRecentAgents, type RecentAgent } from '../lib/user-actions';
 import { GenChip } from '../components/GenChip';
 import NewAgentModal from '../components/NewAgentModal';
-import { NEW_AGENT_EVENT } from '../lib/newAgent';
+import { NEW_AGENT_EVENT, newAgentRuntimeParam } from '../lib/newAgent';
+import { useSearchParams } from 'react-router-dom';
 import { showNewAgent } from '../lib/features';
 
 const TIERS = ['For You', 'Recent', 'All', 'T0', 'T1', 'T2', 'T3'] as const;
@@ -46,6 +47,14 @@ export default function Agents() {
     window.addEventListener(NEW_AGENT_EVENT, open);
     return () => window.removeEventListener(NEW_AGENT_EVENT, open);
   }, []);
+  // `?new=<runtime>` (the model picker's "Start a new agent with …") opens the form on that runtime, for as long as the
+  // link says so: closing the form drops the parameter.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const newAgentRuntime = showNewAgent() ? newAgentRuntimeParam(`?${searchParams.toString()}`) : null;
+  const closeNewAgent = () => {
+    setShowNewAgentModal(false);
+    if (searchParams.has('new')) { const next = new URLSearchParams(searchParams); next.delete('new'); setSearchParams(next, { replace: true }); }
+  };
   const [tierFilter, setTierFilter] = useState<string>('For You');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
@@ -407,8 +416,9 @@ export default function Agents() {
           </div>
         </div>
         {showNewAgent() && <NewAgentModal
-          open={showNewAgentModal}
-          onClose={() => setShowNewAgentModal(false)}
+          open={showNewAgentModal || !!newAgentRuntime}
+          initialRuntime={newAgentRuntime}
+          onClose={closeNewAgent}
           // allAgents, not `agents`: a retired id (gm-g2, build-g2) must still read as TAKEN,
           // or a new agent could be spawned onto a decommissioned row's id.
           taken={new Set(allAgents.map((a: { id: string }) => String(a.id)))}

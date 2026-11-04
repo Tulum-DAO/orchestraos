@@ -24,7 +24,8 @@ import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { principal } from '../lib/principal.js';
 import { dataDir } from '../lib/config.js';
-import { BUILTIN_MODELS, readDefaultModels } from '../lib/agentDefaults.js';
+import { BUILTIN_MODELS, readDefaultEfforts, readDefaultModels } from '../lib/agentDefaults.js';
+import { forgetAgentEffort } from '../lib/agentModelPut.js';
 import { recordLoginShell, sweepLoginShells } from '../lib/loginShells.js';
 
 /** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
@@ -64,6 +65,9 @@ export interface NewAgentDeps {
   /** Bring a new Claude seat over to headless once its TUI is idle, with its own calls on (scripts/headless_adopt.py,
    *  detached). Optional so a deps object without it adopts nothing. */
   adoptHeadless?: (name: string) => void;
+  /** Forget any effort kept under the new name (lib/agentModelPut.ts forgetAgentEffort) before the spawn. Optional so
+   *  a deps object without it forgets nothing. */
+  forgetEffort?: (name: string) => void;
 }
 
 export function normalizeAgentName(raw: unknown): { name: string; error?: string } {
@@ -188,6 +192,8 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
         return res.status(400).json({ ok: false, reason: 'unknown_parent', parent });
       }
     }
+    // A reused name never inherits an old agent's effort: the default (AGENT_EFFORT), or none, from here.
+    try { deps.forgetEffort?.(name); } catch { /* a stale level is the worst case: the spawn goes on */ }
     const result = await deps.spawn({ name, task, runtime: runtime.id, gm, parent });
     if (!result.ok) {
       return res.status(502).json({ ok: false, reason: 'spawn_failed', detail: result.output.slice(-600) });
@@ -312,17 +318,23 @@ export function spawnArgv({ name, task, runtime, gm }: { name: string; task: str
   return args;
 }
 
-/** The environment a New Agent spawn runs with: the API's own, plus the runtime and its default
- *  model (what spawn-agent.sh hands the CLI as --model), with the parent set only when given. */
+/** The environment a New Agent spawn runs with: the API's own, plus the runtime, its default model (what
+ *  spawn-agent.sh hands the CLI as --model) and its default effort when one is set (AGENT_EFFORT: Claude --effort,
+ *  Codex model_reasoning_effort, kept for the agent by scripts/agent_effort.py), with the parent set only when given. */
 const installModels = (): Record<string, string> => { try { return readDefaultModels(dataDir()); } catch { return {}; } };
+const installEfforts = (): Record<string, string> => { try { return readDefaultEfforts(dataDir()); } catch { return {}; } };
 
 export function spawnEnv(base: NodeJS.ProcessEnv, runtime: string, parent: string | null,
-                         models: Record<string, string> = installModels()): NodeJS.ProcessEnv {
+                         models: Record<string, string> = installModels(),
+                         efforts: Record<string, string> = installEfforts()): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...base,
     AGENT_RUNTIME: runtime,
     AGENT_MODEL: models[runtime] || DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
   };
+  // Never inherited from the API's own env: only the default chosen for this runtime.
+  delete env.AGENT_EFFORT;
+  if (efforts[runtime]) env.AGENT_EFFORT = efforts[runtime];
   // Unset, not inherited, when there is no parent: the API's own env must never pick one.
   delete env.PARENT_AGENT_ID;
   if (parent) env.PARENT_AGENT_ID = parent;
@@ -380,6 +392,7 @@ export const productionDeps: NewAgentDeps = {
   startLoginShell: realStartLoginShell,
   listLoginShell: realListLoginShell,
   adoptHeadless: realAdoptHeadless,
+  forgetEffort: (name: string) => forgetAgentEffort(dataDir(), name),
 };
 
 /** The login-shell list's sweep at API start and every 30 s after (lib/loginShells.ts). */

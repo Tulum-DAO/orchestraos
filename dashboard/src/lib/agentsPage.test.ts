@@ -42,7 +42,7 @@ test('each default says its scope in words; the three compaction rows carry the 
     assert.match(p, new RegExp(`k="${k.replace('.', '\\.')}"[\\s\\S]*?description=\\{\`[^\`]+\\$\\{INSTALL_WIDE\\}\`\\} below=\\{count\\('${k.replace('.', '\\.')}'\\)\\}`));
   }
   const model = p.slice(p.indexOf('function DefaultModelRow'), p.indexOf('function SafetyLimitsRow'));
-  assert.match(model, /An agent keeps the model it was made with\. \$\{INSTALL_WIDE\}/);
+  assert.match(model, /An agent keeps the model and effort it was made with\. \$\{INSTALL_WIDE\}/);
   assert.doesNotMatch(model, /OverrideCount|below=/);
   // ServerRows passes `below` through to the row
   const rows = read('components/settings/ServerRows.tsx');

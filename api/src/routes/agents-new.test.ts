@@ -529,3 +529,21 @@ test('spawnEnv uses the install default model for the runtime when one is set', 
   assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'claude', null, { claude: 'claude-sonnet-5' }).AGENT_MODEL, 'claude-sonnet-5');
   assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'codex', null, { claude: 'claude-sonnet-5' }).AGENT_MODEL, 'gpt-5.6-terra');
 });
+
+test('spawnEnv hands spawn-agent.sh the default effort for the runtime, and never an inherited one', async () => {
+  const { spawnEnv } = await import('./agents-new.js');
+  const env = spawnEnv({ AGENT_EFFORT: 'leak' } as NodeJS.ProcessEnv, 'codex', null, {}, { codex: 'xhigh' });
+  assert.equal(env.AGENT_EFFORT, 'xhigh');
+  assert.equal(spawnEnv({ AGENT_EFFORT: 'leak' } as NodeJS.ProcessEnv, 'claude', null, {}, { codex: 'xhigh' }).AGENT_EFFORT, undefined);
+});
+
+test('POST /new forgets any effort kept under the name before the spawn, so a reused name starts on the default', async () => {
+  const order: string[] = [];
+  const w = makeDeps({
+    forgetEffort: (n: string) => { order.push(`forget:${n}`); },
+    spawn: async (args: any) => { order.push(`spawn:${args.name}`); return { ok: true, output: 'spawned' }; },
+  });
+  const r = await post(w, '/api/agents/new', { name: 'caller' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(order, ['forget:caller', 'spawn:caller']);
+});

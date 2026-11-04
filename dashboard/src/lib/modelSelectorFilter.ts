@@ -35,6 +35,10 @@ export interface ProviderAvailability {
   authed: boolean | 'unverified';
   auth_reason?: string;
   models: ProviderModel[];
+  /** The model an empty model runs for this login, when the CLI says ("claude-opus-5-5"): the picker's "default". */
+  model_catalog_default?: string;
+  /** The installed CLI's version ("2.1.295"), when it could be read. */
+  version?: string;
 }
 
 export interface ProviderRow {

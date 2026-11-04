@@ -4,7 +4,8 @@ import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
 import { useAssistantName } from '../../lib/assistantName';
 import {
-  fetchAgentModel, switchAgentModel, modelLabel as labelFor, pickRefusal, switchNotice, switchableModels,
+  agentEffortLevels, applyNote, effortNotice, fetchAgentModel, switchAgentModel, modelLabel as labelFor, pickRefusal,
+  switchNotice, switchableModels,
   type AgentModelInfo, type SwitchNotice,
 } from '../../lib/agentModel';
 import ModelPicker from '../kit/ModelPicker';
@@ -38,6 +39,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   const aname = useAssistantName();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLElement | null>(null);
   // The agent's draft (stores/composerDrafts.ts): kept when the page switches to Dev or to another agent.
   const { draft: { text: draft }, setText: setDraft } = useComposerDraft(agentId);
   // The model this agent runs, from the gateway; picking another switches it (lib/agentModel.ts).
@@ -74,6 +76,19 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
       } else {
         refreshModel();
       }
+    });
+  };
+  // Effort: only where the gateway says a picked level reaches this agent (lib/agentModel.ts agentEffortLevels).
+  const effortOn = agentEffortLevels(agentModel) !== null;
+  const onEffort = (level: string | null) => {
+    if (!agentModel?.model || !level) return;
+    const label = agentEffortLevels(agentModel)?.find((l) => l.id === level)?.label ?? level;
+    setNotice({ tone: 'wait', text: `Setting ${label} effort…` });
+    // The model still waiting to be switched to, if any: an effort pick never cancels that switch.
+    void switchAgentModel(agentId, agentModel.pending?.model ?? agentModel.model, level).then(({ status, body }) => {
+      setNotice(effortNotice(status, body, label));
+      if (status === 200 && body.ok) setModelOf({ id: agentId, info: { ...agentModel, effort: level } });
+      else refreshModel();
     });
   };
   const voiceRef = useRef<VoiceControlsHandle>(null);
@@ -155,7 +170,11 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             <>
               <button type="button" role="menuitem"
                 className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
-                onClick={() => { close(); setSheetOpen(true); }}>
+                onClick={(e) => {
+                  // The overflow menu's button, where focus returns when the picker closes (the pill is hidden here).
+                  menuButtonRef.current = e.currentTarget.closest('[role="menu"]')?.parentElement?.querySelector<HTMLElement>('button[aria-haspopup="menu"]') ?? null;
+                  close(); setSheetOpen(true);
+                }}>
                 <Cpu size={15} className="shrink-0 text-muted-foreground" />
                 <span className="truncate">Model <span className="text-muted-foreground">· {modelTitle ?? 'choose'}</span></span>
               </button>
@@ -167,7 +186,8 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             <ModelPicker open={sheetOpen} onOpenChange={setSheetOpen} triggerClassName="mb-0.5 max-[480px]:hidden"
               label={modelTitle ?? modelLabel ?? undefined}
               value={agentModel?.runtime && agentModel.model ? { providerId: agentModel.runtime, modelId: agentModel.model } : null}
-              onValueChange={onPick}
+              onValueChange={onPick} note={applyNote(agentModel)} returnFocus={() => menuButtonRef.current}
+              effort={effortOn ? agentModel?.effort ?? null : null} onEffortChange={effortOn ? onEffort : undefined}
               agentModels={agentModel?.runtime ? { providerId: agentModel.runtime, models: switchableModels(agentModel) } : null} />
           }
           trailing={

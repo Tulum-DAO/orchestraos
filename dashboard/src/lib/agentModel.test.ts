@@ -60,3 +60,35 @@ test('the picker lists only the models this agent can switch to, by their titles
   assert.deepEqual(switchableModels(info).map((m) => [m.id, m.label]), [['sample-a', 'Sample A'], ['sample-a[1m]', 'Sample A (1M)']]);
   assert.deepEqual(switchableModels(null), []);
 });
+
+test('effort: offered for an agent only where the gateway says a level reaches it, with the runtime\'s own levels', async () => {
+  const { agentEffortLevels, effortNotice } = await import('./agentModel.ts');
+  const claude: AgentModelInfo = { ...live, effort: 'high', effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'], effort_how: 'live' };
+  assert.deepEqual(agentEffortLevels(claude)?.map((l) => l.id), ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(agentEffortLevels({ ...claude, effort_how: null }), null, 'no way to apply it (e.g. a headless seat whose supervisor predates effort)');
+  assert.equal(agentEffortLevels(live), null, 'an older gateway that does not answer effort');
+  assert.equal(agentEffortLevels(cannot), null);
+  assert.equal(agentEffortLevels(null), null);
+  const codex: AgentModelInfo = { ...live, runtime: 'codex', effort: null, effort_levels: ['low', 'medium', 'high', 'xhigh'], effort_how: 'live' };
+  assert.deepEqual(agentEffortLevels(codex)?.map((l) => l.label), ['Low', 'Medium', 'High', 'Extra high']);
+
+  assert.deepEqual(effortNotice(200, { ok: true, effort: 'high', effort_switching: 'switched' }, 'High'), { tone: 'ok', text: 'Effort set to High.' });
+  assert.deepEqual(effortNotice(200, { ok: true, changed: false }, 'High'), { tone: 'ok', text: 'Already on High effort.' });
+  assert.deepEqual(effortNotice(200, { ok: true, effort: 'high', effort_switching: 'next_start' }, 'High'),
+    { tone: 'ok', text: 'High effort applies when the agent next restarts.' }, 'kept for the next start, not set now');
+  assert.deepEqual(effortNotice(202, { ok: true, status: 'pending' }, 'High'),
+    { tone: 'wait', text: 'High effort will apply when the agent finishes its current turn.' });
+  assert.deepEqual(effortNotice(502, { ok: false, error: 'unconfirmed' }, 'High'), { tone: 'error', text: "Couldn't set High effort: unconfirmed." });
+  assert.equal(effortNotice(0, {}, 'High').tone, 'error');
+});
+
+test('an effort pick sends the model still waiting to be switched to, so it never cancels that switch', async () => {
+  const { readFileSync } = await import('node:fs');
+  const c = readFileSync(new URL('../components/agent/Composer.tsx', import.meta.url), 'utf8');
+  assert.match(c, /switchAgentModel\(agentId, agentModel\.pending\?\.model \?\? agentModel\.model, level\)/);
+});
+
+test('a model switch whose kept effort could not be set again says so', () => {
+  assert.deepEqual(switchNotice(200, { ok: true, switching: 'switched', effort_warning: 'x', effort_not_set: 'xhigh' }, 'Sonnet 5.5'),
+    { tone: 'wait', text: 'Switched to Sonnet 5.5, but its Extra high effort could not be set again.' });
+});
