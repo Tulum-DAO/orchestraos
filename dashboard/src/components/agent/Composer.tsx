@@ -164,7 +164,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           leading={
             // The kit's model picker: its chip here; below 480px the chip folds into the pill's overflow menu (menuItems
             // above), whose item opens the same picker. A pick switches this agent (onPick): live on a headless seat.
-            <ModelPicker open={sheetOpen} onOpenChange={setSheetOpen} triggerClassName="max-[480px]:hidden"
+            <ModelPicker open={sheetOpen} onOpenChange={setSheetOpen} triggerClassName="mb-0.5 max-[480px]:hidden"
               label={modelTitle ?? modelLabel ?? undefined}
               value={agentModel?.runtime && agentModel.model ? { providerId: agentModel.runtime, modelId: agentModel.model } : null}
               onValueChange={onPick}
