@@ -142,3 +142,9 @@
 @media (max-width: 640px) {
   .kit-card-pop { left: 16px !important; right: 16px; top: auto !important; bottom: 16px !important; width: auto; max-height: 80dvh !important; }
 }
+
+/* Bubbles: a reply's prose keeps the bubble's usual measure (BUBBLES_WIDTH's 560px less the bubble's padding and
+   border) even in a bubble widened for fenced code or a table (chatSkin BUBBLES_WIDE), so a reply still streaming
+   never re-wraps the words already shown when its first fence or table row arrives and the bubble widens. Code and
+   tables take the wider room. On a phone 85% is narrower anyway: nothing changes there. */
+[data-agent-bubble] > .kit-md > :not(.kit-table-box):not([data-code-frame]) { max-width: 530px; }

@@ -50,6 +50,8 @@ import { LiveJobsContext } from '../kit/liveJobsContext';
 import { useAgentJobs } from '../../stores/agentJobs';
 import { jobsByToolUse } from '../../lib/agentJobs';
 import { agentRows, type LiveText } from '../../lib/threadKit/view';
+import { stableLiveBlocks } from '../../lib/threadKit/liveBlocks';
+import { findReveal } from '../../lib/revealStore';
 import { useChatStyle } from '../../lib/agentPrefs';
 
 const NO_PENDING: PendingSend[] = [];
@@ -97,7 +99,10 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
 }
 
 export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar, liveText: liveTextProp }: Props) {
-  const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
+  // Fixture mode (the QA harness) draws its items as given, in the same render as its live words, as the stream's
+  // items and live words are read together (liveTextOf below).
+  const [streamItems, setItems] = useState<ChatItem[]>([]);
+  const items = fixtureItems ?? streamItems;
   // A headless seat's reply still being written, from this view's own stream (a caller's liveText wins).
   // Kept with the agent it came from, so a page that switches agents never draws the last one's words.
   const [liveEv, setLiveEv] = useState<{ agentId: string; ev: LiveTextEvent } | null>(null);
@@ -115,11 +120,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // while the thread changes (lib/useStickToBottom.ts; the rows are the column's children).
   const stick = useStickToBottom(scrollRef, { rows: columnRef });
 
-  // fixture mode: render given items, no polling
-  useEffect(() => {
-    if (fixtureItems) { setItems(fixtureItems); setLoading(false); }
-  }, [fixtureItems]);
-
+  // fixture mode: render given items (above), no polling
   // A hand-off moved a call's card (lib/agentCalls refreshTranscript): read the thread again (a fresh snapshot).
   const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
@@ -216,7 +217,12 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const streamedLive = useMemo(
     // The live words belong after the newest line, so the live window is all they are checked against (older pages
     // hold nothing still being written).
-    () => (fixtureItems || liveEv?.agentId !== agentId ? null : liveTextOf(liveEv.ev, items)),
+    // Each block keeps its id across frames (lib/threadKit/liveBlocks.ts), so its word-by-word reveal follows it.
+    () => {
+      const lt = fixtureItems || liveEv?.agentId !== agentId ? null : liveTextOf(liveEv.ev, items);
+      const blocks = stableLiveBlocks(agentId, lt?.blocks ?? []);
+      return lt ? { ...lt, blocks } : null;
+    },
     [liveEv, items, fixtureItems, agentId]);
   const liveText = liveTextProp !== undefined ? liveTextProp : streamedLive;
   // The agent is writing its reply: its working row says "Typing…" and its face melts into the dots.
@@ -318,6 +324,8 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     const before = prevLast.current;
     prevLast.current = lastKey;
     if (!lastKey || lastKey === before || Date.now() - typedAt.current > 2000) return;
+    // A reply that streamed in here is already in place, word by word: it carries on as it was, it does not enter.
+    if (findReveal(lastKey)) return;
     const mark = columnRef.current?.querySelector(`[data-row-key="${CSS.escape(lastKey)}"]`);
     const el = mark?.nextElementSibling as HTMLElement | null;
     if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;

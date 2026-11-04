@@ -59,7 +59,8 @@ export function cells(line: string): string[] {
   return out;
 }
 
-function isTableStart(lines: string[], i: number): boolean {
+/** Whether a table starts at line i (its head, then its separator line). */
+export function isTableStart(lines: string[], i: number): boolean {
   return i + 1 < lines.length && lines[i].includes('|') && TABLE_SEP_RE.test(lines[i + 1])
     && cells(lines[i]).length === cells(lines[i + 1]).length;
 }
@@ -157,6 +158,29 @@ export function tableShares(t: { head: string[]; rows: string[][] }): { columns:
 
 // One pass over the text for everything inline; the earliest match wins.
 const INLINE_RE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]\n]+\]\([^)\s]+\))|(\bhttps?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])|(\*[^*\s][^*]*\*)/g;
+
+/** Text still being written (components/kit/StreamMarkdown.tsx): where the first inline mark that could still be
+ *  closed starts (a backtick, `**`, a `*` before a word, or a `[` on the last line that could still become a link),
+ *  outside every piece parseInline already reads; -1 when there is none. Words from there on would be drawn as one
+ *  thing now and another once the mark closes, so they wait. */
+export function unclosedInline(text: string): number {
+  const s = String(text ?? '');
+  const covered: [number, number][] = [];
+  let m: RegExpExecArray | null;
+  INLINE_RE.lastIndex = 0;
+  while ((m = INLINE_RE.exec(s)) !== null) covered.push([m.index, m.index + m[0].length]);
+  const inside = (i: number) => covered.some(([a, b]) => i >= a && i < b);
+  const lastLine = s.lastIndexOf('\n') + 1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch !== '`' && ch !== '*' && ch !== '[') continue;
+    if (inside(i)) continue;
+    if (ch === '`') return i;
+    if (ch === '*' && (s[i + 1] === '*' || (s[i + 1] !== undefined && !/\s/.test(s[i + 1])) || s[i + 1] === undefined)) return i;
+    if (ch === '[' && i >= lastLine && /^\[[^\]\n]*(\](\([^)\s]*)?)?$/.test(s.slice(i))) return i;
+  }
+  return -1;
+}
 
 export function parseInline(text: string): Inline[] {
   const out: Inline[] = [];

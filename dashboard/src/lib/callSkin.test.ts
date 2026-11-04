@@ -48,9 +48,9 @@ test('an agent reply is a bubble again (Bubbles): bordered card on the left, its
   }
   // the bubble lives INSIDE MessageText, so the streaming overlay and the finished reply share it
   const msg = src('components/kit/Message.tsx');
-  assert.match(msg, /if \(skin === 'pane'\) return <div className="bubble">/);
+  assert.match(msg, /if \(skin === 'pane'\) return <div className=\{`bubble\$\{entry \? ' rv' : ''\}`\}/);
   assert.match(msg, /if \(skin === 'modern'\) return <div className="txt">/);
-  assert.match(msg, /className=\{`\$\{BUBBLES_AGENT\} \$\{bubbleWidthOf\(widthFrom \?\? text\)\}`\}/);
+  assert.match(msg, /className=\{`\$\{BUBBLES_AGENT\} \$\{bubbleWidthOf\(widthFrom \?\? text\)\}\$\{entry \? ' rv' : ''\}`\}/);
   assert.match(msg, /data-agent-bubble/);
 });
 
@@ -71,9 +71,8 @@ test("a live reply's bubble is as wide as its finished one: a fence or a table r
   assert.equal(bubbleWidthOf('Here:\n\n```sh\nls -la'), BUBBLES_WIDE);
   assert.equal(bubbleWidthOf('The summary:\n\n| check | state |'), BUBBLES_WIDE);
   assert.equal(bubbleWidthOf('A pipe | in a sentence is not a table.'), BUBBLES_WIDTH);
-  // the live overlay draws only finished paragraphs, so it measures the whole live text, not what it draws
-  const tv = src('components/kit/ThreadView.tsx');
-  assert.match(tv, /<MessageText text=\{t!\.text\} skin=\{skin\} widthFrom=\{text\} \/>/);
-  assert.match(tv, /<Parts parts=\{c\.parts\} skin=\{skin\} widthFrom=\{parts\} \/>/);
+  // the live bubble is measured on the whole live text (its words not drawn yet included), so it widens the moment a
+  // fence or table row arrives; the prose already shown keeps the narrow bubble's measure, so it never re-wraps
   assert.match(src('components/kit/Message.tsx'), /bubbleWidthOf\(widthFrom \?\? text\)/);
+  assert.match(src('components/kit/kit.css'), /\[data-agent-bubble\] > \.kit-md > :not\(\.kit-table-box\):not\(\[data-code-frame\]\) \{ max-width: 530px; \}/);
 });

@@ -437,7 +437,8 @@ export function RenderNodeView({ node, density = 'normal', look = 'card' }: { no
       return hasPasteMarkers(node.text)
         ? <MessageGroup text={node.text} sender="assistant" />
         // The kit's reply: the time, and a copy button (the words, as written) that shows on hover, or always on touch.
-        : <Message text={node.text} skin="bubbles" meta={<MessageTime ts={node.ts} />} />;
+        // A reply streamed here a moment ago carries on its reveal (found by its key; an old one never animates).
+        : <Message text={node.text} skin="bubbles" meta={<MessageTime ts={node.ts} />} revealKey={node.key} />;
     case 'thinking':
       return <ThinkingCard text={node.text} />;
     case 'tool':

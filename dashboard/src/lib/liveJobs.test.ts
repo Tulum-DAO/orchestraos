@@ -70,7 +70,8 @@ test('the row floats on top of the dock (the dock never resizes for it); no "wri
   assert.match(page, /ro\.observe\(rowSlotRef\.current\)/);
   const thread = src('components/kit/ThreadView.tsx');
   assert.doesNotMatch(thread, /writing…|data-paragraph-pending/);
-  assert.match(thread, /\{live && \(skin !== 'bubbles' \|\| hasFinished\(live\.text, live\.parts\)\) && \(/);
+  // every skin draws the live words as they arrive (revealed word by word), from the first word that can be drawn
+  assert.match(thread, /blocks\.map\(\(b\) => revealReady\(b\.text, b\.done\) && <LiveBlockRow /);
   assert.match(src('components/agent/Composer.tsx'), /gate\.queued && draft\.trim\(\) !== '' && \(/);
 });
 
