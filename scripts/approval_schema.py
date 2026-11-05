@@ -208,6 +208,37 @@ def armed(migration_id):
     except Exception:
         return False
 
+GATE_BRIDGE_KINDS = ("gate", "gate_grant")
+
+
+def is_gate_row(row) -> bool:
+    """A safety-gate card: origin 'gate', or a menu whose bridge kind is 'gate' / 'gate_grant' (either is enough,
+    so a card that only looks like one is treated as one: the safe side)."""
+    if not isinstance(row, dict):
+        return False
+    if row.get("origin") == "gate":
+        return True
+    m = row.get("menu")
+    if isinstance(m, str):
+        try:
+            m = json.loads(m)
+        except ValueError:
+            return False
+    b = m.get("bridge") if isinstance(m, dict) else None
+    return isinstance(b, dict) and b.get("kind") in GATE_BRIDGE_KINDS
+
+
+def _gate_row_locked(c, rid, cols) -> bool:
+    """True when `rid` is a safety-gate card (read inside the writer's own connection)."""
+    want = [x for x in ("origin", "menu") if x in cols]
+    if not want:
+        return False
+    r = c.execute(f"SELECT {', '.join(want)} FROM approval_requests WHERE id=?", [rid]).fetchone()
+    if r is None:
+        return False
+    return is_gate_row(dict(zip(want, tuple(r))))
+
+
 class ApprovalStore:
     def __init__(self, db_path=None):
         # Resolved per construction, so a monkeypatched ORCHESTRA_DIR actually isolates.
@@ -531,7 +562,7 @@ class ApprovalStore:
         finally:
             c.close()
     def record_answer(self, rid, answer, answer_text, option_n=None,
-                      surface=None, answered_by=None, device=None):
+                      surface=None, answered_by=None, device=None, gate_checked=False):
         """Id-bound + answer-once: only a still-'pending' row accepts an answer.
         option_n (menu rows, answer=='option'): the captured option index the
         resume path will inject as a keypress.
@@ -542,11 +573,18 @@ class ApprovalStore:
         defaults to 'unknown' (an edge that passes no tag), `answered_by` stays
         NULL. The two columns ride the arming gate (delta 1), so they may not
         exist yet: when unarmed we fall back to the legacy UPDATE and the answer
-        still lands (fail-open — a missing tag never blocks an answer)."""
+        still lands (fail-open — a missing tag never blocks an answer).
+
+        A safety-gate card (a permission card or a grant proposal) is refused here unless
+        `gate_checked` is True, which only watch_gateway.apply_answer passes, after it has checked
+        that a person is answering (plan Task 7a). Every other writer (the ntfy listener, a script
+        that imports the store) is refused: fail closed."""
         c = self._conn()
         try:
             cols = {r[1] for r in
                     c.execute("PRAGMA table_info(approval_requests)").fetchall()}
+            if not gate_checked and _gate_row_locked(c, rid, cols):
+                return False
             # Each provenance column rides its own arming gate, so compose the SET clause
             # from what actually exists rather than branching on every combination. Same
             # fail-open rule as before: a column that is not armed yet never blocks an
@@ -588,6 +626,8 @@ class ApprovalStore:
         try:
             cols = {r[1] for r in
                     c.execute("PRAGMA table_info(approval_requests)").fetchall()}
+            if _gate_row_locked(c, rid, cols):
+                return False                 # a safety-gate card is never a multi-part menu (plan Task 7a)
             have_attr = "answer_surface" in cols and "answered_by" in cols
             if have_attr:
                 res = c.execute(

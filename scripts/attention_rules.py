@@ -7,7 +7,8 @@ There are no fixed "stuck after X" thresholds anywhere. Each person decides, wit
   scope        optional agent; unanswered rules may also scope kind (decision|questionnaire|permission|
                human_task) and risk (low|medium|high)
   actions      remind [repeat_every_s >= 300] | mark_stuck | expire [mode default|no_answer]
-               | hand_off | choose_for_me   (the last two are registered and refused until part 2)
+               | hand_off [to supervisor|<agent>] | choose_for_me [by self|supervisor] (part 2b: an agent's own
+               session decides and answers with `approval.py answer --on-behalf-of`)
 
 Which rule applies: the most specific matching rule of the same trigger (agent 4 + kind 2 + risk 1, ties to
 the newest edit). A per-agent rule switched off still wins, which is how a person silences one agent.
@@ -17,11 +18,14 @@ after_s. rules_epoch is when the tables were created (the release), so nothing w
 backfilled, and editing a rule restarts its clock. Each (rule, target, action) fires once; a remind with
 repeat_every_s fires again when its next_at comes.
 
-SAFETY (the operator's rule): an action that acts FOR the person (expire now; hand_off and choose_for_me in
-part 2) never fires on a card whose action would be held or is risky: a permission card, a high-risk card,
-a hard-to-undo card, or a protected agent's card. Part 1 has no standing permissions, so it simply refuses
-those (may_act_for_person). Part 2 swaps that body for the classifier plus the standing-grant lookup; the
-call site does not change. A refused action is recorded with its reason; reminding still happens.
+SAFETY (the operator's rule): an action that acts FOR the person (expire, hand_off, choose_for_me) never fires on
+a card whose action would be held or is risky: a permission card or grant proposal (a safety-gate card: only a
+person answers those, plan Task 7a), a high-risk card, a hard-to-undo card, a protected agent's card, a card whose
+declared categories (`approval.py request --category`) the agent's level and grants would hold, or an undeclared
+card from an agent the gate does not cover (unless it is explicitly low risk and easy to undo). A gate card whose
+held action a standing permission now covers is left to the gate, which releases it. The checks run again right
+before each act and inside `approval.py answer --on-behalf-of`. A refused action is recorded with its reason;
+reminding still happens.
 """
 from __future__ import annotations
 
@@ -45,7 +49,12 @@ SCOPE_KINDS = ("decision", "questionnaire", "permission", "human_task")
 SCOPE_RISKS = ("low", "medium", "high")
 MIN_AFTER_S, MAX_AFTER_S = 60, 7 * 24 * 3600
 MIN_REPEAT_S = 300
-PART2 = "arrives with supervision levels (part 2)"
+RETRY_S = 600                   # a hand-off / choose-for-me that could not be delivered is tried again after this
+MAX_TRIES = 4                   # the first try and 3 retries, then the result is final (gave_up:<why>)
+ANSWER_WITHIN_S = 900           # choose-for-me: no answer from the chooser in this long -> no_answer_from:<agent>
+ON_BEHALF_ACTIONS = ("hand_off", "choose_for_me")
+_NOT_A_TURN = ("crashed", "stopped", "offline", "gone")
+APPROVAL_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "approval.py")
 _GEN = re.compile(r"-gen\d+$")
 _EPISODE_SLACK_S = 120          # a re-read stall start within this is the same no-progress episode
 
@@ -94,12 +103,52 @@ def min_after_s(trigger) -> int:
 
 # ---- the safety gate ---------------------------------------------------------------------------
 
-def may_act_for_person(item, raw=None, is_protected=None) -> tuple[bool, str | None]:
-    """May a timeout rule answer or close this card for the person? (False, why) for anything that would
-    be held or is risky. `raw` is the authoritative ledger row when there is one (checked too, so a feed
-    row missing a field never widens the gate)."""
+@dataclass
+class GateView:
+    """What the safety gate reads from supervision (part 2 §8.2). Every callable may raise: the gate then refuses.
+    covers(item, raw) -> a gate card's held action is covered by an allow grant now
+    held(agent, hits) -> the hits this agent's level and grants would hold
+    status(agent)     -> its gate coverage: protected | observing | off | not_seen | not_supported"""
+    covers: Callable | None = None
+    held: Callable | None = None
+    status: Callable | None = None
+
+
+def _is_gate_row(r) -> bool:
+    try:
+        from approval_schema import is_gate_row
+        return is_gate_row(r)
+    except Exception:  # noqa: BLE001 — cannot tell: treat as one (the safe side)
+        return True
+
+
+def declared_hits(raw) -> list:
+    """The categories a card declared (`approval.py request --category`, stored as menu.gate_hits)."""
+    from gate_classify import Hit
+    menu = attention_items._menu(raw or {}) or {}
+    out = []
+    for h in menu.get("gate_hits") or ():
+        if isinstance(h, (list, tuple)) and h and isinstance(h[0], str):
+            act = h[1] if len(h) > 1 and isinstance(h[1], str) else ""
+            out.append(Hit(h[0], act, "declared on the card"))
+    return out
+
+
+def may_act_for_person(item, raw=None, is_protected=None, gate: GateView | None = None) -> tuple[bool, str | None]:
+    """May a timeout rule answer, close or hand off this card for the person? (False, why) for anything that would
+    be held or is risky. `raw` is the authoritative ledger row when there is one (checked too, so a feed row
+    missing a field never widens the gate). `gate` (part 2) adds the supervision checks; without it a card is
+    judged on its own fields, as in part 1."""
     card = item.get("card") if isinstance(item.get("card"), dict) else {}
     rows = [r for r in (item, card, raw or {}) if r]
+    if raw is not None and _is_gate_row(raw) or _is_gate_row(card):
+        row = raw if raw is not None else card
+        try:
+            if gate is not None and gate.covers is not None and gate.covers(item, row):
+                return False, "covered:released_by_gate"
+        except Exception:  # noqa: BLE001
+            pass
+        return False, "gate_card"
     if item.get("kind") == "permission" or str(item.get("id", "")).startswith("perm:") or (
             raw and attention_items.kind_of(raw) == "permission"):
         return False, "permission"
@@ -116,7 +165,32 @@ def may_act_for_person(item, raw=None, is_protected=None) -> tuple[bool, str | N
                 return False, "protected_agent"
         except Exception:  # noqa: BLE001 — cannot tell: refuse, the safe side
             return False, "protected_unknown"
+    if gate is None:
+        return True, None
+    hits = declared_hits(raw if raw is not None else card)
+    if hits:
+        try:
+            held = gate.held(agent, hits) if gate.held is not None else hits
+        except Exception:  # noqa: BLE001
+            return False, "gated:unreadable"
+        if held:
+            return False, f"gated:{held[0].category}"
+        return True, None
+    try:
+        st = gate.status(agent) if (gate.status is not None and agent) else "not_seen"
+    except Exception:  # noqa: BLE001
+        st = "unknown"
+    if st != "protected":
+        src = [r for r in (raw or {}, card, item) if r]
+        explicit_low = any(r.get("risk_level") == "low" or r.get("risk") == "low" for r in src)
+        explicit_easy = any(r.get("reversibility") == "easy" for r in src)
+        if not (explicit_low and explicit_easy):
+            return False, "ungated_agent"
     return True, None
+
+
+def _refusal(why) -> str:
+    return why if str(why).startswith("covered:") else f"safety:{why}"
 
 
 # ---- actions -------------------------------------------------------------------------------------
@@ -126,7 +200,7 @@ class TimeoutAction(Protocol):
     acts_for_person: bool
 
     def available(self) -> tuple[bool, str]: ...
-    def validate(self, params: dict) -> dict: ...
+    def validate(self, params: dict, env: dict | None = None) -> dict: ...
     def fire(self, target, rule, params, ctx) -> dict: ...
 
 
@@ -136,7 +210,7 @@ class Remind:
     def available(self):
         return True, ""
 
-    def validate(self, params):
+    def validate(self, params, env=None):
         out = {}
         rep = params.get("repeat_every_s")
         if rep is not None:
@@ -162,7 +236,7 @@ class MarkStuck:
     def available(self):
         return True, ""
 
-    def validate(self, params):
+    def validate(self, params, env=None):
         return {}
 
     def fire(self, target, rule, params, ctx):
@@ -170,12 +244,12 @@ class MarkStuck:
 
 
 class Expire:
-    name, acts_for_person = "expire", True
+    name, acts_for_person, answers_later = "expire", True, False
 
     def available(self):
         return True, ""
 
-    def validate(self, params):
+    def validate(self, params, env=None):
         mode = params.get("mode", "default")
         if mode not in ("default", "no_answer"):
             raise RuleInvalid("invalid", "expire mode is default or no_answer")
@@ -187,17 +261,17 @@ class Expire:
         if item.get("kind") == "human_task":
             return {"ok": False, "detail": "human_task_never_expires"}
         if iid.startswith("qnr_"):
-            ok, why = may_act_for_person(item, None, ctx.is_protected)
+            ok, why = may_act_for_person(item, None, ctx.is_protected, ctx.gate)
             if not ok:
-                return {"ok": False, "detail": f"safety:{why}"}
+                return {"ok": False, "detail": _refusal(why)}
             if not ctx.qstore.discard(iid):
                 return {"ok": False, "detail": "not_pending"}
             ctx.qnr_deliver_discarded(ctx.qstore.get(iid), ctx.qstore)
             return {"ok": True, "detail": "discarded", "chosen": "no answer"}
         raw = ctx.ledger.get(iid) if iid.startswith("apr_") else None
-        ok, why = may_act_for_person(item, raw, ctx.is_protected)
+        ok, why = may_act_for_person(item, raw, ctx.is_protected, ctx.gate)
         if not ok:
-            return {"ok": False, "detail": f"safety:{why}"}
+            return {"ok": False, "detail": _refusal(why)}
         if raw is None or raw.get("status") != "pending":
             return {"ok": False, "detail": "not_pending"}
         by = f"rule:{rule['id']}"
@@ -236,24 +310,260 @@ def _headless_card(row) -> bool:
         return False
 
 
-class _Part2:
-    acts_for_person = True
+def on_behalf_title(row, ob) -> str:
+    return f"Chosen on your behalf by {ob.get('by')}: {row.get('question') or row.get('id')} ({ob.get('chosen')})"
 
-    def __init__(self, name):
-        self.name = name
+
+def _registry_agents() -> dict:
+    """The install's registry agents (id -> row). Empty when unreadable."""
+    try:
+        import approval_config
+        with open(os.path.join(str(approval_config.orchestra_dir()), "registry.json")) as f:
+            a = (json.load(f) or {}).get("agents")
+        return a if isinstance(a, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _known_people() -> set:
+    try:
+        import approval_config
+        d = os.path.join(str(approval_config.orchestra_dir()), "state", "users")
+        return {n for n in os.listdir(d) if os.path.isdir(os.path.join(d, n))}
+    except OSError:
+        return set()
+
+
+def _base(agent) -> str:
+    return _GEN.sub("", str(agent or "").strip())
+
+
+def _reg_row(registry: dict, agent):
+    row = registry.get(agent) if agent else None
+    if not isinstance(row, dict):
+        row = registry.get(_base(agent)) if agent else None
+    return row if isinstance(row, dict) else None
+
+
+def _supervisor(registry: dict, agent):
+    row = _reg_row(registry, agent) or {}
+    sup = row.get("reports_to")
+    return sup.strip() if isinstance(sup, str) and sup.strip() else None
+
+
+def _card_lines(raw: dict, rule_id: str, you_hint: str = "<you>", action: str | None = None) -> tuple[str, str]:
+    """(the card as text, the exact answer command) for a hand-off or choose-for-me turn."""
+    iid = raw["id"]
+    menu = attention_items._menu(raw) if raw.get("kind") == "menu" else None
+    lines = [f"Card {iid} from {raw.get('from_agent')}: {raw.get('question') or ''}".rstrip()]
+    if raw.get("summary"):
+        lines.append(f"Summary: {str(raw['summary'])[:1200]}")
+    if menu and isinstance(menu.get("options"), list):
+        lines.append("Options:")
+        for o in menu["options"]:
+            if isinstance(o, dict):
+                extra = " (write-in: add --answer-text \"...\")" if o.get("input_kind") == "free_text" else ""
+                lines.append(f"  {o.get('n')}. {o.get('label')}{extra}")
+        how = "--answer option --option-n N"
+    else:
+        lines.append("Options: approve | deny")
+        how = "--answer approve   (or --answer deny --text \"why\")"
+    if raw.get("default_option"):
+        lines.append(f"The agent's default: {raw['default_option']}")
+    cmd = (f"python3 {APPROVAL_CLI} answer --id {iid} {how} --surface rule --answered-by {you_hint} "
+           f"--on-behalf-of {rule_id}{':' + action if action else ''} --reasoning \"<one line: why>\"")
+    return "\n".join(lines), cmd
+
+
+def _send(ctx, msg: dict):
+    (ctx.msg_send or _default_msg_send)(msg)
+
+
+def _default_msg_send(msg: dict):
+    """The real msg_store send, under the same fences as approval_resume's real seams (never from a test)."""
+    import approval_resume
+    why = approval_resume._real_seam_refusal()
+    if why:
+        raise RuntimeError(f"message refused: {why}")
+    approval_resume._msg_store().send(**msg)
+
+
+def _tries_left(params) -> bool:
+    return int(params.get("_try") or 1) < MAX_TRIES
+
+
+def _retry(params, why) -> dict:
+    """A delivery that could not happen now: retried after RETRY_S, at most MAX_TRIES in all (review 11)."""
+    if _tries_left(params):
+        return {"ok": False, "detail": f"retry:{why}", "retry_in_s": RETRY_S}
+    return {"ok": False, "detail": f"gave_up:{why}"}
+
+
+def _check(target, ctx):
+    """(raw row, item, refusal detail). The row is re-read: the authoritative state, never a stale feed item."""
+    item = target.item or {}
+    iid = item.get("id") or ""
+    if not iid.startswith("apr_"):
+        return None, item, "safety:not_a_card"          # questionnaires are answered field by field: not handed
+    raw = ctx.ledger.get(iid)
+    if raw is None or raw.get("status") != "pending":
+        return raw, item, "not_pending"
+    ok, why = may_act_for_person(item, raw, ctx.is_protected, ctx.gate)
+    if not ok:
+        return raw, item, _refusal(why)
+    return raw, item, None
+
+
+def _validate_target(to, env):
+    if to in (None, "", "supervisor"):
+        return "supervisor"
+    if not isinstance(to, str):
+        raise RuleInvalid("unknown_agent", "to is 'supervisor' or an agent id")
+    to = to.strip()
+    person = (env or {}).get("person")
+    if to == person or to in _known_people():
+        raise RuleInvalid("unknown_person", "handing a card to a person arrives with multi-user")
+    if _reg_row(_registry_agents(), to) is None:
+        raise RuleInvalid("unknown_agent", f"{to} is not a registered agent")
+    return to
+
+
+class HandOff:
+    """Hand the card to another agent (its supervisor by default), who decides it for the person. The card stays
+    waiting for the person too: whoever answers first wins."""
+    name, acts_for_person, answers_later = "hand_off", True, True
 
     def available(self):
-        return False, PART2
+        return True, ""
 
-    def validate(self, params):
-        return dict(params)
+    def validate(self, params, env=None):
+        return {"to": _validate_target(params.get("to"), env)}
 
     def fire(self, target, rule, params, ctx):
-        return {"ok": False, "detail": "not_available"}
+        raw, item, refused = _check(target, ctx)
+        if refused:
+            return {"ok": False, "detail": refused}
+        registry = ctx.registry() or {}
+        to = params.get("to") or "supervisor"
+        dest = _supervisor(registry, raw.get("from_agent")) if to == "supervisor" else to
+        if not dest:
+            return _retry(params, "no_supervisor")
+        if _reg_row(registry, dest) is None:
+            return _retry(params, f"unknown_agent:{dest}")
+        text, cmd = _card_lines(raw, rule["id"], you_hint=_base(dest), action="hand_off")
+        after = human(rule["after_s"])
+        body = (f"{ctx.person} didn't answer {raw.get('from_agent')}'s card within {after}. Decide it for them:\n\n"
+                f"{text}\n\nAnswer with exactly:\n{cmd}\n\nThe card stays open for {ctx.person} too; whoever "
+                f"answers first wins. If you can't decide it, leave it.")
+        try:
+            _send(ctx, {"from_agent": "attention-rules", "to_agent": dest, "type": "handoff", "priority": "high",
+                        "subject": f"Decide for {ctx.person}: {raw.get('question') or raw['id']}"[:200],
+                        "body": body, "metadata": {"approval_id": raw["id"], "rule_id": rule["id"]}})
+        except Exception as e:  # noqa: BLE001
+            return _retry(params, f"send_failed:{type(e).__name__}")
+        return {"ok": True, "detail": "handed_off", "to": dest, "assignee": _base(dest), "item": raw["id"],
+                "action": "hand_off"}
+
+
+class ChooseForMe:
+    """Ask an agent's own session to pick the option the person would most likely choose (no side model): the
+    asking agent itself when it can take a turn, otherwise its supervisor."""
+    name, acts_for_person, answers_later = "choose_for_me", True, True
+
+    def available(self):
+        return True, ""
+
+    def validate(self, params, env=None):
+        by = params.get("by", "self")
+        if by not in ("self", "supervisor"):
+            raise RuleInvalid("bad_by", "by is 'self' or 'supervisor'")
+        out = {"by": by}
+        w = params.get("answer_within_s")
+        if w is not None:
+            if isinstance(w, bool) or not isinstance(w, int) or not 60 <= w <= 86400:
+                raise RuleInvalid("invalid", "answer_within_s must be an integer 60..86400")
+            out["answer_within_s"] = w
+        return out
+
+    def _intent(self, raw, ctx) -> list:
+        out = []
+        try:
+            prefs = ctx.prefs() or {}
+        except Exception:  # noqa: BLE001
+            prefs = {}
+        texts = [f"{k}: {v}" for k, v in prefs.items() if k != "instructions" and isinstance(v, str) and v.strip()]
+        if isinstance(prefs.get("instructions"), str) and prefs["instructions"].strip():
+            out.append(f"{ctx.person}'s standing instructions: {prefs['instructions'].strip()[:1500]}")
+        if texts:
+            out.append(f"{ctx.person}'s notification settings: " + "; ".join(texts)[:600])
+        try:
+            hist = ctx.history(200) if ctx.history else []
+        except Exception:  # noqa: BLE001
+            hist = []
+        kind = attention_items.kind_of(raw)
+        agent = _base(raw.get("from_agent"))
+        prior = []
+        for h in hist:
+            if h.get("id") == raw.get("id") or _base(h.get("from_agent")) != agent:
+                continue
+            if attention_items.kind_of(h) != kind or not h.get("answer"):
+                continue
+            label = h.get("answer")
+            if h.get("answer") == "option":
+                m = attention_items._menu(h) or {}
+                label = next((o.get("label") for o in m.get("options") or []
+                              if isinstance(o, dict) and str(o.get("n")) == str(h.get("option_n"))),
+                             h.get("option_n"))
+            prior.append(f"  {h.get('question')} → {label} ({h.get('answered_by') or 'unknown'})")
+            if len(prior) == 5:
+                break
+        if prior:
+            out.append(f"{ctx.person}'s last answers to {agent}'s {kind} cards:\n" + "\n".join(prior))
+        return out
+
+    def fire(self, target, rule, params, ctx):
+        raw, item, refused = _check(target, ctx)
+        if refused:
+            return {"ok": False, "detail": refused}
+        registry = ctx.registry() or {}
+        asker = raw.get("from_agent")
+        try:
+            states = ctx.agent_states() or {}
+            blocking = bool((attention_items.from_pending_row(
+                raw, attention_items.Ctx(person=ctx.person, agent_states=states)) or {}).get("blocking", True))
+        except Exception:  # noqa: BLE001 — cannot tell: treat as blocking (never ask a stopped agent)
+            states, blocking = {}, True
+        if params.get("by", "self") == "self" and not blocking and _reg_row(registry, asker) is not None:
+            chooser = asker
+        else:
+            chooser = _supervisor(registry, asker)
+        if not chooser:
+            return _retry(params, "no_one_to_choose")
+        if _reg_row(registry, chooser) is None:
+            return _retry(params, f"unknown_agent:{chooser}")
+        st = states.get(chooser) or states.get(_base(chooser))
+        if st is None:
+            return _retry(params, "chooser_not_running")          # no live session to take the turn
+        if st in _NOT_A_TURN:
+            return _retry(params, f"chooser_{st}")
+        text, cmd = _card_lines(raw, rule["id"], you_hint=_base(chooser), action="choose_for_me")
+        intent = self._intent(raw, ctx)
+        body = (f"{ctx.person} didn't answer {asker}'s card within {human(rule['after_s'])} and asked you to choose "
+                f"for them.\n\n{text}\n\n" + ("\n\n".join(intent) + "\n\n" if intent else "")
+                + f"Pick the option {ctx.person} would most likely choose, then run:\n{cmd}\n"
+                  "If you can't tell, don't answer.")
+        try:
+            _send(ctx, {"from_agent": "attention-rules", "to_agent": chooser, "type": "choose_for_me",
+                        "priority": "high", "subject": f"Choose for {ctx.person}: {raw.get('question') or raw['id']}"[:200],
+                        "body": body, "metadata": {"approval_id": raw["id"], "rule_id": rule["id"]}})
+        except Exception as e:  # noqa: BLE001
+            return _retry(params, f"send_failed:{type(e).__name__}")
+        return {"ok": True, "detail": "asked", "chooser": chooser, "assignee": _base(chooser), "item": raw["id"],
+                "action": "choose_for_me", "answer_within_s": int(params.get("answer_within_s") or ANSWER_WITHIN_S)}
 
 
 ACTIONS: dict[str, TimeoutAction] = {"remind": Remind(), "mark_stuck": MarkStuck(), "expire": Expire(),
-                                     "hand_off": _Part2("hand_off"), "choose_for_me": _Part2("choose_for_me")}
+                                     "hand_off": HandOff(), "choose_for_me": ChooseForMe()}
 
 
 def available_actions():
@@ -266,7 +576,7 @@ def available_actions():
 
 # ---- rule store -----------------------------------------------------------------------------------
 
-def validate_rule(r: dict) -> dict:
+def validate_rule(r: dict, env: dict | None = None) -> dict:
     trig = r.get("trigger")
     if trig not in TRIGGERS:
         raise RuleInvalid("invalid", f"trigger must be one of {TRIGGERS}")
@@ -293,12 +603,12 @@ def validate_rule(r: dict) -> dict:
         ok, why = impl.available()
         if not ok:
             raise RuleInvalid("action_not_available", why)
-        params = impl.validate({k: v for k, v in a.items() if k != "type"})
-        if a["type"] == "expire":
+        params = impl.validate({k: v for k, v in a.items() if k != "type"}, env)
+        if a["type"] in ("expire",) + ON_BEHALF_ACTIONS:
             if trig != "unanswered":
-                raise RuleInvalid("invalid", "expire closes a question: it needs the unanswered trigger")
+                raise RuleInvalid("invalid", f"{a['type']} acts on a question: it needs the unanswered trigger")
             if sk == "permission" or sr == "high":
-                raise RuleInvalid("unsafe_scope", "expire never acts on permission or high-risk cards")
+                raise RuleInvalid("unsafe_scope", f"{a['type']} never acts on permission or high-risk cards")
         norm.append({"type": a["type"], **params})
     return {**r, "actions": norm, "scope_agent": sa.strip() if isinstance(sa, str) else None}
 
@@ -330,7 +640,7 @@ class RuleStore:
     def create(self, person, *, trigger, after_s, actions, scope_agent=None, scope_kind=None, scope_risk=None,
                enabled=True, name=None, is_default=False, now=None):
         r = validate_rule({"trigger": trigger, "after_s": after_s, "actions": actions, "scope_agent": scope_agent,
-                           "scope_kind": scope_kind, "scope_risk": scope_risk})
+                           "scope_kind": scope_kind, "scope_risk": scope_risk}, {"person": person})
         rid = f"rul_{uuid.uuid4().hex[:8]}"
         ts = _iso(now)
 
@@ -351,7 +661,7 @@ class RuleStore:
             return None
         merged = {k: cur[k] for k in self.FIELDS}
         merged.update({k: v for k, v in fields.items() if k in self.FIELDS})
-        r = validate_rule(merged)
+        r = validate_rule(merged, {"person": person})
         ts = _iso(now)
 
         def f(c):
@@ -429,6 +739,162 @@ class RuleStore:
             return None, False
         self.astore._write(f)
 
+    def record_if_unclaimed(self, rule_id, target, action, update) -> bool:
+        """Write `update(current result)` only while the fire is still unclaimed, re-read inside the write
+        transaction (a compare-and-set against consume() in another process). False when it was claimed first."""
+        def f(c):
+            r = c.execute("SELECT result FROM attention_rule_fires WHERE rule_id=? AND target=? AND action=?",
+                          [rule_id, target, action]).fetchone()
+            try:
+                cur = json.loads((r["result"] if r else None) or "{}")
+            except ValueError:
+                return False, False
+            if not r or cur.get("consumed_at"):
+                return False, False
+            c.execute("UPDATE attention_rule_fires SET result=? WHERE rule_id=? AND target=? AND action=?",
+                      [json.dumps(update(cur)), rule_id, target, action])
+            return True, True
+        return bool(self.astore._write(f))
+
+    def set_next(self, rule_id, target, action, at: datetime):
+        """When a fire may be claimed again (a delivery retry)."""
+        def f(c):
+            c.execute("UPDATE attention_rule_fires SET next_at=? WHERE rule_id=? AND target=? AND action=?",
+                      [_iso(at), rule_id, target, action])
+            return None, False
+        self.astore._write(f)
+
+    def consume(self, rule_id, item_id, agent, now=None, *, pending_on_behalf=None, card_pending=True, action=None):
+        """The on-behalf answer's claim (plan §8.1, review 10), one BEGIN IMMEDIATE CAS: a hand_off/choose_for_me
+        fire of exactly (rule, item) whose result is ok, whose assignee is base(agent), not yet consumed. Returns
+        (action, result) on success, else raises RuleInvalid(code) with no_handoff | handed_to_other |
+        already_answered. A claim is spent once (review r3: no lease, so two claims can never race on one card):
+        if the answering process dies before its answer lands, the card simply keeps waiting for the person
+        (fail closed). `pending_on_behalf` is the record to write once the answer lands; reconcile() writes it if
+        the process dies after the answer. `action` names
+        the exact fire (a rule may hand off AND choose for me); each claim gets its own token, and only the holder
+        of the token may give it back or finalise it."""
+        only_action = action
+        now = now or datetime.now(timezone.utc)
+        ts, me = _iso(now), _base(agent)
+
+        def f(c):
+            acts = (only_action,) if only_action in ON_BEHALF_ACTIONS else ON_BEHALF_ACTIONS
+            rows = c.execute(f"SELECT action, result FROM attention_rule_fires WHERE rule_id=? AND target=? AND "
+                             f"action IN ({','.join('?' * len(acts))}) ORDER BY action",
+                             [rule_id, item_id, *acts]).fetchall()
+            found = []
+            for r in rows:
+                try:
+                    res = json.loads(r["result"] or "{}")
+                except ValueError:
+                    continue
+                if res.get("ok") and res.get("assignee"):
+                    found.append((r["action"], res))
+            if not found:
+                return ("no_handoff", None), False
+            mine = [(a, res) for a, res in found if _base(res.get("assignee")) == me]
+            if not mine:
+                return ("handed_to_other", found[0][1].get("assignee")), False
+            free = [(a, res) for a, res in mine if not res.get("consumed_at")]
+            if not free:
+                return ("already_answered", None), False
+            action, res = free[0]
+            res = dict(res, consumed_at=ts, consumed_by=agent, claim=uuid.uuid4().hex)
+            if pending_on_behalf is not None:
+                res["pending_on_behalf"] = pending_on_behalf
+            c.execute("UPDATE attention_rule_fires SET result=? WHERE rule_id=? AND target=? AND action=?",
+                      [json.dumps(res), rule_id, item_id, action])
+            return (action, res), True
+        out = self.astore._write(f)
+        code, detail = out if isinstance(out, tuple) else (None, None)
+        if code in ("no_handoff", "handed_to_other", "already_answered") or code is None:
+            raise RuleInvalid(code or "no_handoff", detail or "")
+        return code, detail
+
+    def unconsume(self, rule_id, item_id, action, claim=None):
+        """Give the claim back when the answer itself failed (the agent may try again). Only the claim's own
+        holder (its token) may: a later claim that replaced an expired one is never undone by the old one."""
+        def f(c):
+            r = c.execute("SELECT result FROM attention_rule_fires WHERE rule_id=? AND target=? AND action=?",
+                          [rule_id, item_id, action]).fetchone()
+            if r is None:
+                return False, False
+            res = json.loads(r["result"] or "{}")
+            if claim is not None and res.get("claim") != claim:
+                return False, False
+            for k in ("consumed_at", "consumed_by", "pending_on_behalf", "claim"):
+                res.pop(k, None)
+            c.execute("UPDATE attention_rule_fires SET result=? WHERE rule_id=? AND target=? AND action=?",
+                      [json.dumps(res), rule_id, item_id, action])
+            return True, True
+        return self.astore._write(f)
+
+    def record_on_behalf(self, rule_id, item_id, action, on_behalf: dict, claim=None):
+        """Finalise: the on_behalf record on the fire row (only for the claim's holder when a token is given)."""
+        def f(c):
+            r = c.execute("SELECT result FROM attention_rule_fires WHERE rule_id=? AND target=? AND action=?",
+                          [rule_id, item_id, action]).fetchone()
+            res = json.loads((r["result"] if r else None) or "{}")
+            if claim is not None and res.get("claim") != claim:
+                return False, False
+            res["on_behalf"] = on_behalf
+            res.pop("pending_on_behalf", None)
+            c.execute("UPDATE attention_rule_fires SET result=? WHERE rule_id=? AND target=? AND action=?",
+                      [json.dumps(res), rule_id, item_id, action])
+            return True, True
+        return self.astore._write(f)
+
+    def reconcile(self, ledger, now=None) -> list:
+        """Finish an on-behalf answer whose process died between the answer and its record: a claimed fire with a
+        pending record whose card was answered by the claiming agent gets its on_behalf record (fire row and
+        Updates row). Returns the item ids recorded."""
+        done = []
+        for fr in self.fires():
+            if fr["action"] not in ON_BEHALF_ACTIONS:
+                continue
+            try:
+                res = json.loads(fr["result"] or "{}")
+            except ValueError:
+                continue
+            ob = res.get("pending_on_behalf")
+            if not res.get("consumed_at") or res.get("on_behalf") or not isinstance(ob, dict):
+                continue
+            row = ledger.get(fr["target"]) if fr["target"].startswith("apr_") else None
+            if not row or row.get("status") == "pending":
+                continue
+            if row.get("answer_surface") != "rule" or _base(row.get("answered_by")) != _base(res.get("consumed_by")):
+                continue                                 # someone else (the person) answered it first
+            ob = {**ob, "action": fr["action"]}
+            self.record_on_behalf(fr["rule_id"], fr["target"], fr["action"], ob)
+            self.astore.record_on_behalf(fr["target"], row.get("from_agent") or "", on_behalf_title(row, ob),
+                                         body=ob.get("reasoning"), on_behalf=ob, rule_id=fr["rule_id"], now=now)
+            done.append(fr["target"])
+        return done
+
+    def expire_asks(self, now) -> list:
+        """Choose-for-me asks the chooser did not answer within answer_within_s: their result becomes
+        no_answer_from:<agent> (the card keeps waiting; nothing else acts for the person)."""
+        done = []
+        for fr in self.fires():
+            if fr["action"] != "choose_for_me":
+                continue
+            try:
+                res = json.loads(fr["result"] or "{}")
+            except ValueError:
+                continue
+            if not res.get("ok") or res.get("detail") != "asked" or res.get("consumed_at"):
+                continue
+            asked = _ts(fr["last_at"] or fr["fired_at"])
+            if asked is None or now < asked + timedelta(seconds=int(res.get("answer_within_s") or ANSWER_WITHIN_S)):
+                continue
+            # The chooser may claim it between the read above and this write: only an unclaimed fire expires.
+            if self.record_if_unclaimed(fr["rule_id"], fr["target"], "choose_for_me",
+                                        lambda cur: {**cur, "ok": False,
+                                                     "detail": f"no_answer_from:{cur.get('chooser')}"}):
+                done.append(fr["target"])
+        return done
+
     def episode_target(self, rule_id, agent, since: datetime) -> str:
         """A no-progress episode's target. The stall start is re-derived every tick and can jitter by a
         second, so a fire within _EPISODE_SLACK_S of the given start is the same episode."""
@@ -501,6 +967,13 @@ class EngineCtx:
     is_protected: Callable = lambda agent: False
     observe: Callable | None = None              # now -> observations (tests); the gateway passes them in
     log: Callable = field(default=lambda msg: print(f"[attention_rules] {msg}", file=sys.stderr))
+    # part 2b (hand off, choose for me)
+    msg_send: Callable | None = None             # one msg_store message as a dict (default: the real store)
+    registry: Callable = field(default=_registry_agents)    # -> {agent id: registry row}
+    agent_states: Callable = lambda: {}          # -> {agent id: /agents state}
+    history: Callable | None = None              # limit -> answered ledger rows, newest first
+    prefs: Callable = lambda: {}                 # -> the person's prefs.json (standing instructions)
+    gate: GateView | None = None                 # the supervision side of the safety gate
 
 
 @dataclass
@@ -546,6 +1019,11 @@ class Engine:
             if now < anchor + timedelta(seconds=rule["after_s"]):
                 continue
             results += self._fire_rule(rule, target, now)
+        try:
+            self.rs.expire_asks(now)
+            self.rs.reconcile(self.ctx.ledger, now)
+        except Exception as e:  # noqa: BLE001
+            self.ctx.log(f"on-behalf sweep failed: {e!r}")
         if agents_ok:
             for row in self.astore.open_events(kinds=("stuck",)):
                 if row["dedup_key"].endswith(":no_progress") and row["agent"] not in stalled:
@@ -566,10 +1044,14 @@ class Engine:
                 continue
             try:
                 ok, why = impl.available()
-                res = impl.fire(target, rule, params, self.ctx) if ok else {"ok": False, "detail": "not_available"}
+                res = impl.fire(target, rule, {**params, "_try": n}, self.ctx) if ok else {
+                    "ok": False, "detail": "not_available"}
                 if res.get("ok") and a["type"] in ("remind", "mark_stuck"):
                     raised[a["type"]] = n
-                if res.get("ok") and impl.acts_for_person:
+                if str(res.get("detail", "")).startswith("retry:"):
+                    self.rs.set_next(rule["id"], target.key, a["type"],
+                                     now + timedelta(seconds=int(res.pop("retry_in_s", RETRY_S))))
+                if res.get("ok") and impl.acts_for_person and not getattr(impl, "answers_later", False):
                     res["on_behalf"] = {"by": f"rule:{rule['id']}", "rule_id": rule["id"], "action": a["type"],
                                         "chosen": res.get("chosen"),
                                         "reasoning": f"No answer within {human(rule['after_s'])}; your rule "

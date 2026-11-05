@@ -299,6 +299,19 @@ class AttentionStore:
             return self._id_for(c, dkey), cur.rowcount > 0
         return self._write(f)
 
+    def on_behalf_for(self, item_id):
+        """The on_behalf record (the Updates row's evidence) for a card a rule or a handed-to agent answered, or
+        None."""
+        def f(c):
+            r = c.execute("SELECT evidence FROM attention_events WHERE dedup_key=?", [f"on_behalf:{item_id}"]).fetchone()
+            if r is None or not r["evidence"]:
+                return None
+            try:
+                return json.loads(r["evidence"])
+            except ValueError:
+                return None
+        return self._read(f, None)
+
     def record_missed_call(self, call_id, agent, title, now=None):
         """The missed_call type (its producer, an agent calling the person, arrives with APNs in part 5)."""
         return self._insert_resolved("missed_call", agent, None, f"missed_call:{call_id}", title,

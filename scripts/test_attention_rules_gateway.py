@@ -25,7 +25,7 @@ def test_get_seeds_the_defaults_and_carries_what_settings_needs(box):
     assert st == 200 and d["person"] == "alex"
     assert {(r["trigger"], r["enabled"]) for r in d["rules"]} == {("unanswered", 1), ("no_progress", 0)}
     assert d["min_after_s"] == {"no_progress": 600, "unanswered": 60}
-    assert {a["type"]: a["available"] for a in d["available_actions"]}["hand_off"] is False
+    assert {a["type"]: a["available"] for a in d["available_actions"]}["hand_off"] is True
     assert all("available_actions" in r and "min_after_s" in r for r in d["rules"])
 
 
@@ -51,8 +51,8 @@ def test_create_update_delete_and_rev(box):
 
 def test_validation_is_422_with_the_reason(box):
     st, d = box.call("POST", "/attention/rules", body={"trigger": "unanswered", "after_s": 600,
-                                                      "actions": [{"type": "hand_off", "to": "pm"}]})
-    assert st == 422 and d["error"] == "action_not_available" and "part 2" in d["detail"]
+                                                      "actions": [{"type": "hand_off", "to": "nobody-here"}]})
+    assert st == 422 and d["error"] == "unknown_agent"
     st, d = box.call("POST", "/attention/rules", body={"trigger": "unanswered", "after_s": 600,
                                                       "scope_kind": "permission", "actions": [{"type": "expire"}]})
     assert st == 422 and d["error"] == "unsafe_scope"

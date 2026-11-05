@@ -18,6 +18,7 @@ import { AgentsSection } from './sections/AgentsSection';
 import { NotificationsSection } from './sections/NotificationsSection';
 import { ServerSection } from './sections/ServerSection';
 import { PermissionsSection } from './sections/PermissionsSection';
+import { RulesSection } from './sections/RulesSection';
 import { GateSection } from './sections/GateSection';
 import '../kit/panel.css';
 import './settings.css';
@@ -37,6 +38,7 @@ function view(id: SectionId, desktop: boolean): ReactNode {
     case 'agents': return <AgentsSection />;
     case 'notifications': return <NotificationsSection />;
     case 'permissions': return <PermissionsSection />;
+    case 'rules': return <RulesSection />;
     case 'server-voice': return <ServerVoiceSection />;
     case 'server-gate': return <GateSection />;
     case 'server': return <ServerSection />;

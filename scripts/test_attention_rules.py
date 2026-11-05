@@ -149,7 +149,7 @@ def test_defaults_seeded_once_remind_only_and_progress_off(rs):
 def test_rules_carry_what_the_settings_ui_needs(rs):
     r = rs.list("alex")[0]
     assert {a["type"]: a["available"] for a in r["available_actions"]} == {
-        "remind": True, "mark_stuck": True, "expire": True, "hand_off": False, "choose_for_me": False}
+        "remind": True, "mark_stuck": True, "expire": True, "hand_off": True, "choose_for_me": True}
     assert AR.min_after_s("no_progress") == 600 and AR.min_after_s("unanswered") == 60
 
 
@@ -186,12 +186,11 @@ def test_validation(rs):
         rs.create("alex", trigger="unanswered", after_s=600, scope_kind="permission", actions=[{"type": "expire"}])
 
 
-def test_part2_actions_are_registered_but_refused(rs):
+def test_part2_actions_act_for_the_person(rs):
+    """Replaced by test_attention_rules_part2.py::test_part2_actions_are_available_now (part 2b)."""
     for t in ("hand_off", "choose_for_me"):
-        assert AR.ACTIONS[t].available() == (False, "arrives with supervision levels (part 2)")
+        assert AR.ACTIONS[t].available() == (True, "")
         assert AR.ACTIONS[t].acts_for_person is True
-        with pytest.raises(AR.RuleInvalid, match="action_not_available"):
-            rs.create("alex", trigger="unanswered", after_s=600, actions=[{"type": t}])
 
 
 def test_update_and_delete_are_per_person(rs):

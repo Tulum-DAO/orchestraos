@@ -25,6 +25,8 @@ import {
   readCanonicalPending,
   readCanonicalPendingOrNull,
   canonicalAnswer,
+  answerPeer,
+  answerRefusalStatus,
   type CanonicalRow,
 } from './_canonical-approvals.js';
 import { principal, installRole, type InstallRole, type Principal } from '../lib/principal.js';
@@ -599,7 +601,7 @@ router.post('/:id/approve', (req: Request, res: Response) => {
 
   // Agent approval -> CANONICAL answer (record_answer -> fire_resume). No more
   // filesystem move, no more queue/inbox side-channel; watch/iOS resolve too.
-  const result = canonicalAnswer(id, 'approve', undefined, undefined, { surface: req.body?.surface });
+  const result = canonicalAnswer(id, 'approve', undefined, undefined, { surface: req.body?.surface, peer: answerPeer(req) });
   if (result.ok && result.applied) {
     res.json({ status: 'approved', type: 'agent', id });
     return;
@@ -610,7 +612,7 @@ router.post('/:id/approve', (req: Request, res: Response) => {
     res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` });
     return;
   }
-  res.status(400).json({ error: result.error || 'answer refused', id });
+  res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
 });
 
 // ---------------------------------------------------------------------------
@@ -657,7 +659,7 @@ router.post('/:id/deny', (req: Request, res: Response) => {
   }
 
   // Agent approval -> CANONICAL answer, carrying the reason as the note text.
-  const result = canonicalAnswer(id, 'deny', reason, undefined, { surface: req.body?.surface });
+  const result = canonicalAnswer(id, 'deny', reason, undefined, { surface: req.body?.surface, peer: answerPeer(req) });
   if (result.ok && result.applied) {
     res.json({ status: 'rejected', type: 'agent', id, reason });
     return;
@@ -666,7 +668,7 @@ router.post('/:id/deny', (req: Request, res: Response) => {
     res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` });
     return;
   }
-  res.status(400).json({ error: result.error || 'answer refused', id });
+  res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
 });
 
 // ---------------------------------------------------------------------------
@@ -753,7 +755,7 @@ router.post('/:id/answer', (req: Request, res: Response) => {
     if (refusal) { res.status(403).json(refusal); return; }
   }
 
-  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface });
+  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface, peer: answerPeer(req) });
   if (result.ok && result.applied) {
     res.json({ status: 'answered', type: 'agent', id, option_n: optionN, answer_text: answerText });
     return;
@@ -762,7 +764,7 @@ router.post('/:id/answer', (req: Request, res: Response) => {
     res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` });
     return;
   }
-  res.status(400).json({ error: result.error || 'answer refused', id });
+  res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
 });
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@
 import { Router, type Request } from 'express';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { readCanonicalPending, canonicalAnswer, type CanonicalRow } from './_canonical-approvals.js';
+import { readCanonicalPending, canonicalAnswer, answerPeer, answerRefusalStatus, type CanonicalRow } from './_canonical-approvals.js';
 import { gateMenuRowsForClient } from './unified-approvals.js';
 
 const router = Router();
@@ -89,19 +89,19 @@ router.get('/', (req: Request, res) => {
 
 router.post('/:id/approve', (req, res) => {
   const id = String(req.params.id);
-  const result = canonicalAnswer(id, 'approve');
+  const result = canonicalAnswer(id, 'approve', undefined, undefined, { peer: answerPeer(req) });
   if (result.ok && result.applied) return res.json({ status: 'approved', id });
   if (result.ok && result.applied === false) return res.status(404).json({ error: 'Not found' });
-  return res.status(400).json({ error: result.error || 'answer refused', id });
+  return res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
 });
 
 router.post('/:id/deny', (req, res) => {
   const id = String(req.params.id);
   const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
-  const result = canonicalAnswer(id, 'deny', reason);
+  const result = canonicalAnswer(id, 'deny', reason, undefined, { peer: answerPeer(req) });
   if (result.ok && result.applied) return res.json({ status: 'denied', id });
   if (result.ok && result.applied === false) return res.status(404).json({ error: 'Not found' });
-  return res.status(400).json({ error: result.error || 'answer refused', id });
+  return res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
 });
 
 export default router;

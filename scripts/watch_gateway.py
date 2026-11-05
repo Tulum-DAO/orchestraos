@@ -1249,7 +1249,8 @@ def _answer_device(request) -> str | None:
 
 
 def apply_answer(store, rid, answer, *, text=None, option_n=None,
-                 answer_text=None, fire=True, surface=None, answered_by=None, device=None):
+                 answer_text=None, fire=True, surface=None, answered_by=None, device=None,
+                 caller=None, handed_to=None):
     """The ONE answer state machine, shared by EVERY transport (SPEC
     all-model-parity §5: validation lives in one place, consumed not
     re-implemented). `handle_answer` (the gateway /approval-answers HTTP
@@ -1260,6 +1261,12 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
     the record_answer -> fire_resume ledger transition exist in exactly one
     function, so a Claude-created and a Gemini-created row resolve identically
     regardless of which surface answers them.
+
+    A safety-gate card (permission card or grant proposal) is answered only by a person (plan Task
+    7a): `caller` is what the transport knows about who is on the other end (an answer_caller.Caller,
+    or a zero-arg callable returning one), merged with this process's own chain; `handed_to` is the
+    agent a timeout rule handed the card to (the on-behalf path, already consumed). A refusal is
+    {ok: False, status: 403, error: 'agent_cannot_answer_gate_card', why} and records nothing.
 
     `store` is supplied by the caller (the gateway builds the live
     ApprovalStore; the CLI/tests build a scratch one via APPROVAL_DB_PATH) —
@@ -1299,6 +1306,13 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
     # these three verbs are human_task-ONLY — on a normal row they'd otherwise
     # fall through to record_answer as a bogus answer.
     _r0 = store.get(rid)
+    gate_ok = False
+    if _r0 is not None and _is_gate_row(_r0):
+        why = _gate_answer_refusal(store, _r0, caller, handed_to)
+        if why:
+            return {"ok": False, "status": 403, "error": "agent_cannot_answer_gate_card", "why": why,
+                    "id": rid}
+        gate_ok = True
     if _r0 is not None and _r0.get("kind") == "human_task":
         if answer not in ("done", "cant", "snooze"):
             return {"ok": False, "status": 400,
@@ -1363,7 +1377,7 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
     # branches on them; a missing tag defaults to surface='unknown' (back-compat).
     applied = store.record_answer(rid, answer, text, option_n=resolved_option_n,
                                   surface=surface, answered_by=answered_by,
-                                  device=device)  # id-bound + answer-once
+                                  device=device, gate_checked=gate_ok)  # id-bound + answer-once
     resume_row = None
     if applied:
         row = store.get(rid)
@@ -1418,6 +1432,46 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
             "resume_row": resume_row}
 
 
+def _is_gate_row(row) -> bool:
+    from approval_schema import is_gate_row
+    return is_gate_row(row)
+
+
+def _gate_owners(store, row) -> set:
+    """The agents that may never answer this gate card: the card's author, the held agent (gate) or the grant's
+    proposer (gate_grant). An unreadable hold or grant leaves the author, who is always one of them."""
+    import answer_caller
+    owners = {answer_caller.base(row.get("from_agent"))}
+    try:
+        import gate_cards
+        from supervision_store import SupervisionStore
+        b = gate_cards.bridge_of(row) or {}
+        ss = SupervisionStore(db_path=getattr(store, "db_path", None))
+        if b.get("kind") == "gate":
+            hold = (ss.hold(b["hold_id"]) if b.get("hold_id") else None) or ss.hold_by_card(row["id"])
+            owners.add(answer_caller.base((hold or {}).get("agent")))
+        elif b.get("kind") == "gate_grant" and b.get("grant_id"):
+            g = ss.grant(b["grant_id"]) or {}
+            owners |= {answer_caller.base(g.get("proposed_by")), answer_caller.base(g.get("created_by"))}
+    except Exception as e:  # noqa: BLE001 — the author alone still refuses the common case
+        print(f"[watch_gateway] gate owners unreadable for {row.get('id')}: {e}", file=sys.stderr)
+    owners.discard("")
+    return owners
+
+
+def _gate_answer_refusal(store, row, caller=None, handed_to=None):
+    """Why this answer on a gate card is refused (plan Task 7a), else None. Never raises: an error is
+    'caller_unknown' (fail closed)."""
+    try:
+        import answer_caller
+        c = caller() if callable(caller) else caller
+        c = answer_caller.self_caller().merged(c if isinstance(c, answer_caller.Caller) else None)
+        return answer_caller.gate_refusal(_gate_owners(store, row), c, handed_to=handed_to)
+    except Exception as e:  # noqa: BLE001
+        print(f"[watch_gateway] gate caller check failed for {row.get('id')}: {e}", file=sys.stderr)
+        return "caller_unknown"
+
+
 def _gate_card_kind(store, rid):
     """'gate' / 'gate_grant' for a safety-gate card, else None (never raises)."""
     b = _gate_bridge(store, rid)
@@ -1462,6 +1516,23 @@ def _gate_wide_pick(store, rid, option_n) -> bool:
     return False
 
 
+def _http_caller(request):
+    """Who is on the other end of this request (answer_caller.of_peer). A request with no socket to look at (a
+    test double) is unknown: fail closed."""
+    import answer_caller
+    try:
+        tr = request.transport
+        peer = tr.get_extra_info("peername") if tr is not None else None
+        sock = tr.get_extra_info("sockname") if tr is not None else None
+    except Exception:  # noqa: BLE001
+        peer = sock = None
+    if not peer or not sock:
+        return answer_caller.Caller((), True, "no_peer")
+    return answer_caller.of_peer(peer[0], peer[1], sock[1],
+                                 forwarded_peer=request.headers.get(answer_caller.PEER_HEADER),
+                                 forwarded_for=request.headers.get("X-Forwarded-For"))
+
+
 async def handle_answer(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
@@ -1487,9 +1558,12 @@ async def handle_answer(request):
                           text=data.get("text"), option_n=data.get("option_n"),
                           answer_text=data.get("answer_text"), fire=False,
                           surface=surface, answered_by=answered_by,
-                          device=_answer_device(request))
+                          device=_answer_device(request), caller=lambda: _http_caller(request))
     if not result["ok"]:
-        return _json({"ok": False, "error": result["error"]}, status=result["status"])
+        body = {"ok": False, "error": result["error"]}
+        if result.get("why"):
+            body["why"] = result["why"]
+        return _json(body, status=result["status"])
     resume_row = result.get("resume_row")
     if resume_row is not None:
         try:
@@ -7637,14 +7711,62 @@ def _attention_tick_inner():
             approval_resume.fire_resume(row, ledger)
         except Exception as e:  # noqa: BLE001 — the answer is durable; the watchdog retries delivery
             log.error(f"attention: resume after a rule answer failed for {row.get('id')}: {e!r}")
+    import notify_policy
+    states = {r.get("id"): r.get("state") for r in rows if r.get("id")}
     ctx = AR.EngineCtx(
         person=person, ledger=ledger, qstore=qstore, apply_answer=apply_answer,
         notify_card=lambda rid: approval_notify.notify(rid, store=ledger),
         notify_questionnaire=lambda qid: approval_notify.notify_questionnaire(qid, store=qstore),
         deliver_discarded=approval_resume.deliver_discarded,
         qnr_deliver_discarded=questionnaire_resume.deliver_discarded,
-        schedule_resume=resume, is_protected=_session_is_protected)
+        schedule_resume=resume, is_protected=_session_is_protected,
+        registry=lambda: reg if isinstance(reg, dict) else {}, agent_states=lambda: dict(states),
+        history=ledger.history, prefs=lambda: notify_policy.load_prefs(ORCH_DIR, person),
+        gate=_rules_gate_view(person))
     AR.Engine(rs, astore, ctx).tick(now, observations, agents_ok=agents_ok)
+
+
+def _rules_gate_view(person):
+    """The supervision side of the timeout rules' safety gate (plan §8.2): covered gate cards, held declared
+    categories and each agent's gate coverage. Unarmed or unreadable -> the strict view (declared categories are
+    held, coverage is 'off'), so a rule refuses rather than acts."""
+    import attention_rules as AR
+    import gate_config as GC
+    import gate_policy as GP
+    import time as _time
+    strict = AR.GateView(covers=lambda item, raw: False, held=lambda agent, hits: list(hits),
+                         status=lambda agent: "off")
+    try:
+        ss = _sup_store()
+        ss.migrate()
+        if not ss.armed:
+            return strict
+        registry = _sup_registry()
+        reg = _sup_reg_agents(registry)
+        data = _sup_data()
+    except Exception as e:  # noqa: BLE001
+        _attention_log_once(e)
+        return strict
+    cached = _agents_cache.get("data")
+    cache_rows = {r.get("id"): r for r in cached if isinstance(r, dict)} if isinstance(cached, list) else {}
+
+    def held(agent, hits):
+        roles = {r["id"]: r for r in ss.roles(person)}
+        project = GP.project_of(agent, registry, data)
+        res = GP.resolve(ss.person_rows(person), roles, ss.assignments(person), agent, project)
+        return GP.held_hits(hits, resolved=res, grants=ss.grants(person, states=("active",)), agent=agent,
+                            project=project)
+
+    def status(agent):
+        row = reg.get(agent) if isinstance(reg.get(agent), dict) else reg.get(_sup_base(agent))
+        row = row if isinstance(row, dict) else {}
+        gate = GC.read_gate(data)
+        return _sup_gate_status(agent, _sup_runtime(agent, row, cache_rows), gate.get("mode", "off"),
+                                GC.kill_switch(data), GC.seen(data), row, _time.time())["status"]
+
+    return AR.GateView(
+        covers=lambda item, raw: GP.covers_item(item, raw, ss, person=person, registry=registry, data_dir=data),
+        held=held, status=status)
 
 
 _ATTN_STOP_KEY = None
