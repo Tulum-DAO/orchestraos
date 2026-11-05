@@ -506,6 +506,15 @@ def test_crash_fails_safe_per_level(box, level, expect_deny):
     assert run(BASH("ls"), dict(box.env(agent="dev"), GATE_TEST_CRASH="1"))[0] is None   # no hits: never crashes
 
 
+def test_observe_never_denies_even_when_the_gate_crashes(box):
+    box.mode("observe")
+    box.agent_override("dev", level="watch_closely", high_risk=["outside_world"])
+    box.env_extra(GATE_TEST_CRASH="1")
+    out, _ = run(BASH("git push"), box.env(agent="dev"))
+    assert decision(out) != "deny"
+    box.env_extra(GATE_TEST_CRASH="0")
+
+
 @pytest.mark.parametrize("level,expect_deny", [("watch_closely", True), ("check_in", False)])
 def test_card_failure_withdraws_hold_and_fails_safe_per_level(box, level, expect_deny):
     box.mode("enforce")

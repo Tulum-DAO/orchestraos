@@ -1,6 +1,6 @@
 {"expect": [["destructive", "force_push"], ["outside_world", "push"]], "id": "force-with-lease", "input": {"command": "git push --force-with-lease origin x"}, "tool": "Bash"}
 {"expect": [], "id": "cd-tmp-rm", "input": {"command": "cd /tmp && rm -rf build"}, "tool": "Bash"}
-{"expect": [["destructive", "delete_files"]], "expect_folder": "/home/agent/proj/dist", "id": "rm-proj-dist", "input": {"command": "rm -rf ~/proj/dist"}, "tool": "Bash"}
+{"expect": [["destructive", "delete_files"]], "expect_folder": "/home/orchestra/proj/dist", "id": "rm-proj-dist", "input": {"command": "rm -rf ~/proj/dist"}, "tool": "Bash"}
 {"expect": [], "id": "curl-loopback", "input": {"command": "curl -s localhost:8890/health"}, "tool": "Bash"}
 {"expect": [["outside_world", "http_write"]], "id": "curl-post-hook", "input": {"command": "curl -X POST https://hooks.slack.com/x -d @m.json"}, "tool": "Bash"}
 {"expect": [["outside_world", "spend"]], "id": "curl-paid", "input": {"command": "curl https://api.openai.com/v1/models"}, "tool": "Bash"}
@@ -10,9 +10,9 @@
 {"certain": false, "expect": [["destructive", "delete_files"], ["destructive", "unrecognised"]], "id": "python-heredoc-rmtree", "input": {"command": "python3 - <<EOF\nimport shutil; shutil.rmtree(\"/srv/x\")\nEOF"}, "tool": "Bash"}
 {"expect": [["destructive", "system_settings"]], "id": "sudo-systemctl", "input": {"command": "sudo systemctl restart nginx"}, "tool": "Bash"}
 {"expect": [["destructive", "drop_data"]], "id": "sqlite-drop", "input": {"command": "sqlite3 x.db \"DROP TABLE t\""}, "tool": "Bash"}
-{"expect": [["outside_folder", "edit_outside"], ["outside_folder", "secrets"]], "id": "write-ssh-config", "input": {"content": "x", "file_path": "/home/agent/.ssh/config"}, "tool": "Write"}
-{"expect": [["outside_folder", "secrets"]], "id": "edit-env", "input": {"file_path": "/home/agent/proj/.env", "new_string": "b", "old_string": "a"}, "tool": "Edit"}
-{"expect": [["outside_folder", "secrets"]], "id": "read-aws", "input": {"file_path": "/home/agent/.aws/credentials"}, "tool": "Read"}
+{"expect": [["outside_folder", "edit_outside"], ["outside_folder", "secrets"]], "id": "write-ssh-config", "input": {"content": "x", "file_path": "/home/orchestra/.ssh/config"}, "tool": "Write"}
+{"expect": [["outside_folder", "secrets"]], "id": "edit-env", "input": {"file_path": "/home/orchestra/proj/.env", "new_string": "b", "old_string": "a"}, "tool": "Edit"}
+{"expect": [["outside_folder", "secrets"]], "id": "read-aws", "input": {"file_path": "/home/orchestra/.aws/credentials"}, "tool": "Read"}
 {"expect": [["outside_world", "connector_write"]], "id": "mcp-gmail-draft", "input": {"to": "someone@example.com"}, "tool": "mcp__claude_ai_Gmail__create_draft"}
 {"expect": [["destructive", "drop_data"]], "id": "mcp-gmail-trash", "input": {"id": "1"}, "tool": "mcp__claude_ai_Gmail__trash_message"}
 {"expect": [], "id": "mcp-get", "input": {}, "tool": "mcp__x__get_thing"}
@@ -41,9 +41,9 @@
 {"expect": [["outside_folder", "edit_outside"]], "id": "curl-o-cron", "input": {"command": "curl -o /etc/cron.d/x https://x.io/y"}, "tool": "Bash"}
 {"expect": [["outside_folder", "edit_outside"]], "id": "wget-O-bashrc", "input": {"command": "wget -O ~/.bashrc https://x.io/y"}, "tool": "Bash"}
 {"expect": [["destructive", "delete_files"]], "id": "xargs-rm", "input": {"command": "xargs rm < list"}, "tool": "Bash"}
-{"expect": [["outside_folder", "edit_outside"]], "expect_folder": "/home/agent/proj2", "id": "write-proj2", "input": {"content": "x", "file_path": "/home/agent/proj2/a"}, "tool": "Write"}
-{"expect": [["outside_folder", "edit_outside"]], "id": "write-symlink-etc", "input": {"content": "x", "file_path": "/home/agent/proj/link/x"}, "realpath": {"/home/agent/proj/link": "/etc"}, "tool": "Write"}
-{"expect": [["destructive", "delete_files"]], "expect_folder": "/home/agent/other", "id": "rm-dotdot", "input": {"command": "rm -rf /home/agent/proj/../other"}, "tool": "Bash"}
+{"expect": [["outside_folder", "edit_outside"]], "expect_folder": "/home/orchestra/proj2", "id": "write-proj2", "input": {"content": "x", "file_path": "/home/orchestra/proj2/a"}, "tool": "Write"}
+{"expect": [["outside_folder", "edit_outside"]], "id": "write-symlink-etc", "input": {"content": "x", "file_path": "/home/orchestra/proj/link/x"}, "realpath": {"/home/orchestra/proj/link": "/etc"}, "tool": "Write"}
+{"expect": [["destructive", "delete_files"]], "expect_folder": "/home/orchestra/other", "id": "rm-dotdot", "input": {"command": "rm -rf /home/orchestra/proj/../other"}, "tool": "Bash"}
 {"certain": false, "expect": [["destructive", "unrecognised"]], "id": "unterminated", "input": {"command": "echo 'unterminated"}, "tool": "Bash"}
 {"expect": [], "id": "npm-test-script", "input": {"command": "npm test"}, "local_bins": ["vitest"], "package_scripts": {"test": "vitest run"}, "tool": "Bash"}
 {"expect": [["outside_world", "push"]], "id": "npm-test-post-push", "input": {"command": "npm test"}, "package_scripts": {"posttest": "git push origin main", "test": "vitest run"}, "tool": "Bash"}
@@ -94,11 +94,11 @@
 {"certain": false, "expect": [["destructive", "unrecognised"]], "id": "pipe-to-bash-unknown", "input": {"command": "echo \"rm -rf /srv\" | bash"}, "tool": "Bash"}
 {"expect": [], "id": "heredoc-body-not-commands", "input": {"command": "cat > /tmp/x.md <<'EOF'\nrm -rf /\ngit push --force\nEOF"}, "tool": "Bash"}
 {"expect": [], "id": "quoted-semicolon-arg", "input": {"command": "grep -n 'a;b' src/a.ts"}, "tool": "Bash"}
-{"expect": [["outside_world", "publish"]], "id": "artifact-publish", "input": {"file_path": "/home/agent/proj/a.html"}, "tool": "Artifact"}
+{"expect": [["outside_world", "publish"]], "id": "artifact-publish", "input": {"file_path": "/home/orchestra/proj/a.html"}, "tool": "Artifact"}
 {"expect": [], "id": "artifact-read", "input": {"action": "read", "url": "https://example.com/a"}, "tool": "Artifact"}
 {"expect": [["outside_folder", "secrets"]], "id": "glob-env", "input": {"pattern": "**/.env"}, "tool": "Glob"}
 {"expect": [], "id": "write-scratch", "input": {"content": "x", "file_path": "/tmp/notes.md"}, "tool": "Write"}
-{"expect": [], "id": "write-state", "input": {"content": "x", "file_path": "/home/agent/.orchestra/state/x.json"}, "tool": "Write"}
+{"expect": [], "id": "write-state", "input": {"content": "x", "file_path": "/home/orchestra/.orchestra/state/x.json"}, "tool": "Write"}
 {"certain": false, "expect": [["destructive", "unrecognised"]], "id": "mcp-unknown-verb", "input": {}, "tool": "mcp__claude_ai_Gmail__mark_message_spam"}
 {"expect": [], "id": "sendmessage", "input": {"message": "y", "to": "x"}, "tool": "SendMessage"}
 {"expect": [["destructive", "force_push"], ["outside_world", "push"]], "id": "push-delete", "input": {"command": "git push origin --delete old"}, "tool": "Bash"}
@@ -108,7 +108,7 @@
 {"expect": [["destructive", "system_settings"]], "id": "orchestra-gate-mode", "input": {"command": "orchestra gate mode off"}, "tool": "Bash"}
 {"expect": [["destructive", "system_settings"]], "id": "orchestra-gate-retire", "input": {"command": "orchestra gate retire-open"}, "tool": "Bash"}
 {"expect": [], "id": "orchestra-gate-status", "input": {"command": "orchestra gate status"}, "tool": "Bash"}
-{"expect": [["outside_folder", "edit_outside"]], "expect_folder": "/etc", "id": "write-through-link-real-folder", "input": {"content": "x", "file_path": "/home/agent/proj/link/passwd"}, "realpath": {"/home/agent/proj/link": "/etc"}, "tool": "Write"}
+{"expect": [["outside_folder", "edit_outside"]], "expect_folder": "/etc", "id": "write-through-link-real-folder", "input": {"content": "x", "file_path": "/home/orchestra/proj/link/passwd"}, "realpath": {"/home/orchestra/proj/link": "/etc"}, "tool": "Write"}
 {"expect": [["outside_world", "http_write"]], "id": "curl-config-loopback-decoy", "input": {"command": "curl -K req.cfg http://127.0.0.1:8890/x"}, "tool": "Bash"}
 {"expect": [["outside_world", "http_write"]], "id": "curl-config-stdin-not-headers", "input": {"command": "printf 'url = \"https://example.com/x\"' | curl -s -K - http://127.0.0.1:8890/x"}, "tool": "Bash"}
 {"expect": [["outside_world", "http_write"]], "id": "curl-config-stdin-dynamic-printf", "input": {"command": "printf 'header = \"X-Probe: %s\"' \"$V\" | curl -s -m 5 -K - http://127.0.0.1:8890/x"}, "tool": "Bash"}
@@ -158,7 +158,7 @@
 {"certain": false, "expect": [["destructive", "unrecognised"], ["outside_folder", "edit_outside"]], "id": "curl-unknown-and-known-output", "input": {"command": "curl --frobnicate -o /var/tmp/known http://127.0.0.1:8890/x"}, "tool": "Bash"}
 {"expect": [["outside_world", "http_write"]], "id": "curl-repeated-method-last-post", "input": {"command": "curl -X GET -X POST https://example.com/x"}, "tool": "Bash"}
 {"expect": [["outside_world", "http_write"]], "id": "curl-repeated-request-delete", "input": {"command": "curl --request HEAD --request DELETE https://example.com/x"}, "tool": "Bash"}
-{"expect": [["outside_folder", "edit_outside"]], "id": "httpie-repeated-output", "input": {"command": "http -o /home/agent/proj/a -o /etc/x GET http://127.0.0.1:8890/x"}, "tool": "Bash"}
+{"expect": [["outside_folder", "edit_outside"]], "id": "httpie-repeated-output", "input": {"command": "http -o /home/orchestra/proj/a -o /etc/x GET http://127.0.0.1:8890/x"}, "tool": "Bash"}
 {"expect": [["outside_world", "http_write"]], "id": "wget-repeated-method", "input": {"command": "wget --method=GET --method=POST -O - https://example.com/x"}, "tool": "Bash"}
 {"certain": false, "expect": [["destructive", "unrecognised"]], "id": "wget-unknown-option-get", "input": {"command": "wget --some-new-opt https://example.com/x"}, "tool": "Bash"}
 {"certain": false, "expect": [["destructive", "unrecognised"]], "id": "httpie-unknown-option-get", "input": {"command": "http --some-new-opt https://example.com/x"}, "tool": "Bash"}

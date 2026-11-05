@@ -403,8 +403,8 @@ def _classify_fixture(c) -> list:
     GC._bin_exists = lambda cwd, name: name in bins
     try:
         ctx = GC.CallCtx(tool=c.get("tool") or "", tool_input=c.get("input") if isinstance(c.get("input"), dict)
-                         else {}, cwd=c.get("cwd") or "/home/agent/proj",
-                         own_dirs=tuple(c.get("own_dirs") or ()), scratch_dirs=("/tmp",), home="/home/agent",
+                         else {}, cwd=c.get("cwd") or "/home/orchestra/proj",
+                         own_dirs=tuple(c.get("own_dirs") or ()), scratch_dirs=("/tmp",), home="/home/orchestra",
                          local_bins=bins, package_scripts=c.get("package_scripts"),
                          realpath=_fake_realpath(c.get("realpath")))
         return GC.classify(ctx)

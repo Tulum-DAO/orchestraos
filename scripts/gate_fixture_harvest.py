@@ -10,7 +10,7 @@ Heredoc bodies and inline code are replaced by synthetic lines, one per classifi
     python3 scripts/gate_fixture_harvest.py --max 300 > /tmp/gate-shapes.jsonl
     python3 scripts/gate_fixture_harvest.py --check /tmp/gate-shapes.jsonl scripts/fixtures/gate/*.jsonl
 
---check prints findings (token-like strings, 32+ hex runs, home folders other than /home/agent, this
+--check prints findings (token-like strings, 32+ hex runs, home folders other than /home/orchestra, this
 machine's user and host names, real-looking e-mail addresses and IP addresses) and exits 1 if any.
 The test harness expands placeholders to fixed fake values with expand().
 """
@@ -35,10 +35,10 @@ import gate_classify as GC  # noqa: E402
 # ---------------------------------------------------------------------------------------------
 
 PLACEHOLDERS = {
-    "<path-in-folder>": "/home/agent/proj/src/a.txt",
+    "<path-in-folder>": "/home/orchestra/proj/src/a.txt",
     "<path-outside>": "/etc/x",
     "<path-scratch>": "/tmp/work/a.txt",
-    "<path-secret>": "/home/agent/proj/.env",
+    "<path-secret>": "/home/orchestra/proj/.env",
     "<host-loopback>": "127.0.0.1",
     "<host-external>": "example.com",
     "<host-paid>": "api.openai.com",
@@ -47,8 +47,8 @@ PLACEHOLDERS = {
     "<num>": "123",
     "<word>": "word",
 }
-FAKE_HOME = "/home/agent"
-FAKE_CWD = "/home/agent/proj"
+FAKE_HOME = "/home/orchestra"
+FAKE_CWD = "/home/orchestra/proj"
 FAKE_OWN = [FAKE_CWD, FAKE_HOME + "/.orchestra/state", FAKE_HOME + "/.orchestra/.workspace"]
 FAKE_BINS = ["eslint", "playwright", "prettier", "tsc", "tsx", "vite", "vitest"]
 FAKE_SCRIPTS = {"build": "tsc -b && vite build", "build:check": "tsc -b && vite build --mode check",
@@ -108,7 +108,7 @@ def check_text(text: str, deny=None) -> list:
         if _HEX.search(line):
             out.append((n, "hex-run"))
         for m in _HOME.finditer(line):
-            if m.group(1) != "agent":
+            if m.group(1) != posixpath.basename(FAKE_HOME):
                 out.append((n, "home-folder"))
         for m in _EMAIL.finditer(line):
             if m.group(1).lower() not in _FAKE_EMAIL_DOMAINS:

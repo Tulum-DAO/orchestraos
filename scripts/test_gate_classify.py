@@ -17,7 +17,7 @@ import gate_classify as GC  # noqa: E402
 import gate_fixture_harvest as GH  # noqa: E402
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "gate"
-OWN = ["/home/agent/proj", "/home/agent/.orchestra/state", "/home/agent/.orchestra/.workspace"]
+OWN = ["/home/orchestra/proj", "/home/orchestra/.orchestra/state", "/home/orchestra/.orchestra/.workspace"]
 
 
 def _load(name):
@@ -35,8 +35,8 @@ def _fake_realpath(mapping):
 
 
 def _ctx(c):
-    return GC.CallCtx(tool=c["tool"], tool_input=c["input"], cwd=c.get("cwd", "/home/agent/proj"),
-                      own_dirs=tuple(c.get("own_dirs", OWN)), scratch_dirs=("/tmp",), home="/home/agent",
+    return GC.CallCtx(tool=c["tool"], tool_input=c["input"], cwd=c.get("cwd", "/home/orchestra/proj"),
+                      own_dirs=tuple(c.get("own_dirs", OWN)), scratch_dirs=("/tmp",), home="/home/orchestra",
                       local_bins=frozenset(c.get("local_bins", [])), package_scripts=c.get("package_scripts"),
                       realpath=_fake_realpath(c.get("realpath")))
 
@@ -91,12 +91,12 @@ def test_unparseable_shell_is_uncertain_not_a_pass():
 
 
 def test_inside_is_component_wise():
-    assert GC.inside("/home/agent/proj/a", "/home/agent/proj")
-    assert GC.inside("/home/agent/proj", "/home/agent/proj")
-    assert not GC.inside("/home/agent/proj2/a", "/home/agent/proj")
-    assert GC.inside("/home/agent/proj/../proj/x", "/home/agent/proj/")
-    assert not GC.inside("/home/agent/proj/../other", "/home/agent/proj")
-    assert not GC.inside("relative", "/home/agent")
+    assert GC.inside("/home/orchestra/proj/a", "/home/orchestra/proj")
+    assert GC.inside("/home/orchestra/proj", "/home/orchestra/proj")
+    assert not GC.inside("/home/orchestra/proj2/a", "/home/orchestra/proj")
+    assert GC.inside("/home/orchestra/proj/../proj/x", "/home/orchestra/proj/")
+    assert not GC.inside("/home/orchestra/proj/../other", "/home/orchestra/proj")
+    assert not GC.inside("relative", "/home/orchestra")
     assert not GC.inside("", "/x")
 
 
@@ -157,54 +157,54 @@ def test_speed():
 def test_a_folder_grant_does_not_cover_a_write_through_a_symlink_inside_it():
     """review r1: a hit's folder is its real path, and a grant's folder is stored real (supervision_store)."""
     import gate_policy as GP
-    ctx = GC.CallCtx(tool="Write", tool_input={"file_path": "/home/agent/proj/sub/link/passwd", "content": "x"},
-                     cwd="/home/agent/other", own_dirs=("/home/agent/other",), scratch_dirs=("/tmp",),
-                     home="/home/agent", realpath=_fake_realpath({"/home/agent/proj/sub/link": "/etc"}))
+    ctx = GC.CallCtx(tool="Write", tool_input={"file_path": "/home/orchestra/proj/sub/link/passwd", "content": "x"},
+                     cwd="/home/orchestra/other", own_dirs=("/home/orchestra/other",), scratch_dirs=("/tmp",),
+                     home="/home/orchestra", realpath=_fake_realpath({"/home/orchestra/proj/sub/link": "/etc"}))
     hits = GC.classify(ctx)
     assert [(h.category, h.action, h.folder) for h in hits] == [("outside_folder", "edit_outside", "/etc")]
-    grant = {"category": "outside_folder", "narrow_folder": "/home/agent/proj/sub"}
+    grant = {"category": "outside_folder", "narrow_folder": "/home/orchestra/proj/sub"}
     assert not GP.grant_matches(grant, hits[0])
-    plain = GC.classify(GC.CallCtx(tool="Write", tool_input={"file_path": "/home/agent/proj/sub/a.txt", "content": "x"},
-                                   cwd="/home/agent/other", own_dirs=("/home/agent/other",), scratch_dirs=("/tmp",),
-                                   home="/home/agent", realpath=_fake_realpath({})))
+    plain = GC.classify(GC.CallCtx(tool="Write", tool_input={"file_path": "/home/orchestra/proj/sub/a.txt", "content": "x"},
+                                   cwd="/home/orchestra/other", own_dirs=("/home/orchestra/other",), scratch_dirs=("/tmp",),
+                                   home="/home/orchestra", realpath=_fake_realpath({})))
     assert GP.grant_matches(grant, plain[0])
 
 
 def test_several_writes_through_different_links_do_not_collapse_to_the_lexical_parent():
     """review r2: each target is resolved before the common folder (writes and deletes)."""
     import gate_policy as GP
-    real = _fake_realpath({"/home/agent/proj/sub/l1": "/etc", "/home/agent/proj/sub/l2": "/var"})
-    grant = {"category": "outside_folder", "narrow_folder": "/home/agent/proj/sub"}
-    dgrant = {"category": "destructive", "narrow_folder": "/home/agent/proj/sub"}
-    for cmd in ("touch /home/agent/proj/sub/l1/a /home/agent/proj/sub/l2/b",
-                "rm -rf /home/agent/proj/sub/l1/a /home/agent/proj/sub/l2/b"):
-        hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": cmd}, cwd="/home/agent/other",
-                                      own_dirs=("/home/agent/other",), scratch_dirs=("/tmp",), home="/home/agent",
+    real = _fake_realpath({"/home/orchestra/proj/sub/l1": "/etc", "/home/orchestra/proj/sub/l2": "/var"})
+    grant = {"category": "outside_folder", "narrow_folder": "/home/orchestra/proj/sub"}
+    dgrant = {"category": "destructive", "narrow_folder": "/home/orchestra/proj/sub"}
+    for cmd in ("touch /home/orchestra/proj/sub/l1/a /home/orchestra/proj/sub/l2/b",
+                "rm -rf /home/orchestra/proj/sub/l1/a /home/orchestra/proj/sub/l2/b"):
+        hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": cmd}, cwd="/home/orchestra/other",
+                                      own_dirs=("/home/orchestra/other",), scratch_dirs=("/tmp",), home="/home/orchestra",
                                       realpath=real))
         assert hits, cmd
         for h in hits:
-            assert h.folder and not GC.inside(h.folder, "/home/agent/proj/sub"), (cmd, h)
+            assert h.folder and not GC.inside(h.folder, "/home/orchestra/proj/sub"), (cmd, h)
             assert not GP.grant_matches(grant, h) and not GP.grant_matches(dgrant, h), (cmd, h)
 
 
 def test_deleting_a_link_is_recorded_at_the_link_and_link_slash_at_its_target():
     """review r3: rm -rf link removes the link itself (its real parent + name); link/ follows it."""
-    real = _fake_realpath({"/home/agent/proj/link": "/etc"})
+    real = _fake_realpath({"/home/orchestra/proj/link": "/etc"})
 
     def folder(cmd):
-        hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": cmd}, cwd="/home/agent/other",
-                                      own_dirs=("/home/agent/other",), scratch_dirs=("/tmp",), home="/home/agent",
+        hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": cmd}, cwd="/home/orchestra/other",
+                                      own_dirs=("/home/orchestra/other",), scratch_dirs=("/tmp",), home="/home/orchestra",
                                       realpath=real))
         return [h.folder for h in hits if h.action == "delete_files"]
-    assert folder("rm -rf /home/agent/proj/link") == ["/home/agent/proj/link"]
-    assert folder("rm -rf /home/agent/proj/link/") == ["/etc"]
+    assert folder("rm -rf /home/orchestra/proj/link") == ["/home/orchestra/proj/link"]
+    assert folder("rm -rf /home/orchestra/proj/link/") == ["/etc"]
 
 
 def test_an_unknown_delete_target_leaves_the_folder_unknown():
     """review r4: xargs rm with a known and an unknown (stdin) target is not narrowed to the known one."""
-    hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": "printf x | xargs rm /home/agent/proj/foo"},
-                                  cwd="/home/agent/proj", own_dirs=("/home/agent/proj",), scratch_dirs=("/tmp",),
-                                  home="/home/agent", realpath=_fake_realpath({})))
+    hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": "printf x | xargs rm /home/orchestra/proj/foo"},
+                                  cwd="/home/orchestra/proj", own_dirs=("/home/orchestra/proj",), scratch_dirs=("/tmp",),
+                                  home="/home/orchestra", realpath=_fake_realpath({})))
     dels = [h for h in hits if h.action == "delete_files"]
     assert dels and all(h.folder is None for h in dels)
 
@@ -214,8 +214,8 @@ def test_an_unknown_http_client_option_is_unrecognised_and_never_covered_by_a_fo
     its own folder, but the unrecognised hit (no folder) is never covered by a folder-narrowed grant."""
     import gate_policy as GP
     hits = GC.classify(GC.CallCtx(tool="Bash", tool_input={"command": "curl --frobnicate -o /var/tmp/known http://127.0.0.1:8890/x"},
-                                  cwd="/home/agent/proj", own_dirs=("/home/agent/proj",), scratch_dirs=("/tmp",),
-                                  home="/home/agent", realpath=_fake_realpath({})))
+                                  cwd="/home/orchestra/proj", own_dirs=("/home/orchestra/proj",), scratch_dirs=("/tmp",),
+                                  home="/home/orchestra", realpath=_fake_realpath({})))
     unrec = [h for h in hits if h.action == "unrecognised"]
     assert unrec and unrec[0].folder is None and not unrec[0].certain
     assert not GP.grant_matches({"category": "destructive", "narrow_folder": "/var/tmp"}, unrec[0])

@@ -658,6 +658,11 @@ def _cleanup_then(decision, reason, to_state, from_states, retire_reason, keep_a
         pass
 
 
+def _enforcing() -> bool:
+    """Only enforce mode may deny on a crash or a deadline; observe mode only ever logs."""
+    return (_G.rec or {}).get("mode") == "enforce"
+
+
 def run(raw: str, data_dir: str) -> int:
     """The gate for one PreToolUse call (the kill switch was already checked by the entry script). Always 0."""
     try:
@@ -666,14 +671,14 @@ def run(raw: str, data_dir: str) -> int:
         _cleanup_then("interrupted", INTERRUPTED, "withdrawn", ("filing", "waiting"),
                       "the agent's turn was interrupted", keep_allowed=True)
     except _Deadline:
-        deny = _G.level == "watch_closely" and bool(_G.hits)
+        deny = _enforcing() and _G.level == "watch_closely" and bool(_G.hits)
         if deny:
             reason = _held_carry_on(_G.card_id) if _G.card_id else GATE_ERROR
             _cleanup_then("deadline", reason, "open", ("waiting",), None)
         else:
             _cleanup_then("deadline", None, "withdrawn", ("filing", "waiting"), "the safety gate ran out of time")
     except Exception as e:  # noqa: BLE001 — §6: deny under Watch closely when there were hits, else allow
-        deny = _G.level == "watch_closely" and bool(_G.hits)
+        deny = _enforcing() and _G.level == "watch_closely" and bool(_G.hits)
         try:
             print(f"[gate-hook] error: {type(e).__name__}: {e}", file=sys.stderr)
         except Exception:  # noqa: BLE001

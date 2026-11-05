@@ -704,7 +704,6 @@ router.get('/:id/card', async (req: Request, res: Response) => {
   }
 });
 
-/** Grant scopes that change more than one agent (a fleet, role or project grant). */
 /** Grant scopes that change one agent only; every other scope (fleet, role, project, or none) is wide. */
 const NARROW_GRANT_SCOPES = new Set(['session', 'agent']);
 
