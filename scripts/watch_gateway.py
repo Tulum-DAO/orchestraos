@@ -2501,6 +2501,7 @@ async def handle_supervision(request):
 
 async def handle_supervision_default(request):
     def fn(req, body):
+        _sup_need_admin(req)                       # the default applies to every agent without its own setting
         person, _ = _attention_person(req)
         ss = _sup_armed_store()
         fields = _sup_fields(body, nullable=False)
@@ -2690,6 +2691,13 @@ async def handle_grant_create(request):
                 agent = _sup_known_agent(body["agent"], registry) if isinstance(body["agent"], str) else None
                 if agent is None:
                     raise _sup_invalid("agent", "unknown agent")
+            # The session must be shown to belong to that agent (its registry row, its gate heartbeat, or a hold
+            # the hook recorded), or a caller could label someone else's session with an agent they may see.
+            # Without an agent, only an admin may grant on a bare session id.
+            if agent is None:
+                _sup_need_admin(req)
+            elif not _sup_session_is_agents(ss, agent, ref, registry):
+                raise _sup_invalid("scope_ref", "that session is not one of this agent's")
         if body.get("agent") is not None and scope != "session":
             raise _sup_invalid("agent", "agent names a session grant's agent only")
         source = body.get("source", "settings")
@@ -2700,6 +2708,25 @@ async def handle_grant_create(request):
         _sup_after_write(ss, person)
         return 201, {"ok": True, "grant": _sup_grant_json(g, _sup_role_names(ss, person))}
     return await _sup_handle(request, fn, json_body=True)
+
+
+def _sup_session_is_agents(ss, agent, session_id, registry) -> bool:
+    """True when `session_id` is known to be `agent`'s: its registry row, its gate-seen heartbeat, or a gate hold."""
+    import gate_config as GC
+    base = GC.base_agent(agent)
+    row = (registry.get("agents") or {}).get(agent) if isinstance(registry, dict) else None
+    if isinstance(row, dict) and row.get("session_id") == session_id:
+        return True
+    try:
+        for a, s in GC.seen(_sup_data()).items():
+            if GC.base_agent(a) == base and isinstance(s, dict) and s.get("session_id") == session_id:
+                return True
+    except Exception:  # noqa: BLE001 — unreadable heartbeats are no evidence
+        pass
+    try:
+        return any(GC.base_agent(a) == base for a in ss.session_agents(session_id))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _sup_grant_for_write(req, ss):

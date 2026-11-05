@@ -168,6 +168,8 @@ def test_put_default_sets_person_source_rewrites_gate_json_and_bumps_rev(box):
                                                          "hold_wait_s": 0}
     # every agent sits in a project whose seeded Hands-off role outranks the default (D1 chain)
     assert g["agents"]["dev-acme"]["level"] == "let_them_run"
+    st, b = box.call("PUT", "/supervision/default", who="approve", body={"level": "let_them_run"})
+    assert st == 403 and b["needed_scope"] == "admin"                  # the default is every agent's: admin only
     st, b = box.call("PUT", "/supervision/default", body={"level": "loud"})
     assert st == 422 and b == {"ok": False, "error": "invalid", "field": "level"}
     st, b = box.call("PUT", "/supervision/default", body={"hold_wait_s": 9999})
@@ -304,6 +306,21 @@ def test_grants_crud_and_validation(box):
     st, b = box.call("POST", "/grants", who="approve", body={"scope": "session", "scope_ref": SESSION,
                                                             "agent": "dev-acme", "category": "install"})
     assert st == 201 and b["grant"]["agent"] == "dev-acme" and b["grant"]["scope_ref"] == SESSION
+    # ...and the session must be that agent's: another agent's (or an unknown) session cannot be labelled with it
+    other = "99999999-8888-7777-6666-555555555555"
+    st, b = box.call("POST", "/grants", who="approve", body={"scope": "session", "scope_ref": other,
+                                                            "agent": "dev-acme", "category": "install"})
+    assert st == 422 and b["field"] == "scope_ref", b
+    GC.heartbeat(str(box.data), "pm-acme", other, "enforce")                  # pm-acme's live session
+    st, b = box.call("POST", "/grants", who="approve", body={"scope": "session", "scope_ref": other,
+                                                            "agent": "dev-acme", "category": "install"})
+    assert st == 422 and b["field"] == "scope_ref", b
+    assert box.call("POST", "/grants", who="approve", body={"scope": "session", "scope_ref": other,
+                                                           "agent": "pm-acme", "category": "install"})[0] == 201
+    # a bare session id (no agent) is admin-only
+    st, b = box.call("POST", "/grants", who="approve", body={"scope": "session", "scope_ref": SESSION,
+                                                            "category": "install"})
+    assert st == 403 and b["needed_scope"] == "admin", b
     # role and project scopes (admin)
     tb = box.role_id("trusted_builder")
     assert box.call("POST", "/grants", body={"scope": "role", "scope_ref": tb, "category": "install",

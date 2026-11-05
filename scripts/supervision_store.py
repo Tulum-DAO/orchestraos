@@ -890,6 +890,11 @@ class SupervisionStore:
             f"SELECT * FROM gate_holds WHERE agent=? AND fingerprint=? AND state IN ({','.join('?' for _ in st)}) "
             "ORDER BY created_at DESC, id DESC LIMIT 1", [agent, fingerprint] + st).fetchone()), None)
 
+    def session_agents(self, session_id) -> set:
+        """The agents any gate hold was recorded for under this session id (the hook's own evidence)."""
+        return self._read(lambda c: {r[0] for r in c.execute(
+            "SELECT DISTINCT agent FROM gate_holds WHERE session_id=?", [session_id])}, set())
+
     def open_holds(self, states=("open",)) -> list[dict]:
         st = list(states)
         return self._read(lambda c: [dict(r) for r in c.execute(
