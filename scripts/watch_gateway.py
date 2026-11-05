@@ -138,6 +138,11 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/attention"): "read",
     ("POST", "/attention/seen"): "read",
     ("GET", "/attention/rules"): "read",
+    # Supervision (attention part 2a): reading levels, roles, grants and one gate hold is read.
+    ("GET", "/supervision"): "read",
+    ("GET", "/supervision/roles"): "read",
+    ("GET", "/grants"): "read",
+    ("GET", "/gate/holds/{id}"): "read",
     ("GET", "/voice-call"): "read",
     ("GET", "/active-voice-call"): "read",
     ("GET", "/voice-calls"): "read",
@@ -177,6 +182,22 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/attention/rules"): "approve",
     ("PUT", "/attention/rules/{id}"): "approve",
     ("DELETE", "/attention/rules/{id}"): "approve",
+    # Supervision writes decide what an agent may do without asking the operator, so they are approve. A write
+    # that changes more than one agent (a role, a project's default role, a role/project/fleet grant) also needs
+    # `admin`, checked inside the handler (403 needed_scope admin), so a member device never widens the fleet.
+    ("PUT", "/supervision/default"): "approve",
+    ("PUT", "/supervision/agents/{agent}"): "approve",
+    ("PUT", "/supervision/projects/{key}"): "approve",
+    ("POST", "/supervision/roles"): "approve",
+    ("PUT", "/supervision/roles/{id}"): "approve",
+    ("DELETE", "/supervision/roles/{id}"): "approve",
+    ("POST", "/supervision/roles/{id}/duplicate"): "approve",
+    ("POST", "/grants"): "approve",
+    ("PATCH", "/grants/{id}"): "approve",
+    ("DELETE", "/grants/{id}"): "approve",
+    # The safety gate's switch and its log (every classified call, redacted) are the server's own: admin.
+    ("PUT", "/gate/mode"): "admin",
+    ("GET", "/gate/log"): "admin",
     # `approve`. FINAL per gm 2026-10-05T08:34Z ("record it as the final state"), after three
     # rulings as messages crossed: approve+condition (08:02), inject (08:11), then approve
     # confirmed once the guard was shown to exist and be pinned (08:34).
@@ -489,7 +510,7 @@ def _validate_option_answer(row, option_n, answer_text):
     # REQUIRES it; direct treats it as commentary (stored, digit still fires).
     if answer_text and len(answer_text) > ANSWER_TEXT_MAX:
         return f"answer_text exceeds {ANSWER_TEXT_MAX} chars"
-    if input_kind == "free_text" and not answer_text:
+    if input_kind == "free_text" and not answer_text and not _gate_text_optional(row):
         return "answer_text required for a free_text option"
     # A menu bridged from an agent's terminal takes a pick OR words: the digit fires the option and only the
     # write-in row carries words, so words sent with another pick would be kept as a note the agent never sees.
@@ -497,6 +518,15 @@ def _validate_option_answer(row, option_n, answer_text):
     if answer_text and input_kind != "free_text" and _is_terminal_menu(row):
         return "pick an option or type your own answer, not both"
     return None
+
+
+def _gate_text_optional(row):
+    """A safety-gate card's "Don't allow" takes optional words (scripts/gate_cards.py)."""
+    try:
+        import gate_cards
+        return gate_cards.deny_text_optional(row)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _is_terminal_menu(row):
@@ -1388,6 +1418,50 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
             "resume_row": resume_row}
 
 
+def _gate_card_kind(store, rid):
+    """'gate' / 'gate_grant' for a safety-gate card, else None (never raises)."""
+    b = _gate_bridge(store, rid)
+    return b.get("kind") if b else None
+
+
+def _gate_bridge(store, rid):
+    """A safety-gate card's bridge dict, else None (never raises)."""
+    try:
+        import gate_cards
+        row = store.get(rid) if isinstance(rid, str) and rid else None
+        return gate_cards.bridge_of(row) if row else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _gate_wide_pick(store, rid, option_n) -> bool:
+    """True when this pick changes more than one agent: option 4 on a gate card (allow for all agents), or Confirm
+    (option 1) on a grant proposal whose scope is fleet, role or project. Those need an admin device (plan §7.2)."""
+    n = str(option_n or "").strip()
+    if n not in ("1", "4"):
+        return False
+    try:                                       # fail closed: a card that cannot be read counts as wide
+        import gate_cards
+        row = store.get(rid) if isinstance(rid, str) and rid else None
+        b = gate_cards.bridge_of(row) if row else None
+    except Exception:  # noqa: BLE001
+        return True
+    if not b:
+        return False
+    if b.get("kind") == "gate":
+        return n == "4"
+    if b.get("kind") == "gate_grant" and n == "1":
+        scope = b.get("scope")
+        if scope is None:                      # a card filed before the bridge named its scope: read the grant
+            try:
+                g = _sup_store().grant(b.get("grant_id"))
+                scope = (g or {}).get("scope")
+            except Exception:  # noqa: BLE001 — unreadable: treat as wide (the safe side)
+                scope = "fleet"
+        return scope in ("fleet", "role", "project")
+    return False
+
+
 async def handle_answer(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
@@ -1397,6 +1471,11 @@ async def handle_answer(request):
         return _json({"ok": False, "error": "bad json"}, status=400)
 
     store = ApprovalStore(); store.migrate()
+    # "Always for all agents" (option 4) on a safety-gate card, or Confirm on a fleet / role / project grant
+    # proposal, widens what many agents may do: admin or '*' only (plan §7.2). Anything else is refused before the
+    # answer lands; the card stays waiting.
+    if _gate_wide_pick(store, data.get("id"), data.get("option_n")) and not _sup_is_admin(request):
+        return _json({"ok": False, "error": "all_agents_needs_admin"}, status=403)
     # R7d: this is the authenticated bearer edge — derive the provenance tags
     # SERVER-SIDE (principal='operator' from the bearer, surface=watch|phone as the
     # app declares). A client-claimed answered_by is ignored (spoof guard).
@@ -1595,8 +1674,11 @@ def _attention_build(request, query):
     reminders, on_behalf = _attention_rule_maps(astore)
     cached = _agents_cache.get("data")
     states = {r.get("id"): r.get("state") for r in cached} if isinstance(cached, list) else {}
+    default_level, levels = _sup_push_levels(person)
+    gate_holds, hold_state_fn = _sup_hold_states()
     ctx = AI.Ctx(person=person, prefs=notify_policy.load_prefs(_data_dir(), person), tz=tz, now=now,
-                 agent_states=states, reminders=reminders, on_behalf=on_behalf)
+                 agent_states=states, reminders=reminders, on_behalf=on_behalf,
+                 levels=levels, default_level=default_level, gate_holds=gate_holds, hold_state_fn=hold_state_fn)
 
     # Waiting is always computed (the counts need it), filtered by agent before anything else.
     pending = [r for r in _pending_rows(request)
@@ -1794,6 +1876,1056 @@ async def handle_attention_rules(request):
             return 422, {"ok": False, "error": "invalid", "detail": str(e)}
     status, out = await asyncio.get_event_loop().run_in_executor(None, work)
     return _json(out, status=status)
+
+
+# ---------------------------------------------------------------------------
+# Supervision (attention part 2a, plan §7.1): how closely each agent is watched, the roles, each project's default
+# role, standing grants and the safety gate's switches file. The DB (supervision_store) is the source of truth;
+# <data>/state/attention/gate.json is the hook's snapshot, rewritten after every write here, at startup and by the
+# attention tick whenever its gen is behind the DB's. Every write: 409 not_armed while m20261104_supervision is
+# unarmed, bumps the attention rev (so /events makes every surface refetch), then rewrites gate.json; a failed
+# rewrite is 500 snapshot_failed while the DB change stands (the tick reconciles it).
+# Writes that change more than one agent (role edits, a project's role, role/project/fleet grants) need `admin`
+# on top of the route's verb: the fleet bearer ('*') or a device minted with admin.
+# ---------------------------------------------------------------------------
+
+SUP_LEVELS = [
+    {"id": "watch_closely", "label": "Watch closely", "detail": "Anything in the four categories waits for you."},
+    {"id": "check_in", "label": "Check in", "detail": "Only what you mark high-risk waits for you."},
+    {"id": "let_them_run", "label": "Let them run", "detail": "Nothing waits. Agents work on their own."},
+]
+SUP_WAIT_CHOICES = [0, 60, 120, 300, 540]
+SUP_CATEGORY_TEXT = {
+    "outside_world": ("Outside-world actions",
+                      "Sending email or messages, posting, deploying, pushing code, paid APIs"),
+    "destructive": ("Destructive actions",
+                    "Deleting files or data, force-pushing, stopping programs, changing system settings"),
+    "outside_folder": ("Outside its folder", "Editing files outside the agent's project folder, secrets and keys"),
+    "install": ("Installing software", "npm, pip and system packages, install scripts from the internet"),
+}
+SUP_UNGATED_RUNTIMES = ("codex", "grok")
+SUP_GRANT_SOURCES = ("settings", "drawer")
+SUP_PROTECTED_WITHIN_S = 24 * 3600
+SUP_RECONCILE_EVERY_S = 60.0
+_SUP_SESSION_RE = re.compile(r"^[0-9a-f-]{36}$")
+_SUP_LOOPBACK_FIXED = ("127.0.0.1", "localhost", "::1")
+_SUP_STATE = {"loopback": None, "reconciled_at": 0.0}
+_SUP_FIELDS = ("level", "high_risk", "hold_wait_s")
+_SUP_INVALID_FIELD = {"bad_level": "level", "bad_high_risk": "high_risk", "bad_hold_wait_s": "hold_wait_s",
+                      "bad_name": "name", "unknown_role": "role_id", "bad_scope": "scope",
+                      "bad_scope_ref": "scope_ref", "bad_category": "category", "bad_effect": "effect",
+                      "bad_narrow": "narrow", "bad_folder": "narrow", "bad_agent": "agent",
+                      "project_needs_role": "role_id", "bad_target": "agent"}
+_SUP_INVALID_PASS = {"name_taken": "name_taken", "widen_not_allowed": "widen_not_allowed",
+                     "deny_immutable": "deny_is_immutable"}
+
+
+class _SupError(Exception):
+    """A finished answer from deep inside a handler's work (status, body)."""
+
+    def __init__(self, status, body):
+        super().__init__(body.get("error"))
+        self.status, self.body = status, body
+
+
+def _sup_invalid(field, detail=None, error="invalid"):
+    body = {"ok": False, "error": error, "field": field}
+    if detail:
+        body["detail"] = detail
+    return _SupError(422, body)
+
+
+def _sup_store():
+    """The supervision store on the install's ledger (approval_config.db_path, which follows $ORCHESTRA_DIR)."""
+    import supervision_store as SS
+    return SS.SupervisionStore()
+
+
+def _sup_data() -> str:
+    return str(ORCH_DIR)
+
+
+def _sup_registry() -> dict:
+    reg = _load_json(Path(_sup_data()) / "registry.json")
+    return reg if isinstance(reg, dict) else {}
+
+
+def _sup_reg_agents(registry) -> dict:
+    a = (registry or {}).get("agents")
+    return a if isinstance(a, dict) else {}
+
+
+def _sup_base(agent) -> str:
+    import supervision_store as SS
+    return SS.base_agent(agent or "")
+
+
+def _sup_known_agent(agent, registry):
+    """The registry id for `agent` (exact, else the -genN-stripped id), or None."""
+    reg = _sup_reg_agents(registry)
+    if agent in reg:
+        return agent
+    b = _sup_base(agent)
+    if b in reg:
+        return b
+    for k in reg:
+        if _sup_base(k) == b:
+            return k
+    return None
+
+
+def _sup_live_fence() -> bool:
+    """True when a test is about to touch the live install's gate files (refused, like the live-DB fence)."""
+    import approval_config
+    if not approval_config.under_pytest():
+        return False
+    try:
+        live = os.path.realpath(str(approval_config.LIVE_ORCHESTRA_DIR))
+    except Exception:  # noqa: BLE001
+        return True
+    return os.path.realpath(_sup_data()) == live
+
+
+def _tailscale_ipv4() -> list:
+    """`tailscale ip -4` when the command exists; [] otherwise (never raises)."""
+    import shutil
+    import subprocess
+    exe = shutil.which("tailscale")
+    if not exe:
+        return []
+    try:
+        out = subprocess.run([exe, "ip", "-4"], capture_output=True, text=True, timeout=3).stdout or ""
+    except Exception:  # noqa: BLE001
+        return []
+    return [x.strip() for x in out.splitlines() if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", x.strip())]
+
+
+def _sup_loopback_hosts(refresh=False) -> list:
+    """The fixed three plus this box's tailscale IPv4 (review 15). Looked up once per process (startup)."""
+    if refresh or _SUP_STATE["loopback"] is None:
+        hosts = list(_SUP_LOOPBACK_FIXED)
+        for ip in _tailscale_ipv4():
+            if ip not in hosts:
+                hosts.append(ip)
+        _SUP_STATE["loopback"] = hosts
+    return list(_SUP_STATE["loopback"])
+
+
+def _sup_gateway_url() -> str:
+    host = GATEWAY_HOST if GATEWAY_HOST not in ("", "0.0.0.0", "::") else "127.0.0.1"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{GATEWAY_PORT}"
+
+
+def _sup_hr(v) -> list | None:
+    if v is None:
+        return None
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return None
+    return list(v) if isinstance(v, (list, tuple)) else None
+
+
+def _sup_policy(r) -> dict:
+    return {"level": r.level, "high_risk": list(r.high_risk), "hold_wait_s": int(r.hold_wait_s)}
+
+
+def _sup_default(rows) -> dict:
+    """The person's default as GET /supervision shows it: stored fields over the built-in Let them run."""
+    row = rows.get("") if isinstance(rows.get(""), dict) else None
+    out = {"level": "let_them_run", "high_risk": [], "hold_wait_s": 0, "source": "builtin"}
+    if row:
+        if row.get("level"):
+            out["level"] = row["level"]
+        hr = _sup_hr(row.get("high_risk"))
+        if hr is not None:
+            out["high_risk"] = hr
+        if row.get("hold_wait_s") is not None:
+            out["hold_wait_s"] = int(row["hold_wait_s"])
+        out["source"] = row.get("source") or "seed"
+    return out
+
+
+def _sup_snapshot(ss, person, registry=None) -> dict:
+    """gate.json's fields from the DB (§2.2): every registry agent's resolved settings, the default, the gen."""
+    import gate_policy as GP
+    registry = _sup_registry() if registry is None else registry
+    resolved = GP.resolve_all(ss, person, registry, _sup_data())
+    d = _sup_default(ss.person_rows(person))
+    return {"person": person, "gateway_url": _sup_gateway_url(), "loopback_hosts": _sup_loopback_hosts(),
+            "default": {k: d[k] for k in _SUP_FIELDS},
+            "agents": {a: dict(_sup_policy(r), role=r.role_id) for a, r in resolved.items()},
+            "gen": ss.gen()}
+
+
+def _sup_write_gate(ss, person, registry=None, *, mode_if_unset=False, mode=None) -> dict:
+    """Rewrite gate.json from the DB. mode_if_unset: when no valid mode is set yet, write the install's
+    `[gate] default_mode` (off unless configured; "off" is left unwritten so a later default still applies).
+    A mode already set always survives (D3: an admin's 'off' survives every restart). Raises on a failed write."""
+    import gate_config as GC
+    if _sup_live_fence():
+        raise RuntimeError("refusing to write the live gate.json under pytest")
+    fields = _sup_snapshot(ss, person, registry) if ss is not None and ss._is_armed() else {}
+    if mode is not None:
+        fields["mode"] = mode
+    elif mode_if_unset:
+        cur = GC.read_gate_raw(_sup_data())
+        if not cur or cur.get("mode") not in GC.MODES:
+            try:
+                import notify_policy
+                raw = notify_policy._config()
+            except Exception:  # noqa: BLE001 — an unreadable config is the shipped default (off)
+                raw = {}
+            dm = GC.default_mode(raw)
+            if dm != "off":
+                fields["mode"] = dm
+    return GC.write_gate(_sup_data(), **fields)
+
+
+def _sup_bump_rev():
+    """Bump the attention rev so /events makes every surface refetch. Never raises."""
+    try:
+        astore = AttentionStore(); astore.migrate()
+        if astore.armed:
+            astore._write(lambda c: (None, True))
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"supervision: attention rev not bumped: {e!r}")
+
+
+def _sup_after_write(ss, person):
+    """Every write's tail: bump rev, rewrite gate.json; a failed rewrite -> 500 snapshot_failed."""
+    _sup_bump_rev()
+    try:
+        _sup_write_gate(ss, person)
+    except Exception as e:  # noqa: BLE001 — the DB change stands; the attention tick reconciles the file
+        log.error(f"supervision: gate.json rewrite failed: {e!r}")
+        raise _SupError(500, {"ok": False, "error": "snapshot_failed",
+                              "detail": "saved, but the gate's snapshot file could not be rewritten"})
+
+
+def _sup_armed_store():
+    ss = _sup_store()
+    if not ss._is_armed():
+        raise _SupError(409, {"ok": False, "error": "not_armed",
+                              "detail": "supervision arrives when m20261104_supervision is armed"})
+    return ss
+
+
+def _sup_is_admin(request) -> bool:
+    from scripts.device_tokens import scopes_allow
+    resolved, principal = _resolved_principal(request)
+    if not resolved:
+        principal = resolve_principal(request)
+    return bool(principal) and scopes_allow(principal.get("scopes") or [], "admin")
+
+
+def _sup_need_admin(request):
+    if not _sup_is_admin(request):
+        raise _SupError(403, {"ok": False, "error": "forbidden", "needed_scope": "admin"})
+
+
+def _sup_runtime(aid, reg_row, cache_rows) -> str:
+    rt = reg_row.get("runtime") if isinstance(reg_row, dict) else None
+    if not isinstance(rt, str) or not rt:
+        c = cache_rows.get(aid) or {}
+        rt = c.get("runtime") or c.get("provider")
+    return str(rt or "claude").lower()
+
+
+def _sup_iso(ts) -> str | None:
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        return _dt.fromtimestamp(float(ts), _tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _sup_gate_status(aid, runtime, mode, kill, seen, reg_row, now_s) -> dict:
+    """§5.4: protected | observing | off | not_seen | not_supported."""
+    import gate_config as GC
+    if runtime in SUP_UNGATED_RUNTIMES:
+        return {"status": "not_supported", "label": "Can't be gated yet"}
+    if kill or mode not in ("observe", "enforce"):
+        return {"status": "off"}
+    s = seen.get(GC._safe_name(aid)) or seen.get(GC._safe_name(_sup_base(aid)))
+    info = {"seen_at": _sup_iso(s.get("ts")) if s else None, "session_id": s.get("session_id") if s else None}
+    if mode == "observe":
+        return {"status": "observing", **info}
+    reg_sid = reg_row.get("session_id") if isinstance(reg_row, dict) else None
+    try:
+        fresh = s is not None and now_s - float(s.get("ts")) <= SUP_PROTECTED_WITHIN_S
+    except (TypeError, ValueError):
+        fresh = False
+    if fresh and s.get("mode") == "enforce" and (not reg_sid or s.get("session_id") == reg_sid):
+        return {"status": "protected", **info}
+    return {"status": "not_seen", **info}
+
+
+def _sup_role_json(r, asg) -> dict:
+    used = {"projects": 0, "agents": 0}
+    for (kind, _t), (rid, _src) in asg.items():
+        if rid == r["id"]:
+            used["projects" if kind == "project" else "agents"] += 1
+    return {"id": r["id"], "name": r["name"], "description": r.get("description"), "level": r["level"],
+            "high_risk": _sup_hr(r.get("high_risk")) or [], "hold_wait_s": int(r.get("hold_wait_s") or 0),
+            "starter": r.get("starter"), "touched": bool(r.get("touched")), "used_by": used}
+
+
+def _sup_projects(registry, asg) -> tuple:
+    """({project key: [agents]}, {agent: project key | None}) over the registry, plus assigned keys with no agent."""
+    import gate_policy as GP
+    by_proj, of_agent = {}, {}
+    for aid in _sup_reg_agents(registry):
+        p = GP.project_of(aid, registry, _sup_data())
+        of_agent[aid] = p
+        if p:
+            by_proj.setdefault(p, []).append(aid)
+    for (kind, target) in asg:
+        if kind == "project":
+            by_proj.setdefault(target, [])
+    return by_proj, of_agent
+
+
+def _sup_body(ss, person, agents_filter=None) -> dict:
+    """GET /supervision."""
+    import time as _time
+    import gate_classify as GCL
+    import gate_config as GC
+    import gate_policy as GP
+    registry = _sup_registry()
+    reg = _sup_reg_agents(registry)
+    rows, roles, asg = ss.person_rows(person), ss.roles(person), ss.assignments(person)
+    roles_by = {r["id"]: r for r in roles}
+    gate = GC.read_gate(_sup_data())
+    mode, kill = gate.get("mode", "off"), GC.kill_switch(_sup_data())
+    seen = GC.seen(_sup_data())
+    cached = _agents_cache.get("data")
+    cache_rows = {r.get("id"): r for r in cached if isinstance(r, dict)} if isinstance(cached, list) else {}
+    by_proj, of_agent = _sup_projects(registry, asg)
+    keep = (lambda a: a in agents_filter) if agents_filter is not None else (lambda a: True)
+    now_s = _time.time()
+    agents = []
+    for aid in sorted(reg):
+        if not keep(aid):
+            continue
+        row = reg.get(aid) if isinstance(reg.get(aid), dict) else {}
+        project = of_agent.get(aid)
+        r = GP.resolve(rows, roles_by, asg, aid, project)
+        own = rows.get(_sup_base(aid)) or {}
+        runtime = _sup_runtime(aid, row, cache_rows)
+        role = ({"id": r.role_id, "name": roles_by[r.role_id]["name"], "source": r.role_source}
+                if r.role_id in roles_by else None)
+        agents.append({
+            "agent": aid, "runtime": runtime, "project": project, "role": role,
+            "override": {"level": own.get("level"), "high_risk": _sup_hr(own.get("high_risk")),
+                         "hold_wait_s": own.get("hold_wait_s")},
+            "effective": _sup_policy(r),
+            "gate": _sup_gate_status(aid, runtime, mode, kill, seen, row, now_s)})
+    projects = []
+    for key in sorted(by_proj):
+        members = sorted(a for a in by_proj[key] if keep(a))
+        if agents_filter is not None and not members:
+            continue
+        a = asg.get(("project", key))
+        projects.append({"key": key, "label": os.path.basename(key.rstrip("/")) or key,
+                         "role_id": a[0] if a else None, "agents": members})
+    categories = [{"id": c, "label": SUP_CATEGORY_TEXT.get(c, (c, ""))[0], "detail": SUP_CATEGORY_TEXT.get(c, ("", ""))[1],
+                   "actions": [{"id": k, "label": v} for k, v in GCL.ACTIONS.get(c, {}).items()]}
+                  for c in GCL.CATEGORIES]
+    return {"ok": True, "person": person, "armed": bool(ss._is_armed()), "gate_mode": mode, "kill_switch": kill,
+            "default": _sup_default(rows), "levels": SUP_LEVELS, "wait_choices": SUP_WAIT_CHOICES,
+            "categories": categories, "roles": [_sup_role_json(r, asg) for r in roles],
+            "projects": projects, "agents": agents, "gen": ss.gen()}
+
+
+def _sup_level_person_made(r, rows, roles_by, asg, agent, project) -> bool:
+    """§9: did the agent's resolved LEVEL come from something a person chose?"""
+    import gate_policy as GP
+    src = (r.sources or {}).get("level")
+    a = _sup_base(agent)
+    if src == "agent":
+        return (rows.get(a) or {}).get("source") == "person"
+    if src in ("role", "project_role"):
+        got = asg.get(("agent", a) if src == "role" else ("project", project))
+        role = roles_by.get(r.role_id) or {}
+        return bool(got and got[1] == "person") or GP._role_person_made(role)
+    if src == "default":
+        return (rows.get("") or {}).get("source") == "person"
+    return False
+
+
+def _sup_push_levels(person) -> tuple:
+    """(default_level, {agent: level}) for attention_items.Ctx: ONLY levels a person chose (§9). The release seeds
+    (Let them run default, Hands-off project roles, untouched starters) never reach decide_push, so at release
+    this is (None, {}) and push is part 1's. Unarmed or unreadable -> (None, {})."""
+    try:
+        import gate_policy as GP
+        ss = _sup_store()
+        if not ss._is_armed():
+            return None, {}
+        registry = _sup_registry()
+        rows, roles, asg = ss.person_rows(person), ss.roles(person), ss.assignments(person)
+        roles_by = {r["id"]: r for r in roles}
+        d = rows.get("") or {}
+        default_level = d.get("level") if d.get("source") == "person" and d.get("level") in GP.LEVELS else None
+        ids = set(_sup_reg_agents(registry)) | {a for a in rows if a} | {t for (k, t) in asg if k == "agent"}
+        levels = {}
+        for aid in ids:
+            project = GP.project_of(aid, registry, _sup_data())
+            r = GP.resolve(rows, roles_by, asg, aid, project)
+            if _sup_level_person_made(r, rows, roles_by, asg, aid, project):
+                levels[_sup_base(aid)] = r.level
+        return default_level, levels
+    except Exception as e:  # noqa: BLE001 — push falls back to part 1's decision, never breaks the list
+        log.warning(f"supervision: push levels unreadable: {e!r}")
+        return None, {}
+
+
+def _sup_hold_states() -> tuple:
+    """({hold id: state} for every live hold, a lookup for any other) for attention_items.Ctx: a gate card's
+    blocking follows its hold. Unarmed or unreadable -> ({}, a lookup that answers None)."""
+    try:
+        ss = _sup_store()
+        if not ss._is_armed():
+            return {}, (lambda _hid: None)
+        live = {h["id"]: h["state"] for h in ss.open_holds(("filing", "waiting", "open"))}
+
+        def one(hid):
+            try:
+                h = ss.hold(hid)
+                return h.get("state") if h else None
+            except Exception:  # noqa: BLE001
+                return None
+        return live, one
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"supervision: gate holds unreadable: {e!r}")
+        return {}, (lambda _hid: None)
+
+
+# ---- grants -----------------------------------------------------------------------------------------------------
+
+def _sup_grant_who(g, role_names) -> str:
+    scope, ref = g.get("scope"), g.get("scope_ref")
+    if scope == "agent":
+        return ref or "this agent"
+    if scope == "session":
+        return f"{g.get('agent') or 'an agent'} (this session)"
+    if scope == "role":
+        return f"agents with the role {role_names.get(ref) or ref}"
+    if scope == "project":
+        return f"agents in {os.path.basename(str(ref or '').rstrip('/')) or ref}"
+    return "all agents"
+
+
+def _sup_grant_label(g, role_names) -> str:
+    import gate_policy as GP
+    who = _sup_grant_who(g, role_names)
+    who = who[:1].upper() + who[1:]
+    what = GP.verb(g.get("narrow_action"), g.get("category"))
+    if g.get("narrow_folder"):
+        what += f" in {g['narrow_folder']}"
+    if g.get("narrow_recipient"):
+        what += f" to {g['narrow_recipient']}"
+    if g.get("effect") == "deny":
+        return f"{who} must ask before they {what}"
+    return f"{who} may {what} without asking"
+
+
+def _sup_grant_json(g, role_names) -> dict:
+    import supervision_store as SS
+    return {"id": g["id"], "scope": g["scope"], "scope_ref": g.get("scope_ref"), "agent": g.get("agent"),
+            "category": g["category"],
+            "narrow": {k: g[f"narrow_{k}"] for k in SS.NARROW_KEYS if g.get(f"narrow_{k}")},
+            "effect": g["effect"], "state": g["state"], "source": g.get("source"), "source_card": g.get("source_card"),
+            "said": g.get("said"), "proposed_by": g.get("proposed_by"), "created_at": g.get("created_at"),
+            "created_by": g.get("created_by"), "revoked_at": g.get("revoked_at"),
+            "label": _sup_grant_label(g, role_names), "applies": None, "overridden_by": None}
+
+
+def _sup_grants_for_agent(ss, person, grants, agent, registry, role_names) -> list:
+    """The grants that reach `agent` at any tier, each marked applies / overridden_by (the precedence contract,
+    gate_policy.winner, probed with every action the grant names)."""
+    import gate_classify as GCL
+    import gate_policy as GP
+    rows, roles, asg = ss.person_rows(person), ss.roles(person), ss.assignments(person)
+    project = GP.project_of(agent, registry, _sup_data())
+    r = GP.resolve(rows, roles, asg, agent, project)
+    active = ss.grants(person, states=("active",))
+    out = []
+    for g in grants:
+        sid = g.get("scope_ref") if g.get("scope") == "session" else None
+        if g.get("scope") == "session":
+            if not g.get("agent") or _sup_base(g["agent"]) != _sup_base(agent):
+                continue
+            tier = GP.SCOPE_RANK["session"]
+        else:
+            tier = GP.tier_of(g, agent=agent, session_id=None, project=project, resolved=r)
+            if tier is None:
+                continue
+        j = _sup_grant_json(g, role_names)
+        j["applies"] = False
+        if g.get("state") != "active":
+            out.append(j)
+            continue
+        over = None
+        actions = [g["narrow_action"]] if g.get("narrow_action") else list(GCL.ACTIONS.get(g["category"], {}))
+        for act in actions:
+            hit = GCL.Hit(category=g["category"], action=act, detail="", folder=g.get("narrow_folder"),
+                          recipient=g.get("narrow_recipient"))
+            w = GP.winner(active, hit, agent=agent, session_id=sid, project=project, resolved=r)
+            if w is None:
+                continue
+            if w["id"] == g["id"] or w.get("effect") == g.get("effect"):
+                j["applies"], over = True, None          # it decides this call, or a same-effect grant does
+                break
+            over = over or w
+        if over is not None:
+            j["overridden_by"] = (f"{over['id']} ({_sup_grant_who(over, role_names)}: "
+                                  f"{'off' if over.get('effect') == 'deny' else 'on'})")
+        out.append(j)
+    return out
+
+
+def _sup_nearest_real(path) -> str:
+    """realpath of the nearest existing ancestor, with the rest of the path re-attached (normalised)."""
+    p = os.path.normpath(path)
+    tail = []
+    while p and not os.path.exists(p) and os.path.dirname(p) != p:
+        tail.append(os.path.basename(p))
+        p = os.path.dirname(p)
+    return os.path.normpath(os.path.join(os.path.realpath(p), *reversed(tail)))
+
+
+def _sup_check_narrow(category, narrow, *, allow_null=False):
+    """§7.1 narrow validation; raises _SupError 422."""
+    import gate_classify as GCL
+    import supervision_store as SS
+    if narrow is None:
+        return {}
+    if not isinstance(narrow, dict) or set(narrow) - set(SS.NARROW_KEYS):
+        raise _sup_invalid("narrow", "narrow takes action, folder and recipient")
+    for k, v in narrow.items():
+        if v is None:
+            if allow_null:
+                continue
+            raise _sup_invalid("narrow", f"{k} may not be null", error="widen_not_allowed")
+        if not isinstance(v, str) or not v.strip():
+            raise _sup_invalid("narrow", f"{k} must be a non-empty string")
+    if narrow.get("action") is not None and narrow["action"] not in GCL.ACTIONS.get(category, {}):
+        raise _sup_invalid("narrow", f"action must be one of {', '.join(GCL.ACTIONS.get(category, {}))}")
+    if narrow.get("folder") is not None:
+        if category not in ("outside_folder", "destructive"):
+            raise _sup_invalid("narrow", "folder narrows only outside_folder and destructive")
+        if not os.path.isabs(narrow["folder"]):
+            raise _sup_invalid("narrow", "folder must be an absolute path")
+    if narrow.get("recipient") is not None and category != "outside_world":
+        raise _sup_invalid("narrow", "recipient narrows only outside_world")
+    return narrow
+
+
+def _sup_project_keys(ss, person, registry) -> set:
+    by_proj, _ = _sup_projects(registry, ss.assignments(person))
+    return set(by_proj)
+
+
+def _sup_role_names(ss, person) -> dict:
+    return {r["id"]: r["name"] for r in ss.roles(person, include_deleted=True)}
+
+
+# ---- handlers -----------------------------------------------------------------------------------------------------
+
+async def _sup_handle(request, fn, *, json_body=False):
+    """Parse, run fn(request, body) -> (status, body) in the executor, map the store's errors."""
+    import asyncio
+    import supervision_store as SS
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    body = None
+    if json_body:
+        try:
+            raw = await request.read()
+            body = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(body, dict):
+            return _json({"ok": False, "error": "body must be an object"}, status=400)
+
+    def work():
+        try:
+            return fn(request, body)
+        except _SupError as e:
+            return e.status, e.body
+        except SS.SupervisionNotArmed:
+            return 409, {"ok": False, "error": "not_armed"}
+        except SS.SupervisionBusy as e:
+            return 503, {"ok": False, "error": "busy", "detail": str(e)}
+        except SS.NotFound as e:
+            return 404, {"ok": False, "error": "not_found", "detail": str(e)}
+        except SS.Conflict as e:
+            return 409, {"ok": False, "error": str(e)}
+        except SS.Invalid as e:
+            code = str(e)
+            if code in _SUP_INVALID_PASS:
+                return 422, {"ok": False, "error": _SUP_INVALID_PASS[code]}
+            return 422, {"ok": False, "error": "invalid", "field": _SUP_INVALID_FIELD.get(code, code), "detail": code}
+    status, out = await asyncio.get_event_loop().run_in_executor(None, work)
+    return _json(out, status=status)
+
+
+def _sup_fields(body, *, nullable) -> dict:
+    """level / high_risk / hold_wait_s from a body (only the keys present), validated up front -> 422 by field."""
+    import supervision_store as SS
+    out = {}
+    for f, check in (("level", SS._v_level), ("high_risk", SS._v_high_risk), ("hold_wait_s", SS._v_wait)):
+        if f not in body:
+            continue
+        v = body[f]
+        if v is None and not nullable:
+            raise _sup_invalid(f, f"{f} may not be null")
+        try:
+            check(v)
+        except SS.Invalid:
+            raise _sup_invalid(f)
+        out[f] = v
+    return out
+
+
+async def handle_supervision(request):
+    def fn(req, _body):
+        person, _ = _attention_person(req)
+        try:
+            q = _attention_query({"agents": req.query.get("agents")} if req.query.get("agents") is not None else {})
+        except ValueError as e:
+            return 400, {"ok": False, "error": str(e)}
+        return 200, _sup_body(_sup_store(), person, q["agents"])
+    return await _sup_handle(request, fn)
+
+
+async def handle_supervision_default(request):
+    def fn(req, body):
+        _sup_need_admin(req)                       # the default applies to every agent without its own setting
+        person, _ = _attention_person(req)
+        ss = _sup_armed_store()
+        fields = _sup_fields(body, nullable=False)
+        ss.set_default(person, by=person, source="person", **fields)
+        _sup_after_write(ss, person)
+        return 200, _sup_body(ss, person)
+    return await _sup_handle(request, fn, json_body=True)
+
+
+async def handle_supervision_agent(request):
+    def fn(req, body):
+        person, _ = _attention_person(req)
+        ss = _sup_armed_store()
+        registry = _sup_registry()
+        aid = _sup_known_agent(req.match_info["agent"], registry)
+        if aid is None:
+            return 404, {"ok": False, "error": "unknown_agent"}
+        fields = _sup_fields(body, nullable=True)
+        if "role_id" in body:
+            rid = body["role_id"]
+            if rid is not None and (not isinstance(rid, str) or not ss.role(rid) or ss.role(rid).get("deleted_at")):
+                raise _sup_invalid("role_id", "no such role")
+            ss.assign(person, "agent", aid, rid, by=person, source="person")
+        if fields:
+            ss.set_agent(person, aid, by=person, source="person", **fields)
+        _sup_after_write(ss, person)
+        out = _sup_body(ss, person)
+        mine = next((a for a in out["agents"] if a["agent"] == aid), None)
+        out["agent"] = mine
+        out["gate"] = mine["gate"] if mine else None
+        return 200, out
+    return await _sup_handle(request, fn, json_body=True)
+
+
+async def handle_supervision_project(request):
+    def fn(req, body):
+        person, _ = _attention_person(req)
+        _sup_need_admin(req)
+        ss = _sup_armed_store()
+        key = req.match_info["key"]
+        if key not in _sup_project_keys(ss, person, _sup_registry()):
+            return 404, {"ok": False, "error": "unknown_project"}
+        rid = body.get("role_id")
+        if rid is None:
+            raise _sup_invalid("role_id", "every project keeps a role")
+        if not isinstance(rid, str) or not ss.role(rid) or ss.role(rid).get("deleted_at"):
+            raise _sup_invalid("role_id", "no such role")
+        ss.assign(person, "project", key, rid, by=person, source="person")
+        _sup_after_write(ss, person)
+        return 200, _sup_body(ss, person)
+    return await _sup_handle(request, fn, json_body=True)
+
+
+def _sup_roles_out(ss, person, with_grants=True) -> list:
+    asg = ss.assignments(person)
+    names = _sup_role_names(ss, person)
+    out = []
+    for r in ss.roles(person):
+        j = _sup_role_json(r, asg)
+        if with_grants:
+            j["grants"] = [_sup_grant_json(g, names) for g in ss.grants(person, scope="role", scope_ref=r["id"])]
+        out.append(j)
+    return out
+
+
+def _sup_one_role(ss, person, rid) -> dict:
+    return next((r for r in _sup_roles_out(ss, person) if r["id"] == rid), None)
+
+
+async def handle_supervision_roles(request):
+    def fn(req, body):
+        person, _ = _attention_person(req)
+        if req.method == "GET":
+            return 200, {"ok": True, "roles": _sup_roles_out(_sup_store(), person)}
+        _sup_need_admin(req)
+        ss = _sup_armed_store()
+        rid = req.match_info.get("id")
+        if req.method == "DELETE":
+            try:
+                gone = ss.delete_role(person, rid, by=person)
+            except Exception as e:
+                import supervision_store as SS
+                if isinstance(e, SS.Conflict) and str(e) == "role_in_use":
+                    used = _sup_role_json(ss.role(rid), ss.assignments(person))["used_by"]
+                    return 409, {"ok": False, "error": "role_in_use", "used_by": used}
+                raise
+            _sup_after_write(ss, person)
+            return 200, {"ok": True, "role": {"id": gone["id"], "name": gone["name"], "deleted_at": gone["deleted_at"]}}
+        fields = _sup_fields(body, nullable=False)
+        for k in ("name", "description"):
+            if k in body:
+                if body[k] is not None and not isinstance(body[k], str):
+                    raise _sup_invalid(k)
+                fields[k] = body[k]
+        if req.path.endswith("/duplicate"):
+            name = body.get("name")
+            if name is not None and not isinstance(name, str):
+                raise _sup_invalid("name")
+            made = ss.duplicate_role(person, rid, by=person, name=name)
+            _sup_after_write(ss, person)
+            return 201, {"ok": True, "role": _sup_one_role(ss, person, made["id"])}
+        if req.method == "POST":
+            if not isinstance(fields.get("name"), str) or not fields["name"].strip():
+                raise _sup_invalid("name", "a role needs a name")
+            if "level" not in fields:
+                raise _sup_invalid("level", "a role needs a level")
+            made = ss.create_role(person, by=person, **fields)
+            _sup_after_write(ss, person)
+            return 201, {"ok": True, "role": _sup_one_role(ss, person, made["id"])}
+        ss.update_role(person, rid, by=person, **fields)
+        _sup_after_write(ss, person)
+        return 200, {"ok": True, "role": _sup_one_role(ss, person, rid)}
+    return await _sup_handle(request, fn, json_body=request.method in ("POST", "PUT"))
+
+
+_SUP_GRANT_STATES = {"active": ("active",), "pending": ("pending",), "all": ()}
+
+
+async def handle_grants(request):
+    def fn(req, _body):
+        import supervision_store as SS
+        person, _ = _attention_person(req)
+        ss = _sup_store()
+        q = req.query
+        states = []
+        for s in (q.get("state") or "active,pending").split(","):
+            s = s.strip()
+            if s not in ("active", "pending", "revoked", "declined", "all"):
+                return 400, {"ok": False, "error": "state must be active, pending or all"}
+            if s == "all":
+                states = []
+                break
+            states.append(s)
+        scope = q.get("scope") or None
+        if scope is not None and scope not in SS.SCOPES:
+            return 400, {"ok": False, "error": f"scope must be one of {', '.join(SS.SCOPES)}"}
+        grants = ss.grants(person, scope=scope, states=tuple(states))
+        names = _sup_role_names(ss, person)
+        if q.get("agent"):
+            registry = _sup_registry()
+            aid = _sup_known_agent(q["agent"], registry) or q["agent"]
+            return 200, {"ok": True, "grants": _sup_grants_for_agent(ss, person, grants, aid, registry, names)}
+        return 200, {"ok": True, "grants": [_sup_grant_json(g, names) for g in grants]}
+    return await _sup_handle(request, fn)
+
+
+async def handle_grant_create(request):
+    def fn(req, body):
+        import supervision_store as SS
+        person, _ = _attention_person(req)
+        ss = _sup_armed_store()
+        registry = _sup_registry()
+        scope, ref, cat = body.get("scope"), body.get("scope_ref"), body.get("category")
+        effect = body.get("effect", "allow")
+        if scope not in SS.SCOPES:
+            raise _sup_invalid("scope")
+        if cat not in SS.CATEGORIES:
+            raise _sup_invalid("category")
+        if effect not in SS.EFFECTS:
+            raise _sup_invalid("effect")
+        if effect == "deny" and scope not in ("agent", "session"):
+            raise _sup_invalid("effect", "deny is for one agent or one session only")
+        narrow = _sup_check_narrow(cat, body.get("narrow"))
+        if scope in ("fleet", "role", "project"):
+            _sup_need_admin(req)
+        agent = None
+        if scope == "fleet":
+            if ref is not None:
+                raise _sup_invalid("scope_ref", "a fleet grant has no scope_ref")
+        elif not isinstance(ref, str) or not ref:
+            raise _sup_invalid("scope_ref")
+        elif scope == "agent":
+            ref = _sup_known_agent(ref, registry)
+            if ref is None:
+                raise _sup_invalid("scope_ref", "unknown agent")
+        elif scope == "role":
+            r = ss.role(ref)
+            if not r or r.get("deleted_at") or r.get("person") != person:
+                raise _sup_invalid("scope_ref", "unknown role")
+        elif scope == "project":
+            if ref not in _sup_project_keys(ss, person, registry):
+                raise _sup_invalid("scope_ref", "unknown project")
+        elif scope == "session":
+            if not _SUP_SESSION_RE.match(ref):
+                raise _sup_invalid("scope_ref", "a session id is 36 characters of hex and dashes")
+            if body.get("agent") is not None:
+                agent = _sup_known_agent(body["agent"], registry) if isinstance(body["agent"], str) else None
+                if agent is None:
+                    raise _sup_invalid("agent", "unknown agent")
+            # The session must be shown to belong to that agent (its registry row, its gate heartbeat, or a hold
+            # the hook recorded), or a caller could label someone else's session with an agent they may see.
+            # Without an agent, only an admin may grant on a bare session id.
+            if agent is None:
+                _sup_need_admin(req)
+            elif not _sup_session_is_agents(ss, agent, ref, registry):
+                raise _sup_invalid("scope_ref", "that session is not one of this agent's")
+        if body.get("agent") is not None and scope != "session":
+            raise _sup_invalid("agent", "agent names a session grant's agent only")
+        source = body.get("source", "settings")
+        if source not in SUP_GRANT_SOURCES:
+            raise _sup_invalid("source")
+        g = ss.create_grant(person, scope=scope, scope_ref=ref, category=cat, narrow=narrow, effect=effect,
+                            source=source, by=person, agent=agent)
+        _sup_after_write(ss, person)
+        return 201, {"ok": True, "grant": _sup_grant_json(g, _sup_role_names(ss, person))}
+    return await _sup_handle(request, fn, json_body=True)
+
+
+def _sup_session_is_agents(ss, agent, session_id, registry) -> bool:
+    """True when `session_id` is known to be `agent`'s: its registry row, its gate-seen heartbeat, or a gate hold."""
+    import gate_config as GC
+    base = GC.base_agent(agent)
+    row = (registry.get("agents") or {}).get(agent) if isinstance(registry, dict) else None
+    if isinstance(row, dict) and row.get("session_id") == session_id:
+        return True
+    try:
+        for a, s in GC.seen(_sup_data()).items():
+            if GC.base_agent(a) == base and isinstance(s, dict) and s.get("session_id") == session_id:
+                return True
+    except Exception:  # noqa: BLE001 — unreadable heartbeats are no evidence
+        pass
+    try:
+        return any(GC.base_agent(a) == base for a in ss.session_agents(session_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _sup_grant_for_write(req, ss):
+    g = ss.grant(req.match_info["id"])
+    if g is None:
+        raise _SupError(404, {"ok": False, "error": "not_found"})
+    if g.get("scope") in ("fleet", "role", "project"):
+        _sup_need_admin(req)
+    return g
+
+
+async def handle_grant_patch(request):
+    def fn(req, body):
+        import gate_classify as GCL
+        import supervision_store as SS
+        person, _ = _attention_person(req)
+        ss = _sup_armed_store()
+        extra = set(body) - {"narrow"}
+        if extra:
+            return 422, {"ok": False, "error": "field_not_patchable", "field": sorted(extra)[0]}
+        g = _sup_grant_for_write(req, ss)
+        if g["effect"] == "deny":
+            return 422, {"ok": False, "error": "deny_is_immutable"}
+        if g["state"] not in ("active", "pending"):
+            return 409, {"ok": False, "error": "not_active"}
+        narrow = body.get("narrow")
+        if not isinstance(narrow, dict):
+            raise _sup_invalid("narrow", "narrow must be an object")
+        _sup_check_narrow(g["category"], narrow)
+        n = dict(narrow)
+        for k in ("action", "recipient"):
+            if k in n and g.get(f"narrow_{k}") is not None:
+                cur, nv = g[f"narrow_{k}"], n[k].strip().lower() if k == "recipient" else n[k]
+                if nv != cur:
+                    return 422, {"ok": False, "error": "widen_not_allowed", "field": k}
+        if "folder" in n:
+            cur = g.get("narrow_folder")
+            if cur is not None:
+                new_real = _sup_nearest_real(n["folder"])
+                if not GCL.inside(new_real, _sup_nearest_real(cur)) or not GCL.inside(os.path.normpath(n["folder"]),
+                                                                                       cur):
+                    return 422, {"ok": False, "error": "widen_not_allowed", "field": "folder"}
+            n["folder"] = os.path.normpath(n["folder"])
+        try:
+            out = ss.narrow_grant(g["id"], n, by=person)
+        except SS.Conflict:
+            return 409, {"ok": False, "error": "not_active"}
+        _sup_after_write(ss, person)
+        return 200, {"ok": True, "grant": _sup_grant_json(out, _sup_role_names(ss, person))}
+    return await _sup_handle(request, fn, json_body=True)
+
+
+async def handle_grant_delete(request):
+    def fn(req, _body):
+        import gate_cards
+        import supervision_store as SS
+        person, _ = _attention_person(req)
+        ss = _sup_armed_store()
+        g = _sup_grant_for_write(req, ss)
+        try:
+            if g["state"] == "pending":
+                out = ss.decline_grant(g["id"], by=person)
+                try:                      # its confirm card is moot now
+                    ledger = ApprovalStore(); ledger.migrate()
+                    for row in ledger.find_by_op_key(f"gate_grant:{g['id']}") or []:
+                        if row.get("status") == "pending":
+                            gate_cards.retire_card(ledger, row["id"], "declined in Settings")
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"supervision: confirm card for {g['id']} not retired: {e!r}")
+            else:
+                out = ss.revoke_grant(g["id"], by=person)
+        except SS.Conflict:
+            return 409, {"ok": False, "error": "not_active"}
+        _sup_after_write(ss, person)
+        return 200, {"ok": True, "grant": _sup_grant_json(out, _sup_role_names(ss, person))}
+    return await _sup_handle(request, fn)
+
+
+async def handle_gate_mode(request):
+    def fn(req, body):
+        import gate_config as GC
+        person, _ = _attention_person(req)
+        mode = body.get("mode")
+        if mode not in GC.MODES:
+            raise _sup_invalid("mode", f"mode must be one of {', '.join(GC.MODES)}")
+        ss = _sup_store()
+        if mode != "off" and not ss._is_armed():       # turning the gate OFF is never refused
+            return 409, {"ok": False, "error": "not_armed"}
+        _sup_bump_rev()
+        try:
+            _sup_write_gate(ss, person, mode=mode)
+        except Exception as e:  # noqa: BLE001
+            log.error(f"supervision: gate mode not written: {e!r}")
+            return 500, {"ok": False, "error": "snapshot_failed"}
+        return 200, {"ok": True, "mode": mode}
+    return await _sup_handle(request, fn, json_body=True)
+
+
+async def handle_gate_log(request):
+    def fn(req, _body):
+        import gate_config as GC
+        try:
+            limit = int(req.query.get("limit", 200))
+        except (TypeError, ValueError):
+            return 400, {"ok": False, "error": "limit must be an integer"}
+        if not 1 <= limit <= 1000:
+            return 400, {"ok": False, "error": "limit must be 1..1000"}
+        lines = GC.read_log(_sup_data(), limit=limit, agent=req.query.get("agent") or None)
+        return 200, {"ok": True, "lines": lines}
+    return await _sup_handle(request, fn)
+
+
+async def handle_gate_hold(request):
+    def fn(req, _body):
+        h = _sup_store().hold(req.match_info["id"])
+        if not h:
+            return 404, {"ok": False, "error": "not_found"}
+        return 200, {"ok": True, "id": h["id"], "state": h["state"], "decision": h.get("decision"),
+                     "card_id": h.get("card_id"), "agent": h["agent"], "hits": _sup_hr(h.get("hits")) or [],
+                     "created_at": h.get("created_at"), "decided_at": h.get("decided_at")}
+    return await _sup_handle(request, fn)
+
+
+# ---- the tick and startup ---------------------------------------------------------------------------------------
+
+def _supervision_tick(now=None):
+    """Once per attention tick (sync, executor): seed (once per person; Hands-off for every new project folder),
+    sweep dead waiting holds and retire their cards, release open holds a new grant covers, withdraw open holds
+    whose card is gone, and rewrite gate.json when its gen is behind the DB's (at most once a minute). Never
+    raises."""
+    import time as _time
+    try:
+        import gate_cards
+        import gate_config as GC
+        import supervision_store as SS
+        ss = _sup_store()
+        if not ss._is_armed():
+            return
+        person, _ = _attention_person()
+        registry = _sup_registry()
+        ss.seed(person, SS.registry_project_keys(_sup_data(), registry))
+        ledger = ApprovalStore(); ledger.migrate()
+        changed = False
+        for h in ss.sweep_stale(now=now):
+            changed = True
+            if h.get("card_id"):
+                gate_cards.retire_card(ledger, h["card_id"], "the waiting hook stopped")
+        if gate_cards.release_covered(ss, ledger, now=now, person=person, registry=registry, data_dir=_sup_data()):
+            changed = True
+        for h in ss.open_holds(("open",)):
+            cid = h.get("card_id")
+            if not cid:
+                continue
+            row = ledger.get(cid)
+            if row is not None and row.get("status") not in ("expired", "retired", "discarded",
+                                                               "resolved_elsewhere"):
+                continue
+            if ss.transition_hold(h["id"], "withdrawn", ("open",), now=now):
+                changed = True
+        if changed:
+            _sup_bump_rev()
+        t = _time.time()
+        if t - _SUP_STATE["reconciled_at"] >= SUP_RECONCILE_EVERY_S:
+            _SUP_STATE["reconciled_at"] = t
+            cur = GC.read_gate_raw(_sup_data()) or {}
+            if cur.get("gen") != ss.gen():
+                _sup_write_gate(ss, person, registry)
+    except Exception as e:  # noqa: BLE001 — the next tick tries again
+        _attention_log_once(e)
+
+
+def _supervision_startup_sync():
+    """Startup (D3): seed, then write gate.json with the resolved snapshot; the configured default mode (off
+    unless `[gate] default_mode` says otherwise) only when no mode is set yet. Only while the store is armed
+    (unarmed: no file, so the hook stays off)."""
+    try:
+        if _sup_live_fence():
+            return
+        import supervision_store as SS
+        ss = _sup_store()
+        if not ss._is_armed():
+            return
+        person, _ = _attention_person()
+        registry = _sup_registry()
+        ss.seed(person, SS.registry_project_keys(_sup_data(), registry))
+        _sup_loopback_hosts(refresh=True)
+        _sup_write_gate(ss, person, registry, mode_if_unset=True)
+    except Exception as e:  # noqa: BLE001 — never keep the gateway down for it; the tick reconciles
+        log.error(f"supervision: startup gate.json not written: {e!r}")
+
+
+async def _start_supervision(app):
+    import asyncio
+    await asyncio.get_event_loop().run_in_executor(None, _supervision_startup_sync)
 
 
 # ---------------------------------------------------------------------------
@@ -6455,11 +7587,13 @@ def _attention_conditions(rows, cfg):
 
 
 def _attention_tick():
-    """One detector pass. Sync: runs in the executor."""
+    """One detector pass, then the supervision housekeeping (which runs even with the detector off: the safety
+    gate's holds and gate.json do not depend on it). Sync: runs in the executor."""
     try:
         _attention_tick_inner()
     except Exception as e:  # noqa: BLE001 — fail-open: the next tick tries again
         _attention_log_once(e)
+    _supervision_tick()
 
 
 def _attention_tick_inner():
@@ -10300,6 +11434,7 @@ def build_app():
     app.on_shutdown.append(_terminal_on_shutdown)
     app.on_startup.append(_start_pending_model_switches)
     app.on_startup.append(_start_attention_detector)
+    app.on_startup.append(_start_supervision)
     app.on_cleanup.append(_stop_pending_model_switches)
     app.on_cleanup.append(_stop_attention_detector)
     app.router.add_get("/pending-approvals", handle_pending)
@@ -10312,6 +11447,22 @@ def build_app():
     app.router.add_post("/attention/rules", handle_attention_rules)
     app.router.add_put("/attention/rules/{id}", handle_attention_rules)
     app.router.add_delete("/attention/rules/{id}", handle_attention_rules)
+    app.router.add_get("/supervision", handle_supervision)
+    app.router.add_put("/supervision/default", handle_supervision_default)
+    app.router.add_put("/supervision/agents/{agent}", handle_supervision_agent)
+    app.router.add_put("/supervision/projects/{key}", handle_supervision_project)
+    app.router.add_get("/supervision/roles", handle_supervision_roles)
+    app.router.add_post("/supervision/roles", handle_supervision_roles)
+    app.router.add_put("/supervision/roles/{id}", handle_supervision_roles)
+    app.router.add_delete("/supervision/roles/{id}", handle_supervision_roles)
+    app.router.add_post("/supervision/roles/{id}/duplicate", handle_supervision_roles)
+    app.router.add_get("/grants", handle_grants)
+    app.router.add_post("/grants", handle_grant_create)
+    app.router.add_patch("/grants/{id}", handle_grant_patch)
+    app.router.add_delete("/grants/{id}", handle_grant_delete)
+    app.router.add_put("/gate/mode", handle_gate_mode)
+    app.router.add_get("/gate/log", handle_gate_log)
+    app.router.add_get("/gate/holds/{id}", handle_gate_hold)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
     app.router.add_get("/terminal/ws", handle_terminal_ws)

@@ -173,6 +173,7 @@ def test_init_seeds_the_approval_and_questionnaire_schema(tmp_path):
     argv, cwd, env = seed_calls[0]
     assert "QuestionnaireStore" in " ".join(argv) and ".migrate()" in " ".join(argv)
     assert "AttentionStore().migrate()" in " ".join(argv)
+    assert "SupervisionStore().migrate()" in " ".join(argv)
     assert env["ORCHESTRA_DIR"] == str(data)
     assert str(root / "scripts") in env["PYTHONPATH"]
 
@@ -199,8 +200,11 @@ def test_init_schema_seed_arms_the_ruled_gated_migrations(tmp_path):
     # msg_3f3a4d05: "add the 4 fields"); a fresh install has no live table to protect.
     # m20261104_attention joins with attention part 1 (the approved 2026-11-04 attention plan, Task 11):
     # the Updates tables plus the urgency / default_option columns; a fresh install has nothing to protect.
+    # m20261104_supervision joins with attention part 2a (the 2026-11-04 attention part 2 plan, Task 9): the
+    # supervision tables; a fresh install has nothing to protect. Seeding stays with the gateway.
     assert armed == {"m20260825_answer_attribution", "m20260825_human_task",
-                     "m20261005_answer_device", "m20261010_card_retire", "m20261104_attention"}
+                     "m20261005_answer_device", "m20261010_card_retire", "m20261104_attention",
+                     "m20261104_supervision"}
 
 
 def test_init_demo_seeds_three_fixture_seats_and_runs_the_card_seeder(tmp_path):
@@ -354,7 +358,7 @@ def test_init_hooks_prompt_shows_the_plan_and_a_no_writes_nothing(tmp_path, monk
     assert not (cfg / "settings.json").exists()
     assert len(seen) == 1
     plan = seen[0]
-    assert str(cfg / "settings.json") in plan and "14 hook rows" in plan
+    assert str(cfg / "settings.json") in plan and "15 hook rows" in plan
     assert f'ORCHESTRA_DIR="{tmp_path / "data"}"' in plan          # the exact command text it will write
     assert "agent-queue-drain.py" in plan
 

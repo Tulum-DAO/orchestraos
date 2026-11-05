@@ -124,7 +124,7 @@ def test_installed_command_still_runs_the_script_when_present(tmp_path):
     block decision) reaches Claude unchanged."""
     import subprocess
     fake_root = tmp_path / "repo"; (fake_root / "hooks").mkdir(parents=True)
-    for _ev, _m, rel, _r in H.HOOKS:
+    for _ev, _m, rel, _r, *_ in H.HOOKS:
         p = fake_root / rel; p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text('print("{\\"decision\\": \\"block\\", \\"reason\\": \\"probe\\"}")\n' if rel.endswith(".py") else "console.log('js-ok')\n")
     settings = tmp_path / "settings.json"

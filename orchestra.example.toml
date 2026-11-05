@@ -66,6 +66,14 @@ interval_seconds = 60
 # when a seat runs something heavy. Every program a seat starts inherits it. 0-19; 0 = off.
 nice = 10
 
+[gate]
+# The supervision safety gate (hooks/gate-hook.py, PreToolUse). It ships OFF: the hook row is installed
+# but does nothing until a mode is set. default_mode is the mode the gateway writes the first time it
+# starts with none set: "off" (default), "observe" (log what it would hold) or "enforce" (hold calls for
+# your answer per the Permissions settings). A mode already set is kept; change it any time with
+# `orchestra gate mode <off|observe|enforce>` or Settings > Safety gate.
+default_mode = "off"
+
 [public]
 # The externally-reachable URL for this install (Tailscale hostname, a
 # reverse-proxy domain, or a tunnel URL). Used only for links shown in the UI

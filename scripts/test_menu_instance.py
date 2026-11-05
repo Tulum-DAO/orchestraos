@@ -443,7 +443,7 @@ def test_the_installer_registers_the_closing_events():
     spec = iu.spec_from_file_location("hooks_install", os.path.join(os.path.dirname(HERE), "hooks", "install.py"))
     m = iu.module_from_spec(spec)
     spec.loader.exec_module(m)
-    events = {e for e, _, script, _ in m.HOOKS if script == "hooks/state-event-hook.py"}
+    events = {e for e, _, script, *_ in m.HOOKS if script == "hooks/state-event-hook.py"}
     assert {"PostToolUseFailure", "PermissionDenied"} <= events
 
 

@@ -13,6 +13,7 @@ doctor` reports `hooks:claude`.
 | `hooks/agent-queue-drain.py` | Stop | when the seat goes idle with pending mail in `msg_store` older than 30 s, blocks the stop once with a `[QUEUE-DIGEST]` so the agent reads and acts without anyone pressing Enter |
 | `hooks/rotation-self-trigger.js` | PostToolUse | near the context ceiling, injects a one-time "author your handoff / rotate" instruction (`ORCH_SELF_ROTATE=off|warn_only|full`) |
 | `scripts/lineage_daemon/bus_feeder.py` | Stop, SessionEnd, Notification | feeds the lineage event stream used by blue-green rotation |
+| `hooks/gate-hook.py` | PreToolUse | the supervision gate; ships off (nothing is checked until `orchestra gate mode observe|enforce`, Settings › Safety gate, or `[gate] default_mode` in orchestra.toml sets a mode), and holds nothing under the default Let them run even when enforcing; kill switch `<data>/state/attention/GATE_OFF`. Installed with `"timeout": 600` and the same fail-open form as every row (a crash, kill or timeout lets the call run; no `onFailure` key). `python3 hooks/install.py --remove-gate` takes out this row alone |
 
 Each installed row is tagged `#orchestraos-hook` and carries `ORCHESTRA_DIR=<data dir>` and
 `ORCHESTRA_ROOT=<checkout>`, so a seat whose cwd is a client repo still finds

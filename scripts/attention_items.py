@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ import attention_push  # noqa: E402
 SURFACES = ("web", "phone", "watch", "chat", "rule")
 _ANSWERED_STATUSES = ("answered", "resumed", "resolved_elsewhere", "resume_failed", "discarded",
                       "submitted", "stale_target")
+_GEN_SUFFIX = re.compile(r"-gen\d+$")
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,12 @@ class Ctx:
     on_behalf: dict = field(default_factory=dict)       # item id -> {by, rule_id, action, chosen, reasoning}
     urgency: dict = field(default_factory=dict)         # questionnaire id -> urgency (its own column)
     push_fn: Callable = attention_push.decide_push
+    gate_holds: dict = field(default_factory=dict)      # gate hold id -> state (the gateway pre-reads them)
+    hold_state_fn: Callable | None = None               # hold id -> state for a hold not in gate_holds
+    # Supervision levels a PERSON chose (part 2 §9). Seeded defaults never land here, so at release both are
+    # empty/None and push is exactly part 1's Settings › Notifications decision.
+    levels: dict = field(default_factory=dict)          # agent (-genN stripped) -> level
+    default_level: str | None = None                    # the person's own default, only when they set it
 
     def with_cards(self, cards) -> "Ctx":
         return dataclasses.replace(self, cards=dict(cards))
@@ -72,6 +80,38 @@ def _menu(row):
 def _is_permission_menu(menu) -> bool:
     bridge = (menu or {}).get("bridge")
     return isinstance(bridge, dict) and bridge.get("permission") is True
+
+
+def _gate_bridge(menu):
+    b = (menu or {}).get("bridge")
+    return b if isinstance(b, dict) and b.get("kind") in ("gate", "gate_grant") else None
+
+
+_HOLD_STORES: dict = {}
+
+
+def _default_hold_state(hold_id):
+    """The hold's state from the supervision tables in this data dir's ledger; None when unreadable."""
+    try:
+        import approval_config
+        import supervision_store
+        path = str(approval_config.db_path())
+        st = _HOLD_STORES.get(path)
+        if st is None:
+            st = _HOLD_STORES[path] = supervision_store.SupervisionStore(db_path=path)
+        h = st.hold(hold_id)
+        return h.get("state") if h else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _gate_hold_state(bridge, ctx):
+    hid = bridge.get("hold_id")
+    if not hid:
+        return None
+    if hid in ctx.gate_holds:
+        return ctx.gate_holds[hid]
+    return (ctx.hold_state_fn or _default_hold_state)(hid)
 
 
 def kind_of(row) -> str | None:
@@ -101,13 +141,20 @@ def _blocking(row, kind, ctx) -> bool:
     """"An agent is stopped on it": a held permission or menu, a human_task that blocks something, and a plain
     approval only while its agent is not working (it asked and is idle on the answer)."""
     if kind == "permission":
+        gate = _gate_bridge(_menu(row))
+        if gate is not None:
+            # A gate hold (D2): a hook waiting in place is stopped on it; an `open` hold's agent carries on, so it
+            # follows the plain-approval rule (stopped only while the agent is not working).
+            if _gate_hold_state(gate, ctx) == "waiting":
+                return True
+            return ctx.agent_states.get(row.get("from_agent")) != "working"
         return True
     if kind == "human_task":
         return bool(row.get("blocks_what")) and row.get("feature") != "commitment"
     if kind != "decision":
         return False
     if row.get("kind") == "menu":
-        return True
+        return _gate_bridge(_menu(row)) is None          # a grant-confirm card blocks nobody
     if row.get("kind") in (None, "", "approval"):
         return ctx.agent_states.get(row.get("from_agent")) != "working"
     return False                                         # proposal shadow rows: nobody is parked on them
@@ -121,12 +168,17 @@ def _multi(menu) -> bool:
 
 def _option_actions(menu):
     out = []
+    bridge = menu.get("bridge") if isinstance(menu.get("bridge"), dict) else {}
+    watch_ok = bridge.get("watch_ok") if isinstance(bridge.get("watch_ok"), list) else None
+    watch_ok = [str(n) for n in watch_ok] if watch_ok is not None else None
+    optional_text = bridge.get("kind") == "gate"            # "Don't allow": say why, optionally
     for o in menu.get("options") or []:
         if not isinstance(o, dict) or o.get("n") in (None, ""):
             continue
         ik = o.get("input_kind")
-        out.append(_a("option", str(o.get("label") or ""), ik != "chat",
-                      "required" if ik == "free_text" else "none", n=str(o["n"])))
+        ok = (str(o["n"]) in watch_ok) if watch_ok is not None else ik != "chat"
+        text = ("optional" if optional_text else "required") if ik == "free_text" else "none"
+        out.append(_a("option", str(o.get("label") or ""), ok, text, n=str(o["n"])))
     return out
 
 
@@ -164,8 +216,18 @@ def actions_for(kind, row=None, *, linked_pending=False) -> list:
     return []
 
 
+def _decide_push(item, ctx):
+    """ctx.push_fn for one item: with the person-chosen levels when there are any (§9), else called exactly as
+    part 1 called it."""
+    agent = item.get("agent") or ""
+    agent_level = ctx.levels.get(agent) or ctx.levels.get(_GEN_SUFFIX.sub("", agent))
+    if ctx.default_level is None and agent_level is None:
+        return ctx.push_fn(item, ctx.prefs, ctx.now, ctx.tz)
+    return ctx.push_fn(item, ctx.prefs, ctx.now, ctx.tz, level=ctx.default_level, agent_level=agent_level)
+
+
 def _push(item, ctx):
-    p = ctx.push_fn(item, ctx.prefs, ctx.now, ctx.tz)
+    p = _decide_push(item, ctx)
     return attention_push.apply_reminder(p, ctx.reminders.get(item["id"]), ctx.prefs, item.get("agent"),
                                          ctx.now, ctx.tz)
 
@@ -249,7 +311,7 @@ def from_event(ev, ctx):
         it["evidence"] = evidence
     if kind == "on_behalf":
         it["on_behalf"] = evidence if isinstance(evidence, dict) else None
-    it["push"] = ctx.push_fn(it, ctx.prefs, ctx.now, ctx.tz)
+    it["push"] = _decide_push(it, ctx)
     po = _parse(ev.get("push_override"))
     if isinstance(po, dict) and po.get("decision"):
         it["push"] = {"decision": po["decision"], "reason": po.get("reason")}   # a rule asked for this exactly

@@ -33,7 +33,9 @@ test('Voice is the personal category (same id and path as before); Voice & calls
   const ids = vis.map((s) => s.id);
   assert.ok(!vis.find((s) => s.id === 'voice')!.group, 'Voice is personal, not under Server');
   assert.equal(vis.find((s) => s.id === 'server-voice')!.group, 'server');
-  assert.deepEqual(ids.slice(-2), ['server-voice', 'server']);
+  // The install's pages close the list; Voice & calls comes before Time zone (Safety gate sits between them).
+  assert.deepEqual(ids.filter((i) => i === 'server-voice' || i === 'server'), ['server-voice', 'server']);
+  assert.equal(ids[ids.length - 1], 'server');
   const shell = read('components/settings/SettingsShell.tsx');
   assert.match(shell, /case 'voice': return <VoiceSection \/>;/);
   assert.match(shell, /case 'server-voice': return <ServerVoiceSection \/>;/);

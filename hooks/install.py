@@ -27,11 +27,15 @@ MARKER = "#orchestraos-hook"
 PY = shutil.which("python3") or sys.executable or "python3"
 NODE = "node"
 
-# (event, matcher, script relative to repo, runner)
+# (event, matcher, script relative to repo, runner[, extra keys copied onto the hook object])
 HOOKS = [
     ("SessionStart", "", "hooks/state-event-hook.py", "py"),
     ("UserPromptSubmit", "", "hooks/state-event-hook.py", "py"),
     ("PreToolUse", "", "hooks/state-event-hook.py", "py"),
+    # The supervision gate. FAILS OPEN like every row: a crash, a kill or a timeout lets the call run.
+    # Never give it an "onFailure" key: "allow" is not a valid value (the row is silently dropped, even a
+    # working deny is ignored) and "block" would fail closed. It decides by stdout JSON on exit 0 only.
+    ("PreToolUse", "", "hooks/gate-hook.py", "py", {"timeout": 600}),
     ("PostToolUse", "", "hooks/state-event-hook.py", "py"),
     ("PostToolUseFailure", "", "hooks/state-event-hook.py", "py"),   # closes the open call too
     ("PermissionDenied", "", "hooks/state-event-hook.py", "py"),
@@ -44,6 +48,13 @@ HOOKS = [
     ("Notification", "", "scripts/lineage_daemon/bus_feeder.py", "py"),
     ("Stop", "", "hooks/agent-queue-drain.py", "py"),   # LAST on Stop: the digest may block
 ]
+GATE_SCRIPT = "hooks/gate-hook.py"
+
+
+def _row(row):
+    """(event, matcher, rel, runner, extra) for a HOOKS row with or without its extra-keys dict."""
+    ev, matcher, rel, runner = row[:4]
+    return ev, matcher, rel, runner, dict(row[4]) if len(row) > 4 else {}
 
 
 def _command(repo_root: Path, data_dir: Path, rel: str, runner: str) -> str:
@@ -170,7 +181,7 @@ def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bo
         return {"installed": 0, "removed": 0, "error": f"{settings_path} top level is not an object; left untouched"}
     # GUARD 1: every shipped script must exist on disk at repo_root, else a hook row would
     # error on every tool call and block the whole host (2026-09-17 incident).
-    missing = [rel for _ev, _m, rel, _r in HOOKS if not (repo_root / rel).is_file()]
+    missing = [row[2] for row in HOOKS if not (repo_root / row[2]).is_file()]
     if missing:
         return {"installed": 0, "removed": 0,
                 "error": f"refusing to install: hook scripts missing under {repo_root}: {', '.join(sorted(set(missing)))}"}
@@ -182,13 +193,16 @@ def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bo
     removed = _strip_ours(hooks)
     # 2. append ours, one rule per (event, matcher), in HOOKS order
     installed = 0
-    for ev, matcher, rel, runner in HOOKS:
+    for row in HOOKS:
+        ev, matcher, rel, runner, extra = _row(row)
         rules = hooks.setdefault(ev, [])
         target = next((r for r in rules if (r.get("matcher") or "") == matcher and any(_is_ours(h.get("command", "")) for h in r.get("hooks", []))), None)
         if target is None:
             target = {"matcher": matcher, "hooks": []} if matcher else {"hooks": []}
             rules.append(target)
-        target["hooks"].append({"type": "command", "command": _command(repo_root, data_dir, rel, runner)})
+        hook = {"type": "command", "command": _command(repo_root, data_dir, rel, runner)}
+        hook.update({k: v for k, v in extra.items() if k not in ("type", "command")})
+        target["hooks"].append(hook)
         installed += 1
     rows = [h["command"] for rules in hooks.values() for r in rules for h in r.get("hooks", []) if _is_ours(h.get("command", ""))]
     user_rows = sum(1 for rules in hooks.values() for r in rules for h in r.get("hooks", []) if not _is_ours(h.get("command", "")))
@@ -218,6 +232,42 @@ def remove(*, settings_path: Path, dry_run: bool = False) -> dict:
     return rep
 
 
+def remove_gate(*, settings_path: Path, dry_run: bool = False) -> dict:
+    """Take out ONLY the supervision gate row(s) (tagged MARKER, running gate-hook.py, any checkout);
+    every other OrchestraOS row and every user row stays. The rollback for the gate alone."""
+    settings_path = Path(os.path.expanduser(str(settings_path)))
+    try:
+        settings = _load(settings_path)
+    except ValueError as e:
+        return {"removed": 0, "error": f"{settings_path} is not valid JSON ({e}); left untouched"}
+    if not isinstance(settings, dict):
+        return {"removed": 0, "error": f"{settings_path} top level is not an object; left untouched"}
+    hooks = settings.get("hooks")
+    rules = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    removed = 0
+    if isinstance(rules, list):
+        kept = []
+        for rule in rules:
+            inner = rule.get("hooks") if isinstance(rule, dict) else None
+            if not isinstance(inner, list):
+                kept.append(rule)
+                continue
+            hk = [h for h in inner if not (isinstance(h, dict) and _is_ours(h.get("command", ""))
+                                           and GATE_SCRIPT in h.get("command", ""))]
+            n = len(inner) - len(hk)
+            removed += n
+            if hk or not n:
+                kept.append(dict(rule, hooks=hk) if n else rule)
+        if kept or not removed:
+            hooks["PreToolUse"] = kept
+        else:
+            hooks.pop("PreToolUse", None)
+    rep = {"removed": removed, "settings": str(settings_path)}
+    if removed and not dry_run:
+        _write(settings_path, settings)
+    return rep
+
+
 def plan(*, settings_path: Path, repo_root: Path, data_dir: Path) -> dict:
     """What install() would write, without writing it."""
     return install(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir, dry_run=True)
@@ -241,18 +291,21 @@ def status(*, settings_path: Path, repo_root: Path) -> dict:
     try:
         settings = _load(settings_path)
     except ValueError:
-        return {"installed": [], "missing": [f"{ev}:{rel}" for ev, _, rel, _ in HOOKS], "error": "settings.json not valid JSON"}
+        return {"installed": [], "missing": [f"{row[0]}:{row[2]}" for row in HOOKS], "gate": "unknown",
+                "error": "settings.json not valid JSON"}
     present = set()
     for ev, rules in (settings.get("hooks") or {}).items():
         for rule in rules or []:
             for h in rule.get("hooks") or []:
                 cmd = h.get("command", "")
                 if _is_ours(cmd):
-                    for _ev, _m, rel, _r in HOOKS:
-                        if _ev == ev and rel in cmd:
-                            present.add(f"{ev}:{rel}")
-    want = [f"{ev}:{rel}" for ev, _, rel, _ in HOOKS]
-    return {"installed": [w for w in want if w in present], "missing": [w for w in want if w not in present]}
+                    for row in HOOKS:
+                        if row[0] == ev and row[2] in cmd:
+                            present.add(f"{ev}:{row[2]}")
+    want = [f"{row[0]}:{row[2]}" for row in HOOKS]
+    gate = "installed" if f"PreToolUse:{GATE_SCRIPT}" in present else "absent"
+    return {"installed": [w for w in want if w in present], "missing": [w for w in want if w not in present],
+            "gate": gate}
 
 
 # ---- the status line (opt-in; writes the context reading the apps and the rotation engine read) ----
@@ -379,6 +432,8 @@ def main(argv=None) -> int:
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--remove", action="store_true",
                     help=f"remove every row tagged {MARKER} and our status line (a chained one is restored exactly)")
+    ap.add_argument("--remove-gate", action="store_true",
+                    help="remove only the supervision gate row (hooks/gate-hook.py); every other row stays")
     ap.add_argument("--statusline", choices=("install", "chain", "status", "remove"),
                     help="the status line alone: install (refuses to replace yours), chain (keep yours), status, remove")
     ns = ap.parse_args(argv)
@@ -388,6 +443,9 @@ def main(argv=None) -> int:
                remove_statusline(settings_path=sp) if ns.statusline == "remove" else
                install_statusline(settings_path=sp, repo_root=Path(ns.repo_root), data_dir=Path(ns.data_dir),
                                   chain=ns.statusline == "chain"))
+        print(json.dumps(rep, indent=2)); return 1 if rep.get("error") else 0
+    if ns.remove_gate:
+        rep = remove_gate(settings_path=Path(ns.settings))
         print(json.dumps(rep, indent=2)); return 1 if rep.get("error") else 0
     if ns.remove:
         rep = remove(settings_path=Path(ns.settings))

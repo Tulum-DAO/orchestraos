@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from 'lucide-react';
 import { arturoHealth, ARTURO_DISABLED_TEXT, handsFreeReady, isArturoDisabled, type ArturoHealth } from '../../lib/arturo';
-import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
+import { panelStatus, pathTo, PAGE_TITLES, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
          type PanelPage, type DrawerSection } from '../../lib/arturoPanel';
 import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceProviderValue, voiceNameValue, PROVIDER_SCOPE_NOTE, ADMIN_ONLY_NOTE, GPT_LIVE,
          type VoiceVendor, type VoiceRow, type CurrentVoice } from '../../lib/arturoVoice';
@@ -31,6 +31,7 @@ import { styleOptions, styleLabel, chooseStyle, loadPrefs, useChatStyle, useAgen
 import { HeadlessDevNote } from './HeadlessDevNote';
 import { Row, Info, LinkRow } from './PanelRows';
 import { TakesCalls } from './TakesCalls';
+import { SupervisionPage, SupervisionRow } from './SupervisionPage';
 import { useOpenSettings } from '../settings/useOpenSettings';
 import { applyNote, fetchAgentModel, switchAgentModel, switchableModels, pickRefusal,
          type AgentModelInfo } from '../../lib/agentModel';
@@ -56,11 +57,7 @@ import { shapeName, colorName } from '../../lib/avatarLooks';
 import { useInstallAdmin } from '../../lib/myRole';
 import { useAssistantName, named, saveAssistantName, resetAssistantName, DEFAULT_ASSISTANT_NAME, NAME_MAX } from '../../lib/assistantName';
 
-const TITLES: Record<PanelPage, string> = {
-  voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain',
-  avatar: 'Avatar', name: 'Name', edit: 'Edit', style: 'Chat style', model: 'Model',
-  library: 'Library', history: 'History', setup: 'Setup',
-};
+const TITLES = PAGE_TITLES;
 
 /** The agent the panel is about, when it is not Arturo (Arturo's comes from his own stores). */
 export interface PanelAgent {
@@ -292,6 +289,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
           : <Row id="model" label="Model" value={agentModelTitle(model) ?? ''} onOpen={push} />}
         <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
+        {!isArturo && <SupervisionRow agentId={agentId} onOpen={push} />}
         <Row id="settings" label="Settings" onOpen={push} />
         {!isArturo && <TakesCalls agentId={agentId} />}
         <RotationSettings key={agentId} agentId={agentId} isArturo={isArturo} />
@@ -308,6 +306,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           : page === 'activity' ? (isArturo ? <ActivityPage /> : <SubagentsPage running={agent?.subagents} name={aname} />)
           : page === 'style' ? <StylePage agentId={agentId} />
           : page === 'model' ? <ModelPage agentId={agentId} onChanged={setModel} onClose={onClose} />
+          : page === 'supervision' && !isArturo ? <SupervisionPage agentId={agentId} name={aname} onEditRoles={() => toSettings(() => openSettings('permissions'))} />
           : page === 'settings' ? (
             <div className="panel-list">
               <Row id="name" label="Name" value={aname} onOpen={push} />

@@ -7,7 +7,14 @@ import { DEFAULT_ASSISTANT_NAME } from './assistantName.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 
 export type PanelPage = 'voice' | 'memory' | 'activity' | 'settings' | 'brain' | 'avatar' | 'name' | 'edit'
-  | 'style' | 'model' | 'library' | 'history' | 'setup';
+  | 'style' | 'model' | 'library' | 'history' | 'setup' | 'supervision';
+
+/** Each page's title in the bar. */
+export const PAGE_TITLES: Record<PanelPage, string> = {
+  voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain',
+  avatar: 'Avatar', name: 'Name', edit: 'Edit', style: 'Chat style', model: 'Model',
+  library: 'Library', history: 'History', setup: 'Setup', supervision: 'Supervision',
+};
 
 /** The levels to a page from the root, so a jump lands with the right back arrow: Brain sits under Settings. */
 export function pathTo(page: PanelPage): PanelPage[] {

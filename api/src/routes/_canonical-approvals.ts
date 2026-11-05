@@ -65,15 +65,21 @@ export interface AnswerResult {
  * still renders), never a 500.
  */
 export function readCanonicalPending(): CanonicalRow[] {
+  return readCanonicalPendingOrNull() ?? [];
+}
+
+/** The pending rows, or null when they could not be read (a timeout, a crash, bad JSON). An authorization
+ *  check uses this one, so "could not read" is never mistaken for "no such card" (fail closed). */
+export function readCanonicalPendingOrNull(): CanonicalRow[] | null {
   try {
     const out = execFileSync('python3', [APPROVAL_CLI, 'pending', '--json'], {
       timeout: 5000,
       encoding: 'utf-8',
     });
     const rows = JSON.parse(out.trim());
-    return Array.isArray(rows) ? rows : [];
+    return Array.isArray(rows) ? rows : null;
   } catch {
-    return [];
+    return null;
   }
 }
 

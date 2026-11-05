@@ -23,10 +23,11 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
 import {
   readCanonicalPending,
+  readCanonicalPendingOrNull,
   canonicalAnswer,
   type CanonicalRow,
 } from './_canonical-approvals.js';
-import { principal } from '../lib/principal.js';
+import { principal, installRole, type InstallRole, type Principal } from '../lib/principal.js';
 import { dismissCard, defaultDismissDeps } from '../lib/approval-dismiss.js';
 import {
   isUnscopedAdmin,
@@ -703,6 +704,32 @@ router.get('/:id/card', async (req: Request, res: Response) => {
   }
 });
 
+/** Grant scopes that change one agent only; every other scope (fleet, role, project, or none) is wide. */
+const NARROW_GRANT_SCOPES = new Set(['session', 'agent']);
+
+/**
+ * Picks that change more than one agent need an admin: an unscoped principal that is also an admin of the install
+ * (installRole; without an authenticating proxy every principal is the unscoped operator, so the principal alone is
+ * no check). Option 4 on a gate card (menu.bridge.kind 'gate') is "allow for all agents" (a fleet grant), and
+ * Confirm (option 1) on a grant proposal (kind 'gate_grant') whose bridge scope is fleet, role or project
+ * activates a grant for many agents. Anyone else gets this refusal and the card stays pending. Pure, for the
+ * answer route and its tests.
+ */
+export function gateOptionRefusal(
+  row: Pick<CanonicalRow, 'menu'> | null | undefined,
+  optionN: string | undefined,
+  p: Principal | null,
+  role: InstallRole = 'member',
+): { error: string } | null {
+  const n = String(optionN ?? '').trim();
+  const bridge: any = row?.menu?.bridge;
+  const wide = (bridge?.kind === 'gate' && n === '4')
+    // A grant proposal whose scope is missing or unknown counts as wide (the safe side, as in the gateway).
+    || (bridge?.kind === 'gate_grant' && n === '1' && !NARROW_GRANT_SCOPES.has(String(bridge?.scope ?? '')));
+  if (!wide) return null;
+  return isUnscopedAdmin(p) && role === 'admin' ? null : { error: 'all_agents_needs_admin' };
+}
+
 router.post('/:id/answer', (req: Request, res: Response) => {
   const id = String(req.params.id);
   const optionN = req.body?.option_n != null ? String(req.body.option_n) : undefined;
@@ -711,6 +738,19 @@ router.post('/:id/answer', (req: Request, res: Response) => {
   if (!optionN && !answerText) {
     res.status(400).json({ error: 'option_n or answer_text is required' }); // A1
     return;
+  }
+
+  // A pick that changes more than one agent (a gate card's option 4, Confirm on a fleet/role/project grant
+  // proposal) needs an admin; checked before anything is answered.
+  // An admin is never refused, so the card is only read (a python shell-out) for anyone else.
+  const caller = principal(req);
+  const role = installRole(req);
+  if (optionN && (optionN.trim() === '4' || optionN.trim() === '1') && !(isUnscopedAdmin(caller) && role === 'admin')) {
+    // Fail closed: when the pending cards cannot be read, nobody but an admin may pick 1 or 4 right now.
+    const rows = readCanonicalPendingOrNull();
+    if (!rows) { res.status(503).json({ error: 'cards_unreadable', id }); return; }
+    const refusal = gateOptionRefusal(rows.find((r) => r.id === id), optionN, caller, role);
+    if (refusal) { res.status(403).json(refusal); return; }
   }
 
   const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface });
