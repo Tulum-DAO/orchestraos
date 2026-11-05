@@ -314,7 +314,7 @@ def _device_label(stored):
     sees the id of the person's paired device."""
     if not isinstance(stored, str) or not stored:
         return None
-    return stored.split(":", 1)[1] if ":" in stored else stored
+    return (stored.split(":", 1)[1] or None) if ":" in stored else None   # a bare id (no label) shows nothing
 
 
 def order_waiting(items):
