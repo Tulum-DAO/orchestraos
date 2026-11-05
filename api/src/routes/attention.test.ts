@@ -46,6 +46,7 @@ function makeDeps(over: Partial<AttentionDeps> = {}, respond?: (url: string, ini
     token: () => 'gw-token',
     gatewayUrl: () => 'http://gw.test',
     principal: () => ADMIN,
+    role: () => 'admin',
     resolveTags: () => [],
     agentIds: () => ['gm', 'pm'],
     fetchJson: async (url: string, init: RequestInit) => {
@@ -337,4 +338,19 @@ test('rules: a member may edit only rules scoped to agents they can see; person-
   const admin = makeDeps();
   assert.equal((await req(admin, 'POST', '/api/attention/rules', { ...base, scope_agent: null })).status, 200);
   assert.equal((await req(admin, 'DELETE', '/api/attention/rules/rul_all')).status, 200);
+});
+
+test('rules: an unscoped principal that is not an install admin is a member for person-wide writes', async () => {
+  // No authenticating proxy: every caller's principal is the unscoped operator, so only the install role decides.
+  const deps = makeDeps({ role: () => 'member' });
+  const base = { trigger: 'no_progress', after_s: 900, actions: [{ type: 'mark_stuck' }] };
+  assert.equal((await req(deps, 'POST', '/api/attention/rules', { ...base, scope_agent: null })).status, 403);
+  assert.equal((await req(deps, 'PUT', '/api/attention/rules/rul_all', { after_s: 60 })).status, 403);
+  assert.equal((await req(deps, 'DELETE', '/api/attention/rules/rul_all')).status, 403);
+  // a rule on an agent the caller can see is still theirs to write
+  assert.equal((await req(deps, 'POST', '/api/attention/rules', { ...base, scope_agent: 'gm' })).status, 200);
+  assert.equal((await req(deps, 'PUT', '/api/attention/rules/rul_gm', { after_s: 1200 })).status, 200);
+  const writes = deps.calls.filter((c) => (c.init.method || 'GET') !== 'GET');
+  assert.deepEqual(writes.map((c) => [c.init.method, new URL(c.url).pathname]), [
+    ['POST', '/attention/rules'], ['PUT', '/attention/rules/rul_gm']]);
 });

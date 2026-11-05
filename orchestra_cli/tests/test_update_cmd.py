@@ -66,6 +66,25 @@ def test_a_retry_with_the_same_key_posts_nothing_new(armed_db, monkeypatch, caps
     assert len([r for r in armed_db.ledger.pending_to_notify() if r["kind"] == "completion"]) == 1
 
 
+def test_a_retry_after_the_card_was_accepted_and_the_guard_window_passed_posts_nothing_new(armed_db, monkeypatch,
+                                                                                            capsys):
+    monkeypatch.setenv("ORCHESTRA_AGENT_ID", "gm")
+    assert U.main_done(["Shipped", "--key", "k2"]) == 0
+    first = capsys.readouterr().out.strip()
+    rid = armed_db.attn.get(first)["source_id"]
+    armed_db.ledger.record_answer(rid, "accept", None, surface="web", answered_by="operator")
+    import sqlite3
+    c = sqlite3.connect(armed_db.ledger.db_path)
+    c.execute("UPDATE approval_requests SET created_at='2026-01-01T00:00:00+00:00' WHERE id=?", [rid])
+    c.commit(); c.close()
+    notified = []
+    monkeypatch.setattr(U, "_notify", lambda r: notified.append(r))
+    assert U.main_done(["Shipped", "--key", "k2"]) == 0
+    assert capsys.readouterr().out.strip() == first
+    assert len(armed_db.attn.list_events()) == 1
+    assert len(armed_db.ledger.find_by_op_key("done:gm:k2")) == 1 and notified == []
+
+
 def test_legacy_cards_off_writes_only_the_event(armed_db, monkeypatch, capsys, tmp_path):
     (tmp_path / "orchestra.toml").write_text("[attention]\nlegacy_completion_cards = false\n")
     monkeypatch.setenv("ORCHESTRA_AGENT_ID", "gm")

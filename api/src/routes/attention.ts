@@ -21,7 +21,7 @@
 import { Router, type Request, type Response } from 'express';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
-import { principal as defaultPrincipal, type Principal } from '../lib/principal.js';
+import { principal as defaultPrincipal, installRole, type InstallRole, type Principal } from '../lib/principal.js';
 import { canPrincipalSeeCard, isUnscopedAdmin } from '../lib/approval-scope.js';
 import { defaultResolveTags } from '../lib/agent-scope.js';
 import { getRegistry } from '../services/state-reader.js';
@@ -48,6 +48,10 @@ export interface AttentionDeps {
   resolveTags: (id: string) => unknown;
   /** Every agent id the install knows (the registry). A member's `agents=` list is drawn from it. */
   agentIds: () => string[];
+  /** The caller's role on the install (lib/principal installRole). Person-wide rule writes need an unscoped
+   *  principal AND an install admin: without an authenticating proxy every caller's principal is the
+   *  unscoped operator, so the principal alone is no check. */
+  role: (req: Request) => InstallRole;
 }
 
 export function defaultAttentionDeps(): AttentionDeps {
@@ -65,6 +69,7 @@ export function defaultAttentionDeps(): AttentionDeps {
         json: async () => r.json().catch(() => ({ ok: false, error: 'bad gateway json' })) };
     },
     principal: defaultPrincipal,
+    role: (req) => installRole(req),
     resolveTags: defaultResolveTags,
     agentIds: () => {
       const registry = getRegistry() as { agents?: Record<string, unknown> } | null;
@@ -120,9 +125,12 @@ export function createAttentionRouter(deps: AttentionDeps = defaultAttentionDeps
   const sees = (p: Principal, agent: unknown) =>
     canPrincipalSeeCard(p, typeof agent === 'string' ? agent : null, deps.resolveTags);
 
-  /** May this principal write a rule scoped to `scopeAgent`? Person-wide (none) is admin-only. */
-  function mayWriteScope(p: Principal, scopeAgent: unknown): boolean {
-    if (isUnscopedAdmin(p)) return true;
+  /** An unscoped principal that is also an admin of the install (see AttentionDeps.role). */
+  const isAdmin = (req: Request, p: Principal): boolean => isUnscopedAdmin(p) && deps.role(req) === 'admin';
+
+  /** May this caller write a rule scoped to `scopeAgent`? Person-wide (none) is admin-only. */
+  function mayWriteScope(req: Request, p: Principal, scopeAgent: unknown): boolean {
+    if (isAdmin(req, p)) return true;
     if (typeof scopeAgent !== 'string' || !scopeAgent) return false;
     return sees(p, scopeAgent);
   }
@@ -286,7 +294,7 @@ export function createAttentionRouter(deps: AttentionDeps = defaultAttentionDeps
   router.post('/rules', async (req: Request, res: Response) => {
     const p = who(req, res);
     if (!p) return;
-    if (!mayWriteScope(p, req.body?.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
+    if (!mayWriteScope(req, p, req.body?.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
     const g = await gateway('/attention/rules', { method: 'POST', ...json(req.body) });
     res.status(g.status).json(g.body);
   });
@@ -295,14 +303,14 @@ export function createAttentionRouter(deps: AttentionDeps = defaultAttentionDeps
     const p = who(req, res);
     if (!p) return;
     const id = String(req.params.id);
-    if (!isUnscopedAdmin(p)) {
+    if (!isAdmin(req, p)) {
       // Both scopes count: the one the rule has now (else a member could move someone else's
       // rule onto their own agent) and the one the body would give it.
       if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'scope_agent')
-        && !mayWriteScope(p, req.body.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
+        && !mayWriteScope(req, p, req.body.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
       const s = await storedRule(id);
       if (s.status < 200 || s.status >= 300) { res.status(s.status).json(s.body); return; }
-      if (s.rule && !mayWriteScope(p, s.rule.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
+      if (s.rule && !mayWriteScope(req, p, s.rule.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
     }
     const g = await gateway(`/attention/rules/${encodeURIComponent(id)}`, { method: 'PUT', ...json(req.body) });
     res.status(g.status).json(g.body);
@@ -312,10 +320,10 @@ export function createAttentionRouter(deps: AttentionDeps = defaultAttentionDeps
     const p = who(req, res);
     if (!p) return;
     const id = String(req.params.id);
-    if (!isUnscopedAdmin(p)) {
+    if (!isAdmin(req, p)) {
       const s = await storedRule(id);
       if (s.status < 200 || s.status >= 300) { res.status(s.status).json(s.body); return; }
-      if (s.rule && !mayWriteScope(p, s.rule.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
+      if (s.rule && !mayWriteScope(req, p, s.rule.scope_agent)) { res.status(403).json(FORBIDDEN); return; }
     }
     const g = await gateway(`/attention/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
     res.status(g.status).json(g.body);

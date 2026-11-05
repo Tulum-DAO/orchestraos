@@ -90,15 +90,23 @@ def done(ns) -> int:
     try:
         if attention_config.load().legacy_completion_cards:
             # Card first, then the row: a crash in between leaves a pending card the detector's mirror
-            # picks up, so nothing is lost. The op_key makes a retry with the same --key re-find the card.
+            # picks up, so nothing is lost. The op_key makes a retry with the same --key re-find the card,
+            # whatever its status and however long ago it was filed (create()'s own guard only covers a
+            # pending twin and a 15-minute window, so an accepted card would otherwise be filed again).
             from approval_schema import ApprovalStore
             ledger = ApprovalStore()
             ledger.migrate()
-            rid = ledger.create(from_agent=me, question=text, worker_kind="pane", op_key=f"done:{me}:{key}",
-                                options=["accept", "respond"], summary=ns.summary, kind="completion",
-                                evidence=evidence)
-            eid = st.add_done(me, text, key=key, body=ns.summary, evidence=evidence, source_id=rid)
-            _notify(rid)
+            op_key = f"done:{me}:{key}"
+            prior = [r for r in ledger.find_by_op_key(op_key) if r.get("from_agent") == me] if ns.key else []
+            if prior:
+                rid = prior[-1]["id"]                       # the first card filed under this key
+                eid = st.add_done(me, text, key=key, body=ns.summary, evidence=evidence, source_id=rid)
+            else:
+                rid = ledger.create(from_agent=me, question=text, worker_kind="pane", op_key=op_key,
+                                    options=["accept", "respond"], summary=ns.summary, kind="completion",
+                                    evidence=evidence)
+                eid = st.add_done(me, text, key=key, body=ns.summary, evidence=evidence, source_id=rid)
+                _notify(rid)
         else:
             eid = st.add_done(me, text, key=key, body=ns.summary, evidence=evidence)
     except S.AttentionNotArmed as e:
