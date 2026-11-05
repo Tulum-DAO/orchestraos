@@ -304,9 +304,17 @@ def from_history(row, ctx):
         "title": row.get("question") or row.get("title"), "summary": row.get("summary"),
         "outcome": status if status in ("discarded", "retired", "expired") else "answered",
         "answer": row.get("answer"), "answer_label": _answer_label(row), "answer_text": row.get("answer_text"),
-        "answer_device": row.get("answer_device"), "on_behalf": ctx.on_behalf.get(row["id"]),
+        "answer_device": _device_label(row.get("answer_device")), "on_behalf": ctx.on_behalf.get(row["id"]),
     }
     return it
+
+
+def _device_label(stored):
+    """The ledger stores "<device_id>:<label>"; /attention shows only the label, so a scoped member never
+    sees the id of the person's paired device."""
+    if not isinstance(stored, str) or not stored:
+        return None
+    return stored.split(":", 1)[1] if ":" in stored else stored
 
 
 def order_waiting(items):

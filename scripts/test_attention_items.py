@@ -110,7 +110,8 @@ def test_answered_fields_normalised(ctx):
     assert I.from_history({**row, "answered_by": "rule:rul_1", "answer_surface": "rule"}, ctx)[
         "answer_surface"] == "rule"
     assert I.from_history({**row, "answered_by": "dev-1"}, ctx)["answered_by"] == "dev-1"
-    assert I.from_history({**row, "answer_device": "dev_1:Phone"}, ctx)["answer_device"] == "dev_1:Phone"
+    assert I.from_history({**row, "answer_device": "dev_1:Phone"}, ctx)["answer_device"] == "Phone"   # never the id
+    assert I.from_history({**row, "answer_device": None}, ctx)["answer_device"] is None
 
 
 def test_answered_menu_carries_the_label_and_questionnaires_map_too(ctx):
