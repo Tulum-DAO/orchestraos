@@ -361,6 +361,47 @@ def test_a_thread_read_carries_its_reader_and_the_turn_query(monkeypatch, princi
     assert seen["headers"]["X-Arturo-Principal"] == stamp      # built fresh, never the client's own header
 
 
+@pytest.mark.parametrize("before,forwarded", [("120", "120"), ("0", "0"), ("12a", None), ("-5", None),
+                                              ("1.5", None), ("", None), ("١٢", None)])
+def test_a_thread_page_passes_before_only_as_a_whole_number(monkeypatch, before, forwarded):
+    seen = {}
+
+    class _Resp:
+        status = 200
+
+        async def json(self, content_type=None):
+            return {"ok": True}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Session:
+        def __init__(self, *a, **k):
+            pass
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            seen.update(url=url, params=dict(params or {}))
+            return _Resp()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _Session)
+    monkeypatch.setattr(G, "_authorized", lambda request: True)
+    req = _Req({"id": "legacy"})
+    req.match_info = {"conversation_id": "c1"}
+    req.query = {"limit": "50", "before": before}
+    asyncio.run(G.handle_arturo_threads(req))
+    assert seen["url"].endswith("/threads/c1")
+    assert seen["params"] == {"limit": "50", **({"before": forwarded} if forwarded is not None else {})}
+
+
 # --- a health read carries its reader: the onboarding thread id goes only to the dashboard -------------------
 
 @pytest.mark.parametrize("principal,stamp", [({"id": "legacy"}, "fleet"), ({"id": "dev_x"}, "device:dev_x")])

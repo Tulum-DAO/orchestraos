@@ -8,7 +8,8 @@
  * denominator and the Down bucket.
  *
  * This module answers one question for one row and nothing else, so the rule is testable
- * rather than hoped for. The API sets the field; the fleet view decides what to draw. See
+ * rather than hoped for. GET /api/agents leaves such a row out of the list (and its counts), so one
+ * seat is one row; the row stays addressable by id for its own routes and revive. See
  * .workspace/proposals/parked-rotation-leftovers-spec.md for the measurements.
  */
 

@@ -1,0 +1,40 @@
+[
+  {
+    "name": "a focused multi-part card in full and a second card as one line",
+    "in": {"v": 1, "focus": "c1", "cards": [
+      {"ref": "c1", "kind": "multipart", "from": "pm-demo", "state": "waiting", "surface": "popover",
+       "question": "Which size?", "extra": "dropped",
+       "part": {"n": 2, "of": 3, "question": "Which colour?", "select": "single",
+                "options": ["A. Blue", "B. Green"], "picked": [], "typed": ""}},
+      {"ref": "c2", "line": "Approval from dev-demo, waiting: Deploy the drawer?"}
+    ]},
+    "out": {"v": 1, "focus": "c1", "cards": [
+      {"ref": "c1", "kind": "multipart", "from": "pm-demo", "state": "waiting", "surface": "popover",
+       "question": "Which size?",
+       "part": {"n": 2, "of": 3, "question": "Which colour?", "select": "single", "options": ["A. Blue", "B. Green"]}},
+      {"ref": "c2", "line": "Approval from dev-demo, waiting: Deploy the drawer?"}
+    ]}
+  },
+  {
+    "name": "a focus naming no card is dropped; bad refs, duplicates and empty cards are left out",
+    "in": {"focus": "c9", "cards": [
+      {"ref": "apr_1234abcd_5678", "question": "Not a ref"},
+      {"ref": "c1", "question": "  Which   size?  ", "options": ["A. Circle", 7, "", "B. Square"], "answer": "Circle"},
+      {"ref": "c1", "question": "A duplicate"},
+      {"ref": "c2", "kind": "decision"},
+      "not a card"
+    ]},
+    "out": {"v": 1, "focus": null, "cards": [
+      {"ref": "c1", "question": "Which size?", "options": ["A. Circle", "B. Square"], "answer": "Circle"}
+    ]}
+  },
+  {
+    "name": "long words are clipped and part numbers out of range are dropped",
+    "in": {"focus": "c1", "cards": [
+      {"ref": "c1", "question": "Ask about the sample report now please", "part": {"n": 0, "of": 99, "question": "Which one?", "select": "other"}}
+    ], "clip": {"question": 300}},
+    "out": {"v": 1, "focus": "c1", "cards": [
+      {"ref": "c1", "question": "Ask about the sample report now please", "part": {"question": "Which one?"}}
+    ]}
+  }
+]

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { panelStatus, pathTo, factsValue, activityValue } from './arturoPanel.ts';
+import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, computerValue, openingSection, contextUsedLabel } from './arturoPanel.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 
 const LIVE = { ok: true, live: true, live_engine: 'relay' as const };
@@ -33,7 +33,45 @@ test('Memory row: the fact count', () => {
 test('Activity row: running jobs, or Idle', () => {
   const job = (status: ArturoJob['status']) => ({ id: status, status }) as ArturoJob;
   assert.equal(activityValue([job('running'), job('running'), job('done')]), '2 running');
-  assert.equal(activityValue([job('done'), job('failed')]), 'Idle');
-  assert.equal(activityValue([]), 'Idle');
+  assert.equal(activityValue([job('done'), job('failed')]), 'Nothing running');
+  assert.equal(activityValue([]), 'Nothing running');
   assert.equal(activityValue(null), '');
+});
+
+test('the drawer: History, Library, Setup; it opens on History when something waits or runs, else where you left it', () => {
+  assert.deepEqual(DRAWER_SECTIONS, ['history', 'library', 'setup']);
+  assert.equal(openingSection('working', false, 'setup'), 'history');
+  assert.equal(openingSection('idle', true, 'setup'), 'history');
+  assert.equal(openingSection('needs_input', false, 'library'), 'history');
+  assert.equal(openingSection('idle', false, 'library'), 'library');
+  assert.equal(openingSection('idle', false, 'now'), 'history', 'a section that no longer exists');
+  assert.equal(openingSection(undefined, false, null), 'history');
+});
+
+test('the context meter', () => {
+  assert.equal(contextUsedLabel(38), '62% context used');
+  assert.equal(contextUsedLabel(null), null);
+  assert.equal(contextUsedLabel(140), null);
+  assert.equal(contextUsedLabel(100), null, '0% used is the status line before its first reply: no reading');
+});
+
+test('the live status line in the header', () => {
+  const now = 10_000_000;
+  assert.equal(liveStatus('working', now - 3 * 60_000, now), 'Working · 3m');
+  assert.equal(liveStatus('working', now - 20_000, now), 'Working · under a minute');
+  assert.equal(liveStatus('working', now - 80 * 60_000, now), 'Working · 1h 20m');
+  assert.equal(liveStatus('needs_input', now, now), 'Waiting for you');
+  assert.equal(liveStatus('idle', now, now), 'Idle');
+  assert.equal(liveStatus(undefined, undefined, now), 'Idle');
+  assert.equal(liveStatus('failed', now, now), 'Stopped with an error');
+  assert.equal(computerValue('working'), 'Working');
+  assert.equal(computerValue('idle'), 'Idle');
+  assert.equal(computerValue('needs_input'), 'Waiting');
+});
+
+test('the History row is never blank for an agent: no subagent count reads as nothing running', () => {
+  assert.equal(subagentsValue(undefined), 'Nothing running');
+  assert.equal(subagentsValue(null), 'Nothing running');
+  assert.equal(subagentsValue(0), 'Nothing running');
+  assert.equal(subagentsValue(2), '2 running');
 });

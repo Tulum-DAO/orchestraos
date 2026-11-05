@@ -51,7 +51,7 @@ model = "not-top-level"
 
 
 class FakeCodex:
-    def __init__(self, tmp_path, picker=MODELS_SCREEN, busy=False, applies=None, opens=True):
+    def __init__(self, tmp_path, picker=MODELS_SCREEN, busy=False, applies=None, opens=True, applies_effort=None):
         self.config = tmp_path / "codex" / "config.toml"
         self.config.parent.mkdir(parents=True)
         self.config.write_text(CONFIG)
@@ -60,6 +60,7 @@ class FakeCodex:
                                 + json.dumps({"type": "event_msg", "payload": {"type": "thread_settings_applied",
                                               "thread_id": THREAD, "thread_settings": {"model": "gpt-5.6-terra"}}}) + "\n")
         self.picker, self.busy, self.applies, self.opens = picker, busy, applies, opens
+        self.applies_effort = applies_effort
         self.thread = THREAD
         self.screen, self.sent, self.keyed, self.chosen = "› Ask Codex to do anything\n", [], [], None
         self.lock = tmp_path / "claude" / "settings.json"
@@ -88,15 +89,18 @@ class FakeCodex:
             text = text.replace('model_reasoning_effort = "medium"', f'model_reasoning_effort = "{effort}"', 1)
             self.config.write_text(text)
             with open(self.rollout, "a") as f:
+                ts = {"model": self.applies or self.chosen}
+                if self.applies_effort:
+                    ts["reasoning_effort"] = self.applies_effort
                 f.write(json.dumps({"type": "event_msg", "payload": {"type": "thread_settings_applied",
-                        "thread_id": self.thread, "thread_settings": {"model": self.applies or self.chosen}}}) + "\n")
+                        "thread_id": self.thread, "thread_settings": ts}}) + "\n")
             self.screen = f"• Model changed to {self.chosen} {effort}\n› Ask Codex to do anything\n"
 
     def capture(self):
         return self.screen
 
-    def run(self, model="gpt-5.6-terra", rollout="default"):
-        return C.switch_live(model=model, config_path=self.config, lock_path=self.lock, send=self.send,
+    def run(self, model="gpt-5.6-terra", rollout="default", effort=None):
+        return C.switch_live(model=model, effort=effort, config_path=self.config, lock_path=self.lock, send=self.send,
                              keys=self.keys, capture=self.capture,
                              rollout=self.rollout if rollout == "default" else rollout,
                              timeout_s=0, screen_timeout_s=0, sleep=lambda _s: None)
@@ -157,6 +161,51 @@ def test_a_busy_codex_is_409(tmp_path):
 def test_effort_follows_the_agent_or_the_default_row(current, digit):
     rows = C.effort_rows(EFFORT_SCREEN.format(model="gpt-5.6-terra"), "gpt-5.6-terra")
     assert C.pick_effort(rows, current)[0] == digit
+
+
+@pytest.mark.parametrize("requested,digit,label", [("low", "1", "low"), ("high", "3", "high"), ("xhigh", "4", "extra high")])
+def test_a_requested_effort_wins_over_the_agents_current_one(requested, digit, label):
+    rows = C.effort_rows(EFFORT_SCREEN.format(model="gpt-5.6-terra"), "gpt-5.6-terra")
+    assert C.pick_effort(rows, "medium", requested) == (digit, label)
+
+
+def test_a_requested_effort_the_picker_does_not_offer_is_never_swapped_for_another():
+    rows = C.effort_rows(EFFORT_SCREEN.format(model="gpt-5.6-terra"), "gpt-5.6-terra")
+    del rows["extra high"]
+    with pytest.raises(C.EffortNotOffered):
+        C.pick_effort(rows, "medium", "xhigh")
+    with pytest.raises(C.EffortNotOffered):
+        C.pick_effort(rows, "medium", "max")
+
+
+def test_a_switch_with_an_effort_picks_that_row_and_says_so(tmp_path):
+    c = FakeCodex(tmp_path)
+    status, body = c.run("gpt-5.6-terra", effort="high")
+    assert status == 200 and body["effort"] == "high" and c.keyed == ["3", "3"]
+    assert c.config.read_text() == CONFIG
+
+
+def test_an_effort_only_switch_reopens_the_picker_on_the_same_model(tmp_path):
+    c = FakeCodex(tmp_path)
+    status, body = c.run("gpt-5.6-luna", effort="xhigh")
+    assert status == 200 and c.keyed == ["4", "4"] and body["effort"] == "extra high"
+
+
+def test_an_effort_the_model_does_not_offer_is_422_and_both_menus_close(tmp_path):
+    c = FakeCodex(tmp_path)
+    real = c.keys
+
+    def keys(k):
+        if k == "Escape" and "Select Reasoning Level" in c.screen:
+            c.keyed.append(k)
+            c.screen = MODELS_SCREEN
+            return
+        real(k)
+    c.keys = keys
+    status, body = c.run("gpt-5.6-terra", effort="max")
+    assert status == 422 and body["error"] == "this model does not offer that effort"
+    assert "high" in body["offered"]
+    assert c.keyed == ["3", "Escape", "Escape"] and c.config.read_text() == CONFIG
 
 
 def test_an_effort_picker_for_another_model_is_not_ours():
@@ -225,7 +274,7 @@ def test_an_open_effort_picker_gets_one_escape_per_menu(tmp_path, monkeypatch):
         real(k)
     c.keys = keys
 
-    def no_row(_rows, _current):
+    def no_row(_rows, _current, requested=None):
         raise LookupError("no row")
     monkeypatch.setattr(C, "pick_effort", no_row)
     status, body = c.run("gpt-5.6-terra")
@@ -335,3 +384,36 @@ def test_an_event_written_before_the_send_does_not_confirm(tmp_path, monkeypatch
     c.applies = "gpt-5.6-sol"                          # the switch itself logs another model
     status, body = c.run("gpt-5.6-terra")
     assert status == 502 and body["error"] == "a different model was confirmed"
+
+
+
+def test_an_applied_event_that_names_another_effort_is_not_a_success(tmp_path):
+    c = FakeCodex(tmp_path, applies_effort="medium")
+    status, body = c.run("gpt-5.6-terra", effort="high")
+    assert status == 502 and body["error"] == "a different effort was confirmed" and body["detail"] == "medium"
+    c2 = FakeCodex(tmp_path / "b", applies_effort="high")
+    assert c2.run("gpt-5.6-terra", effort="high")[0] == 200
+
+
+def test_a_codex_switch_also_puts_back_an_effort_switch_that_died(tmp_path):
+    import scripts.agent_effort as AE
+    c = FakeCodex(tmp_path)
+    c.lock.parent.mkdir(parents=True, exist_ok=True)
+    settings = {"theme": "dark", "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}}}
+    c.lock.write_text(json.dumps(settings))
+    AE._write_journal(c.lock, AE.read_keys(c.lock))
+    c.lock.write_text(json.dumps({"theme": "dark", "modelSettings": {"claude-opus-5-5": {"effortLevel": "low"}}}))
+    assert c.run("gpt-5.6-terra")[0] == 200
+    assert json.loads(c.lock.read_text()) == settings
+
+
+
+@pytest.mark.parametrize("said", ["extra high", "Extra High", "xhigh", "extra_high"])
+def test_an_effort_named_in_another_spelling_of_the_same_level_confirms(tmp_path, said):
+    c = FakeCodex(tmp_path, applies_effort=said)
+    assert c.run("gpt-5.6-terra", effort="xhigh")[0] == 200
+
+
+def test_an_effort_field_that_cannot_be_read_with_confidence_never_fails_the_switch(tmp_path):
+    c = FakeCodex(tmp_path, applies_effort="ultra-ish")
+    assert c.run("gpt-5.6-terra", effort="high")[0] == 200

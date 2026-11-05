@@ -23,6 +23,8 @@
       "items": { "$ref": "#/$defs/RenderItem" },
       "description": "Server-paired render-ready nodes: tool_result attached under its tool_use, empties dropped, spawn brief flagged. Clients render with a trivial node->view switch — NO client-side pairing or summarizing."
     },
+    "has_older": { "type": "boolean", "description": "ADDITIVE v2 (paged chat): only on a page read with ?before=<cursor>; true when the chat has items older than this page. Absent without a cursor (the live window's envelope is unchanged)." },
+    "oldest_id": { "type": ["string", "null"], "description": "ADDITIVE v2 (paged chat): only on a page read with ?before=<cursor>; the cursor for the next older page (pass it back as before=), null when the page is empty. Opaque: '<session>~<uuid>', '<session>~#<n>' or a marker's uuid. A page never starts inside one log line's items, so pages chained by oldest_id neither repeat nor skip an item. A client may also pass an item's own uuid as before=." },
     "error": { "type": "string" }
   },
   "$defs": {
@@ -33,7 +35,8 @@
         { "$ref": "#/$defs/ToolUseItem" },
         { "$ref": "#/$defs/ToolResultItem" },
         { "$ref": "#/$defs/QueuedBatchItem" },
-        { "$ref": "#/$defs/RotationItem" }
+        { "$ref": "#/$defs/RotationItem" },
+        { "$ref": "#/$defs/CompactionItem" }
       ],
       "discriminator": { "propertyName": "kind" }
     },
@@ -54,6 +57,7 @@
           "type": "boolean",
           "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): true when this user turn is a still-pending phone/watch message merged from the msg_store hold queue (B1) — render a 'queued' chip; it resolves to the real turn on delivery. Older clients ignore this flag and render a normal user bubble."
         },
+        "mid_turn": { "type": "boolean", "description": "ADDITIVE v2: true on a machine `task` line (<task-notification>) that arrived while the agent was mid-turn (Claude Code logs it as a queued_command attachment). It sits inside the turn it landed in and never opens one; clients draw it as a finished-work card. Absent on the same notice when it arrived at an idle prompt. Older clients ignore it." },
         "machine": { "enum": ["decision", "questionnaire", "approval", "human_task", "relay", "task", "system"], "description": "ADDITIVE v2: set by the server on a user-role line a MACHINE wrote into the pane, never the operator: decision = [DECISION ANSWERED], questionnaire = [MULTI-PART DECISION ANSWERED] / [questionnaire-answers|-discarded], approval = [APPROVAL RESOLVED], human_task = [HUMAN-TASK], relay = [MSG from <agent> | <priority>] (another agent's message), task = <task-notification>, system = any other harness line. Absent = the operator's own words. Clients draw a tagged line as a machine card, never as the operator's bubble. Older clients ignore it." },
         "model": { "type": "string", "description": "ADDITIVE v2 (#458): the model that wrote this agent item (Claude: the entry's message.model, never \"<synthetic>\"; Codex: the model of the turn_context it ran under). Absent on user items and when unknown. Clients mark where it changes." },
         "usage": { "$ref": "#/$defs/TokenUsage", "description": "ADDITIVE v2: tokens the model call that wrote this item spent, named and meant as in the OpenTelemetry GenAI semantic conventions (gen_ai.usage.*). Once per model call: Claude on the first drawn item of each reply (Claude Code repeats a reply's usage on every one of its lines), Codex on the last agent item before its token_count. Summing it over items gives the true total. Absent when the source has no count (never guessed). A model call that drew nothing carries its tokens to the next agent item. Codex's arrives with its token_count after the response; the SSE tailer re-sends a snapshot when it lands on an item already sent." },
@@ -161,7 +165,7 @@
     },
     "RotationItem": {
       "type": "object",
-      "description": "ADDITIVE v2 (stitched chat, ios-watch-dev msg_41c00a45): ONE divider between the previous generation's tail and the current generation. The poll route emits it only when the seat's current head took over from a generation whose log this box can read; items above it are the previous generation's. audience is always user (drawn in the conversation, never inside a strip) and it has no exchange. Older clients: unknown kind is skipped.",
+      "description": "ADDITIVE v2 (stitched chat): ONE quiet marker where one generation took over from the one before. The poll route stitches the seat's whole lineage, oldest first, every generation whose log this box can read, and emits one marker between each two that both show items (a generation it cannot read is passed over: the marker then spans it). Items above it are the older generation's. A rotation's warm-up exchange is never in the chat. audience is always user (drawn in the conversation, never inside a strip) and it has no exchange. Older clients: unknown kind is skipped.",
       "required": ["kind", "role", "uuid", "from_generation", "to_generation", "from_session", "to_session"],
       "properties": {
         "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
@@ -169,11 +173,49 @@
         "kind": { "const": "rotation" },
         "role": { "const": "system" },
         "uuid": { "type": "string", "description": "rot:<to_session>" },
-        "ts": { "type": "string", "description": "When the current generation took over (its promoted_at, ISO 8601)." },
-        "from_generation": { "type": "integer", "description": "The previous generation's number. Numbers can reset: display only, never compare." },
-        "to_generation": { "type": "integer", "description": "The current generation's number." },
-        "from_session": { "type": "string", "description": "The previous generation's session id." },
-        "to_session": { "type": "string", "description": "The current generation's session id." }
+        "ts": { "type": "string", "description": "When the newer generation took over (its promoted_at, ISO 8601)." },
+        "from_generation": { "type": "integer", "description": "The older generation's number. Numbers can reset: display only, never compare." },
+        "to_generation": { "type": "integer", "description": "The newer generation's number." },
+        "from_session": { "type": "string", "description": "The older generation's session id." },
+        "to_session": { "type": "string", "description": "The newer generation's session id." }
+      }
+    },
+    "CompactionItem": {
+      "type": "object",
+      "description": "ADDITIVE v2 (provider-agnostic rotation): the chat's compaction notice, \"Chat compacting…\" while a new provider session is made ready, then \"Chat compacted\" once it took over (\"failed\": the old one kept serving). Stored in the conversation store (episodic-memory.db compaction_notices), so it survives a restart; never written to a transcript and never part of any model's context. Placed by time; ONE item per notice that updates in place (same id); the live stream sends `event: compaction` with this same object when it starts or finishes. Omitted entirely when the seat's show_compaction setting is off. Clients draw their own words (no token numbers in the text in Release 1); the counts are data. Older clients: unknown kind is skipped.",
+      "required": ["kind", "id", "state", "ts"],
+      "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation; agent = folded into the strip. A compaction notice is always user." },
+        "kind": { "const": "compaction" },
+        "id": { "type": "string", "description": "cmp-<notice id>: stable; a later state of the same notice carries the same id." },
+        "uuid": { "type": "string", "description": "Same as id (list diffing). Never a page cursor." },
+        "state": { "enum": ["compacting", "compacted", "failed"] },
+        "trigger": { "enum": ["auto", "manual"], "description": "ADDITIVE: how it was started: 'auto' (the seat's Auto-compact) or 'manual' (a person's /compact). A failed notice is only ever sent for 'manual' (draw \"Couldn't compact the chat right now.\"); an automatic notice is made only once the switch is committed." },
+        "ts": { "type": "string", "description": "When it started (ISO 8601): its place in the chat." },
+        "finished_at": { "type": ["string", "null"], "description": "When it ended; null while compacting." },
+        "before_tokens": { "type": ["integer", "null"], "description": "Context size before (data only)." },
+        "after_tokens": { "type": ["integer", "null"], "description": "Context size after, from the first turn's usage; null until known." }
+      }
+    },
+    "LiveTextBlock": {
+      "type": "object",
+      "description": "One text block of a live_text event: its words so far and the transcript uuid its finished line will carry (null until the CLI has finished the block).",
+      "required": ["uuid", "text"],
+      "properties": {
+        "uuid": { "type": ["string", "null"] },
+        "text": { "type": "string" }
+      }
+    },
+    "LiveTextEvent": {
+      "type": "object",
+      "description": "ADDITIVE (live text): the data of an `event: live_text` frame on GET /api/agents/:id/transcript/stream, for HEADLESS seats only (a tmux seat never gets one). The main chain's reply still being written, text blocks only (no thinking, no subagents, no tool calls: those show as rows when the transcript lands). Sent when it changes, after the same beat's delta. A block leaves it once the transcript holds its uuid, so a client draws `text` (or, exactly, the blocks whose uuid is not yet among its items) after the thread and never twice. text '' = nothing live (cleared, an ended or interrupted turn). The frame has no id: it never moves the resume offset. Older clients: an unknown event name is ignored.",
+      "required": ["agent_id", "message_id", "text", "blocks", "done"],
+      "properties": {
+        "agent_id": { "type": "string" },
+        "message_id": { "type": ["string", "null"], "description": "The API message id of the newest live block; null when nothing is live." },
+        "text": { "type": "string", "description": "The words so far, blocks joined by a blank line." },
+        "blocks": { "type": "array", "items": { "$ref": "#/$defs/LiveTextBlock" } },
+        "done": { "type": "boolean", "description": "The turn has ended: no more words are coming; what is left waits for its transcript line." }
       }
     },
     "RenderItem": {
@@ -183,7 +225,8 @@
         { "$ref": "#/$defs/RenderThinking" },
         { "$ref": "#/$defs/RenderTool" },
         { "$ref": "#/$defs/RenderQueuedBatch" },
-        { "$ref": "#/$defs/RenderRotation" }
+        { "$ref": "#/$defs/RenderRotation" },
+        { "$ref": "#/$defs/RenderCompaction" }
       ],
       "discriminator": { "propertyName": "kind" }
     },
@@ -262,18 +305,35 @@
     },
     "RenderRotation": {
       "type": "object",
-      "description": "Server-paired render node for the stitched chat's divider. Same data as RotationItem; draw it like a date line (\"Rotated · gen 36 → 37 · 12:05 AM\").",
+      "description": "Server-paired render node for the stitched chat's marker. Same data as RotationItem; draw it as one quiet line, like a date line (\"Rotated · gen 36 → 37 · 12:05 AM\"), never a divider block.",
       "required": ["kind", "from_generation", "to_generation", "from_session", "to_session", "key"],
       "properties": {
         "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "rotation" },
-        "ts": { "type": "string", "description": "When the current generation took over (its promoted_at, ISO 8601)." },
-        "from_generation": { "type": "integer", "description": "The previous generation's number. Numbers can reset: display only, never compare." },
-        "to_generation": { "type": "integer", "description": "The current generation's number." },
-        "from_session": { "type": "string", "description": "The previous generation's session id." },
-        "to_session": { "type": "string", "description": "The current generation's session id." },
+        "ts": { "type": "string", "description": "When the newer generation took over (its promoted_at, ISO 8601)." },
+        "from_generation": { "type": "integer", "description": "The older generation's number. Numbers can reset: display only, never compare." },
+        "to_generation": { "type": "integer", "description": "The newer generation's number." },
+        "from_session": { "type": "string", "description": "The older generation's session id." },
+        "to_session": { "type": "string", "description": "The newer generation's session id." },
         "key": { "type": "string" }
+      }
+    },
+    "RenderCompaction": {
+      "type": "object",
+      "description": "Server-paired render node for the compaction notice. Same data as CompactionItem; draw one quiet line: \"Chat compacting…\" then \"Chat compacted\" (Bubbles and Modern), keyed by id so it updates in place.",
+      "required": ["kind", "id", "state", "ts", "key"],
+      "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation; agent = folded into the strip. A compaction notice is always user." },
+        "kind": { "const": "compaction" },
+        "id": { "type": "string" },
+        "state": { "enum": ["compacting", "compacted", "failed"] },
+        "trigger": { "enum": ["auto", "manual"] },
+        "ts": { "type": "string" },
+        "finished_at": { "type": ["string", "null"] },
+        "before_tokens": { "type": ["integer", "null"] },
+        "after_tokens": { "type": ["integer", "null"] },
+        "key": { "type": "string", "description": "The notice's id (cmp-<n>): stable across its states." }
       }
     }
   }

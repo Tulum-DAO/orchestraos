@@ -80,4 +80,9 @@ def claude_context(session_id: str | None, transcript_path: str | None, *,
     if taken < entry - STATUSLINE_SLACK_S:
         return None, None                 # the seat has moved on since this reading
     remaining = _pct(d.get("remaining_percentage"))
-    return (None if remaining is None else 100 - remaining), _pct(d.get("used_pct"))
+    # "0% used" (100% remaining) is what Claude Code reports before it has a reading at all, not a
+    # seat at zero: a resumed or fresh session carries its system prompt and tools in context, so a
+    # true 0 never occurs. Shown as 0, it reads as an empty seat. No reading instead.
+    if remaining is None or remaining >= 100:
+        return None, None
+    return 100 - remaining, _pct(d.get("used_pct"))

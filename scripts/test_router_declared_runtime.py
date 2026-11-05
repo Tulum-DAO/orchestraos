@@ -47,7 +47,8 @@ def mr(tmp_path, monkeypatch):
     monkeypatch.setattr(rs, "REGISTRY", reg)
     monkeypatch.setattr(m, "UNKNOWN_RUNTIME_WARNED", tmp_path / "data" / "state" / "warned.json")
     m.CODE_ROOT = Path("/home/user/orchestraos")   # the path the synthetic agy screens were generated with
-    m.time.sleep = lambda s: None
+    # m.time is the process-wide time module: patched through monkeypatch so it is put back after the test
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
     m.hook_state = lambda s: None
     m._logs = []
     m.log = lambda msg: m._logs.append(msg)

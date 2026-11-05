@@ -28,6 +28,7 @@ const CODE_FILES = [
   'spawn-agent.sh',
   'message_bus.py',
   join('scripts', 'approval.py'),
+  join('scripts', 'agent_tree.py'),
   join('scripts', 'lineage_daemon', 'realtime', 'api_bridge.py'),
   'prompts',
 ];

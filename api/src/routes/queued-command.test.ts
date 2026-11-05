@@ -25,14 +25,25 @@ test('a human mid-turn prompt becomes a user turn, marked queued', () => {
   assert.equal(it.ts, '2026-10-06T20:00:00Z', 'it keeps its own timestamp, so it sorts in position');
 });
 
-test('a task-notification is NOT operator speech', () => {
-  // The same shape carries the harness's own envelopes. Rendering them would put machine
-  // chatter in the conversation as if Shaw typed it — the same lie as hiding his message,
-  // pointed the other way.
-  assert.deepEqual(queuedCommandItems(att({
+test('a task-notification is NOT operator speech: it is kept as the harness\'s own line', () => {
+  // The same shape carries the harness's own envelopes. Rendering them as the operator's words would
+  // be the same lie as hiding his message, pointed the other way; dropping them lost every background
+  // job that finished mid-turn. So: a machine `task` line, never queued, never opening a turn.
+  const [it, ...rest] = queuedCommandItems(att({
     type: 'queued_command', prompt: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>',
     origin: { kind: 'task-notification' }, commandMode: 'task-notification',
-  })), []);
+  }));
+  assert.equal(rest.length, 0);
+  assert.equal(it.machine, 'task');
+  assert.equal(it.mid_turn, true);
+  assert.equal(it.queued, undefined, 'not a pending operator message');
+  assert.match(it.text, /^<task-notification>/);
+  assert.equal(it.ts, '2026-10-06T20:00:00Z');
+});
+
+test('a task-notification attachment that is not an envelope is still dropped', () => {
+  assert.deepEqual(queuedCommandItems(att({ type: 'queued_command', prompt: 'something else',
+    origin: { kind: 'task-notification' } })), []);
 });
 
 test('the empty queue-operation rows are rejected', () => {
@@ -156,4 +167,15 @@ test('with no batches present nothing is dropped', () => {
   // otherwise the message is lost on that lane entirely.
   const items = [{ kind: 'text', role: 'user', queued: true, text: 'a'.repeat(60) }];
   assert.equal(dropQueuedCommandsCoveredByBatches(items).length, 1);
+});
+
+test('a mid-turn notice the log also holds as a real user turn is shown once', () => {
+  const text = '<task-notification>\n<task-id>abc</task-id>\n</task-notification>';
+  const items = [
+    { kind: 'text', role: 'user', text, machine: 'task', mid_turn: true, uuid: 'q1' },
+    { kind: 'text', role: 'user', text, uuid: 'u2' },
+  ];
+  assert.deepEqual(dedupeQueuedCommands(items).map((x: any) => x.uuid), ['u2']);
+  // alone, it is kept (it does not count as the real turn that would cover itself)
+  assert.deepEqual(dedupeQueuedCommands([items[0]]).map((x: any) => x.uuid), ['q1']);
 });

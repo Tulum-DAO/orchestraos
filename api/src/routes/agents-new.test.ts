@@ -229,6 +229,28 @@ test('POST /login-shell names the first NOT-installed cli when nothing is instal
   assert.match(r.json.hint, /install/i);
 });
 
+test('POST /login-shell lists the shell it started for the web terminal, and only once it is up', async () => {
+  const listed: any[] = [];
+  const deps = makeDeps({ rows: [authedRow('codex', 'codex')], listLoginShell: (e) => { listed.push(e); } });
+  const r = await post(deps, '/api/agents/login-shell', { provider: 'codex' });
+  assert.equal(r.status, 200);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].session, 'login-codex');
+  assert.equal(listed[0].provider, 'codex');
+  assert.ok(listed[0].createdBy === null || typeof listed[0].createdBy === 'string');
+  const failed: any[] = [];
+  const down = makeDeps({ startLoginShell: async () => ({ ok: false, output: 'no tmux' }), listLoginShell: (e) => { failed.push(e); } });
+  assert.equal((await post(down, '/api/agents/login-shell', {})).status, 502);
+  assert.deepEqual(failed, [], 'a shell that did not start is never listed');
+});
+
+test('POST /login-shell says so when the shell cannot be listed, rather than hand back a terminal that refuses', async () => {
+  const deps = makeDeps({ listLoginShell: () => { throw new Error('read-only state dir'); } });
+  const r = await post(deps, '/api/agents/login-shell', {});
+  assert.equal(r.status, 502);
+  assert.equal(r.json.reason, 'list_failed');
+});
+
 // --- G21: /login-shell must target the provider the operator CLICKED ------------------------
 // The disconnected-provider modal (operator, 2026-09-18) opens a login for the tile that was
 // tapped. Before this, loginHint() picked `installed[0]` — so tapping Gemini on a box where
@@ -484,4 +506,44 @@ test('a new Claude seat is spawned on Opus 5.5 with the 1M context (AGENT_MODEL 
   assert.equal(env.PARENT_AGENT_ID, 'gm');
   assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'codex', null).AGENT_MODEL, 'gpt-5.6-terra');   // others unchanged
   assert.equal(spawnEnv({ PARENT_AGENT_ID: 'leak' } as NodeJS.ProcessEnv, 'claude', null).PARENT_AGENT_ID, undefined);
+});
+
+test('POST /new brings a Claude worker over to headless (its own calls); never the gm, never another runtime', async () => {
+  const adopted: string[] = [];
+  const w = makeDeps({ adoptHeadless: (n: string) => { adopted.push(n); } });
+  const r = await post(w, '/api/agents/new', { name: 'caller' });
+  assert.equal(r.json.headless, 'pending');
+  assert.deepEqual(adopted, ['caller']);
+  const g = makeDeps({ existingNames: () => new Set<string>(), adoptHeadless: (n: string) => { adopted.push(n); } });
+  const rg = await post(g, '/api/agents/new', { name: 'gm', gm: true });
+  assert.equal(rg.json.headless, false);
+  const c = makeDeps({ rows: [authedRow('codex', 'codex')], adoptHeadless: (n: string) => { adopted.push(n); } });
+  const rc = await post(c, '/api/agents/new', { name: 'cx' });
+  assert.equal(rc.json.ok, true);
+  assert.equal(rc.json.headless, false);
+  assert.deepEqual(adopted, ['caller']);
+});
+
+test('spawnEnv uses the install default model for the runtime when one is set', async () => {
+  const { spawnEnv } = await import('./agents-new.js');
+  assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'claude', null, { claude: 'claude-sonnet-5' }).AGENT_MODEL, 'claude-sonnet-5');
+  assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'codex', null, { claude: 'claude-sonnet-5' }).AGENT_MODEL, 'gpt-5.6-terra');
+});
+
+test('spawnEnv hands spawn-agent.sh the default effort for the runtime, and never an inherited one', async () => {
+  const { spawnEnv } = await import('./agents-new.js');
+  const env = spawnEnv({ AGENT_EFFORT: 'leak' } as NodeJS.ProcessEnv, 'codex', null, {}, { codex: 'xhigh' });
+  assert.equal(env.AGENT_EFFORT, 'xhigh');
+  assert.equal(spawnEnv({ AGENT_EFFORT: 'leak' } as NodeJS.ProcessEnv, 'claude', null, {}, { codex: 'xhigh' }).AGENT_EFFORT, undefined);
+});
+
+test('POST /new forgets any effort kept under the name before the spawn, so a reused name starts on the default', async () => {
+  const order: string[] = [];
+  const w = makeDeps({
+    forgetEffort: (n: string) => { order.push(`forget:${n}`); },
+    spawn: async (args: any) => { order.push(`spawn:${args.name}`); return { ok: true, output: 'spawned' }; },
+  });
+  const r = await post(w, '/api/agents/new', { name: 'caller' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(order, ['forget:caller', 'spawn:caller']);
 });

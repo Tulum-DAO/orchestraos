@@ -19,9 +19,14 @@
  * a real CLI, tmux, or the registry.
  */
 import { Router, type Request, type Response } from 'express';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn as spawnChild } from 'node:child_process';
 import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { principal } from '../lib/principal.js';
+import { dataDir } from '../lib/config.js';
+import { BUILTIN_MODELS, readDefaultEfforts, readDefaultModels } from '../lib/agentDefaults.js';
+import { forgetAgentEffort } from '../lib/agentModelPut.js';
+import { recordLoginShell, sweepLoginShells } from '../lib/loginShells.js';
 
 /** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
  *  binary name, so `cli` is optional and falls back to the provider id (they match for
@@ -44,12 +49,7 @@ const RESERVED = new Set(['all', 'none', 'new', 'arturo', 'self', 'system']);
 // refuses it (spawn-agent.sh R4 invariant). Same table Arturo's commission path uses.
 // A new Claude seat starts on Opus 5.5 with the 1M context (product decision 2026-10-22);
 // claude-sonnet-5 was an old default.
-export const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
-  claude: 'claude-opus-5-5[1m]',
-  gemini: 'gemini-3.1-pro',
-  codex: 'gpt-5.6-terra',
-  grok: 'grok-4.7',
-};
+export const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = BUILTIN_MODELS;
 
 export interface NewAgentDeps {
   probeRuntimes: () => RuntimeRow[];
@@ -59,6 +59,15 @@ export interface NewAgentDeps {
   registeredAgents: () => Record<string, string> | Promise<Record<string, string>>;
   sessionExists: (session: string) => boolean;
   startLoginShell: (args: { session: string; greeting: string }) => Promise<{ ok: boolean; output: string }>;
+  /** List the shell for the web terminal (lib/loginShells.ts): the proxy attaches only to registered seats and to
+   *  shells listed there. Optional so a deps object without it lists nothing. */
+  listLoginShell?: (entry: { session: string; provider: string | null; createdBy: string | null }) => void;
+  /** Bring a new Claude seat over to headless once its TUI is idle, with its own calls on (scripts/headless_adopt.py,
+   *  detached). Optional so a deps object without it adopts nothing. */
+  adoptHeadless?: (name: string) => void;
+  /** Forget any effort kept under the new name (lib/agentModelPut.ts forgetAgentEffort) before the spawn. Optional so
+   *  a deps object without it forgets nothing. */
+  forgetEffort?: (name: string) => void;
 }
 
 export function normalizeAgentName(raw: unknown): { name: string; error?: string } {
@@ -183,6 +192,8 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
         return res.status(400).json({ ok: false, reason: 'unknown_parent', parent });
       }
     }
+    // A reused name never inherits an old agent's effort: the default (AGENT_EFFORT), or none, from here.
+    try { deps.forgetEffort?.(name); } catch { /* a stale level is the worst case: the spawn goes on */ }
     const result = await deps.spawn({ name, task, runtime: runtime.id, gm, parent });
     if (!result.ok) {
       return res.status(502).json({ ok: false, reason: 'spawn_failed', detail: result.output.slice(-600) });
@@ -190,7 +201,11 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     if (!deps.sessionExists(name)) {
       return res.status(502).json({ ok: false, reason: 'session_missing', detail: result.output.slice(-600) });
     }
-    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm, parent });
+    // A new agent takes its own calls, so a Claude worker goes headless once its first turn is done
+    // (a call needs a headless seat). The General Manager stays a terminal seat; other runtimes stay on tmux.
+    const adopting = runtime.id === 'claude' && !gm && !!deps.adoptHeadless;
+    if (adopting) deps.adoptHeadless!(name);
+    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm, parent, headless: adopting ? 'pending' : false });
   });
 
   router.get('/new/parents', async (_req: Request, res: Response) => {
@@ -228,6 +243,13 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
       const detail = started.output.slice(-400);
       console.warn(`[login-shell] shell_failed session=${session} cli=${cli} detail=${detail.replace(/\n/g, ' | ')}`);
       return res.status(502).json({ ok: false, reason: 'shell_failed', detail });
+    }
+    try {
+      deps.listLoginShell?.({ session, provider: provider || cli, createdBy: principal(req)?.username ?? null });
+    } catch (err) {
+      // The shell is up but the terminal will refuse it: say so here, where it can be traced.
+      console.warn(`[login-shell] list_failed session=${session} detail=${String(err)}`);
+      return res.status(502).json({ ok: false, reason: 'list_failed', detail: String(err).slice(-400) });
     }
     return res.json({ ok: true, session, cli, hint, machine: 'vps' });
   });
@@ -296,14 +318,23 @@ export function spawnArgv({ name, task, runtime, gm }: { name: string; task: str
   return args;
 }
 
-/** The environment a New Agent spawn runs with: the API's own, plus the runtime and its default
- *  model (what spawn-agent.sh hands the CLI as --model), with the parent set only when given. */
-export function spawnEnv(base: NodeJS.ProcessEnv, runtime: string, parent: string | null): NodeJS.ProcessEnv {
+/** The environment a New Agent spawn runs with: the API's own, plus the runtime, its default model (what
+ *  spawn-agent.sh hands the CLI as --model) and its default effort when one is set (AGENT_EFFORT: Claude --effort,
+ *  Codex model_reasoning_effort, kept for the agent by scripts/agent_effort.py), with the parent set only when given. */
+const installModels = (): Record<string, string> => { try { return readDefaultModels(dataDir()); } catch { return {}; } };
+const installEfforts = (): Record<string, string> => { try { return readDefaultEfforts(dataDir()); } catch { return {}; } };
+
+export function spawnEnv(base: NodeJS.ProcessEnv, runtime: string, parent: string | null,
+                         models: Record<string, string> = installModels(),
+                         efforts: Record<string, string> = installEfforts()): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...base,
     AGENT_RUNTIME: runtime,
-    AGENT_MODEL: DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
+    AGENT_MODEL: models[runtime] || DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
   };
+  // Never inherited from the API's own env: only the default chosen for this runtime.
+  delete env.AGENT_EFFORT;
+  if (efforts[runtime]) env.AGENT_EFFORT = efforts[runtime];
   // Unset, not inherited, when there is no parent: the API's own env must never pick one.
   delete env.PARENT_AGENT_ID;
   if (parent) env.PARENT_AGENT_ID = parent;
@@ -318,6 +349,14 @@ function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: st
       resolve({ ok: !err, output: `${stdout || ''}\n${stderr || ''}`.trim() });
     });
   });
+}
+
+function realAdoptHeadless(name: string): void {
+  // Detached: it waits for the seat's first turn to finish (up to an hour), long after this request has answered.
+  const child = spawnChild('python3', [`${ORCHESTRA_ROOT}/scripts/headless_adopt.py`, name, '--by', 'new-agent'],
+    { cwd: ORCHESTRA_ROOT, env: process.env, detached: true, stdio: 'ignore' });
+  child.on('error', () => { /* no python: the seat stays a TUI, as before */ });
+  child.unref();
 }
 
 function realStartLoginShell({ session, greeting }: { session: string; greeting: string }): Promise<{ ok: boolean; output: string }> {
@@ -335,6 +374,13 @@ function realStartLoginShell({ session, greeting }: { session: string; greeting:
   });
 }
 
+function realListLoginShell(entry: { session: string; provider: string | null; createdBy: string | null }): void {
+  const dir = dataDir();
+  // A shell that ended since the last sweep must not keep its entry while this one is written.
+  sweepLoginShells(dir, realSessionExists);
+  recordLoginShell(dir, entry);
+}
+
 export const productionDeps: NewAgentDeps = {
   // Installed/authed only, from the shared cache when it is warm. Paying for a live model
   // probe here made opening a terminal a 3.5s round trip — a 502 behind a proxy.
@@ -344,6 +390,12 @@ export const productionDeps: NewAgentDeps = {
   registeredAgents: realRegisteredAgents,
   sessionExists: realSessionExists,
   startLoginShell: realStartLoginShell,
+  listLoginShell: realListLoginShell,
+  adoptHeadless: realAdoptHeadless,
+  forgetEffort: (name: string) => forgetAgentEffort(dataDir(), name),
 };
+
+/** The login-shell list's sweep at API start and every 30 s after (lib/loginShells.ts). */
+export { realSessionExists as loginShellSessionExists };
 
 export default createAgentsNewRouter(productionDeps);

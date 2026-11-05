@@ -60,14 +60,14 @@ export function AgentsSummaryStrip({
     <div className="space-y-2 min-w-0">
       <div className="flex items-center gap-2 flex-wrap min-w-0">
         {/* On a phone the title and + live in the layout's top bar; only the machine shows here. */}
-        <h1 className="hidden md:block text-2xl font-bold text-neutral-100">Agents</h1>
+        <h1 className="hidden md:block text-2xl font-bold text-tone-100">Agents</h1>
         {onNewAgent && (
           <button
             type="button"
             onClick={onNewAgent}
             aria-label="New agent"
             title="New agent"
-            className="touch-circle shrink-0 rounded-full hidden md:flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+            className="touch-circle shrink-0 rounded-full hidden md:flex items-center justify-center text-tone-400 hover:text-tone-white hover:bg-tone-800 transition-colors"
           >
             <Plus size={22} />
           </button>
@@ -78,11 +78,11 @@ export function AgentsSummaryStrip({
         />
         {/* break-all, not wrap: a hostname has no spaces to break at, so at 375px it used to
             push three lines wide into the old New agent button instead of breaking. */}
-        <span className="text-sm text-neutral-500 break-all min-w-0">{machineName}</span>
+        <span className="text-sm text-tone-500 break-all min-w-0">{machineName}</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 min-w-0">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-neutral-400 min-w-0">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-tone-400 min-w-0">
           <span className="whitespace-nowrap">{formatAgentsUp(agentsUp, agentsTotal)}</span>
           <span className="whitespace-nowrap">{messages24h} messages ({windowHours}h)</span>
           <span className="whitespace-nowrap">{activeConnections} active connections</span>
@@ -91,7 +91,7 @@ export function AgentsSummaryStrip({
               type="button"
               onClick={onSelectBusiest}
               title={`Open ${busiest.a} ⇄ ${busiest.b}`}
-              className="whitespace-nowrap underline decoration-neutral-700 hover:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-sky-500 rounded"
+              className="whitespace-nowrap underline decoration-tone-700 hover:text-tone-100 focus:outline-none focus:ring-1 focus:ring-sky-500 rounded"
             >
               busiest: {formatBusiest(busiest)}
             </button>
@@ -115,13 +115,13 @@ export function AgentsSummaryStrip({
             1435px at 1920. The outer div owns the line break, the inner one the width. */}
         <div className="basis-full w-full">
         <div className="relative w-full sm:w-80">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-tone-500" />
           <input
             type="text"
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search agents, repos, prompts"
-            className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:border-neutral-600"
+            className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg bg-tone-900 border border-tone-800 text-tone-100 placeholder:text-tone-500 focus:outline-none focus:border-tone-600"
           />
         </div>
         </div>

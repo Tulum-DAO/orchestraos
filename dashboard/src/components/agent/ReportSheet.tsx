@@ -70,7 +70,7 @@ export function ReportSheet({ isOpen, onClose, agentId }: ReportSheetProps) {
               className={`text-left rounded-xl border px-3 py-2 min-h-[52px] transition-colors ${kind === k.kind ? 'border-red-500/60 bg-red-500/10' : 'border-border hover:bg-muted'}`}
             >
               <div className="text-sm font-medium">{k.label}</div>
-              <div className="text-[11px] text-muted-foreground">{k.hint}</div>
+              <div className="text-px11 text-muted-foreground">{k.hint}</div>
             </button>
           ))}
         </div>
@@ -84,7 +84,7 @@ export function ReportSheet({ isOpen, onClose, agentId }: ReportSheetProps) {
         />
 
         {result && (
-          <div className={`text-xs rounded-lg px-3 py-2 ${result.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-400'}`}>
+          <div className={`text-xs rounded-lg px-3 py-2 ${result.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-tone-red-400'}`}>
             {result.ok
               ? <>Filed <span className="font-mono">{result.id}</span>{result.card_id ? <> · card <span className="font-mono">{result.card_id}</span> is on your phone</> : <> · sent to Telegram and {aname}</>}. If nobody answers in 2 minutes the safe repairs run on their own.</>
               : <>Couldn't file it: {result.error || 'unknown error'}</>}
@@ -96,7 +96,7 @@ export function ReportSheet({ isOpen, onClose, agentId }: ReportSheetProps) {
           <button
             onClick={submit}
             disabled={busy || words.trim().length < 3}
-            className="text-sm px-4 py-2 min-h-[44px] rounded-lg font-medium bg-red-500/20 text-red-300 disabled:opacity-40"
+            className="text-sm px-4 py-2 min-h-[44px] rounded-lg font-medium bg-red-500/20 text-tone-red-300 disabled:opacity-40"
           >
             {busy ? 'Filing…' : 'File report'}
           </button>

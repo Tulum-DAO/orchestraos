@@ -47,3 +47,21 @@ def test_default_alert_is_non_blocking(monkeypatch):
     vu._card_alert("hume at 80% of cap")
     elapsed = _t.time() - started
     assert elapsed < 0.5, f"_card_alert blocked {elapsed:.2f}s — must be fire-and-forget"
+
+
+def test_the_cap_comes_from_the_settings_file_on_every_check(tmp_path):
+    limits = tmp_path / "voice-limits.json"
+    u = vu.UsageStore(path=tmp_path / "u.json", now=lambda: 1_700_000_000.0, alert=lambda m: None, limits_path=limits)
+    assert u.cap_min == vu.DEFAULT_CAP
+    limits.write_text('{"daily_cap_min": 5}')
+    u.add_seconds("hume", 5 * 60)
+    assert u.cap_min == 5 and u.over_cap("hume")
+    limits.write_text('{"daily_cap_min": "lots"}')
+    assert u.cap_min == vu.DEFAULT_CAP
+
+
+def test_an_explicit_cap_still_wins(tmp_path):
+    limits = tmp_path / "voice-limits.json"
+    limits.write_text('{"daily_cap_min": 5}')
+    u = vu.UsageStore(path=tmp_path / "u.json", cap_min=50, now=lambda: 1_700_000_000.0, alert=lambda m: None, limits_path=limits)
+    assert u.cap_min == 50

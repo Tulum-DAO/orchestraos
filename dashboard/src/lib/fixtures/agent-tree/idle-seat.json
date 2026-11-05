@@ -1,0 +1,19 @@
+{
+ "agent_id": "5ea70000-0000-4000-8000-000000000000",
+ "parent_agent_id": null,
+ "depth": 0,
+ "type": "seat",
+ "label": "demo-seat",
+ "state": "finished",
+ "started_at": "2026-10-29T10:22:48Z",
+ "last_activity_at": "2026-11-05T02:22:50Z",
+ "current_tool": null,
+ "last_tool": "Bash",
+ "tokens_own": 420103,
+ "tokens_rollup": 420103,
+ "tokens_cache_read": 4241845,
+ "ctx_tokens": 129042,
+ "elapsed_s": 576001.2,
+ "transcript_path": "/fixture/5ea70000-0000-4000-8000-000000000000.jsonl",
+ "children": []
+}

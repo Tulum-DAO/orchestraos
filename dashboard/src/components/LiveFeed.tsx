@@ -19,7 +19,7 @@ export function LiveFeed({ limit = 30 }: { limit?: number }) {
   return (
     <div className="space-y-0">
       {activity.slice(0, limit).map((e, i) => <ActivityEvent key={i} event={e} />)}
-      {activity.length === 0 && <p className="text-neutral-600 text-sm">No activity yet</p>}
+      {activity.length === 0 && <p className="text-tone-600 text-sm">No activity yet</p>}
     </div>
   );
 }

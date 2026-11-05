@@ -20,3 +20,12 @@ test('terminal relay credential accepts only an exact reference-held value', asy
   assert.equal(isTerminalRelay(req('wrong')), false);
   assert.equal(isTerminalRelay(req('relay-test-secret-x')), false);
 });
+
+test("terminal relay: a latin1 value of equal string length is rejected, not thrown", async () => {
+  const { isTerminalRelay } = await import("./terminal-relay-secret.js");
+  const expected = "relay-test-secret";
+  const bad = expected.slice(0, -1) + "é";
+  assert.equal(bad.length, expected.length);
+  assert.doesNotThrow(() => isTerminalRelay(req(bad)));
+  assert.equal(isTerminalRelay(req(bad)), false);
+});

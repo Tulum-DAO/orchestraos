@@ -175,15 +175,21 @@ build_codex_resume_args() {
     printf 'resume %s\n' "$sid"
 }
 
-# Pure: prints the codex-specific TAIL of the launch line: "[--model m] [resume <uuid>]". The
+# Pure: prints the codex-specific TAIL of the launch line: "[--model m] [-c model_reasoning_effort=<e>]
+# [resume <uuid>]". The effort is a per-run config override (codex has no --effort flag; nothing is written
+# to ~/.codex/config.toml), a global flag, so before `resume`; only a known level is ever printed (rc 2). The
 # branch APPENDS it to the launch_cmd that spawn_agent has already built (binary, bypass flags, the
 # bg green marker, the ORCHESTRA_DIR/data prefix, the installer-session scrub); rebuilding the line
 # in the branch dropped those prefixes (orchestraos-builder, #430 r3/r4). With a sid the tail ENDS
 # in `resume <uuid>`; a non-UUID sid is refused (rc 2) and nothing is printed.
 build_codex_launch_tail() {
-    local model="${1:-}" sid="${2:-}"
+    local model="${1:-}" sid="${2:-}" effort="${3:-}"
     local tail=""
     [[ -n "$model" ]] && tail="--model $model"
+    if [[ -n "$effort" ]]; then
+        [[ "$effort" =~ ^(low|medium|high|xhigh)$ ]] || return 2
+        tail="${tail:+$tail }-c model_reasoning_effort=$effort"
+    fi
     if [[ -n "$sid" ]]; then
         local args
         args="$(build_codex_resume_args "$sid")" || return 2
@@ -422,6 +428,14 @@ resolve_spawn_model() {  # $1 agent_id -> echoes normalized launch model
     normalize_model_1m "${AGENT_MODEL:-$(get_agent_field "$agent_id" "model" || true)}"
 }
 
+# The agent's effort level for this runtime (scripts/agent_effort.py: AGENT_EFFORT when set, which is
+# then kept for the agent, else the level kept for its lineage root, so a rotation keeps it). Empty:
+# none, and the CLI starts on its own default. Never fails a spawn.
+resolve_spawn_effort() {  # $1 agent_id, $2 runtime -> echoes a level or nothing
+    python3 "$SCRIPT_DIR/scripts/agent_effort.py" resolve "$1" --runtime "$2" \
+        --orchestra-dir "$ORCHESTRA_DIR" 2>/dev/null || true
+}
+
 list_agents() {
     python3 -c "
 import json
@@ -633,6 +647,8 @@ spawn_agent() {
     # issue #92: a model id that names ANOTHER runtime (claude-sonnet-5 on a codex seat)
     # makes the CLI exit and the init prompt land in bare bash — refuse before any pane.
     refuse_model_mismatch "$runtime" "$model" "$agent_id" || exit 3
+    local effort
+    effort=$(resolve_spawn_effort "$agent_id" "$runtime")
 
     # Check if we're on the right machine
     local this_machine="mac"
@@ -977,7 +993,8 @@ spawn_agent() {
     # approval.py against the default data dir and load hooks from the default config dir.
     # Carry the data dir, checkout, config and (when set) the Claude config dir explicitly.
     local _orch_prefix
-    _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR")"
+    # ORCHESTRA_AGENT_ID: the seat's own id, for `orchestra react` and any tool that must know who it runs as.
+    _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q ORCHESTRA_AGENT_ID=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR" "$agent_id")"
     [[ -n "${ORCHESTRA_CONFIG:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'ORCHESTRA_CONFIG=%q' "$ORCHESTRA_CONFIG")"
     [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CLAUDE_CONFIG_DIR=%q' "$CLAUDE_CONFIG_DIR")"
     launch_cmd="$_orch_prefix $launch_cmd"
@@ -993,6 +1010,7 @@ spawn_agent() {
     fi
     if [[ "$runtime" == "claude" ]]; then
         [[ -n "$model" ]] && launch_cmd+=" --model $model"   # [1m] guard: explicit model
+        [[ -n "$effort" ]] && launch_cmd+=" --effort $effort"
         [[ -n "$resume_sid" ]] && launch_cmd+=" --resume $resume_sid"
         # Layer A (Bug 2, live-but-unreachable): pre-configure permission
         # allow-rules so benign PROJECT-LOCAL self-edits never raise the
@@ -1022,18 +1040,18 @@ spawn_agent() {
             fi
         fi
         rm -f "$perm_err"
-        log "  Runtime: claude | Model: ${model:-<settings default opus-4-8[1m]>}"
+        log "  Runtime: claude | Model: ${model:-<settings default opus-4-8[1m]>}${effort:+ | Effort: $effort}"
     elif [[ "$runtime" == "codex" ]]; then
         # APPEND the codex tail; never rebuild launch_cmd here (its prefixes: bg marker, data dir,
         # installer-session scrub, were all dropped by an assignment in r3/r4 of #430).
         local _codex_tail
-        if ! _codex_tail="$(build_codex_launch_tail "$model" "$resume_sid")"; then
+        if ! _codex_tail="$(build_codex_launch_tail "$model" "$resume_sid" "$effort")"; then
             err "$agent_id: --resume for codex needs the session UUID (got '$resume_sid')"
             tmux kill-session -t "$tmux_name" 2>/dev/null || true
             exit 3
         fi
         [[ -n "$_codex_tail" ]] && launch_cmd+=" $_codex_tail"
-        log "  Runtime: codex | Model: ${model:-<config default>}${resume_sid:+ | Resume: $resume_sid}"
+        log "  Runtime: codex | Model: ${model:-<config default>}${effort:+ | Effort: $effort}${resume_sid:+ | Resume: $resume_sid}"
     elif [[ "$runtime" == "grok" ]]; then
         log "  Runtime: grok | Model: ${model:-<grok default>} | Session: $grok_sid ($grok_mode)"
     else

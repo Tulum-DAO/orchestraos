@@ -6,6 +6,8 @@ const { execFileSync } = require("child_process");
 const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { wsOriginDecision } = require("./dashboard-ws-origin");
+const { listedLoginShell } = require("./dashboard-login-shells");
+const { allowedLogins } = require("./dashboard-tailscale-users");
 let pty = null;
 try { pty = require("node-pty"); } catch (e) { console.warn("dashboard-proxy: node-pty not installed — web terminal disabled (npm install node-pty to enable)"); }
 
@@ -34,8 +36,12 @@ const GATEWAY_URL = (process.env.WATCH_GATEWAY_URL ||
 // x-forwarded-host preserves the address the BROWSER used. `host` below is rewritten to the
 // upstream, so without this the API cannot tell a same-origin request from a foreign one
 // and logs every request from this very dashboard as a blocked origin (2026-09-29).
-function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const fwdHost=req.headers["x-forwarded-host"]||req.headers.host;const fwdProto=req.headers["x-forwarded-proto"]||(req.socket&&req.socket.encrypted?"https":"http");const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host,"x-forwarded-host":fwdHost,"x-forwarded-proto":fwdProto},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{const h={...r.headers};delete h["keep-alive"];delete h["connection"];/* hop-by-hop: they describe the API's connection to us, not ours to the browser (RFC 9110 7.6.1) */res.writeHead(r.statusCode,h);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});req.pipe(p);}
-function proxyToLocal(req,res){proxyTo(VPS_API,req,res);}
+function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const fwdHost=req.headers["x-forwarded-host"]||req.headers.host;const fwdProto=req.headers["x-forwarded-proto"]||(req.socket&&req.socket.encrypted?"https":"http");const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host,"x-forwarded-host":fwdHost,"x-forwarded-proto":fwdProto},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{const h={...r.headers};delete h["keep-alive"];delete h["connection"];/* hop-by-hop: they describe the API's connection to us, not ours to the browser (RFC 9110 7.6.1) */res.writeHead(r.statusCode,h);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});/* the browser left before the response ended (a live stream never ends on its own): end ours to the API, or it keeps serving, and polling for, a page nobody has open */res.on("close",()=>{if(!res.writableFinished)p.destroy();});req.pipe(p);}
+// PUT /api/agents/:id/model can take a /model and an /effort, each confirmed by the CLI (api/src/lib/agentModelPut.ts
+// MODEL_PUT_TIMEOUT_MS): wait longer than the API does for it, so the picker hears its answer.
+const MODEL_PUT_PROXY_TIMEOUT_MS=60000;
+function isModelPut(req){return req.method==="PUT"&&/^\/api\/agents\/[^/?]+\/model(\?|$)/.test(req.url||"");}
+function proxyToLocal(req,res){proxyTo(VPS_API,req,res,isModelPut(req)?MODEL_PUT_PROXY_TIMEOUT_MS:undefined);}
 
 const server = http.createServer((req,res)=>{
   // Exact only: do not turn the dashboard into a generic unauthenticated gateway proxy.
@@ -132,7 +138,8 @@ function tailscaleOperator(req) {
   if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer)) return false;
   let raw = process.env.ORCHESTRA_TAILSCALE_USERS || "";
   if (!raw) { try { raw = fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "state", "tailscale-users"), "utf8"); } catch { raw = ""; } }
-  const allowed = raw.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter((s) => s && !s.startsWith("#"));
+  // `login [role]` per line (Settings phase 1): only a word with an @ is a login (dashboard-tailscale-users.js).
+  const allowed = allowedLogins(raw);
   const login = String(req.headers["tailscale-user-login"] || "").trim().toLowerCase();
   return !!login && allowed.includes(login);
 }
@@ -153,8 +160,10 @@ function registeredTerminalSession(session) {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(session || "")) return false;
   try {
     const reg = JSON.parse(fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "registry.json"), "utf8"));
-    return Object.values(reg.agents || {}).some((a) => a && (a.tmux_session === session || a.name === session));
-  } catch { return false; }
+    if (Object.values(reg.agents || {}).some((a) => a && (a.tmux_session === session || a.name === session))) return true;
+  } catch { /* no registry: only a listed login shell can pass */ }
+  // A login shell the API started for Connect has no registry row; the API lists it while it lives (dashboard-login-shells.js).
+  return listedLoginShell(session, process.env.ORCHESTRA_DIR);
 }
 // noServer + our own dispatch: with `server`, ws answers EVERY other upgrade path with 400, which killed the
 // /api/voice/live upgrade the listener above had already started forwarding ("voice bridge connection error").

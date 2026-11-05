@@ -51,6 +51,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ac.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="fill a template {KEY}; repeatable")
     ac.add_argument("--task", help="first instruction injected into the seat")
     ac.add_argument("--cwd", help="the seat's working directory (default: the checkout); must exist")
+    ac.add_argument("--test", action="store_true", help="a TEST seat: a short-lived throwaway, worker T2 reporting to the integrator (not a registered seat), recorded on the seat; the router's down pages and hold alarms skip it")
     stp = sub.add_parser("starter", help="the default first-install team: gm (T0) -> a project manager (T1) -> a worker (T2)")
     stp.add_argument("--project", default="first-project",
                      help="names the PM and worker pm-<project> / dev-<project> (default first-project)")
@@ -69,6 +70,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     sp.add_argument("--tier", help="T0 (the always-on manager), T1 or T2; default by position: T1 with no parent or a T0 parent, T2 under any other --parent; T0 with --gm")
     sp.add_argument("--parent", help="the seat this one reports to (recorded as reports_to)")
     sp.add_argument("--role", choices=["pm", "worker"], help="pm runs the project-manager briefing at boot; default worker")
+    sp.add_argument("--test", action="store_true", help="a TEST seat: a short-lived throwaway, worker T2 reporting to the integrator (not a registered seat), recorded on the seat; the router's down pages and hold alarms skip it")
     sp.add_argument("--prompt", help="role prompt path relative to the checkout (default prompts/<seat>.md)")
     sp.add_argument("--verbose", action="store_true", help="show spawn detail (model-banner checks, generated settings paths)")
 
@@ -134,6 +136,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     ist = isub.add_parser("status", help="is the identity store armed on this data dir")
     ist.add_argument("--data-dir", help="data dir to check (default: the one `orchestra up` uses)")
     ist.add_argument("--json", action="store_true")
+    from .memory_cmd import add_parser as _add_memory
+    _add_memory(sub)
+    from .react_cmd import add_parser as _add_react
+    _add_react(sub)
+    from .update_cmd import add_parser as _add_update
+    _add_update(sub)
     s = sub.add_parser("status", help="show the supervisor's process table")
     s.add_argument("--json", action="store_true")
     return p.parse_args(argv)
@@ -267,11 +275,15 @@ def main(argv=None) -> int:
     from .pair_cmd import run_pair, run_devices, run_rotate_fleet_token
     from .install_unit import cmd_install_unit
     from .identity_cmd import cmd_identity
+    from .memory_cmd import cmd_memory
+    from .react_cmd import cmd_react
+    from .update_cmd import cmd_update
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "retire": cmd_retire, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
             "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit,
-            "identity": cmd_identity}[ns.command](ns)
+            "identity": cmd_identity, "memory": cmd_memory, "react": cmd_react,
+            "update": cmd_update}[ns.command](ns)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ export default function SignInLink({ session, label = 'Open the sign-in page' }:
         target="_blank"
         rel="noreferrer"
         title={url}
-        className="flex-1 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#d97757] text-white text-sm font-medium"
+        className="flex-1 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#d97757] text-tone-white text-sm font-medium"
       >
         <ExternalLink size={13} /> {label}
       </a>
@@ -32,7 +32,7 @@ export default function SignInLink({ session, label = 'Open the sign-in page' }:
         aria-label="Copy the sign-in link"
         title="Copy the link"
         onClick={() => { void navigator.clipboard?.writeText(url); setCopied(true); }}
-        className="p-2 rounded-lg border border-neutral-700 text-neutral-300 hover:bg-neutral-800"
+        className="p-2 rounded-lg border border-tone-700 text-tone-300 hover:bg-tone-800"
       >
         {copied ? <Check size={13} /> : <Copy size={13} />}
       </button>

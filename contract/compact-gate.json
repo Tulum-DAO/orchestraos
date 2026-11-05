@@ -1,0 +1,19 @@
+{
+  "_doc": "Who may run a person's /compact. The gateway (scripts/watch_gateway.py _compact_allowed) enforces it; the API (api/src/lib/seatSettings.ts seatCanCompactNow) reports it as compact_now so the slideout offers Compact now only where it works. Both read the two flags here and both run every case, so they cannot drift. needs_headless: the seat is switched on headless and not in Dev (in Dev its TUI runs in the pane, so it reads as not headless). needs_test_seat: its registry row has test exactly true, found by seat id or tmux_session. A reader that cannot read this file refuses. In each case, registry is the seat's registry row (keyed by seat), or null for no row; headless means switched on headless; dev means its Dev marker exists.",
+  "needs_headless": true,
+  "needs_test_seat": true,
+  "cases": [
+    {"name": "a headless test seat", "seat": "qa-demo", "headless": true, "dev": false, "registry": {"test": true, "tmux_session": "qa-demo"}, "expected": true},
+    {"name": "a headless test seat whose tmux session has another name", "seat": "qa-demo", "headless": true, "dev": false, "registry": {"test": true, "tmux_session": "qa-demo-g2"}, "expected": true},
+    {"name": "a headless test seat with no tmux_session in its row", "seat": "qa-demo", "headless": true, "dev": false, "registry": {"test": true}, "expected": true},
+    {"name": "a headless test seat in Dev", "seat": "qa-demo", "headless": true, "dev": true, "registry": {"test": true, "tmux_session": "qa-demo"}, "expected": false},
+    {"name": "a test seat on tmux", "seat": "qa-demo", "headless": false, "dev": false, "registry": {"test": true, "tmux_session": "qa-demo"}, "expected": false},
+    {"name": "a test seat on tmux with a Dev marker", "seat": "qa-demo", "headless": false, "dev": true, "registry": {"test": true, "tmux_session": "qa-demo"}, "expected": false},
+    {"name": "a headless real seat", "seat": "dev-demo", "headless": true, "dev": false, "registry": {"test": false, "tmux_session": "dev-demo"}, "expected": false},
+    {"name": "a headless seat whose row does not say test", "seat": "dev-demo", "headless": true, "dev": false, "registry": {"tmux_session": "dev-demo"}, "expected": false},
+    {"name": "a headless seat whose row says test as a string", "seat": "dev-demo", "headless": true, "dev": false, "registry": {"test": "true", "tmux_session": "dev-demo"}, "expected": false},
+    {"name": "a headless real seat in Dev", "seat": "dev-demo", "headless": true, "dev": true, "registry": {"test": false, "tmux_session": "dev-demo"}, "expected": false},
+    {"name": "a real seat on tmux", "seat": "pm-demo", "headless": false, "dev": false, "registry": {"test": false, "tmux_session": "pm-demo"}, "expected": false},
+    {"name": "a headless seat with no registry row", "seat": "pm-demo", "headless": true, "dev": false, "registry": null, "expected": false}
+  ]
+}

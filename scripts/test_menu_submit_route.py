@@ -150,12 +150,13 @@ def test_armed_flag_is_the_multipart_one_not_the_single_part_one(spy, monkeypatc
     assert status == 200 and body["armed"] is True and spy[-1]["armed"] is True
 
 
-def test_armed_own_words_refused_until_text_armed(spy, monkeypatch):
+def test_armed_own_words_refused_only_when_text_is_opted_out(spy, monkeypatch):
     monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    monkeypatch.setenv("MENU_MULTIPART_TEXT_ARMED", "0")          # the operator opted out of own words
     with_text = [{"part": 0, "ns": ["1"]}, {"part": 1, "text": "do it my way"}]
     status, body = _post({"session": "gm", "answers": with_text, "confirm": True, "card_id": "apr_1"})
     assert status == 409 and body["reason"] == "free_text_not_armed" and spy == []
-    monkeypatch.setenv("MENU_MULTIPART_TEXT_ARMED", "1")
+    monkeypatch.delenv("MENU_MULTIPART_TEXT_ARMED")               # the default: own words are typed
     status, body = _post({"session": "gm", "answers": with_text, "confirm": True, "card_id": "apr_1"})
     assert status == 200 and spy[-1]["answers"] == [{"part": 0, "ns": ["1"]},
                                                     {"part": 1, "ns": [], "text": "do it my way"}]
@@ -308,7 +309,7 @@ def test_capabilities_advertise_menu_submit_and_its_arm_state(monkeypatch):
     resp = _run(G.handle_gateway_capabilities(_Req(None)))
     body = json.loads(resp.text)
     assert "menu_submit" in body["features"]
-    assert body["menu_submit"] == {"armed": False, "text_armed": False}
+    assert body["menu_submit"] == {"armed": False, "text_armed": True}      # own words: on unless opted out
     monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
     body = json.loads(_run(G.handle_gateway_capabilities(_Req(None))).text)
     assert body["menu_submit"]["armed"] is True
@@ -469,12 +470,13 @@ def test_default_install_menu_submit_without_a_card_is_card_required_not_a_dry_r
     assert status == 409 and body["reason"] == "card_required" and spy == []
 
 
-def test_default_install_capabilities_say_armed_and_text_not_armed(monkeypatch):
+def test_default_install_capabilities_say_armed_and_text_armed(monkeypatch):
     monkeypatch.delenv("MENU_MULTIPART_SUBMIT_ARMED", raising=False)
+    monkeypatch.delenv("MENU_MULTIPART_TEXT_ARMED", raising=False)
     monkeypatch.setattr(G, "_capability_providers", lambda: [], raising=False)
     monkeypatch.setattr(G, "_pending_count", lambda: 0, raising=False)
     body = json.loads(_run(G.handle_gateway_capabilities(_Req({}))).text)
-    assert body["menu_submit"] == {"armed": True, "text_armed": False}
+    assert body["menu_submit"] == {"armed": True, "text_armed": True}
 
 
 # ---- /agent-key's batch leg: same card binding, same text arm, no identity-less leg when armed --
@@ -499,10 +501,11 @@ def test_agent_key_armed_own_words_text_needs_its_own_arm(monkeypatch):
     calls = []
     monkeypatch.setattr(G, "durable_first_batch_submit", lambda *a, **k: calls.append(k) or (True, {}))
     monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    monkeypatch.setenv("MENU_MULTIPART_TEXT_ARMED", "0")          # opted out
     with_text = [{"part": 0, "ns": ["1"]}, {"part": 1, "ns": ["4"], "text": "D"}]
     status, body = _agent_key({"answers": with_text, "card_id": "apr_1"})
     assert status == 409 and body["reason"] == "free_text_not_armed" and calls == []
-    monkeypatch.setenv("MENU_MULTIPART_TEXT_ARMED", "1")
+    monkeypatch.delenv("MENU_MULTIPART_TEXT_ARMED")               # the default: on
     status, _ = _agent_key({"answers": with_text, "card_id": "apr_1"})
     assert status == 200 and len(calls) == 1
 
@@ -607,7 +610,7 @@ def test_a_MIXED_card_one_part_without_a_question_is_refused(replay, env):
 
 
 def test_batch_key_tolerates_a_non_string_text():
-    assert G._batch_key([{"part": 0, "ns": ["1"], "text": 5}]) == {0: (["1"], "5")}
+    assert G._batch_key([{"part": 0, "ns": ["1"], "text": 5}]) == {0: (["1"], "5", False)}
 
 
 # ---- a LIVE-delivered replay is terminal (no second delivery by approval_resume) ----

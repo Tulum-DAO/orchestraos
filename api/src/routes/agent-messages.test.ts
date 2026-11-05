@@ -15,9 +15,10 @@ function store(): string {
   const p = join(mkdtempSync(join(tmpdir(), 'agent-msg-')), 'tasks.db');
   const db = new Database(p);
   db.exec(`create table messages (id text primary key, from_agent text, to_agent text, subject text, body text,
-           priority text, created_at text)`);
-  db.prepare('insert into messages values (?,?,?,?,?,?,?)').run(
-    'msg_demo_1', 'pm-demo', 'dev-demo', 'Sample subject', 'Example body.\n\nSecond paragraph.', 'high', '2026-10-28T12:00:00Z');
+           priority text, created_at text, type text)`);
+  db.prepare('insert into messages values (?,?,?,?,?,?,?,?)').run(
+    'msg_demo_1', 'pm-demo', 'dev-demo', 'Sample subject', 'Example body.\n\nSecond paragraph.', 'high', '2026-10-28T12:00:00Z',
+    'phase_report');
   db.close();
   return p;
 }
@@ -27,6 +28,7 @@ test('the agent it was sent to reads the whole body', () => {
   assert.equal(m?.from_agent, 'pm-demo');
   assert.equal(m?.body, 'Example body.\n\nSecond paragraph.');
   assert.equal(m?.priority, 'high');
+  assert.equal(m?.type, 'phase_report', 'the type says whether it is a hand-back');
 });
 
 test("a later generation of the same seat reads it too", () => {

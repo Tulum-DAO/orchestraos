@@ -14,6 +14,19 @@ import sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from approval_config import DB_PATH
 
 
+def _add_column(c, sql):
+    """One additive ALTER. Two processes can both see a column missing and both add it (the second gets
+    "duplicate column name"): that is the column being there, which is what was wanted. Returns True if this call
+    added it. Any other error is raised."""
+    try:
+        c.execute(sql)
+        return True
+    except sqlite3.OperationalError as e:
+        if "duplicate column" in str(e).lower():
+            return False
+        raise
+
+
 def _now():
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -76,7 +89,7 @@ CREATE TABLE IF NOT EXISTS questionnaire_answers (
   n           INTEGER NOT NULL,
   option_n    TEXT,
   answer_text TEXT,
-  state       TEXT NOT NULL DEFAULT 'draft',   -- 'draft' (mutable) | 'final' (frozen at submit)
+  state       TEXT NOT NULL DEFAULT 'draft',   -- 'draft' (mutable) | 'final' (frozen at submit) | 'skipped' (no answer, by choice)
   updated_at  TEXT NOT NULL,
   surface     TEXT,
   PRIMARY KEY (qnr_id, n)
@@ -135,10 +148,12 @@ class QuestionnaireStore:
             # Additive columns (same discipline as ApprovalStore.migrate).
             existing = {r[1] for r in c.execute("PRAGMA table_info(questionnaires)").fetchall()}
             if "notified_at" not in existing:   # ntfy push stamp (spec §5)
-                c.execute("ALTER TABLE questionnaires ADD COLUMN notified_at TEXT")
-            for col in ("last_attempt_at", "escalated_at"):   # SLA spec 2026-08-14
+                _add_column(c, "ALTER TABLE questionnaires ADD COLUMN notified_at TEXT")
+            # notify_skipped: why a push did not go (Settings › Notifications: suppressed / held by quiet hours),
+            # the same audit column approval_requests has. Nullable, additive.
+            for col in ("last_attempt_at", "escalated_at", "notify_skipped"):   # SLA spec 2026-08-14
                 if col not in existing:
-                    c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
+                    _add_column(c, f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
             if "real_attempts" not in existing:   # G3 answer-resume spec 2026-08-18:
                 # resume_attempts becomes the EVERY-attempt counter (busy/no-head
                 # refusals included — zero-attempts-while-pending impossible by
@@ -146,21 +161,22 @@ class QuestionnaireStore:
                 # WATCHDOG_MAX_ATTEMPTS keeps gating on REAL failed injects,
                 # never on busy minutes (3 busy beats must not read as
                 # "delivered 3x with no ack").
-                c.execute("ALTER TABLE questionnaires ADD COLUMN real_attempts "
+                added = _add_column(c, "ALTER TABLE questionnaires ADD COLUMN real_attempts "
                           "INTEGER NOT NULL DEFAULT 0")
                 # Backfill: historically every counted attempt WAS a real one.
-                c.execute("UPDATE questionnaires SET real_attempts=resume_attempts")
+                if added:   # another process added it first: it backfilled too
+                    c.execute("UPDATE questionnaires SET real_attempts=resume_attempts")
             # Card RETIRE columns ride the SAME operator arm as approval_requests (gm msg_3f3a4d05:
             # one arm, both tables). Unarmed: nothing is added and retire() refuses.
             import approval_schema
             if approval_schema.armed(approval_schema.RETIRE_MIGRATION):
                 for col in approval_schema.RETIRE_COLS:
                     if col not in existing:
-                        c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
+                        _add_column(c, f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
             if approval_schema.armed(PROVENANCE_MIGRATION):
                 for col, coltype in PROVENANCE_COLS:
                     if col not in existing:
-                        c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} {coltype}")
+                        _add_column(c, f"ALTER TABLE questionnaires ADD COLUMN {col} {coltype}")
             c.commit()
         finally:
             c.close()
@@ -324,10 +340,18 @@ class QuestionnaireStore:
 
     # ---- submit (all-or-nothing, once) ----
     def submit(self, qid, answers=None, surface=None):
-        """Merge the final delta into the draft, then require EVERY question to hold
-        a valid answer -> atomic freeze (answers->final) + guarded flip
-        (pending->submitted, once). Returns {applied:True} | {applied:False, missing}
-        | {applied:False, status} | None."""
+        """Merge the final delta into the draft, then require EVERY required question to
+        hold a valid answer or an explicit skip, and at least one question to be answered
+        unless EVERY question was explicitly skipped -> atomic freeze
+        (answers->final) + guarded flip (pending->submitted, once). Returns
+        {applied:True} | {applied:False, missing} | {applied:False, nothing_answered:True}
+        | {applied:False, status} | None.
+
+        A question sent as {"skipped": true} (any question, required or not;
+        partial questionnaires are accepted) is recorded with no answer and
+        state 'skipped', which the freeze
+        keeps, so the stored answer says the person chose to skip it rather than
+        never reaching it."""
         c = self._conn()
         try:
             q = c.execute("SELECT status, question_count FROM questionnaires WHERE id=?",
@@ -342,21 +366,27 @@ class QuestionnaireStore:
                 cur = c.execute(
                     "SELECT option_n, answer_text FROM questionnaire_answers WHERE qnr_id=? AND n=?",
                     [qid, n]).fetchone()
-                opt = a["option_n"] if "option_n" in a else (cur["option_n"] if cur else None)
-                txt = a["answer_text"] if "answer_text" in a else (cur["answer_text"] if cur else None)
+                skipped = a.get("skipped") is True
+                if skipped:
+                    opt, txt, state = None, None, "skipped"
+                else:
+                    opt = a["option_n"] if "option_n" in a else (cur["option_n"] if cur else None)
+                    txt = a["answer_text"] if "answer_text" in a else (cur["answer_text"] if cur else None)
+                    state = "draft"
                 if cur:
                     c.execute(
                         "UPDATE questionnaire_answers SET option_n=?, answer_text=?, "
-                        "state='draft', updated_at=?, surface=? WHERE qnr_id=? AND n=?",
-                        [opt, txt, now, surface, qid, n])
+                        "state=?, updated_at=?, surface=? WHERE qnr_id=? AND n=?",
+                        [opt, txt, state, now, surface, qid, n])
                 else:
                     c.execute(
                         "INSERT INTO questionnaire_answers (qnr_id, n, option_n, answer_text, "
-                        "state, updated_at, surface) VALUES (?,?,?,?, 'draft', ?, ?)",
-                        [qid, n, opt, txt, now, surface])
+                        "state, updated_at, surface) VALUES (?,?,?,?,?,?,?)",
+                        [qid, n, opt, txt, state, now, surface])
             have = {r["n"]: r for r in c.execute(
-                "SELECT n, option_n, answer_text FROM questionnaire_answers WHERE qnr_id=?",
+                "SELECT n, option_n, answer_text, state FROM questionnaire_answers WHERE qnr_id=?",
                 [qid]).fetchall()}
+            skipped = {n for n, r in have.items() if r["state"] == "skipped"}
             # Optional questions (required=0 — stored by create() since day one
             # but previously IGNORED here) never block submission. the operator field
             # bug 2026-08-16: an optional free-text question wedged the watch
@@ -364,18 +394,29 @@ class QuestionnaireStore:
             req = {r["n"]: r["required"] for r in c.execute(
                 "SELECT n, required FROM questionnaire_questions WHERE qnr_id=?",
                 [qid]).fetchall()}
+            # A required question blocks only when it is LEFT OUT (an app that sends no skips);
+            # one the person skipped explicitly is settled.
             missing = [n for n in range(1, q["question_count"] + 1)
-                       if req.get(n, 1) and not _answered(have.get(n))]
+                       if req.get(n, 1) and n not in skipped and not _answered(have.get(n))]
             if missing:
                 c.commit()   # the delta persists as draft; caller jumps to first missing
                 return {"applied": False, "missing": missing}
+            every = range(1, q["question_count"] + 1)
+            if (not any(_answered(have.get(n)) for n in every)
+                    and not all(n in skipped for n in every)):
+                # Nothing answered and not every question skipped on purpose (an empty send):
+                # nothing to send, nothing kept. Every question skipped explicitly is an answer
+                # in itself (the card asks once first) and goes through.
+                c.rollback()
+                return {"applied": False, "nothing_answered": True}
             res = c.execute(
                 "UPDATE questionnaires SET status='submitted', submitted_at=? "
                 "WHERE id=? AND status='pending'", [now, qid])
             if res.rowcount == 0:      # lost the submit race
                 c.commit()
                 return {"applied": False}
-            c.execute("UPDATE questionnaire_answers SET state='final' WHERE qnr_id=?", [qid])
+            c.execute("UPDATE questionnaire_answers SET state='final' "
+                      "WHERE qnr_id=? AND state != 'skipped'", [qid])
             c.commit()
             return {"applied": True}
         finally:
@@ -491,20 +532,26 @@ class QuestionnaireStore:
         finally:
             c.close()
 
-    def history(self, limit=50):
+    def history(self, limit=50, agents=None):
         """R8 everything-to-history: containers that reached a the operator-visible end
-        (submitted/resumed, discarded, and retired by author/gm), newest-ended-first."""
+        (submitted/resumed, discarded, and retired by author/gm), newest-ended-first.
+        `agents` (attention list, a scoped member): only those authors, filtered before the limit."""
         c = self._conn()
         try:
             out = []
             cols = {r[1] for r in c.execute("PRAGMA table_info(questionnaires)").fetchall()}
             ended = ("submitted_at, discarded_at, retired_at" if "retired_at" in cols
                      else "submitted_at, discarded_at")
+            only, args = "", []
+            if agents is not None:
+                agents = list(agents)
+                only = f" AND from_agent IN ({','.join('?' for _ in agents)})" if agents else " AND 0"
+                args = agents
             for q in c.execute(
                     "SELECT * FROM questionnaires "
-                    "WHERE status IN ('submitted','resumed','discarded','retired') "
-                    f"ORDER BY COALESCE({ended}) DESC LIMIT ?",
-                    [int(limit)]).fetchall():
+                    "WHERE status IN ('submitted','resumed','discarded','retired')" + only +
+                    f" ORDER BY COALESCE({ended}) DESC LIMIT ?",
+                    args + [int(limit)]).fetchall():
                 d = dict(q)
                 arows = c.execute(
                     "SELECT option_n, answer_text FROM questionnaire_answers WHERE qnr_id=?",

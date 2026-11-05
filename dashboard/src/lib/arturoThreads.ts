@@ -16,13 +16,23 @@
  *     should not mute context in another) and it persists, so it survives a reload.
  */
 import type { ArturoContext } from './arturo';
+// Same card-id shape as cardRefs.ts, kept local: importing cardRefs pulls the decisions graph into
+// this module, and arturoThreads.test.mjs runs under plain Node type stripping, which cannot resolve
+// that graph's extensionless imports.
+const CARD_ID = /\b(?:apr|qnr)_[0-9a-f]{8}_\d{1,8}\b/;
+const hasRefs = (text: string): boolean => CARD_ID.test(String(text ?? ''));
 
 /** `gist`: the conversation's own summary (services/arturo: kept current as it grows and when a call ends). */
 export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string; gist?: string }
 /** `meta.kind === 'job_result'`: posted by a background job (jobs.py), with the steps it ran. */
 export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: string; title?: string; status?: string;
-  steps?: import('./arturoJobs').JobStep[]; call_id?: string }
-export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta }
+  steps?: import('./arturoJobs').JobStep[]; call_id?: string;
+  /** A reply that showed a choice card (kind "card"): the card, its id, and whether it was closed unanswered. */
+  card_id?: string; choices?: import('./arturo').ChoiceCard; dismissed?: boolean;
+  /** The card's answer as the server keeps it (the turn that answered it said so): picks and words, and when. */
+  answer?: { picks?: string[]; words?: string; at?: number } }
+/** `seq`: the turn's number in its thread, present when the thread was read a page at a time (loadThreadPage). */
+export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta; seq?: number }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
 export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 export interface ContextCard { kind: 'page-context'; label: string; context: ArturoContext }
@@ -45,6 +55,32 @@ export async function loadThread(id: string): Promise<LoadedThread | null> {
     if (!res.ok) return null;
     const json = await res.json();
     return threadFromJson(json.thread);
+  } catch { return null; }
+}
+
+/** How many turns a page of a long thread holds (the newest on opening it, then each older page as the reader
+ *  scrolls up). */
+export const THREAD_PAGE_TURNS = 100;
+
+/** A thread a page at a time: the newest turns (no `before`), or those just older than the turn numbered `before`.
+ *  `hasOlder`/`next` page further up. A server that does not page (it answers the whole thread, with no has_older)
+ *  is the whole thread with nothing older; a page that is not older than its cursor (a hop that dropped `before`)
+ *  is refused, so the same turns are never drawn twice. null when the thread is gone or unreachable. */
+export async function loadThreadPage(id: string, before?: number, limit = THREAD_PAGE_TURNS):
+    Promise<{ thread: LoadedThread | null; hasOlder: boolean; next: number | null } | null> {
+  try {
+    const q = new URLSearchParams({ limit: String(limit), ...(before !== undefined ? { before: String(before) } : {}) });
+    const res = await fetch(`/api/arturo/threads/${encodeURIComponent(id)}?${q}`);
+    if (!res.ok) return null;
+    const json = await res.json() as { thread?: ThreadJson | null; has_older?: boolean; oldest_seq?: number | null; error?: string };
+    const thread = threadFromJson(json.thread);
+    if (before !== undefined) {
+      if (typeof json.has_older !== 'boolean' || json.error) return null;
+      if (thread?.turns.some((t) => typeof t.seq !== 'number' || t.seq >= before)) return null;
+    }
+    const pages = typeof json.has_older === 'boolean';
+    return { thread, hasOlder: pages && json.has_older === true && typeof json.oldest_seq === 'number',
+             next: pages && typeof json.oldest_seq === 'number' ? json.oldest_seq : null };
   } catch { return null; }
 }
 
@@ -79,12 +115,14 @@ const PRETTY: Record<string, string> = {
   overview: 'Overview',
 };
 
-/** What the card SAYS. Plain English — it is a card in a chat, not a debug line, so
- *  "Approvals · apr_1a2b3c4d", never "route=/approvals entity=approvals:apr_1a2b3c4d". */
-export function contextCardLabel(ctx?: ArturoContext | null): string {
+/** What the card SAYS. Plain English — it is a card in a chat, not a debug line, never "route=/approvals
+ *  entity=approvals:…". A card on screen is named by its question (`cards`: lib/screenCards screenLabel, "Approvals ·
+ *  Which size?"), and a card id is never shown: a page focused on one says only the page. */
+export function contextCardLabel(ctx?: ArturoContext | null, cards?: string | null): string {
   if (!ctx) return '';
   const kind = PRETTY[ctx.entityKind || ''] || (ctx.entityKind ? ctx.entityKind[0].toUpperCase() + ctx.entityKind.slice(1) : 'This page');
-  return ctx.entityId ? `${kind} · ${ctx.entityId}` : kind;
+  if (cards) return `${kind} · ${cards}`;
+  return ctx.entityId && !hasRefs(ctx.entityId) ? `${kind} · ${ctx.entityId}` : kind;
 }
 
 export function contextCardFor(ctx?: ArturoContext | null): ContextCard | null {
@@ -129,4 +167,17 @@ export function restoreContext(threadId: string): void {
 export function contextForTurn(threadId: string, ctx?: ArturoContext | null): ArturoContext | null {
   if (!ctx) return null;
   return isContextDismissed(threadId) ? null : ctx;
+}
+
+/** Close one of Arturo's choice cards without answering it (it stays in the thread, marked dismissed). Returns an
+ *  error to show, or null. */
+export async function dismissCard(conversationId: string, cardId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/arturo/threads/${encodeURIComponent(conversationId)}/cards/${encodeURIComponent(cardId)}/dismiss`,
+      { method: 'POST' });
+    const json = await res.json().catch(() => ({}));
+    return res.ok && json.ok ? null : (json.error || `Couldn't dismiss (HTTP ${res.status})`);
+  } catch {
+    return "Couldn't reach the server";
+  }
 }

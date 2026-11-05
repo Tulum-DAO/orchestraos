@@ -207,6 +207,64 @@ export function predecessorOf(sid: string, orch: string = ORCHESTRA_DIR): Predec
   }
 }
 
+/** One generation of a lineage chain, as the stitched chat needs it. */
+export interface ChainLink {
+  generation: number;
+  session_id: string | null;
+  conversation_path: string | null;
+  promoted_at: string | null;
+}
+
+/** The whole chain behind `sid`, oldest first and `sid`'s own generation last. `sid` must be the
+ *  session of a root's CURRENT head, as for predecessorOf; each step back follows the same rule
+ *  (exactly one generation of the root retired at the moment the newer one was promoted). A
+ *  generation with no session id stays in the chain (its file cannot be found, but the walk goes
+ *  on through it). The walk stops at a generation never promoted, at an ambiguous or missing step,
+ *  at a loop, or after `max` steps. Not a head, or no store: null. */
+export function lineageChainOf(sid: string, orch: string = ORCHESTRA_DIR, max = 1000):
+    { root: string; cwd: string | null; links: ChainLink[] } | null {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    const cur = db.prepare(
+      `SELECT g.id, g.root, l.cwd
+       FROM generations g JOIN canonical c ON c.generation_id = g.id
+       LEFT JOIN lineages l ON l.root = g.root
+       WHERE g.session_id = ?`,
+    ).get(sid) as { id: number; root: string; cwd: string | null } | undefined;
+    if (!cur) return null;
+    type Row = ChainLink & { id: number; retired_at: string | null };
+    const rows = db.prepare(
+      `SELECT id, generation, session_id, conversation_path, promoted_at, retired_at
+       FROM generations WHERE root = ?`,
+    ).all(cur.root) as Row[];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    let at = byId.get(cur.id);
+    const newestFirst: Row[] = [];
+    const seen = new Set<number>();
+    while (at && !seen.has(at.id) && newestFirst.length < max) {
+      seen.add(at.id);
+      newestFirst.push(at);
+      const promoted = at.promoted_at;
+      if (!promoted) break;
+      const prev = rows.filter((r) => r.id !== at!.id && r.retired_at === promoted);
+      at = prev.length === 1 ? prev[0] : undefined;
+    }
+    return {
+      root: cur.root, cwd: cur.cwd ?? null,
+      links: newestFirst.reverse().map((r) => ({
+        generation: r.generation, session_id: r.session_id ?? null,
+        conversation_path: r.conversation_path ?? null, promoted_at: r.promoted_at ?? null,
+      })),
+    };
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
+}
+
 /** Every generation of one root, newest first. */
 export function getGenerations(root: string, orch: string = ORCHESTRA_DIR): GenerationRow[] | null {
   let db: Database.Database | null = null;

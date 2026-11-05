@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { canonicalAnswerArgv, answerSurface } from './_canonical-approvals.js';
 
 const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'unified-approvals.ts'), 'utf-8');
 
@@ -27,4 +28,24 @@ test('the id and reason travel as argv and the scripts read sys.argv', () => {
   assert.equal((SRC.match(/reason = sys\.argv\[2\]/g) || []).length, 2);
   assert.match(SRC, /\[String\(id\), String\(reason \|\| ''\)\]/);
   assert.match(SRC, /\[String\(id\), String\(reason\)\]/);
+});
+
+// The answer surface hint (attention part 1): a chat answer is recorded as surface chat so the
+// list can say where it was answered. The client may only ask for chat; anything else is web, the
+// web route's own surface, so no caller can claim to be the phone or the watch.
+test('surface chat reaches approval.py as --surface chat; any other value is web', () => {
+  const surfaceOf = (argv: string[]) => argv[argv.indexOf('--surface') + 1];
+  assert.equal(surfaceOf(canonicalAnswerArgv('apr_1', 'approve', undefined, undefined, { surface: 'chat' })), 'chat');
+  assert.equal(surfaceOf(canonicalAnswerArgv('apr_1', 'approve', undefined, undefined, { surface: 'watch' })), 'web');
+  assert.equal(surfaceOf(canonicalAnswerArgv('apr_1', 'deny', 'no', undefined, { surface: 42 })), 'web');
+  assert.equal(surfaceOf(canonicalAnswerArgv('apr_1', 'approve')), 'web');
+  assert.equal(canonicalAnswerArgv('apr_1', 'approve', undefined, undefined, { surface: 'chat' }).filter((a) => a === '--surface').length, 1);
+  assert.equal(answerSurface('chat'), 'chat');
+  for (const v of ['watch', 'phone', 'web', 'rule', '', null, undefined, 'CHAT']) assert.equal(answerSurface(v), 'web', String(v));
+});
+
+test('approve, deny and answer pass the body surface to the canonical answer', () => {
+  assert.match(SRC, /canonicalAnswer\(id, 'approve', undefined, undefined, \{ surface: req\.body\?\.surface \}\)/);
+  assert.match(SRC, /canonicalAnswer\(id, 'deny', reason, undefined, \{ surface: req\.body\?\.surface \}\)/);
+  assert.match(SRC, /canonicalAnswer\(id, 'option', undefined, \{ optionN, answerText \}, \{ surface: req\.body\?\.surface \}\)/);
 });

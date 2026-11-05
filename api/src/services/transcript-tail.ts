@@ -13,6 +13,16 @@
  *              of the missed tail; stale/foreign id -> fresh snapshot.
  *  - reset:    session rotation or file truncation -> snapshot { reset: true }.
  *
+ * A headless seat's cut turns (the supervisor's interrupted.json) get the same "[TURN INTERRUPTED]"
+ * line as the poll route, after the turn its message opened, once. The file is watched beside the
+ * log (it is written when the process dies, usually with nothing appended to the log). A line that
+ * lands at the end goes out as a delta; one that lands before the tail goes out as a snapshot,
+ * because a delta only appends and every later item's offset moved.
+ *
+ * A tailer whose seat has no transcript AND no tmux window for GONE_TICKS beats in a row (an agent with no pane,
+ * a retired seat whose page is still open) stops: tick() says 'gone' once and every later tick is a no-op, so an
+ * open page no longer asks tmux about a window that is not coming back. A new subscriber starts it again.
+ *
  * The live-STATE lane (working/idle/waiting/stranded v2 detector) is NOT here
  * by design — state stays its own lane per the locked congruence guardrail.
  *
@@ -20,10 +30,17 @@
  * the route (transcript-stream.ts) owns the interval + per-agent registry.
  */
 import { readFileSync, statSync } from 'fs';
-import { normalizeTranscript, buildRenderItems, GRAMMAR_VERSION } from '../routes/chat-transcript.js';
+import {
+  normalizeTranscript, buildRenderItems, dropWakeReplies, GRAMMAR_VERSION,
+  mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
+} from '../routes/chat-transcript.js';
+import { storeRules } from './conversation-store.js';
+import { stampRefs } from '../lib/messageRef.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
+/** Beats in a row with no transcript and no tmux window before a tailer stops (about 30 s at the route's 1 s beat). */
+export const GONE_TICKS = 30;
 
 export interface TailEvent {
   type: 'snapshot' | 'delta';
@@ -41,6 +58,7 @@ export interface TailEvent {
 }
 
 type Resolver = () => { path: string | null; sid: string | null };
+type Interrupted = { read: () => InterruptedTurn[]; sig: () => string };
 type Subscriber = (ev: TailEvent) => void;
 
 /** Item identity for aligning two windows of the same log (usage excluded: that is what changed). */
@@ -69,15 +87,42 @@ export class TranscriptTailer {
   private fileSize = -1;
   private items: any[] = [];
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
+  private interrupted: Interrupted;
+  private interruptedSig = '';
+  private rulesSig = '';
+  private windowGone: () => boolean;
+  private goneBeats = 0;
+  private stopped = false;
+  /** A subagent's own log (the agent-tree drill-in): every row is sidechain, and the seat's cut turns and
+   *  store rules are the seat's, not its. */
+  private keepSidechain: boolean;
 
-  constructor(opts: { agentId: string; resolve: Resolver; limit?: number }) {
+  constructor(opts: { agentId: string; resolve: Resolver; limit?: number; interrupted?: Interrupted;
+    windowGone?: () => boolean; keepSidechain?: boolean }) {
     this.agentId = opts.agentId;
     this.resolve = opts.resolve;
     this.limit = opts.limit ?? 150;
+    this.windowGone = opts.windowGone ?? (() => false);
+    this.keepSidechain = opts.keepSidechain ?? false;
+    this.interrupted = opts.interrupted ?? (this.keepSidechain ? { read: () => [], sig: () => '' } : {
+      read: () => readInterruptedTurns(opts.agentId),
+      sig: () => interruptedTurnsSig(opts.agentId),
+    });
   }
 
   get subscriberCount(): number {
     return this.subs.size;
+  }
+
+  /** The newest items read so far (the live step: the tool call still running). Read only. */
+  recentItems(n = 50): readonly any[] {
+    return this.items.slice(-n);
+  }
+
+  /** Whether the items read so far hold this uuid (live text: its finished line has landed). */
+  hasItemUuid(uuid: string): boolean {
+    for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i]?.uuid === uuid) return true;
+    return false;
   }
 
   /** Re-resolve + re-read the transcript. Returns what changed. */
@@ -98,7 +143,13 @@ export class TranscriptTailer {
     // Cheap no-op check: same file, same size -> nothing to re-normalize.
     let size = -1;
     try { size = statSync(path).size; } catch { size = -1; }
-    if (!rotated && path === this.path && size === this.fileSize) {
+    let isig = '';
+    try { isig = this.interrupted.sig(); } catch { isig = ''; }
+    // The store's rules for this session (seen-only entries, seed rows): marking an entry seen-only changes what is
+    // shown without the log growing, so it re-reads and re-sends the window.
+    let rsig = '';
+    try { rsig = this.keepSidechain ? '' : storeRules(sid).sig; } catch { rsig = ''; }
+    if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig && rsig === this.rulesSig) {
       return { rotated: false, grewFrom: null };
     }
 
@@ -109,7 +160,22 @@ export class TranscriptTailer {
     // DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
     const env = normalizeTranscript(
-      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'));
+      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, null, true, this.keepSidechain);
+    let turns: InterruptedTurn[] = [];
+    try { turns = this.interrupted.read(); } catch { turns = []; }
+    env.items = mergeInterruptedTurns(env.items, turns);
+    // The server's message ref on each log item (lib/messageRef.ts): the same `<session>~<uuid>#<part>` the poll
+    // route's chatWindow gives it, so a reaction made from either view names one message. Cut-turn lines get none.
+    // Parts are numbered over this read (up to TAIL_ITEM_CAP items): only a line cut by that cap, at the very oldest
+    // edge of a huge log, could number differently from the poll route.
+    env.items = stampRefs(env.items, sid);
+    // A reaction wake's silent or emoji answer (chat-transcript markWakeReplies): numbered like the poll route, never sent.
+    env.items = dropWakeReplies(env.items);
+    // A cut-turn line new this beat and placed before the old tail: every later item moved, which
+    // a delta (append only) cannot say. Sent as a snapshot.
+    const sentUuids = new Set(this.items.map((it) => it?.uuid));
+    const insertedBeforeTail = !rotated && path === this.path && prevCount > 0
+      && env.items.some((it, i) => it?.interrupted_turn && !sentUuids.has(it.uuid) && i < prevCount);
 
     const truncated = !rotated && env.items.length < prevCount;
     // Codex reports a response's tokens after its items: `usage` can land on an item a delta
@@ -126,9 +192,13 @@ export class TranscriptTailer {
         }
       }
     }
+    if (insertedBeforeTail) restated = true;
+    if (!rotated && path === this.path && prevCount > 0 && rsig !== this.rulesSig) restated = true;
+    this.rulesSig = rsig;
     this.sid = sid;
     this.path = path;
     this.fileSize = size;
+    this.interruptedSig = isig;
     this.items = env.items;
 
     if (rotated || truncated) return { rotated: true, grewFrom: null, restated: false };
@@ -196,10 +266,27 @@ export class TranscriptTailer {
     return () => { this.subs.delete(cb); };
   }
 
-  /** One poll-tail beat: re-read, broadcast delta / reset-snapshot as needed. */
-  tick(): void {
-    if (this.subs.size === 0) return;
+  get isStopped(): boolean {
+    return this.stopped;
+  }
+
+  /** A new subscriber to a stopped tailer: tick again (its seat may be back). */
+  restart(): void {
+    this.stopped = false;
+    this.goneBeats = 0;
+  }
+
+  /** One poll-tail beat: re-read, broadcast delta / reset-snapshot as needed. 'gone' once, when it stops. */
+  tick(): 'gone' | void {
+    if (this.subs.size === 0 || this.stopped) return;
     const { rotated, grewFrom, restated } = this.refresh();
+    let gone = false;
+    try { gone = this.path === null && this.windowGone(); } catch { gone = false; }
+    this.goneBeats = gone ? this.goneBeats + 1 : 0;
+    if (this.goneBeats >= GONE_TICKS) {
+      this.stopped = true;
+      return 'gone';
+    }
     if (rotated || restated) {
       // reset only for a new session or a shrunk log; a late usage update is a plain snapshot.
       const ev = this.snapshot(rotated);

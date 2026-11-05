@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request } from 'express';
-import { principal, actingAgent, tenantScope, trustsIdentityHeaders } from './principal.js';
+import { principal, actingAgent, tenantScope, trustsIdentityHeaders, installRole, changedBy } from './principal.js';
 
 const req = (headers: Record<string, string> = {}) => ({ headers } as unknown as Request);
 
@@ -109,4 +109,44 @@ test('an array-valued header cannot smuggle a second identity', () => {
 test('the trust flag is off unless explicitly enabled', () => {
   untrusted(() => assert.equal(trustsIdentityHeaders(), false));
   trusted(() => assert.equal(trustsIdentityHeaders(), true));
+});
+
+const tsReq = (login?: string, addr = '127.0.0.1') =>
+  ({ headers: login ? { 'tailscale-user-login': login } : {}, socket: { remoteAddress: addr } }) as unknown as Request;
+const USERS = [{ login: 'sam@x.net', role: null }, { login: 'mo@y.net', role: 'member' as const }];
+
+test('install role: a listed login with no role is admin; a member is a member; an unlisted login or no login is a member', () => {
+  untrusted(() => {
+    assert.equal(installRole(tsReq('sam@x.net'), USERS), 'admin');
+    assert.equal(installRole(tsReq('Mo@Y.net'), USERS), 'member');
+    assert.equal(installRole(tsReq('who@z.net'), USERS), 'member');
+    assert.equal(installRole(tsReq(), USERS), 'member', 'a caller with no Tailscale login is never admin');
+    assert.equal(installRole(tsReq(undefined, '::1'), USERS), 'member');
+  });
+});
+
+test('install role: the login header only counts when it arrived through the local proxy', () => {
+  untrusted(() => {
+    assert.equal(installRole(tsReq('sam@x.net', '100.64.0.9'), USERS), 'member');
+    assert.equal(installRole(tsReq('mo@y.net', '100.64.0.9'), USERS), 'member');
+  });
+});
+
+test('install role in trusted mode follows the proxy role and never defaults to admin', () => {
+  trusted(() => {
+    assert.equal(installRole(req({ 'x-orchestra-user': 'a', 'x-orchestra-role': 'admin' }), USERS), 'admin');
+    assert.equal(installRole(req({ 'x-orchestra-user': 'a' }), USERS), 'member');
+    assert.equal(installRole(req({}), USERS), 'member');
+  });
+});
+
+test('changedBy names the Tailscale login when there is one, else the principal', () => {
+  untrusted(() => {
+    assert.equal(changedBy(tsReq('Sam@X.net')), 'sam@x.net');
+    assert.ok(changedBy(tsReq()).length > 0);
+  });
+});
+
+test('the tenant role is untouched: a member login is still the operator for tenant scoping', () => {
+  untrusted(() => assert.equal(tenantScope(tsReq('mo@y.net')).isAdmin, true));
 });

@@ -21,6 +21,9 @@ router.param('id', agentScopeParam);
 export interface AgentMessage {
   id: string; from_agent: string; to_agent: string; priority: string | null;
   subject: string | null; body: string | null; created_at: string | null;
+  /** msg_store's message type (task, reply, status, phase_report, handoff, ...): a hand-back is drawn as a
+   *  finished-work card. Additive. */
+  type: string | null;
 }
 
 const MSG_ID = /^[A-Za-z0-9_]{1,80}$/;
@@ -33,7 +36,7 @@ export function readAgentMessage(dbPath: string, agentId: string, msgId: string)
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
       const row = db.prepare(
-        `select id, from_agent, to_agent, priority, subject, body, created_at from messages where id = ?`,
+        `select id, from_agent, to_agent, priority, subject, body, created_at, type from messages where id = ?`,
       ).get(msgId) as AgentMessage | undefined;
       return row && base(String(row.to_agent || '')) === base(agentId) ? row : null;
     } finally { db.close(); }

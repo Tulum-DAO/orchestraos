@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request } from 'express';
-import { gateMenuRowsForClient } from './unified-approvals.js';
+import { gateMenuRowsForClient, normalizeCanonical } from './unified-approvals.js';
 import type { CanonicalRow } from './_canonical-approvals.js';
 
 function req(headers: Record<string, string> = {}): Request {
@@ -119,4 +119,10 @@ test('legacy endpoint: W5 gate passes raw multipart to capable client', () => {
 
   assert.equal(out.menu?.read_only, undefined, 'capable client gets raw card');
   assert.equal(out.menu?.multipart, true);
+});
+
+test('the unified feed carries op_key, so the dashboard can tell a terminal menu (a pick or words) from a posted card', () => {
+  assert.equal(normalizeCanonical(menuRow({ op_key: 'menu:dev-demo:0123456789abcdef' })).op_key, 'menu:dev-demo:0123456789abcdef');
+  assert.equal(normalizeCanonical(menuRow()).op_key, 'demo-vertical-20260914');
+  assert.equal(normalizeCanonical(menuRow({ op_key: null as unknown as string })).op_key, null);
 });

@@ -54,7 +54,80 @@
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* TEXT SCALE (Settings › Display › Text size): every text size is the base size × --ui-text-scale, set on <html> by
+   lib/deviceSettings.ts (and before the first paint by index.html). Tailwind's own sizes are re-declared scaled, and
+   the old fixed-pixel classes became the text-pxN tokens below (11h = 11.5px). lib/textScale.test.ts refuses new
+   fixed-pixel text. Spacing and layout do NOT scale with text. */
+@theme {
+    --text-xs: calc(0.75rem * var(--ui-text-scale, 1));
+    --text-sm: calc(0.875rem * var(--ui-text-scale, 1));
+    --text-base: calc(1rem * var(--ui-text-scale, 1));
+    --text-lg: calc(1.125rem * var(--ui-text-scale, 1));
+    --text-xl: calc(1.25rem * var(--ui-text-scale, 1));
+    --text-2xl: calc(1.5rem * var(--ui-text-scale, 1));
+    --text-3xl: calc(1.875rem * var(--ui-text-scale, 1));
+    --text-4xl: calc(2.25rem * var(--ui-text-scale, 1));
+    --text-px9: calc(9px * var(--ui-text-scale, 1));
+    --text-px10: calc(10px * var(--ui-text-scale, 1));
+    --text-px11: calc(11px * var(--ui-text-scale, 1));
+    --text-px11h: calc(11.5px * var(--ui-text-scale, 1));
+    --text-px12: calc(12px * var(--ui-text-scale, 1));
+    --text-px12h: calc(12.5px * var(--ui-text-scale, 1));
+    --text-px13: calc(13px * var(--ui-text-scale, 1));
+    --text-px13h: calc(13.5px * var(--ui-text-scale, 1));
+    --text-px14: calc(14px * var(--ui-text-scale, 1));
+    --text-px14h: calc(14.5px * var(--ui-text-scale, 1));
+    --text-px15: calc(15px * var(--ui-text-scale, 1));
+}
+
+/* TOUCH TEXT input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"]),
+textarea, select, [contenteditable]:not([contenteditable="false"]): iPhone Safari zooms the page when a text field under 16px gets focus, and with Text size below
+   100% (87% made Arturo's composer ~14.8px) most fields were. On touch devices (pointer: coarse) no text field renders
+   under 16px; a field already 16px or more keeps its size. --field-min exists only here, so on a desktop every
+   max(var(--field-min, 0px), X) below is exactly X and nothing moves. A field sized in a component stylesheet wraps its
+   size the same way (lib/touchInputs.test.ts checks every one). */
+@media (pointer: coarse) {
+  :root { --field-min: 16px; }
+}
+/* A Tailwind size on a field (text-sm ...) reads its token, so the tokens floor on fields. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"]),
+textarea, select, [contenteditable]:not([contenteditable="false"]) {
+    --text-xs: max(var(--field-min, 0px), calc(0.75rem * var(--ui-text-scale, 1)));
+    --text-sm: max(var(--field-min, 0px), calc(0.875rem * var(--ui-text-scale, 1)));
+    --text-base: max(var(--field-min, 0px), calc(1rem * var(--ui-text-scale, 1)));
+    --text-lg: max(var(--field-min, 0px), calc(1.125rem * var(--ui-text-scale, 1)));
+    --text-xl: max(var(--field-min, 0px), calc(1.25rem * var(--ui-text-scale, 1)));
+    --text-2xl: max(var(--field-min, 0px), calc(1.5rem * var(--ui-text-scale, 1)));
+    --text-3xl: max(var(--field-min, 0px), calc(1.875rem * var(--ui-text-scale, 1)));
+    --text-4xl: max(var(--field-min, 0px), calc(2.25rem * var(--ui-text-scale, 1)));
+    --text-px9: max(var(--field-min, 0px), calc(9px * var(--ui-text-scale, 1)));
+    --text-px10: max(var(--field-min, 0px), calc(10px * var(--ui-text-scale, 1)));
+    --text-px11: max(var(--field-min, 0px), calc(11px * var(--ui-text-scale, 1)));
+    --text-px11h: max(var(--field-min, 0px), calc(11.5px * var(--ui-text-scale, 1)));
+    --text-px12: max(var(--field-min, 0px), calc(12px * var(--ui-text-scale, 1)));
+    --text-px12h: max(var(--field-min, 0px), calc(12.5px * var(--ui-text-scale, 1)));
+    --text-px13: max(var(--field-min, 0px), calc(13px * var(--ui-text-scale, 1)));
+    --text-px13h: max(var(--field-min, 0px), calc(13.5px * var(--ui-text-scale, 1)));
+    --text-px14: max(var(--field-min, 0px), calc(14px * var(--ui-text-scale, 1)));
+    --text-px14h: max(var(--field-min, 0px), calc(14.5px * var(--ui-text-scale, 1)));
+    --text-px15: max(var(--field-min, 0px), calc(15px * var(--ui-text-scale, 1)));
+}
+/* A field with no size of its own inherits one: floored here, in the base layer, so a size class still wins. */
+@layer base {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"]),
+textarea, select, [contenteditable]:not([contenteditable="false"]) {
+    font-size: max(var(--field-min, 0px), 1em);
+  }
+}
+
 :root {
+    /* Settings › Display (lib/displaySettings.ts writes these on <html>; these are the defaults). */
+    --ui-text-scale: 1;
+    --ui-gap: 1;
+    --ui-msg-width: 560px;
+    --ui-col-extra: 0px;
+    --sidebar-w: 240px;
+    --drawer-w: 80vw;
     /* OrchestraOS: green primary (changeable in Settings via inline overrides on <html>) */
     --os-primary: oklch(0.527 0.154 150.069);
     --os-primary-foreground: oklch(0.982 0.018 155.826);
@@ -154,7 +227,7 @@
 }
 
 /* ── beautifului.dev design tokens (MIT, © Shane Levine — see NOTICE) ───────────
- * Ported for Arturo's tool cards (components/arturo/ToolRun.tsx). Raw values are --bui-*, so they
+ * Ported for the shared tool card (components/chat/ToolCalls.tsx). Raw values are --bui-*, so they
  * cannot clash with anything above; the @theme block below exposes them to Tailwind under names
  * nothing in this dashboard used before (checked), except `accent`, which is ours — theirs is
  * `bui-accent`. Same switch as ours: :root is light, .dark is dark. Keyframes only, no animate-*
@@ -318,6 +391,12 @@ button {
   }
 }
 
+/* Option rows (components/chat/MultiPartCard.tsx): a 22px badge centred on the label's first line. 1lh is the row's
+   line (font size x leading), so this holds under the text-size setting: the shorter of the two is pushed down by
+   half the difference, the badge slot when the line is taller than the badge, the label when it is shorter. */
+.opt-badge-slot { height: max(22px, 1lh); }
+.opt-text { padding-top: max(0px, calc((22px - 1lh) / 2)); }
+
 /* Mobile touch targets */
 @media (max-width: 768px) {
   button, a, select, input {
@@ -415,7 +494,10 @@ main {
   display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: 100%;
   padding: 2px 14px 2px 2px; border: 0; border-radius: 999px; margin: 0;
   background: var(--agent-pill-bg); --la-surface: var(--agent-pill-bg); color: var(--agent-pill-fg);
-  font: inherit; font-size: 15px; font-weight: 600; line-height: 1.2; white-space: nowrap; text-align: left;
+  font: inherit; font-size: calc(15px * var(--ui-text-scale, 1)); font-weight: 600; line-height: 1.2; white-space: nowrap; text-align: left;
+  /* Arturo's face of the system font (arturo.css .arturo-shell): every agent's name reads the way his does. */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 .agent-pill > canvas { flex: 0 0 auto; }
 .agent-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -433,7 +515,7 @@ button.agent-pill { cursor: pointer; }
 button.agent-pill.is-bare:focus-visible { background: var(--agent-pill-bg); --la-surface: var(--agent-pill-bg); outline: none; }
 /* Inline text size (the "Message from" line): the line's own size and weight, and the 6px icon-to-label gap of a
    collapsed call's line. */
-.agent-pill.is-inline { font-size: 13px; font-weight: 400; gap: 6px; }
+.agent-pill.is-inline { font-size: calc(13px * var(--ui-text-scale, 1)); font-weight: 400; gap: 6px; }
 /* No status room: the face is centred in its canvas, with the provider badge's room on its left and the status
    dot's on its right. Where no status dot is ever shown, that right-hand room is only a gap before the name, so
    it is taken back (a fifth of the face's size). */
@@ -446,3 +528,205 @@ button.agent-pill.is-bare:focus-visible { background: var(--agent-pill-bg); --la
 @media (prefers-reduced-motion: reduce) { .rail-face-pill { animation: none; } }
 .la-on-selected { --la-surface: var(--color-neutral-200); }
 .dark .la-on-selected { --la-surface: var(--color-neutral-800); }
+
+/* ── Tone scale: the theme-aware stand-in for Tailwind's fixed neutral palette ──────────────────
+ * Most pages were drawn for dark only, with fixed classes (bg-neutral-900, text-neutral-300, text-white,
+ * text-red-400): in light mode they kept dark panels and pale text on white. tone-N is neutral-N in dark,
+ * so dark looks exactly as before, and the mirrored step in light (900 <-> 100, 300 <-> 700, 500 stays):
+ * a card stays a step off the page, faint text stays faint, strong text stays strong. 600 and 700
+ * are the exception: faint text and control borders, they are 500 and 400 in light, since their mirrors are
+ * too pale to read on white. tone-white is the
+ * strongest text (white in dark, neutral-950 in light). tone-<hue>-N does the same for coloured text drawn
+ * pale for dark (100-400: a deep shade in light, for contrast on white) and dark coloured surfaces
+ * (800-950: a light tint in light). A class string that already has a dark: variant is theme-aware and keeps
+ * the plain palette. */
+@theme inline {
+    --color-tone-50: var(--tone-50);
+    --color-tone-100: var(--tone-100);
+    --color-tone-200: var(--tone-200);
+    --color-tone-300: var(--tone-300);
+    --color-tone-400: var(--tone-400);
+    --color-tone-500: var(--tone-500);
+    --color-tone-600: var(--tone-600);
+    --color-tone-700: var(--tone-700);
+    --color-tone-800: var(--tone-800);
+    --color-tone-900: var(--tone-900);
+    --color-tone-950: var(--tone-950);
+    --color-tone-white: var(--tone-white);
+    --color-tone-amber-200: var(--tone-amber-200);
+    --color-tone-amber-300: var(--tone-amber-300);
+    --color-tone-amber-400: var(--tone-amber-400);
+    --color-tone-amber-900: var(--tone-amber-900);
+    --color-tone-amber-950: var(--tone-amber-950);
+    --color-tone-blue-200: var(--tone-blue-200);
+    --color-tone-blue-300: var(--tone-blue-300);
+    --color-tone-blue-400: var(--tone-blue-400);
+    --color-tone-blue-800: var(--tone-blue-800);
+    --color-tone-blue-900: var(--tone-blue-900);
+    --color-tone-cyan-400: var(--tone-cyan-400);
+    --color-tone-emerald-300: var(--tone-emerald-300);
+    --color-tone-emerald-400: var(--tone-emerald-400);
+    --color-tone-emerald-900: var(--tone-emerald-900);
+    --color-tone-green-100: var(--tone-green-100);
+    --color-tone-green-300: var(--tone-green-300);
+    --color-tone-green-400: var(--tone-green-400);
+    --color-tone-green-800: var(--tone-green-800);
+    --color-tone-green-900: var(--tone-green-900);
+    --color-tone-green-950: var(--tone-green-950);
+    --color-tone-indigo-400: var(--tone-indigo-400);
+    --color-tone-orange-300: var(--tone-orange-300);
+    --color-tone-orange-400: var(--tone-orange-400);
+    --color-tone-pink-400: var(--tone-pink-400);
+    --color-tone-purple-300: var(--tone-purple-300);
+    --color-tone-purple-400: var(--tone-purple-400);
+    --color-tone-purple-800: var(--tone-purple-800);
+    --color-tone-purple-900: var(--tone-purple-900);
+    --color-tone-red-200: var(--tone-red-200);
+    --color-tone-red-300: var(--tone-red-300);
+    --color-tone-red-400: var(--tone-red-400);
+    --color-tone-red-800: var(--tone-red-800);
+    --color-tone-red-900: var(--tone-red-900);
+    --color-tone-red-950: var(--tone-red-950);
+    --color-tone-sky-200: var(--tone-sky-200);
+    --color-tone-sky-300: var(--tone-sky-300);
+    --color-tone-sky-400: var(--tone-sky-400);
+    --color-tone-sky-800: var(--tone-sky-800);
+    --color-tone-sky-950: var(--tone-sky-950);
+    --color-tone-violet-400: var(--tone-violet-400);
+    --color-tone-yellow-400: var(--tone-yellow-400);
+    --color-tone-yellow-950: var(--tone-yellow-950);
+}
+:root {
+    --tone-50: var(--color-neutral-950);
+    --tone-100: var(--color-neutral-900);
+    --tone-200: var(--color-neutral-800);
+    --tone-300: var(--color-neutral-700);
+    --tone-400: var(--color-neutral-600);
+    --tone-500: var(--color-neutral-500);
+    --tone-600: var(--color-neutral-500);
+    --tone-700: var(--color-neutral-400);
+    --tone-800: var(--color-neutral-200);
+    --tone-900: var(--color-neutral-100);
+    --tone-950: var(--color-neutral-50);
+    --tone-white: var(--color-neutral-950);
+    --tone-amber-200: var(--color-amber-800);
+    --tone-amber-300: var(--color-amber-800);
+    --tone-amber-400: var(--color-amber-700);
+    --tone-amber-900: var(--color-amber-100);
+    --tone-amber-950: var(--color-amber-50);
+    --tone-blue-200: var(--color-blue-800);
+    --tone-blue-300: var(--color-blue-800);
+    --tone-blue-400: var(--color-blue-700);
+    --tone-blue-800: var(--color-blue-200);
+    --tone-blue-900: var(--color-blue-100);
+    --tone-cyan-400: var(--color-cyan-700);
+    --tone-emerald-300: var(--color-emerald-800);
+    --tone-emerald-400: var(--color-emerald-700);
+    --tone-emerald-900: var(--color-emerald-100);
+    --tone-green-100: var(--color-green-900);
+    --tone-green-300: var(--color-green-800);
+    --tone-green-400: var(--color-green-700);
+    --tone-green-800: var(--color-green-200);
+    --tone-green-900: var(--color-green-100);
+    --tone-green-950: var(--color-green-50);
+    --tone-indigo-400: var(--color-indigo-700);
+    --tone-orange-300: var(--color-orange-800);
+    --tone-orange-400: var(--color-orange-700);
+    --tone-pink-400: var(--color-pink-700);
+    --tone-purple-300: var(--color-purple-800);
+    --tone-purple-400: var(--color-purple-700);
+    --tone-purple-800: var(--color-purple-200);
+    --tone-purple-900: var(--color-purple-100);
+    --tone-red-200: var(--color-red-800);
+    --tone-red-300: var(--color-red-800);
+    --tone-red-400: var(--color-red-700);
+    --tone-red-800: var(--color-red-200);
+    --tone-red-900: var(--color-red-100);
+    --tone-red-950: var(--color-red-50);
+    --tone-sky-200: var(--color-sky-800);
+    --tone-sky-300: var(--color-sky-800);
+    --tone-sky-400: var(--color-sky-700);
+    --tone-sky-800: var(--color-sky-200);
+    --tone-sky-950: var(--color-sky-50);
+    --tone-violet-400: var(--color-violet-700);
+    --tone-yellow-400: var(--color-yellow-700);
+    --tone-yellow-950: var(--color-yellow-50);
+}
+.dark {
+    --tone-50: var(--color-neutral-50);
+    --tone-100: var(--color-neutral-100);
+    --tone-200: var(--color-neutral-200);
+    --tone-300: var(--color-neutral-300);
+    --tone-400: var(--color-neutral-400);
+    --tone-500: var(--color-neutral-500);
+    --tone-600: var(--color-neutral-600);
+    --tone-700: var(--color-neutral-700);
+    --tone-800: var(--color-neutral-800);
+    --tone-900: var(--color-neutral-900);
+    --tone-950: var(--color-neutral-950);
+    --tone-white: var(--color-white);
+    --tone-amber-200: var(--color-amber-200);
+    --tone-amber-300: var(--color-amber-300);
+    --tone-amber-400: var(--color-amber-400);
+    --tone-amber-900: var(--color-amber-900);
+    --tone-amber-950: var(--color-amber-950);
+    --tone-blue-200: var(--color-blue-200);
+    --tone-blue-300: var(--color-blue-300);
+    --tone-blue-400: var(--color-blue-400);
+    --tone-blue-800: var(--color-blue-800);
+    --tone-blue-900: var(--color-blue-900);
+    --tone-cyan-400: var(--color-cyan-400);
+    --tone-emerald-300: var(--color-emerald-300);
+    --tone-emerald-400: var(--color-emerald-400);
+    --tone-emerald-900: var(--color-emerald-900);
+    --tone-green-100: var(--color-green-100);
+    --tone-green-300: var(--color-green-300);
+    --tone-green-400: var(--color-green-400);
+    --tone-green-800: var(--color-green-800);
+    --tone-green-900: var(--color-green-900);
+    --tone-green-950: var(--color-green-950);
+    --tone-indigo-400: var(--color-indigo-400);
+    --tone-orange-300: var(--color-orange-300);
+    --tone-orange-400: var(--color-orange-400);
+    --tone-pink-400: var(--color-pink-400);
+    --tone-purple-300: var(--color-purple-300);
+    --tone-purple-400: var(--color-purple-400);
+    --tone-purple-800: var(--color-purple-800);
+    --tone-purple-900: var(--color-purple-900);
+    --tone-red-200: var(--color-red-200);
+    --tone-red-300: var(--color-red-300);
+    --tone-red-400: var(--color-red-400);
+    --tone-red-800: var(--color-red-800);
+    --tone-red-900: var(--color-red-900);
+    --tone-red-950: var(--color-red-950);
+    --tone-sky-200: var(--color-sky-200);
+    --tone-sky-300: var(--color-sky-300);
+    --tone-sky-400: var(--color-sky-400);
+    --tone-sky-800: var(--color-sky-800);
+    --tone-sky-950: var(--color-sky-950);
+    --tone-violet-400: var(--color-violet-400);
+    --tone-yellow-400: var(--color-yellow-400);
+    --tone-yellow-950: var(--color-yellow-950);
+}
+
+/* Settings › Display › Spacing: the space between messages in an agent's chat (was space-y-2.5 = 0.625rem). In :where(),
+   specificity 0 and in the utilities layer, as Tailwind's space-y is, so a row's own margin (a system row's my-1) still
+   wins (an unlayered rule would beat every utility whatever its specificity). */
+@layer utilities { :where(.ui-feed-gap > :not(:last-child)) { margin-block-end: calc(0.625rem * var(--ui-gap, 1)); } }
+
+/* Settings › General › Timestamps: "On hover" keeps message and tool-line times hidden until their row is hovered or
+   focused (the full date stays in the title). Only where something can hover: on a touch screen it is "Always".
+   "Off" leaves them out everywhere. */
+@media (hover: hover) {
+  html[data-timestamps="hover"] [data-msg-time] { opacity: 0; transition: opacity 0.15s; }
+  html[data-timestamps="hover"] :hover > [data-msg-time],
+  html[data-timestamps="hover"] :focus-within > [data-msg-time],
+  html[data-timestamps="hover"] [data-msg-time]:hover { opacity: 1; }
+}
+html[data-timestamps="off"] [data-msg-time] { display: none; }
+
+/* Settings › Display › Motion = Reduced: every CSS animation and transition finishes at once, whatever the OS says. */
+html[data-motion="reduced"] *, html[data-motion="reduced"] *::before, html[data-motion="reduced"] *::after {
+    animation-duration: 0.001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important; scroll-behavior: auto !important;
+}

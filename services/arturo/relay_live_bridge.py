@@ -7,7 +7,8 @@ contract and drives the stream relay on :5071 (/ptt/stream/audio|events|end), ex
 so the relay's vendor choice, caps, delegation to Arturo's brain and call journal all apply unchanged.
 
   browser -> us: first a JSON hello {route, focusedEntity, threadId?}; then binary 16 kHz mono s16le mic PCM;
-                 JSON {event:"context", route, focusedEntity} when the page changes mid-call;
+                 JSON {event:"context", route, focusedEntity, cards?} when the page or the cards on it
+                 change mid-call (cards: contract/notes/arturo-screen-context.md);
                  JSON {event:"user_turn"} from on-device captions (ignored here: the relay transcribes)
   us -> browser: {event:"connected", session_id, voice, user_captions:"server"}; binary 24 kHz s16le
                  (the relay's 16 kHz upsampled); {event:"transcript", text, role, partial?};
@@ -22,7 +23,8 @@ recognizer (two sources would commit every user turn twice).
 
 The page ({route, focusedEntity}) goes to `on_surface(route, focused_entity, conv_id)`: the gateway
 records it as the `web` device's surface, which is what the voice brain's screen readout and its
-read_screen_context tool read. It is re-stamped every SURFACE_REFRESH_S so a long call on one page
+read_screen_context tool read. The cards on screen ride along as `cards=` when the browser sent them
+(the gateway clips them by the same rules as a text turn), so the voice brain knows them too. It is re-stamped every SURFACE_REFRESH_S so a long call on one page
 never reads as "app backgrounded" (surface.STALE_S).
 """
 import asyncio
@@ -120,11 +122,13 @@ class RelayLiveSession:
     """One browser call on the relay. `base` is :5071's /ptt/stream; `headers` carry the gateway's own
     principal stamp (the caller is the fleet bearer, as on the Gemini path)."""
 
-    def __init__(self, ws, base, headers, voice="", http=None, on_surface=None):
+    def __init__(self, ws, base, headers, voice="", http=None, on_surface=None, agent=None):
         self.ws = ws
         self.base = base.rstrip("/")
         self.cid = str(uuid.uuid4())
         self.headers = {**headers, "X-Conversation-Id": self.cid, "X-Surface": "web"}
+        if agent:   # the agent the call is with: Arturo answers in that agent's own voice (None: the server voice)
+            self.headers["X-Arturo-Agent"] = str(agent)
         self.voice = voice
         self.http = http
         self.up = Upsampler()
@@ -134,6 +138,7 @@ class RelayLiveSession:
         self._seen_partial = {"user": False, "arturo": False}
         self.on_surface = on_surface
         self._page = None            # (route, focusedEntity) the browser last reported
+        self._cards = None           # the cards on screen with that page (None: none sent)
 
     def _note_page(self, text):
         """A TEXT frame: the hello or a mid-call {event:"context"} carries the page; anything else is ignored."""
@@ -152,13 +157,18 @@ class RelayLiveSession:
         if not isinstance(route, str):
             return
         self._page = (route, focused if isinstance(focused, str) else None)
+        # Each frame carries the whole screen: a frame without cards means none are on it now.
+        self._cards = msg.get("cards") if isinstance(msg.get("cards"), dict) else None
         self._stamp_page()
 
     def _stamp_page(self):
         if self.on_surface is None or self._page is None:
             return
         try:
-            self.on_surface(self._page[0], self._page[1], self.cid)
+            if self._cards is not None:
+                self.on_surface(self._page[0], self._page[1], self.cid, cards=self._cards)
+            else:
+                self.on_surface(self._page[0], self._page[1], self.cid)
         except Exception as e:  # noqa: BLE001 — screen context is best effort, never the call
             log.warning(f"relay live {self.cid}: surface stamp failed: {e}")
 

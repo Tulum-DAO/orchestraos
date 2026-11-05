@@ -227,7 +227,9 @@ def load_directory(orchestra_dir, live_sessions=None, has_claude=None):
     out = []
     # the built-in mailboxes: always there, always reachable (the assistant is a service, not a pane)
     an = assistant_display_name()
-    out.append({"id": "arturo", "name": an or "arturo", "aliases": [], "alive": True, "resumable": False, "builtin": True})
+    # the assistant's name is a seat name (assistant_name.py), so its old names are aliases like any agent's
+    out.append({"id": "arturo", "name": an or "arturo", "aliases": (names.get("arturo") or {}).get("aliases") or [],
+                "alive": True, "resumable": False, "builtin": True})
     out.append({"id": "operator", "name": "operator", "aliases": [], "alive": True, "resumable": False, "builtin": True})
     for i in sorted(ids):
         if i in BUILTIN_IDS:

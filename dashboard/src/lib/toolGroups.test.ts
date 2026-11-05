@@ -23,13 +23,19 @@ const failed = (tool: string, path?: string): WorkItem => ({ tool, path, status:
 
 test('the plan acceptance fixture: 2 reads, 1 edit, 1 failing command', () => {
   const s = summarizeTurn([ok('Read', 'a.ts'), ok('Read', 'b.ts'), ok('Edit', 'a.ts'), failed('Bash')]);
-  assert.equal(s.headline, 'edited 1 file, ran 1 command (failed)');
+  assert.equal(s.headline, 'edited 1 file, ran 1 command (failed), read 2 files');
   assert.equal(s.failed, 1);
 });
 
-test('file changes and commands outrank reads — reads are not named when they exist', () => {
+test('file changes and commands lead; reads follow them, so every call is accounted for', () => {
   const s = summarizeTurn([ok('Read', 'x'), ok('Read', 'y'), ok('Read', 'z'), ok('Write', 'out.md')]);
-  assert.equal(s.headline, 'edited 1 file');
+  assert.equal(s.headline, 'edited 1 file, read 3 files');
+});
+
+test('the headline accounts for every call in the run (the opened list never shows more than it says)', () => {
+  assert.equal(summarizeTurn([ok('Bash'), ok('Read', 'p.json'), ok('Bash')]).headline, 'ran 2 commands, read 1 file');
+  assert.equal(summarizeTurn([ok('Edit', 'a'), ok('Grep'), ok('mcp__x__go')]).headline, 'edited 1 file, searched 1 time, used 1 other tool');
+  assert.equal(summarizeTurn([ok('Bash'), ok('mcp__x__go'), ok('mcp__x__go')]).headline, 'ran 1 command, used 2 other tools');
 });
 
 test('edits count DISTINCT files, not edit calls', () => {
@@ -117,8 +123,8 @@ test('transcript and Arturo streams give the headline each can actually WARRANT'
   // NOT assert.equal(a, b): the two adapters legitimately DIFFER, because the transcript knows
   // paths and the Arturo stream does not. Each side is pinned to the exact string it must produce,
   // so a regression on either one cannot hide behind the other agreeing with it.
-  assert.equal(summarizeTurn(blocks.map(fromToolBlock)).headline, 'edited 1 file, ran 1 command (failed)');
-  assert.equal(summarizeTurn(parts.map(fromToolPart)).headline, 'made 1 edit, ran 1 command (failed)');
+  assert.equal(summarizeTurn(blocks.map(fromToolBlock)).headline, 'edited 1 file, ran 1 command (failed), read 1 file');
+  assert.equal(summarizeTurn(parts.map(fromToolPart)).headline, 'made 1 edit, ran 1 command (failed), 1 read');
 });
 
 // ---- groupToolRuns: where the fold happens ----------------------------------------------
@@ -281,13 +287,13 @@ test('Antigravity edit, read and search names map, with TargetFile/AbsolutePath 
   assert.equal(fromToolBlock(blk('write_to_file', { TargetFile: 'b.md' })).path, 'b.md');
   assert.equal(fromToolBlock(blk('view_file', { AbsolutePath: '/x/a.ts' })).path, '/x/a.ts');
   const edits = [blk('view_file', { AbsolutePath: 'a' }), blk('replace_file_content', { TargetFile: 'a' }), blk('write_to_file', { TargetFile: 'b' })];
-  assert.equal(summarizeTurn(edits.map(fromToolBlock)).headline, 'edited 2 files');
+  assert.equal(summarizeTurn(edits.map(fromToolBlock)).headline, 'edited 2 files, read 1 file');
   const mixed = [blk('replace_file_content', { TargetFile: 'a' }), blk('write_to_file', { TargetFile: 'b' }), blk('run_command', { CommandLine: 'ls' })];
   assert.equal(summarizeTurn(mixed.map(fromToolBlock)).headline, 'edited 2 files, ran 1 command');
   assert.equal(summarizeTurn([ok('grep_search'), ok('find_by_name')]).headline, 'searched 2 times');
   // view_file's CATEGORY, not just its path: the `edits` assertion above cannot see it,
   // because the two real edits produce 'edited 2 files' on their own.
-  assert.equal(summarizeTurn([ok('view_file'), ok('view_file')]).headline, 'made 2 reads');
+  assert.equal(summarizeTurn([ok('view_file'), ok('view_file')]).headline, '2 reads');
   // search_web appeared in no assertion at all.
   assert.equal(summarizeTurn([ok('search_web'), ok('search_web')]).headline, 'searched 2 times');
 });
@@ -336,7 +342,7 @@ test('THE DEFECT: unnamed edit calls are counted as CALLS, never invented as fil
   // M6: the singular boundary needs exactly ONE ok call in the category, because two calls
   // render "made 2 edits" and would make this branch unreachable.
   assert.equal(summarizeTurn([patch()]).headline, 'made 1 edit');
-  assert.equal(summarizeTurn([{ tool: 'read_many_files', status: 'ok' }]).headline, 'made 1 read');
+  assert.equal(summarizeTurn([{ tool: 'read_many_files', status: 'ok' }]).headline, '1 read');
 });
 
 test('M2 a MIXED category reports CALLS for the whole category, never a file count', () => {
@@ -353,15 +359,16 @@ test('M3 the read clause obeys the same rule (its own call site, pinned separate
   // so a stray Bash would make a broken read clause pass.
   assert.equal(summarizeTurn([named('Read', 'a'), named('Read', 'a')]).headline, 'read 1 file');
   assert.equal(summarizeTurn([{ tool: 'read_many_files', status: 'ok' },
-                              { tool: 'read_many_files', status: 'ok' }]).headline, 'made 2 reads');
+                              { tool: 'read_many_files', status: 'ok' }]).headline, '2 reads');
 });
 
 test('M4 the clause-gate: an all-unnamed edit turn must NOT fall through to the read clause', () => {
   // The likeliest implementation bug: countWork returns files:0 and a retained `files > 0`
-  // test deletes the edit clause, so the headline silently becomes a READING turn.
+  // test deletes the edit clause, so the headline silently becomes a READING turn. The read is
+  // named too (every call is accounted for), but only AFTER the edits it must not replace.
   const h = summarizeTurn([patch(), patch(), named('Read', 'z.ts')]).headline;
-  assert.equal(h, 'made 2 edits');
-  assert.ok(!/read/.test(h), `an editing turn reported reading: ${h}`);
+  assert.equal(h, 'made 2 edits, read 1 file');
+  assert.ok(h.startsWith('made 2 edits'), `an editing turn reported reading: ${h}`);
 });
 
 test('M5 a failed or running unnamed edit is not work done', () => {
@@ -382,7 +389,7 @@ test('INVARIANT: the headline never claims more files than it can know (4 parts)
   // command or a failure row to the table below would make these go red against a CORRECT
   // implementation — extend the table and the anchors together, or not at all.
   const KNOWN_EDIT = [/^edited (\d+) files?$/, /^made (\d+) edits?$/];
-  const KNOWN_READ = [/^read (\d+) files?$/, /^made (\d+) reads?$/];
+  const KNOWN_READ = [/^read (\d+) files?$/, /^(\d+) reads?$/];
   const rows: WorkItem[][] = [];
   const paths = [undefined, 'a.ts', 'b.ts'];
   for (const p1 of paths) for (const p2 of paths) for (const p3 of paths) {
@@ -419,7 +426,7 @@ test('INVARIANT: the headline never claims more files than it can know (4 parts)
     }
   }
   // (iv), second half: every shape must have been exercised, so none of the above is vacuous.
-  assert.deepEqual([...shapesSeen].sort(), ['edited N file', 'made N edit', 'made N read', 'read N file']);
+  assert.deepEqual([...shapesSeen].sort(), ['N read', 'edited N file', 'made N edit', 'read N file']);
 });
 
 test('the Arturo adapter is a SUBSET of the transcript adapter, with path free to arrive', () => {

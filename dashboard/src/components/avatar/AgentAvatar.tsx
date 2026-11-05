@@ -29,18 +29,8 @@ import { AvatarModel, REACTIONS, STATES, type AvatarState, type ReactionName, ty
 import { attach, type AttachOpts } from './avatarCanvas';
 import { providerMark } from './brandMarks';
 import { avatarHub, useAgentRecord, defaultLook, ensureAgent } from './agentState';
+import { useMotionReduced } from '../../lib/motion';
 
-function usePrefersReducedMotion(): boolean {
-  const q = typeof matchMedia !== 'undefined' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
-  const [v, setV] = useState(q ? q.matches : false);
-  useEffect(() => {
-    if (!q) return;
-    const on = () => setV(q.matches);
-    q.addEventListener('change', on);
-    return () => q.removeEventListener('change', on);
-  }, [q]);
-  return v;
-}
 
 export interface AgentAvatarProps {
   agentId: string;
@@ -63,6 +53,9 @@ export interface AgentAvatarProps {
   greet?: ReactionName;
   /** No constant motion (breathing, bob): blinks, glances and one-off reactions only. */
   calm?: boolean;
+  /** What the agent is doing (avatarGesture Activity: reading, thinking, editing, running, searching, none): the
+   *  working gestures fit it. */
+  activity?: string;
   /** Each change makes the eyes glance at `glanceAt` for a moment (e.g. on every keystroke in an input). */
   glanceKey?: unknown;
   glanceAt?: { x: number; y: number };
@@ -77,7 +70,7 @@ export function AgentAvatar(props: AgentAvatarProps) {
   const {
     agentId, role = 'sidebar', size = 48, selected, provider, followRadius, followAlways,
     shape: shapeProp, color: colorProp, eyeColor: eyeProp, state: stateProp, sleepAfterMs: sleepProp = 30000,
-    showStatus = true, greet, calm, glanceKey, glanceAt, reducedMotion, label, onClick, className, style,
+    showStatus = true, greet, calm, activity, glanceKey, glanceAt, reducedMotion, label, onClick, className, style,
   } = props;
   const rec = useAgentRecord(agentId);
   const identity = !showStatus && stateProp === undefined;
@@ -87,7 +80,7 @@ export function AgentAvatar(props: AgentAvatarProps) {
   const color = identity ? colorProp || rec.color : colorProp;
   const eyeColor = identity ? eyeProp || rec.eyeColor : eyeProp;
   const sleepAfterMs = identity ? 0 : sleepProp;
-  const systemReduced = usePrefersReducedMotion();
+  const systemReduced = useMotionReduced();
   const rm = reducedMotion ?? systemReduced;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The model is made in an effect, not during render: the shared one may create the agent's hub record,
@@ -121,6 +114,7 @@ export function AgentAvatar(props: AgentAvatarProps) {
   }, [model, size, role, selected, prov, followRadius, followAlways]);
   useEffect(() => { if (model && !shared && state) model.setState(state); }, [shared, state, model]);
   useEffect(() => { if (model && calm !== undefined) model.configure({ calm }); }, [model, calm]);
+  useEffect(() => { if (model && activity !== undefined) model.setActivity(activity); }, [model, activity]);
   const glanceRef = useRef(glanceKey);
   useEffect(() => {
     if (!model || glanceRef.current === glanceKey) return;

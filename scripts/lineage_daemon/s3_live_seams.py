@@ -237,6 +237,13 @@ def _inject_correction(successor, text, nonce, *, orchestra_dir=None,
     if nudge_fn is None:
         def nudge_fn(succ, body, nc):  # noqa: E306
             import subprocess
+            try:
+                from scripts import gateway_deliver
+                _headless = gateway_deliver.headless_seat(succ)
+            except Exception:  # noqa: BLE001 -- unreadable: a tmux seat, as before
+                _headless = None
+            if _headless:
+                return  # a headless seat's pane holds its supervisor; the durable row reaches its CLI via the router
             # inject-guard (feedback_inject_guard_live_auq): capture the pane FIRST and
             # skip the nudge if a live prompt / AUQ is showing — never clobber it. The
             # durable msg_store send already delivered; the nudge is only a wake.

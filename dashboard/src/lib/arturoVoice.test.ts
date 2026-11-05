@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { voiceRowValue, pickVoice, canChangeVoice, type VoiceVendor } from './arturoVoice.ts';
+import { setInstallRole } from './myRole.ts';
 
 const ON: VoiceVendor = { id: 'openai', title: 'GPT-Live', available: true };
 const OFF: VoiceVendor = { id: 'openai', title: 'GPT-Live', available: false, reason: 'missing OPENAI_API_KEY' };
@@ -31,9 +32,21 @@ test('a refused pick rolls back to the old voice with the server\'s reason', asy
   assert.deepEqual(shown.at(-1), { current: 'marin', error: "Couldn't change the voice: 'nova' is not an openai voice" });
 });
 
-test('only an admin may change the voice; an unknown role may not', () => {
-  assert.equal(canChangeVoice('admin'), true);
-  assert.equal(canChangeVoice('viewer'), false);
-  assert.equal(canChangeVoice(''), false);
-  assert.equal(canChangeVoice(undefined), false);                               // /api/me not answered yet
+test('only an admin may change the voice; a member (the default until the server says admin) may not', () => {
+  assert.equal(canChangeVoice(), false);
+  setInstallRole('admin');
+  try { assert.equal(canChangeVoice(), true); } finally { setInstallRole('member'); }
+});
+
+test('the voice row splits: the provider is the server\'s (greyed), the voice is the agent\'s own', async () => {
+  const { voiceProviderValue, voiceNameValue, PROVIDER_SCOPE_NOTE } = await import('./arturoVoice.ts');
+  const ON: VoiceVendor = { id: 'openai', title: 'GPT-Live', available: true };
+  const OFF: VoiceVendor = { id: 'openai', title: 'GPT-Live', available: false };
+  assert.equal(PROVIDER_SCOPE_NOTE, 'Set for the whole server');
+  assert.equal(voiceProviderValue(ON, true), 'GPT-Live');
+  assert.equal(voiceProviderValue(OFF, false), 'Not set up');
+  assert.equal(voiceProviderValue(null, null), '');
+  assert.equal(voiceNameValue(ON, { voice_id: 'marin', title: 'Marin' }, true), 'Marin');
+  assert.equal(voiceNameValue(ON, { voice_id: 'cedar', title: null }, true), 'Cedar');
+  assert.equal(voiceNameValue(OFF, { voice_id: 'marin', title: 'Marin' }, false), '', 'no provider: no voice to show');
 });

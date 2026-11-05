@@ -77,7 +77,7 @@ def _valid_pending(e):
             and not isinstance(e.get("since_ts"), bool) and math.isfinite(e["since_ts"])
             and isinstance(e.get("sids"), list) and all(isinstance(x, str) for x in e["sids"])
             and isinstance(e.get("reported", False), bool)
-            and all(e.get(k) is None or isinstance(e.get(k), str) for k in ("by", "from")))
+            and all(e.get(k) is None or isinstance(e.get(k), str) for k in ("by", "from", "effort")))
 
 
 def _valid_last(e):
@@ -124,11 +124,14 @@ def _locked(path, timeout=None):
         os.replace(tmp, path)
 
 
-def put(path, session, model, *, current=None, sids=(), by=None, now=None):
-    """Record (or replace) the session's pending switch. Returns the entry."""
+def put(path, session, model, *, current=None, sids=(), by=None, now=None, effort=None):
+    """Record (or replace) the session's pending switch: a model, and an effort level when one was
+    picked too (scripts/agent_effort.py). Returns the entry."""
     ts = time.time() if now is None else now
     entry = {"model": model, "from": current, "since": _iso(ts), "since_ts": ts,
              "sids": [s for s in sids if s], "by": by}
+    if effort:
+        entry["effort"] = effort
     with _locked(path) as data:
         data["pending"][session] = entry
     return entry
@@ -154,14 +157,17 @@ def pending_sessions(path):
 
 
 def view(entry, now=None):
-    """The client's form of a pending entry: {model, since, stale}."""
+    """The client's form of a pending entry: {model, since, stale}, plus effort when one waits."""
     if not entry:
         return None
     ts = time.time() if now is None else now
     since_ts = entry.get("since_ts")
     since_ts = ts if since_ts is None else float(since_ts)      # 0 is a time, not "missing"
-    return {"model": entry.get("model"), "since": entry.get("since"),
-            "stale": ts - since_ts >= STALE_AFTER_S}
+    out = {"model": entry.get("model"), "since": entry.get("since"),
+           "stale": ts - since_ts >= STALE_AFTER_S}
+    if entry.get("effort"):
+        out["effort"] = entry["effort"]
+    return out
 
 
 def resolve(path, session, since, outcome, *, model=None, reason=None, now=None):
@@ -174,6 +180,8 @@ def resolve(path, session, since, outcome, *, model=None, reason=None, now=None)
             return False
         data["pending"].pop(session, None)
         rec = {"model": model or cur.get("model"), "at": _iso(ts), "outcome": outcome}
+        if cur.get("effort"):
+            rec["effort"] = cur["effort"]
         if reason:
             rec["reason"] = reason
         data["last"][session] = rec

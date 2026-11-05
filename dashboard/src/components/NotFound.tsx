@@ -14,12 +14,12 @@ export default function NotFound() {
   const aname = useAssistantName();
   return (
     <div className="p-8">
-      <h1 className="text-lg font-semibold text-neutral-100 mb-2">Page not found</h1>
-      <p className="text-sm text-neutral-400 mb-4">
-        <code className="text-neutral-300">{window.location.pathname}</code> is not a route in
+      <h1 className="text-lg font-semibold text-tone-100 mb-2">Page not found</h1>
+      <p className="text-sm text-tone-400 mb-4">
+        <code className="text-tone-300">{window.location.pathname}</code> is not a route in
         this dashboard. Before this message existed, it rendered a blank page.
       </p>
-      <a href="/" className="text-sm text-blue-400 hover:underline">Back to {aname}</a>
+      <a href="/" className="text-sm text-tone-blue-400 hover:underline">Back to {aname}</a>
     </div>
   );
 }

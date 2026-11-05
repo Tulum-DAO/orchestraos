@@ -1,7 +1,7 @@
 /**
  * B1 client tests — dashboard/src/lib/agentSend.ts (Agent Page v1, DEC-1789508247033721).
  * Mocks global fetch (the only boundary this module has) — pure logic + a
- * fake network, same style as menuAnswer.test.mjs.
+ * fake network, same style as the other .test.mjs files.
  *   node --experimental-strip-types dashboard/src/lib/agentSend.test.mjs
  */
 import assert from 'node:assert';

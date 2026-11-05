@@ -128,7 +128,7 @@ export function staleStyleFor(verdict: FeedVerdict): { dot: string; label: strin
   // alarm as the banner.
   if (!isDegraded(verdict)) return undefined;
   return {
-    dot: 'bg-neutral-600',
+    dot: 'bg-tone-600',
     label: verdict.health === 'disconnected'
       ? (verdict.lastSeenAt ? `disconnected · ${lastSeenLabel(verdict.lastSeenAt)}` : 'disconnected')
       : `stale · ${lastSeenLabel(verdict.lastSeenAt)}`,
@@ -147,7 +147,7 @@ export function styleForAgentState(
   base: { label: string; dot: string; text: string },
 ): { label: string; dot: string; text: string } {
   const stale = feed && staleStyleFor(feed);
-  if (stale) return { ...base, ...stale, text: 'text-neutral-400' };
+  if (stale) return { ...base, ...stale, text: 'text-tone-400' };
   const updating = feed && updatingStyleFor(feed, base);
   return updating ?? base;
 }

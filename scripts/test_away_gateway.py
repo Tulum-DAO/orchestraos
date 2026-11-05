@@ -68,7 +68,7 @@ def test_away_rejects_an_unknown_anchor_mode(box):
 # ---- the ledger: delivered or held only ---------------------------------------------------------------
 
 def test_a_delivered_send_from_a_device_is_the_anchor_with_its_device(box, monkeypatch):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {"verified": True}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (True, {"verified": True}))
     status, _ = _call(box, "POST", "/agent-message", token="dev", body={"session": "gm", "text": "fix the card"},
                       headers={"X-Surface": "phone"})
     assert status == 200
@@ -82,7 +82,7 @@ def test_a_delivered_send_from_a_device_is_the_anchor_with_its_device(box, monke
 
 
 def test_the_fleet_bearer_stamps_no_device_and_never_the_token(box, monkeypatch):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (True, {}))
     _call(box, "POST", "/agent-message", body={"session": "gm", "text": "hi"})
     [row] = _ledger(box)
     assert row["device"] is None
@@ -90,19 +90,19 @@ def test_the_fleet_bearer_stamps_no_device_and_never_the_token(box, monkeypatch)
 
 
 def test_a_refused_send_writes_nothing(box, monkeypatch):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (False, {"reason": "unverified"}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (False, {"reason": "unverified"}))
     status, _ = _call(box, "POST", "/agent-message", body={"session": "gm", "text": "lost"})
     assert status == 502 and _ledger(box) == []
 
 
 def test_a_busy_send_without_hold_writes_nothing(box, monkeypatch):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (False, {"reason": "busy", "state": "working"}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (False, {"reason": "busy", "state": "working"}))
     status, _ = _call(box, "POST", "/agent-message", body={"session": "gm", "text": "later"})
     assert status == 409 and _ledger(box) == []
 
 
 def test_a_held_send_is_recorded(box, monkeypatch):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (False, {"reason": "busy", "state": "working"}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (False, {"reason": "busy", "state": "working"}))
     monkeypatch.setattr(G, "_hold_for_boundary", lambda *a, **k: "msg_held")
     status, body = _call(box, "POST", "/agent-message",
                          body={"session": "gm", "text": "when you're free", "accepts": ["held"]})
@@ -161,7 +161,7 @@ def test_ledger_and_presence_writes_run_off_the_event_loop(box, monkeypatch):
     seen = []
     monkeypatch.setattr(AW, "record_message", lambda *a, **k: seen.append(threading.current_thread().name))
     monkeypatch.setattr(AW, "record_presence", lambda *a, **k: seen.append(threading.current_thread().name))
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (True, {}))
     _call(box, "POST", "/agent-message", token="dev", body={"session": "gm", "text": "hi"})
     _call(box, "POST", "/presence", token="dev", body={"foreground": True})
     assert len(seen) == 2 and all(n != "MainThread" for n in seen), seen
@@ -173,7 +173,7 @@ def test_a_ledger_that_cannot_be_written_never_fails_a_delivered_send(box, monke
     def boom(*a, **k):
         raise OSError("disk full")
     monkeypatch.setattr(AW, "record_message", boom)
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {"verified": True}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (True, {"verified": True}))
     status, body = _call(box, "POST", "/agent-message", body={"session": "gm", "text": "still delivered"})
     assert status == 200 and body["ok"] is True and body["delivered"] is True
 
@@ -188,7 +188,7 @@ def test_a_ledger_that_cannot_be_written_never_fails_a_delivered_send(box, monke
     ("fleet", {"X-Actor": "automation:boundary-delivery"}, False),
 ])
 def test_each_send_says_whether_a_person_sent_it(box, monkeypatch, token, headers, person):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (True, {}))
     status, _ = _call(box, "POST", "/agent-message", token=token, body={"session": "gm", "text": "hello"}, headers=headers)
     assert status == 200
     [row] = _ledger(box)
@@ -196,7 +196,7 @@ def test_each_send_says_whether_a_person_sent_it(box, monkeypatch, token, header
 
 
 def test_agents_rows_carry_the_last_person_message(box, monkeypatch):
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": (True, {}))
     _call(box, "POST", "/agent-message", body={"session": "gm", "text": "from a person"}, headers={"X-Actor": "operator:web"})
     first = _ledger(box)[-1]["at"]
     _call(box, "POST", "/agent-message", body={"session": "gm", "text": "from automation"})   # later, not a person

@@ -9,7 +9,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, LoaderCircle, X } from 'lucide-react';
-import ToolRun from './ToolRun';
+import ToolCalls from '../kit/ToolCard';
+import { OPEN_JOBS_EVENT } from '../kit/CallCard';
+import { fromPart } from '../../lib/toolCalls';
 import { cancelJob, elapsed, fetchJobs, jobToolParts, newlyEnded, trayHeader, type ArturoJob } from '../../lib/arturoJobs';
 
 const POLL_RUNNING_MS = 1500;
@@ -24,6 +26,13 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
 }) {
   const [jobs, setJobs] = useState<ArturoJob[]>([]);
   const [open, setOpen] = useState(false);
+  const trayRef = useRef<HTMLDivElement>(null);
+  // A job chip in a call's transcript opens this drawer and brings it into view.
+  useEffect(() => {
+    const onOpen = () => { setOpen(true); trayRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
+    window.addEventListener(OPEN_JOBS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_JOBS_EVENT, onOpen);
+  }, []);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
   const prev = useRef<ArturoJob[]>([]);
@@ -64,10 +73,10 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
   if (shown.length === 0) return null;
 
   return (
-    <div className="arturo-jobtray w-full rounded-control border border-line bg-field px-2.5 py-1.5 mb-1.5"
+    <div ref={trayRef} className="arturo-jobtray w-full rounded-control border border-line bg-field px-2.5 py-1.5 mb-1.5"
          data-testid="job-tray">
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
-              className="flex w-full items-center gap-1.5 text-left text-[12.5px] text-ink-2">
+              className="flex w-full items-center gap-1.5 text-left text-px12h text-ink-2">
         {running ? <LoaderCircle size={13} className="shrink-0 animate-spin text-ink-3" aria-label="working" />
                  : <X size={13} className="shrink-0 text-red" aria-label="didn't finish" />}
         <span className="min-w-0 flex-1 truncate tabular-nums">{trayHeader(shown)}</span>
@@ -78,7 +87,7 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
         <div className="mt-1.5 flex max-h-64 flex-col gap-2 overflow-y-auto">
           {shown.map((j) => (
             <div key={j.id} className="flex flex-col">
-              <div className="flex items-center gap-2 text-[12.5px]">
+              <div className="flex items-center gap-2 text-px12h">
                 <span className="min-w-0 flex-1 truncate font-medium text-ink">{j.title}</span>
                 <span className="shrink-0 tabular-nums text-ink-3">
                   {j.status === 'running' ? elapsed(j) : j.status === 'lost' ? 'lost' : 'failed'}
@@ -93,8 +102,8 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
                           onClick={() => setDismissed((d) => new Set(d).add(j.id))}>Dismiss</button>
                 )}
               </div>
-              {j.error && j.status !== 'running' && <span className="text-[11.5px] text-red">{j.error}</span>}
-              {j.steps.length > 0 && <ToolRun tools={jobToolParts(j)} />}
+              {j.error && j.status !== 'running' && <span className="text-px11h text-red">{j.error}</span>}
+              {j.steps.length > 0 && <ToolCalls calls={jobToolParts(j).map(fromPart)} />}
             </div>
           ))}
         </div>

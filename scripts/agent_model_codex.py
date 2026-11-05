@@ -103,8 +103,23 @@ def effort_rows(screen: str, model: str) -> dict[str, str] | None:
     return rows
 
 
-def pick_effort(rows: dict[str, str], current: str | None) -> tuple[str, str]:
-    """(digit, label) for the agent's current effort, else the picker's default row."""
+class EffortNotOffered(LookupError):
+    """A requested effort this model's reasoning picker does not list: never swapped for another."""
+
+    def __init__(self, requested, offered):
+        super().__init__(f"the effort picker does not offer {requested!r}")
+        self.requested, self.offered = requested, offered
+
+
+def pick_effort(rows: dict[str, str], current: str | None, requested: str | None = None) -> tuple[str, str]:
+    """(digit, label) for the REQUESTED effort when one is asked for (a level the picker does not
+    list raises EffortNotOffered: it is never swapped for another); else the agent's current effort;
+    else the picker's default row."""
+    if requested:
+        want = _EFFORT_LABEL.get(requested.lower())
+        if want and want in rows:
+            return rows[want], want
+        raise EffortNotOffered(requested, sorted(k for k in rows if k != "(default)"))
     want = _EFFORT_LABEL.get((current or "").lower())
     if want and want in rows:
         return rows[want], want
@@ -140,10 +155,28 @@ def rollout_thread_id(rollout: Path) -> str | None:
     return m.group(1).lower() if m else None
 
 
-def applied_after(rollout: Path, offset: int, model: str):
+# Unverified: no codex on the build box showed a thread_settings_applied carrying an effort, so the
+# field name is a guess among these and a missing one is simply not checked.
+_EVENT_EFFORT_KEYS = ("reasoning_effort", "effort", "model_reasoning_effort")
+_CANONICAL = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "extra high": "xhigh",
+              "minimal": "minimal"}
+
+
+def _canonical_effort(text):
+    """A level id ("xhigh") for any spelling codex may use ("Extra High", "extra_high"); None when it
+    cannot be read with confidence."""
+    if not isinstance(text, str):
+        return None
+    t = re.sub(r"[\s_-]+", " ", text.strip().lower())
+    return _CANONICAL.get(t)
+
+
+def applied_after(rollout: Path, offset: int, model: str, effort: str | None = None):
     """"set" when a thread_settings_applied for `model`, for THIS rollout's thread, was written
-    after `offset`; "other:<id>" for one naming another model; None for nothing yet (or a file
-    that shrank). An event for another thread never counts."""
+    after `offset`; "other:<id>" for one naming another model; "effort:<level>" for one naming
+    another reasoning effort than `effort` (when the event carries one; codex's field name is not
+    pinned down, so any of _EVENT_EFFORT_KEYS); None for nothing yet (or a file that shrank). An
+    event for another thread never counts."""
     thread = rollout_thread_id(rollout)
     try:
         with open(rollout, "rb") as f:
@@ -164,8 +197,15 @@ def applied_after(rollout: Path, offset: int, model: str):
         if d.get("type") == "event_msg" and isinstance(p, dict) and p.get("type") == "thread_settings_applied":
             if not thread or str(p.get("thread_id") or "").lower() != thread:
                 continue
-            got = (p.get("thread_settings") or {}).get("model")
+            ts = p.get("thread_settings") or {}
+            got = ts.get("model")
             if got == model:
+                said = _canonical_effort(next((ts[k] for k in _EVENT_EFFORT_KEYS
+                                               if isinstance(ts.get(k), str)), None))
+                # Only a level read with confidence can refuse it: an unknown spelling is not proof.
+                if effort and said and said != _canonical_effort(effort):
+                    seen = f"effort:{said}"
+                    continue
                 return "set"
             seen = f"other:{got}"
     return seen
@@ -301,7 +341,7 @@ def _wait_screen(capture, parse, timeout_s, sleep, clock):
 
 
 def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, capture,
-                rollout: Path | None, timeout_s: float = 10.0, screen_timeout_s: float = 5.0,
+                rollout: Path | None, effort: str | None = None, timeout_s: float = 10.0, screen_timeout_s: float = 5.0,
                 recheck_s: float = 3.0, sleep=time.sleep, clock=time.monotonic):
     """Drive the codex picker to `model` and confirm it from the rollout.
 
@@ -318,6 +358,10 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
                      "detail": "this agent's rollout was not found, so a switch could not be "
                                "confirmed; nothing was typed"}
     with AM.host_model_lock(lock_path):
+        from scripts import agent_effort as AE
+        # A Claude switch that died mid-way (model or effort, same lock) is put back first.
+        if not AM.recover_pending(lock_path) or not AE.recover_pending(lock_path):
+            return 500, {"ok": False, "error": "a previous switch left the host settings unrestored"}
         if not recover_pending(config_path):
             return 500, {"ok": False, "error": "a previous switch left the host default model unrestored"}
         before = read_keys(config_path)
@@ -356,14 +400,20 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
                     if eff is None:
                         result = (502, {"ok": False, "error": "the effort picker did not open"})
                     else:
-                        digit, label = pick_effort(eff, effort_now)
-                        if len(digit) != 1:
-                            raise LookupError(f"effort row {digit} cannot be picked with one key")
-                        keys(digit)
-                        res = _wait_screen(lambda: applied_after(rollout, offset, model),
-                                           lambda r: r or None, timeout_s, sleep, clock)
-                        result = None
-                        effort_label = label
+                        try:
+                            digit, label = pick_effort(eff, effort_now, effort)
+                        except EffortNotOffered as e:
+                            digit = None
+                            result = (422, {"ok": False, "error": "this model does not offer that effort",
+                                            "effort": effort, "offered": e.offered})
+                        if digit is not None:
+                            if len(digit) != 1:
+                                raise LookupError(f"effort row {digit} cannot be picked with one key")
+                            keys(digit)
+                            res = _wait_screen(lambda: applied_after(rollout, offset, model, effort),
+                                               lambda r: r or None, timeout_s, sleep, clock)
+                            result = None
+                            effort_label = label
         except Exception as e:  # noqa: BLE001 — answered, never raised past the restore
             result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300]})
         finally:
@@ -393,6 +443,8 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
             return 502, {"ok": False, "error": "unconfirmed",
                          "detail": f"no thread_settings_applied for {model} in the rollout within "
                                    f"{int(timeout_s)} s"}
+        if res.startswith("effort:"):
+            return 502, {"ok": False, "error": "a different effort was confirmed", "detail": res[7:]}
         if res != "set":
             return 502, {"ok": False, "error": "a different model was confirmed", "detail": res[6:]}
         return 200, {"ok": True, "model": model, "switching": "switched", "effort": effort_label}

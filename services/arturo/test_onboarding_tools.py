@@ -88,6 +88,9 @@ def test_a_card_records_cleaned_options_on_the_turn(P):
     finally:
         P._TEAM_TURN.reset(tok)
     assert out.startswith("Card shown")
+    # each card gets an id: the page dismisses it by this, and the thread keeps it with the reply
+    card_id = card.pop("card_id")
+    assert len(card_id) == 16 and all(c in "0123456789abcdef" for c in card_id)
     assert card == {"options": ["iPhone", "Mac", "Android"], "multi": True, "purpose": "other"}
 
 

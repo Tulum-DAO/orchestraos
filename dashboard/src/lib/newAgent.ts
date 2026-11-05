@@ -90,6 +90,18 @@ export async function fetchParents(): Promise<ParentSeat[]> {
 /** The phone top bar's + (DashboardLayout) asks the Agents page to open its New Agent form. */
 export const NEW_AGENT_EVENT = 'orchestra:new-agent';
 
+/** The Agents page with its New Agent form open on a runtime (the model picker's "Start a new agent with Codex"):
+ *  `/agents?new=codex`. */
+export function newAgentHref(runtime: string): string {
+  return `/agents?new=${encodeURIComponent(runtime)}`;
+}
+
+/** The runtime a `?new=` link asks for: a plain runtime id, else null (the form opens on its usual first choice). */
+export function newAgentRuntimeParam(search: string): string | null {
+  const v = new URLSearchParams(search).get('new');
+  return v && /^[a-z0-9_-]{1,32}$/i.test(v) ? v : null;
+}
+
 export type SeatKind = 'lead' | 'worker' | 'gm';
 
 /** Who a seat of this kind reports to. A worker (T2) needs a lead: any registered seat that is

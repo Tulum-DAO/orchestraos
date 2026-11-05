@@ -1,0 +1,178 @@
+/* Message reactions (components/kit/ReactionBadges.tsx, Reactions.tsx; spec 2026-11-02 build step 2).
+   Motion is slow and smooth, never a hop: eased fades and small scales of 180-240ms, no overshoot, nothing that
+   bounces; prefers-reduced-motion turns them off.
+   Badges OVERLAP the bubble's border at its INNER corner (lib/reactionLayout badgePlace; SlotBadges re-measures and
+   pulls a badge in near the scroller's edge):
+     desktop = (pointer: fine):   straddling the TOP border (iMessage tapback), the hover icons centred on the outer side;
+     phone   = (pointer: coarse): straddling the BOTTOM border, on the corner nearest the middle of the screen.
+   Only a bubble with badges keeps room for the half that hangs out (15px = badgeReserve: 22/2 + 4). */
+
+[data-rx-anchor] { position: relative; transition: margin 220ms cubic-bezier(0.22, 1, 0.36, 1), padding 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* --- badges ------------------------------------------------------------------------------------------------- */
+.rx-badges { position: absolute; z-index: 1; display: flex; gap: 3px; user-select: none; -webkit-user-select: none; }
+.rx-badges[data-side="user"] { left: -8px; }    /* the inner corner (toward the middle), BADGE_OVERHANG past it */
+.rx-badges[data-side="agent"] { right: -8px; }
+.rx-badge {
+  display: inline-flex; align-items: center; gap: 3px; height: 22px; min-width: 24px; padding: 0 6px;
+  border-radius: 999px; border: 1.5px solid var(--background); background: var(--popover); color: var(--popover-foreground);
+  font-size: calc(13px * var(--ui-text-scale, 1)); line-height: 1; box-shadow: 0 1px 3px rgb(0 0 0 / 0.22); cursor: pointer;
+  transition: background-color 220ms ease, border-color 220ms ease;
+  animation: rx-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rx-badge[data-mine] { background: color-mix(in oklab, rgb(59 130 246) 26%, var(--popover)); }
+.rx-count { font-size: calc(11px * var(--ui-text-scale, 1)); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+@media (pointer: fine) {
+  .rx-badges { top: 0; transform: translateY(-50%); }   /* centre line on the top border */
+  [data-rx-anchor][data-has-badges] { margin-top: 15px; }
+  /* Modern's agent reply has no bubble, so its "border" is the top of its words: lift it off them by the badge's lower
+     half, so the badge sits just above the first line instead of over it (the same 15px of room overall). A bubble
+     (the person's; the agent's in Bubbles, data-rx-bubble) has a real border to straddle and takes the 15px above. */
+  [data-rx-anchor="agent"]:not([data-rx-bubble])[data-has-badges] { margin-top: 4px; padding-top: 11px; }
+}
+@media (pointer: coarse) {
+  .rx-badges { bottom: 0; transform: translateY(50%); }   /* centre line on the bottom border */
+  [data-rx-anchor][data-has-badges] { margin-bottom: 15px; }
+  [data-rx-anchor="agent"]:not([data-rx-bubble])[data-has-badges] { margin-bottom: 8px; padding-bottom: 7px; }   /* Modern: clear of the last line */
+  /* Accepted trade-off (as iMessage): a long-press on a bubble is the reaction hold, not text selection or a link's
+     menu (Copy is in the hold's menu). Only while a hold is in progress or its sheet is up (Reactions.tsx holdOn): no selection or callout under the
+     finger. Otherwise text selection and a link's long-press stay the system's own. */
+  [data-rx-anchor][data-rx-holding] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}
+
+/* --- desktop hover icons -------------------------------------------------------------------------------------- */
+/* --rx-bar-w = BAR_WIDTH and --rx-bar-off = BAR_OFFSET (lib/reactionLayout; chatNoXScroll.test pins them equal). */
+.rx-bar {
+  --rx-bar-w: 94px; --rx-bar-off: 12px;
+  position: absolute; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 2px;
+  border-radius: 10px; border: 1px solid var(--border); background: var(--popover); color: var(--muted-foreground);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.16); opacity: 0; pointer-events: none; transition: opacity 200ms ease;
+}
+.rx-bar::before { content: ''; position: absolute; inset: -8px -14px; z-index: -1; }   /* the gap to the bubble keeps the hover */
+/* outside: 12px off the outer edge (clear of the badge's 8px overhang), top set inline (barOffsetTop: centred) */
+.rx-bar[data-place="out"][data-side="agent"] { left: calc(100% + var(--rx-bar-off)); }
+.rx-bar[data-place="out"][data-side="user"] { right: calc(100% + var(--rx-bar-off)); }
+/* under: from the inner corner, but never past the bubble's FAR edge. A bubble narrower than the bar gets the bar flush
+   with that far edge instead, so an (invisible, still laid-out) bar can't push past the scroller and scroll the chat
+   sideways. */
+.rx-bar[data-place="under"][data-side="agent"] { right: min(0px, calc(100% - var(--rx-bar-w))); top: calc(100% + 2px); }
+.rx-bar[data-place="under"][data-side="user"] { left: min(0px, calc(100% - var(--rx-bar-w))); top: calc(100% + 2px); }
+[data-rx-anchor]:hover > .rx-bar, .rx-bar:has(:focus-visible), .rx-bar[data-open] { opacity: 1; pointer-events: auto; }
+.rx-bar-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+.rx-bar-btn:hover, .rx-bar-btn:focus-visible { background: var(--muted); color: var(--foreground); }
+
+/* --- phone: the hidden "React" (and the sheet's "Close") a screen reader or keyboard reaches; shown only when focused */
+.rx-sr-react {
+  position: absolute; width: 1px; height: 1px; min-height: 0; padding: 0; overflow: hidden; white-space: nowrap;
+  clip-path: inset(50%); border: 0; user-select: none; -webkit-user-select: none;
+}
+/* its words are drawn, not written (no text node): never part of the bubble's selected or copied text */
+.rx-sr-react::before { content: attr(data-label); }
+.rx-sr-react:focus-visible {
+  z-index: 4; width: auto; height: 28px; padding: 0 10px; clip-path: none; top: 0; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--popover); color: var(--popover-foreground); font-size: calc(12px * var(--ui-text-scale, 1));
+}
+[data-rx-anchor="agent"] > .rx-sr-react:focus-visible { left: 0; transform: translateY(-110%); }
+[data-rx-anchor="user"] > .rx-sr-react:focus-visible { right: 0; transform: translateY(-110%); }
+.rx-lift > .rx-sr-react:focus-visible { position: fixed; top: 12px; right: 12px; transform: none; }
+
+/* --- popovers: quick row, menus, who reacted, the full picker --------------------------------------------------- */
+.rx-pop {
+  position: fixed; z-index: 81; border: 1px solid var(--border); background: var(--popover); color: var(--popover-foreground);
+  border-radius: 14px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.28);
+  animation: rx-rise 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rx-quick { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 4px; border-radius: 999px; }
+.rx-quick button {
+  display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 999px;
+  font-size: calc(22px * var(--ui-text-scale, 1)); line-height: 1; transition: background-color 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.rx-quick button:hover, .rx-quick button:focus-visible { background: var(--muted); transform: scale(1.08); }
+.rx-quick button[data-mine] { background: color-mix(in oklab, rgb(59 130 246) 24%, transparent); }
+.rx-quick .rx-more { color: var(--muted-foreground); }
+.rx-menu { min-width: 180px; padding: 4px; }
+.rx-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 8px;
+  font-size: calc(13px * var(--ui-text-scale, 1)); text-align: left; transition: background-color 180ms ease;
+}
+.rx-menu button:hover, .rx-menu button:focus-visible { background: var(--muted); }
+.rx-who { min-width: 200px; max-width: 280px; padding: 8px 10px; font-size: calc(13px * var(--ui-text-scale, 1)); }
+.rx-who-line { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+
+/* --- phone hold: the message lifted over a dimmed thread ---------------------------------------------------------- */
+.rx-lift { position: fixed; inset: 0; z-index: 80; }
+.rx-dim { position: absolute; inset: 0; background: rgb(0 0 0 / 0.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  animation: rx-fade 220ms ease both; }
+.rx-lifted {
+  position: absolute; overflow: hidden; border-radius: 18px; transform-origin: center;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.38); animation: rx-lift 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rx-lifted > [data-user-words] { max-width: none; }   /* the copy is already the bubble's own width */
+.rx-lifted > [data-agent-bubble] { max-width: none; }
+.rx-lifted[data-bare] { background: var(--background); color: var(--foreground); padding: 6px 8px; }
+.rx-lifted[data-clipped]::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 32px;
+  background: linear-gradient(to bottom, transparent, var(--background));
+}
+.rx-lift[data-leaving], .rx-pop[data-leaving] { animation: rx-out 180ms ease forwards; }
+
+/* --- the full picker --------------------------------------------------------------------------------------------- */
+.rx-picker { display: flex; flex-direction: column; width: 352px; height: 420px; overflow: hidden; border-radius: 16px; }
+.rx-picker[data-sheet] {
+  left: 0 !important; right: 0; top: auto !important; bottom: 0; width: auto; height: min(70vh, 460px);
+  border-radius: 18px 18px 0 0; animation: rx-sheet 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rx-picker-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 6px; }
+.rx-search {
+  flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--background); color: var(--foreground); font-size: max(var(--field-min, 0px), calc(13px * var(--ui-text-scale, 1))); outline: none;
+}
+.rx-search:focus { border-color: var(--ring); }
+.rx-tones { display: flex; gap: 1px; }
+.rx-tones button { width: 28px; height: 28px; border-radius: 8px; font-size: calc(17px * var(--ui-text-scale, 1)); opacity: 0.5; transition: opacity 180ms ease, background-color 180ms ease; }
+.rx-tones button[aria-pressed="true"] { opacity: 1; background: var(--muted); }
+.rx-tabs { display: flex; justify-content: space-between; padding: 0 6px; border-bottom: 1px solid var(--border); }
+.rx-tabs button { padding: 6px 4px; font-size: calc(17px * var(--ui-text-scale, 1)); opacity: 0.55; transition: opacity 180ms ease; }
+.rx-tabs button:hover, .rx-tabs button:focus-visible { opacity: 1; }
+.rx-picker-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 6px 6px; }
+.rx-group { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+.rx-group-name { position: sticky; top: 0; z-index: 1; padding: 6px 4px 4px; background: var(--popover); font-size: calc(11px * var(--ui-text-scale, 1)); color: var(--muted-foreground); }
+.rx-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.rx-cell {
+  display: flex; align-items: center; justify-content: center; aspect-ratio: 1; border-radius: 8px;
+  font-size: calc(22px * var(--ui-text-scale, 1)); line-height: 1; transition: background-color 160ms ease;
+}
+.rx-cell:hover, .rx-cell:focus-visible { background: var(--muted); }
+.rx-failed { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.rx-retry { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); color: var(--foreground); transition: background-color 180ms ease; }
+.rx-retry:hover, .rx-retry:focus-visible { background: var(--muted); }
+.rx-empty { padding: 24px 8px; text-align: center; font-size: calc(12px * var(--ui-text-scale, 1)); color: var(--muted-foreground); }
+.rx-picker-foot {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; border-top: 1px solid var(--border);
+  font-size: calc(12px * var(--ui-text-scale, 1)); color: var(--muted-foreground);
+}
+.rx-picker-foot .rx-big { font-size: calc(22px * var(--ui-text-scale, 1)); }
+
+.rx-notice {
+  position: sticky; z-index: 5; bottom: 8px; margin: 0 auto; width: fit-content; max-width: 92%; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--popover); color: var(--popover-foreground); font-size: calc(11px * var(--ui-text-scale, 1));
+  animation: rx-rise 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes rx-in { from { opacity: 0; scale: 0.8; } to { opacity: 1; scale: 1; } }
+@keyframes rx-rise { from { opacity: 0; translate: 0 6px; scale: 0.97; } to { opacity: 1; translate: 0 0; scale: 1; } }
+@keyframes rx-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rx-lift { from { scale: 1; } to { scale: 1.03; } }
+@keyframes rx-sheet { from { translate: 0 100%; } to { translate: 0 0; } }
+@keyframes rx-out { to { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-rx-anchor] { transition: none; }
+  .rx-badge, .rx-pop, .rx-dim, .rx-lifted, .rx-picker[data-sheet], .rx-notice { animation: none; }
+  .rx-lift[data-leaving], .rx-pop[data-leaving] { animation: none; opacity: 0; }
+  .rx-quick button:hover { transform: none; }
+}

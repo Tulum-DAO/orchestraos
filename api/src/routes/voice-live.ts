@@ -33,6 +33,8 @@
  *   setupVoiceLiveWebSocket(server);
  */
 import { readFileSync } from 'fs';
+import { join } from 'path';
+import { Router, type Request, type Response } from 'express';
 import { createHmac } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server as HttpServer, IncomingMessage } from 'http';
@@ -43,8 +45,12 @@ import type { Socket } from 'net';
 // that sets the env after other modules load still picks it up correctly.
 import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: shared reader
-import { gatewayWsUrl } from '../lib/gateway-url.js';
+import { gatewayWsUrl, gatewayUrl } from '../lib/gateway-url.js';
+import { dataDir } from '../lib/config.js';
 import { tailscaleOperator } from '../lib/tailscale-identity.js';
+import { isSafeAgentId } from '../lib/agentPaths.js';
+import { principal } from '../lib/principal.js';
+import { canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
 const GATEWAY_WS_URL = gatewayWsUrl();  // #84 class: env, then [gateway] in orchestra.toml
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
@@ -160,6 +166,22 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       return;
     }
 
+    // The agent the call is with, when the page names one: a safe id the caller may see, by the same scope rule as
+    // every /api/agents/:id route (an out-of-scope id gets the same 404 an unknown one does). None: Arturo's own call.
+    const agent = url.searchParams.get('agent');
+    if (agent !== null) {
+      if (!isSafeAgentId(agent)) {
+        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nbad agent id');
+        socket.destroy();
+        return;
+      }
+      if (!canPrincipalSeeAgent(principal(req as any), { id: agent, tags: defaultResolveTags(agent) })) {
+        socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nagent not found');
+        socket.destroy();
+        return;
+      }
+    }
+
     const gatewayToken = readGatewayToken();
     if (!gatewayToken) {
       // W1: LOUD failure at the HTTP-upgrade layer (before any WS handshake)
@@ -180,7 +202,7 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       // logs, proxy logs, etc.). Send it as an Authorization header instead
       // — the same pattern routes/voice.ts already uses for /voice-call.
       const upstream = new WebSocket(
-        `${gatewayWsUrl}/live?voice=${encodeURIComponent(voice)}`,
+        `${gatewayWsUrl}/live?voice=${encodeURIComponent(voice)}${agent !== null ? `&agent=${encodeURIComponent(agent)}` : ''}`,
         { headers: { Authorization: `Bearer ${gatewayToken}` } },
       );
 
@@ -201,8 +223,14 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       });
 
       upstream.on('close', (code, reasonBuf) => {
-        const reason = reasonBuf?.toString() || 'gateway closed the voice session';
-        if (clientWs.readyState === WebSocket.OPEN) closeLoud(clientWs, code || 1011, reason);
+        if (clientWs.readyState !== WebSocket.OPEN) return;
+        // No close code (1005 none sent, 1006 dropped): a code the browser side may not be sent, so passing it on threw
+        // and left the page's call open. That is the call ending: say so plainly. A real code passes through.
+        if (!code || code === 1005 || code === 1006) {
+          try { clientWs.close(1000, 'call ended'); } catch { /* already gone */ }
+          return;
+        }
+        closeLoud(clientWs, code, reasonBuf?.toString() || 'gateway closed the voice session');
       });
 
       upstream.on('error', (err) => {
@@ -223,4 +251,70 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       clientWs.on('error', () => { try { upstream.close(); } catch { /* noop */ } });
     });
   });
+}
+
+// ---- GET /api/voice/live/ready ------------------------------------------------------------------------------------
+// Read-only: will a call on /api/voice/live start? The page asks before it offers Call, so Call is never offered where
+// it cannot work. It never places a call, never opens a realtime session, and never returns or logs a key: it only
+// asks whether one exists. The answer is the install's, not an agent's: the bridge above sends no agent to the
+// gateway's /live, so every agent's call runs the same engine with the same key.
+
+export type LiveEngine = 'gemini' | 'relay' | null | 'unreachable';
+
+export interface VoiceReadyDeps {
+  /** Whether the gateway bearer exists (the bridge refuses with 502 without it). */
+  hasGatewayToken: () => boolean;
+  /** The engine the gateway will run, from Arturo's /health live_engine, or 'unreachable'. */
+  liveEngine: () => Promise<LiveEngine>;
+  /** Whether a Gemini key is set where the gateway's Live bridge reads it. */
+  hasGeminiKey: () => boolean;
+}
+
+export const NOT_SET_UP = "Voice calls aren't set up on this server";
+export const NO_KEY = 'No voice key is set up';
+
+export async function voiceLiveReady(deps: VoiceReadyDeps): Promise<{ ok: boolean; reason?: string }> {
+  if (!deps.hasGatewayToken()) return { ok: false, reason: NOT_SET_UP };
+  const engine = await deps.liveEngine();
+  if (engine === 'gemini' || engine === 'relay') return { ok: true };
+  // The gateway runs Gemini when it cannot ask Arturo, so then only a Gemini key makes a call start.
+  if (engine === 'unreachable' && deps.hasGeminiKey()) return { ok: true };
+  return { ok: false, reason: NO_KEY };
+}
+
+/** Presence only, as services/arturo/gemini_live_bridge.py get_gemini_api_key looks: the data dir's .env.secrets, then
+ *  the environment. The value is never kept, returned or logged. */
+function realHasGeminiKey(): boolean {
+  try {
+    const text = readFileSync(join(dataDir(), '.env.secrets'), 'utf-8');
+    if (text.split('\n').some((l) => /^GEMINI_API_KEY=\S/.test(l))) return true;
+  } catch { /* no secrets file */ }
+  return !!(process.env.GEMINI_API_KEY || '').trim();
+}
+
+async function realLiveEngine(): Promise<LiveEngine> {
+  try {
+    const r = await fetch(`${gatewayUrl()}/arturo/health`, {
+      headers: { Authorization: `Bearer ${readGatewayToken()}` }, signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return 'unreachable';
+    const e = (await r.json() as { live_engine?: unknown })?.live_engine;
+    return e === 'gemini' || e === 'relay' ? e : e === null ? null : 'unreachable';
+  } catch { return 'unreachable'; }
+}
+
+export const realVoiceReadyDeps: VoiceReadyDeps = {
+  hasGatewayToken: () => !!readGatewayToken(),
+  liveEngine: realLiveEngine,
+  hasGeminiKey: realHasGeminiKey,
+};
+
+/** Mounted at /api/voice. */
+export function createVoiceLiveReadyRouter(deps: VoiceReadyDeps = realVoiceReadyDeps): Router {
+  const router = Router();
+  router.get('/live/ready', async (_req: Request, res: Response) => {
+    try { res.json(await voiceLiveReady(deps)); }
+    catch { res.json({ ok: false, reason: NOT_SET_UP }); }
+  });
+  return router;
 }

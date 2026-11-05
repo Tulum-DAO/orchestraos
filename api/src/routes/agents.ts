@@ -20,15 +20,23 @@ import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistere
 import { loadConfig, dataDir } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
-import { actingAgent, principal } from '../lib/principal.js';
+import { actingAgent, principal, installRole, changedBy } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { decorateIdentity, readSeatNames } from '../lib/agentIdentity.js';
 import { readPins, writePins, cleanPins } from '../lib/agentPins.js';
+import { readPrefs, writePrefs, cleanPrefsChange, isAgentId } from '../lib/agentPrefs.js';
+import { readSeatSettings, writeSeatSettings, cleanSettingsChange, seatHistory, seatRotates, seatCanCompactNow } from '../lib/seatSettings.js';
 import { getProjectsKnowledge } from '../services/state-reader.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
+import { MODEL_PUT_TIMEOUT_MS, parseModelPut } from '../lib/agentModelPut.js';
+import { headlessSeats } from '../services/status-stream.js';
+import { headlessInDev, paneHoldsSupervisor, PANE_IS_SUPERVISOR } from '../lib/paneGuard.js';
+import { agentCallGoesToSeat, agentCallSwitch, liveEngine, writeAgentCallSwitch } from '../lib/agentCallGate.js';
+import { recordSettingChange } from '../lib/settingsLog.js';
+import { headlessStep, stepFromProbe } from '../services/live-step.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -73,6 +81,43 @@ function mergeDetector(agent: AgentEntry, d: DetectorStatus | undefined): void {
   agent.alive = true;
 }
 
+/** A retired past generation (the <root>-gen<N> row a later generation leaves in the registry): never listed, so the
+ *  agents list shows one row per seat and never a "Not running" ghost, as the gateway's /agents leaves it out. Any
+ *  lineage, not only test ones. A retired test seat is a throwaway and goes too. Never hides a row that is alive, a
+ *  canonical root or a root's live head, and only when its root is itself in the registry: the "never hide the only
+ *  agent answering for its root" rule. `alive` is the row's resolved liveness, as supersededBy takes it. */
+export function isGenerationLeftover(args: {
+  id: string;
+  def: Record<string, unknown>;
+  defs: Record<string, Record<string, unknown>>;
+  alive: boolean;
+  index: CanonicalIndex | null;
+}): boolean {
+  const { id, def, defs, alive, index } = args;
+  if (String(def?.status || '') !== 'retired') return false;
+  if (alive) return false;
+  if (index && (index.roots.has(id) || index.sessions.has(id))) return false;
+  if (def.test === true) return true;
+  const rootId = typeof def.lineage_root === 'string' ? def.lineage_root : '';
+  const root = rootId && rootId !== id ? defs[rootId] : undefined;
+  return !!root && root !== def;
+}
+
+/** Is this registry row left out of GET / — a parked rotation leftover (supersededBy) or a retired past generation?
+ *  One predicate so the list, its counts and the tests cannot disagree. The /:id routes, /:id/generations and
+ *  revive never consult it: a hidden row is still addressable by id. */
+export function hiddenFromListing(args: {
+  id: string;
+  def: Record<string, unknown>;
+  defs: Record<string, Record<string, unknown>>;
+  alive: boolean;
+  index: CanonicalIndex | null;
+}): boolean {
+  const { id, def, alive, index } = args;
+  return !!supersededBy({ id, defStatus: def.status as string | undefined, alive, index })
+    || isGenerationLeftover(args);
+}
+
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
 // applies (lib/agent-scope.ts). Registered as a param handler so a /:id route added later is
@@ -97,10 +142,6 @@ interface AgentEntry {
   tmux_alive: boolean;
   inbox_count: number;
   machine_status: string;
-  /** Set ONLY on a parked rotation leftover (DEC-1790826247484632): the canonical root that
-   *  supersedes this row. Absent on every other row, so a client that does not know the field
-   *  behaves exactly as before. */
-  superseded_by?: string;
   /** How many generations this agent's lineage has, when the identity DB is readable. Absent
    *  (never 0) when there is no DB or no history, so a client just offers no history list. */
   generations_total?: number;
@@ -171,6 +212,8 @@ router.get('/', async (_req: Request, res: Response) => {
     } catch { /* use empty */ }
 
     const agents: AgentEntry[] = [];
+    // Sessions of the rows left out below, so a leftover never comes back as an unregistered chip.
+    const hiddenSessions = new Set<string>();
     for (const [id, def] of Object.entries(agentDefs)) {
       const state = states[id] || {};
       const tmuxSession = (def.tmux_session as string) || id;
@@ -203,18 +246,15 @@ router.get('/', async (_req: Request, res: Response) => {
       // the state-file spread above must not clobber them (blank-name spawn
       // stubs blanked seats off the web dashboard; see agents-identity.ts).
       applyIdentityPrecedence(agent, def, id, tmuxSession, machine, unified?.tmux_alive ?? isLocalAlive);
-      // DEC-1790826247484632: flag a parked rotation leftover so the fleet view can undraw it.
-      // AFTER applyIdentityPrecedence, which owns `status`/`retired` — a leftover is NOT
-      // retired (the registry never said so) and `status` stays `parked`, so the evidence a
-      // reader needs to audit this survives in the payload. `def.status`, not `agent.status`:
-      // the state spread and the detector pass both overwrite the latter.
-      const superseded = supersededBy({
-        id,
-        defStatus: def.status as string | undefined,
-        alive: agent.alive as boolean,
-        index: canonIndex,
-      });
-      if (superseded) (agent as any).superseded_by = superseded;
+      // One row per seat: leave out parked rotation leftovers and retired past generations. Here, AFTER
+      // applyIdentityPrecedence, because both rules need the row's resolved liveness (a fresh local tmux probe sees
+      // only this host's sessions) and must never hide a row that is alive. Before the detector pass, which can only
+      // turn a row offline, so it cannot make a live row hideable. `def.status`, not `agent.status`: the state
+      // spread and the detector pass both overwrite the latter.
+      if (hiddenFromListing({ id, def: def as Record<string, unknown>, defs: agentDefs, alive: agent.alive as boolean, index: canonIndex })) {
+        hiddenSessions.add(tmuxSession);
+        continue;
+      }
       // Defense-in-depth: the /agents UI iterates several fields with
       // (field||[]).forEach / .includes / .map — that guards null but NOT a
       // wrong TYPE. A registry record with a string where an array is expected
@@ -235,7 +275,7 @@ router.get('/', async (_req: Request, res: Response) => {
     }
 
     // Discover unregistered tmux sessions (VPS local + Mac via cached probe)
-    const registeredSessions = new Set(agents.map(a => a.tmux_session));
+    const registeredSessions = new Set([...agents.map(a => a.tmux_session), ...hiddenSessions]);
     const allTmuxSessions = localSessions;
     const unregistered: AgentEntry[] = [];
 
@@ -381,6 +421,20 @@ router.get('/', async (_req: Request, res: Response) => {
       }
     } catch { /* detector unavailable -> legacy fields stand */ }
 
+    // The live step (services/live-step.ts), for the cards' line: a headless seat from its supervisor log, a tmux seat
+    // from the pane probe's verdict merged above (no tool input here; an open chat's stream adds the summary).
+    try {
+      const headless = headlessSeats();
+      for (const agent of allAgents) {
+        const st = headless.has(agent.id)
+          ? (headlessInDev(agent.id) ? null : headlessStep(agent.id, dataDir()))
+          : (agent.status_source === 'detector' || agent.status_source === 'transcript')
+            ? stepFromProbe({ state: agent.status, tool: agent.tool as string | undefined, state_age_s: agent.state_age_s as number | undefined }, null)
+            : null;
+        if (st) (agent as any).step = { agent_id: agent.id, ...st };
+      }
+    } catch { /* no step: the cards show the state as before */ }
+
     allAgents.sort((a, b) => a.tier.localeCompare(b.tier) || a.name.localeCompare(b.name));
 
     const online = allAgents.filter((a) => a.tmux_alive).length;
@@ -473,6 +527,140 @@ router.put('/pins', (req: Request, res: Response) => {
   if (!pins) { res.status(400).json({ ok: false, error: 'pins must be a list of agent ids' }); return; }
   writePins(dataDir(), who, pins);
   res.json({ ok: true, pins });
+});
+
+// Helper: a read from the gateway (the avatar, voice and assistant-name stores live behind it); null on any failure,
+// so one missing piece never fails the whole identity.
+async function gatewayRead(pathAndQuery: string): Promise<any | null> {
+  const token = readGatewayToken();
+  if (!token) return null;
+  try {
+    const r = await fetch(`${GATEWAY_URL}${pathAndQuery}`, {
+      headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+    });
+    const body: any = await r.json().catch(() => null);
+    return r.ok && body && body.ok !== false ? body : null;
+  } catch { return null; }
+}
+
+// GET /api/agents/:id/identity — the one place an agent's identity is read: name, full name and old names (seat names;
+// Arturo's is a seat name too), avatar look, voice (its own or the install's) and how this person sees it (prefs).
+// Read-only; each store keeps its own write route and rules (rename, PUT /api/arturo/avatar, PUT /api/arturo/ptt/voice,
+// PUT /api/agents/:id/prefs). History and telemetry stay keyed by the id, so a rename never splits them.
+router.get('/:id/identity', async (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  const root = baseAgentId(req.params.id);
+  const registry = (getRegistry() as any)?.agents || {};
+  const builtin = root === 'arturo';
+  if (!builtin && !registry[root] && !registry[req.params.id]) { res.status(404).json({ ok: false, error: 'Agent not found' }); return; }
+  const names = readSeatNames(dataDir());
+  const [avatar, voice, assistant] = await Promise.all([
+    gatewayRead(`/arturo/avatar?agent=${encodeURIComponent(root)}`),
+    gatewayRead(`/arturo/ptt/voice?agent=${encodeURIComponent(root)}`),
+    builtin ? gatewayRead('/arturo/assistant/name') : Promise.resolve(null),
+  ]);
+  let name: string; let fullName: string; let project: any = null;
+  if (builtin) {
+    name = assistant?.name || names.get(root)?.name || 'Arturo';
+    fullName = name;
+  } else {
+    const [row] = decorateIdentity([{ id: root, ...(registry[root] || registry[req.params.id]) }],
+      { knowledge: getProjectsKnowledge() as any, names, lastMessage: new Map(), registry });
+    name = row.display_name || root; fullName = row.full_name || name; project = row.project ?? null;
+  }
+  const pick = (o: any, keys: string[]) => (o ? Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]])) : null);
+  res.json({
+    ok: true, id: root, builtin, name, full_name: fullName, project, aliases: names.get(root)?.aliases || [],
+    avatar: pick(avatar, ['shape', 'color', 'eyeColor', 'chosen']),
+    voice: pick(voice, ['vendor', 'voice_id', 'title', 'scope']),
+    prefs: readPrefs(dataDir(), who, root),
+  });
+});
+
+// GET/PUT /api/agents/:id/prefs {style?, accent?} — how this person sees this agent (lib/agentPrefs.ts): chat style
+// (modern | bubbles | dev) and an accent colour, saved per person on the server. `null` clears a field back to the
+// default. Any agent id, Arturo's included: the view is the person's own choice.
+router.get('/:id/prefs', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  res.json({ ok: true, agent: req.params.id, ...readPrefs(dataDir(), who, req.params.id) });
+});
+router.put('/:id/prefs', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  const r = cleanPrefsChange(req.body);
+  if ('error' in r) { res.status(400).json({ ok: false, error: r.error }); return; }
+  writePrefs(dataDir(), who, req.params.id, r.change);
+  res.json({ ok: true, agent: req.params.id, ...readPrefs(dataDir(), who, req.params.id) });
+});
+
+// GET/PUT /api/agents/:id/settings {auto_compact?, show_compaction?, compact_at?} — the seat's rotation settings
+// (lib/seatSettings.ts, the twin of scripts/seat_settings.py). Per AGENT, unlike /prefs: every person sees and changes
+// the same values; each change is recorded in the seat's history with who made it. The supervisor reads them at every
+// turn end, so a change applies on the next turn.
+// `rotates`: whether this seat can use our rotation at all (lib/seatSettings.ts seatRotates); the slideout hides the
+// rotation rows when it can't, and a change for such a seat is refused (409).
+router.get('/:id/settings', async (req: Request, res: Response) => {
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  // `compact_now`: whether a person's "/compact" can run for this seat (lib/seatSettings.ts seatCanCompactNow, the
+  // gateway's gate, contract/compact-gate.json): the slideout offers "Compact now" only where it can work. A seat in
+  // Dev is not headless to the gateway, so it is not offered there either.
+  res.json({ ok: true, agent: req.params.id, rotates: seatRotates(req.params.id, getRegistry() as any),
+             compact_now: seatCanCompactNow(req.params.id, getRegistry() as any, headlessSeats(), headlessInDev),
+             agent_calls: await agentCallsLabel(req.params.id),
+             takes_calls: agentCallSwitch(dataDir(), req.params.id) === true,
+             in_dev: headlessInDev(req.params.id),
+             ...readSeatSettings(dataDir(), req.params.id), history: seatHistory(dataDir(), req.params.id).slice(-20) });
+});
+/** `agent_calls`: whether a call to this agent is its own call (lib/agentCallGate.ts, the voice side's
+ *  agent_call.enabled() on the relay engine, contract/agent-call-gate.json); a seat in Dev counts, and `in_dev` beside
+ *  it lets the call bar offer Back to chat. Headless as the voice side resolves it (headless_switch.headless_seat): the id's
+ *  own switch entry, else a switched-on seat whose registry row has the id as its tmux session. */
+async function agentCallsLabel(id: string): Promise<boolean> {
+  const agents = ((getRegistry() as any)?.agents || {}) as Record<string, any>;
+  const headless = headlessSeats();
+  const seat = headless.has(id) ? id
+    : Object.entries(agents).find(([s, row]) => headless.has(s) && row && row.tmux_session === id)?.[0] ?? null;
+  const facts = {
+    // The switch by the id the call names, as agent_call.enabled reads it.
+    switch_on: agentCallSwitch(dataDir(), id),
+    headless: seat !== null,
+    registry_runtime: seat && typeof agents[seat]?.runtime === 'string' ? agents[seat].runtime : null,
+    engine: 'unreachable' as const,
+  };
+  // Only a seat that passes everything else asks for the engine (a network read, cached).
+  if (!agentCallGoesToSeat({ ...facts, engine: 'relay' })) return false;
+  return agentCallGoesToSeat({ ...facts, engine: await liveEngine() });
+}
+
+router.put('/:id/settings', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  if (!seatRotates(req.params.id, getRegistry() as any)) { res.status(409).json({ ok: false, error: "This agent can't compact yet" }); return; }
+  const r = cleanSettingsChange(req.body);
+  if ('error' in r) { res.status(400).json({ ok: false, error: r.error }); return; }
+  const now = writeSeatSettings(dataDir(), req.params.id, r.change, who);
+  res.json({ ok: true, agent: req.params.id, rotates: true, ...now, history: seatHistory(dataDir(), req.params.id).slice(-20) });
+});
+
+// PUT /api/agents/:id/takes-calls {on} — the agent panel's "Takes calls" (Settings phase 1): whether a call to this agent
+// is with the agent itself (state/agent-calls.json seats.<id>.on, the voice side's switch; other options kept). It
+// affects everyone who calls the agent, so only an admin may change it.
+router.put('/:id/takes-calls', (req: Request, res: Response) => {
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  const known = (getRegistry() as { agents?: Record<string, unknown> } | null)?.agents ?? {};
+  if (!Object.prototype.hasOwnProperty.call(known, req.params.id)) { res.status(404).json({ ok: false, error: `Agent '${req.params.id}' not found` }); return; }
+  if (installRole(req) !== 'admin') { res.status(403).json({ ok: false, error: 'Only an admin can change this' }); return; }
+  const on = (req.body || {}).on;
+  if (typeof on !== 'boolean') { res.status(400).json({ ok: false, error: 'on: true or false' }); return; }
+  writeAgentCallSwitch(dataDir(), req.params.id, on);
+  recordSettingChange(dataDir(), { key: `agent.takesCalls.${req.params.id}`, scope: 'everyone', by: changedBy(req), at: new Date().toISOString(), value: on });
+  res.json({ ok: true, agent: req.params.id, takes_calls: on });
 });
 
 // PUT /api/agents/:id/name {name} — rename an agent (scripts/identity_store/seat_names.py: names unique per project,
@@ -742,6 +930,25 @@ async function gatewayKey(session: string, key: string, confirm: boolean, expect
   return { status: resp.status, body };
 }
 
+// Helper: the gateway's /agent-model (scripts/agent_model.py has the rules). GET lists the models this
+// agent can switch to; PUT switches it: live where the CLI allows, else at its next rotation, and a busy
+// agent's switch waits for its turn to end. A person picked it, so the request says so (X-Actor).
+async function gatewayModel(session: string, model?: string, effort?: string): Promise<{ status: number; body: any }> {
+  const token = readGatewayToken();
+  if (!token) throw new Error('gateway token unavailable');
+  const put = model !== undefined;
+  const resp = await fetch(put ? `${GATEWAY_URL}/agent-model` : `${GATEWAY_URL}/agent-model?session=${encodeURIComponent(session)}`, {
+    method: put ? 'PUT' : 'GET',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': 'operator:web' },
+    ...(put ? { body: JSON.stringify({ session, model, ...(effort ? { effort } : {}) }) } : {}),
+    // A live switch waits for the CLI to confirm it ("Set model to …", then "Set effort level to …"); under the
+    // dashboard proxy's own wait for this route, so the picker hears an answer rather than a dropped connection.
+    signal: AbortSignal.timeout(put ? MODEL_PUT_TIMEOUT_MS : 10000),
+  });
+  const body: any = await resp.json().catch(() => ({}));
+  return { status: resp.status, body };
+}
+
 // Helper: send keys to tmux session (LEGACY — Mac agents only; VPS goes
 // through gatewayInject above)
 function sendToTmux(session: string, machine: string, text: string) {
@@ -896,9 +1103,34 @@ router.post('/:id/inject', async (req: Request, res: Response) => {
 });
 
 // POST /api/agents/:id/key — send special keys (Escape, Enter, numbers, Ctrl-C, etc.)
-router.post('/:id/key', (req: Request, res: Response) => {
+/** A headless seat's Stop: its pane holds the seat's supervisor, not the TUI, so Esc into the pane would stop
+ *  nothing. True for Escape on a switched-on headless seat that is not in Dev (in Dev the pane IS its TUI). */
+export function stopGoesToInterrupt(agentId: string, key: string,
+  headless: Set<string> = headlessSeats(), inDev: (id: string) => boolean = headlessInDev): boolean {
+  return /^(esc|escape)$/i.test(key.trim()) && headless.has(agentId) && !inDev(agentId);
+}
+
+router.post('/:id/key', async (req: Request, res: Response) => {
   const { key } = req.body;
   if (!key) { res.status(400).json({ error: 'key required' }); return; }
+  if (stopGoesToInterrupt(String(req.params.id), String(key))) {
+    // The CLI's own interrupt, through the gateway (which checks the seat is mid-turn).
+    const session = modelSession(req, res);
+    if (!session) return;
+    try {
+      const r = await gatewayPost('/agent-interrupt', { session }, 15000);
+      res.status(r.status).json({ ...r.body, key, session, agent_id: req.params.id, sent: !!r.body?.ok });
+    } catch (err: any) {
+      res.status(502).json({ error: 'gateway unreachable', detail: err.message });
+    }
+    return;
+  }
+  // Any other key on a headless seat outside Dev would land in its supervisor's pane (Ctrl-C there stops the
+  // supervisor). In Dev the pane is the CLI's TUI and the keys are the terminal view's own: they go through.
+  if (paneHoldsSupervisor(String(req.params.id))) {
+    res.status(409).json({ error: 'headless', detail: PANE_IS_SUPERVISOR, key, agent_id: req.params.id });
+    return;
+  }
 
   const registry = getRegistry() as any;
   const agent = registry?.agents?.[String(req.params.id)];
@@ -952,6 +1184,12 @@ router.post('/:id/inject-raw', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Agent not found' }); return;
   }
 
+  // Typing into a prompt is pane control, so it stays a keystroke; on a headless seat outside Dev it would type into
+  // the supervisor's pane, so it is refused there (text for the agent itself goes through /send).
+  if (paneHoldsSupervisor(String(req.params.id))) {
+    res.status(409).json({ error: 'headless', detail: PANE_IS_SUPERVISOR, agent_id: req.params.id });
+    return;
+  }
   try {
     // Send text without Enter — for typing into prompts
     execFileSync('tmux', ['send-keys', '-t', session, text], { timeout: 5000 });
@@ -994,6 +1232,124 @@ router.post('/:id/agent-key', async (req: Request, res: Response) => {
 
   try {
     const r = await gatewayKey(session, dismiss ? '' : String(key), !!confirm, expect, dismiss ? 'dismiss' : undefined);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+// Helper: a POST to the gateway as the operator (the dashboard); its status comes back as is.
+async function gatewayPost(path: string, body: Record<string, unknown>, timeoutMs: number): Promise<{ status: number; body: any }> {
+  const token = readGatewayToken();
+  if (!token) throw new Error('gateway token unavailable');
+  const resp = await fetch(`${GATEWAY_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': 'operator:web' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return { status: resp.status, body: await resp.json().catch(() => ({})) };
+}
+
+// POST /api/agents/:id/menu-capture — every question of a multi-part menu on the agent's screen (the gateway's
+// /agent-menu-capture: it pages with Right only, never Enter or a digit, and presses nothing unless a menu is on screen
+// and the operator is on its first part). POST /api/agents/:id/menu-submit {answers:[{part, ns, text?}], card_id,
+// confirm} — answer it, bound to the card it was drawn from (the gateway's /menu-submit: 428 until confirmed).
+router.post('/:id/menu-capture', async (req: Request, res: Response) => {
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayPost('/agent-menu-capture', { session }, 25000);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+router.post('/:id/menu-submit', async (req: Request, res: Response) => {
+  const { answers, card_id, confirm } = req.body || {};
+  if (!Array.isArray(answers) || !answers.length) { res.status(400).json({ ok: false, error: 'answers required' }); return; }
+  if (typeof card_id !== 'string' || !card_id) { res.status(400).json({ ok: false, error: 'card_id required' }); return; }
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayPost('/menu-submit', { session, answers, card_id, confirm: confirm === true }, 25000);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+// POST /api/agents/:id/dev {on, force?} — a headless seat's Dev round trip (the gateway's /agent-dev): on=true stops
+// its headless process and resumes it as the TUI in its pane (same session, same environment); on=false, Back to
+// chat, ends the TUI and starts the headless process again (409 while the TUI is busy, unless force). 404 for a
+// seat that is not headless: Dev for a tmux seat is the terminal as it is.
+/** The Dev request's body as the gateway takes it, or 'bad'. Only a real boolean switches; force is opt-in. */
+export function devRequestOf(body: unknown): { on: boolean; force: boolean } | 'bad' {
+  const b = (body && typeof body === 'object' ? body : {}) as { on?: unknown; force?: unknown };
+  if (typeof b.on !== 'boolean') return 'bad';
+  return { on: b.on, force: b.force === true };
+}
+
+/** Whether this seat runs headless, and whether its TUI holds the pane right now (Dev). A tmux seat is
+ *  {headless:false}: its Dev is the terminal as it always was. */
+export function devInfoOf(agentId: string, headless: Set<string> = headlessSeats(),
+  inDev: (id: string) => boolean = headlessInDev): { headless: boolean; dev: boolean } {
+  const h = headless.has(agentId);
+  return { headless: h, dev: h && inDev(agentId) };
+}
+
+router.get('/:id/dev', (req: Request, res: Response) => {
+  res.json({ ok: true, ...devInfoOf(String(req.params.id)) });
+});
+
+router.post('/:id/dev', async (req: Request, res: Response) => {
+  const ask = devRequestOf(req.body);
+  if (ask === 'bad') { res.status(400).json({ ok: false, error: 'on (true|false) required' }); return; }
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayPost('/agent-dev', { session, ...ask }, 50000);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+// GET /api/agents/:id/model — the model this agent runs and the ones it can switch to (each with a reason when
+// it cannot). PUT {model, effort?} switches it. Both proxy the gateway's /agent-model and pass its status through, so the
+// picker can say what happened: switched (200), waiting for the turn to end (202), not offered (422), busy (503).
+function modelSession(req: Request, res: Response): string | null {
+  const registry = getRegistry() as any;
+  const agent = registry?.agents?.[String(req.params.id)];
+  if (!agent) { res.status(404).json({ ok: false, error: 'Agent not found' }); return null; }
+  // Like menus, a model is switched through this host's gateway only.
+  if (!isThisHost((agent.machine as string) || 'vps')) {
+    res.status(400).json({ ok: false, error: 'model switching is only supported for agents on this host' });
+    return null;
+  }
+  return (agent.tmux_session as string) || String(req.params.id);
+}
+
+router.get('/:id/model', async (req: Request, res: Response) => {
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayModel(session);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+router.put('/:id/model', async (req: Request, res: Response) => {
+  // {model, effort?}: an effort level (lib/agentModelPut.ts) is applied too, Claude by /effort, Codex in its picker.
+  const put = parseModelPut(req.body);
+  if ('error' in put) { res.status(400).json({ ok: false, error: put.error }); return; }
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayModel(session, put.model, put.effort);
     res.status(r.status).json(r.body);
   } catch (err: any) {
     res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
@@ -1095,6 +1451,57 @@ router.get('/:id/decisions', async (req: Request, res: Response) => {
     res.json({ agent: seat, generation_started_at: started, decisions: current });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to read decisions', detail: String(err?.message || err) });
+  }
+});
+
+/** The gateway's durable records of multi-part answers (answer='batch') for one tmux session: the hydrated parts and
+ *  the batch as submitted, skipped parts included. The chat draws an answered AskUserQuestion from these in
+ *  preference to parsing the tool result's text. */
+export function menuBatchRecords(rows: any[]): any[] {
+  const out: any[] = [];
+  for (const r of rows) {
+    let menu: any = null;
+    let answers: unknown = null;
+    try { menu = r.menu ? JSON.parse(r.menu) : null; } catch { menu = null; }
+    try { answers = JSON.parse(r.answer_text || 'null'); } catch { answers = null; }
+    if (!menu || !Array.isArray(menu.parts) || !Array.isArray(answers)) continue;
+    out.push({ id: r.id, answered_at: r.answered_at || null, parts: menu.parts, answers });
+  }
+  return out;
+}
+
+/** One approval_requests row, in any state, as the card a reference to it opens (a chip in a message): the
+ *  decisions feed's shape (state, delivery, parsed options and menu), plus whether it mirrors an agent's terminal
+ *  menu (op_key "menu:…", answered a pick OR words) and, for a recorded multi-part answer, that record. */
+export function cardLookup(row: any, now = Date.now()): any {
+  let options: unknown = [];
+  let menu: unknown = null;
+  try { options = JSON.parse(row.options || '[]'); } catch { options = []; }
+  try { menu = row.menu ? JSON.parse(row.menu) : null; } catch { menu = null; }
+  const batch = row.answer === 'batch' ? menuBatchRecords([row])[0] ?? null : null;
+  const { op_key: opKey, origin, ...rest } = row;
+  return {
+    ...rest, options, menu, state: decisionStatus(row, now), delivery: decisionDelivery(row),
+    terminal: /^menu:/.test(String(opKey || '')) || origin === 'menu_bridge', batch,
+  };
+}
+
+router.get('/:id/menu-batches', async (req: Request, res: Response) => {
+  const { queryDb } = await import('../lib/db.js');
+  const id = String(req.params.id);
+  const registry = getRegistry() as any;
+  const seat = registry?.agents?.[id] ? id : id.replace(/^unregistered:/, '');
+  const session = (registry?.agents?.[seat]?.tmux_session as string) || seat;
+  const like = `menu:${session.replace(/[\\%_]/g, (c) => `\\${c}`)}:%`;
+  try {
+    const rows = queryDb(
+      `SELECT id, menu, answer_text, answered_at FROM approval_requests
+        WHERE kind = 'menu' AND answer = 'batch' AND op_key LIKE ? ESCAPE '\\' AND created_at >= ?
+        ORDER BY answered_at DESC LIMIT 50`,
+      [like, new Date(Date.now() - 60 * 86400_000).toISOString()]) as any[];
+    res.json({ agent: seat, records: menuBatchRecords(rows) });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to read answer records', detail: String(err?.message || err) });
   }
 });
 

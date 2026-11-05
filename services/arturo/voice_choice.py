@@ -7,6 +7,7 @@ so no config re-pin either. EL voice choice is client-side (the phone passes voi
 refused here. Append-only audit log; atomic tmp-replace writes."""
 import json
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -32,12 +33,25 @@ _UA = "Mozilla/5.0 (X11; Linux x86_64) arturo-proxy/1.0"
 
 VENDORS = ("hume", "openai")          # vendors whose voice is chosen SERVER-side
 _EMPTY = {"voice_id": None, "changed_at": None, "changed_by": None, "source": None}
+# An agent's own voice is keyed by its id; with none, the agent speaks with the install's voice.
+_AGENT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def agent_key(agent):
+    """The agent id a voice is kept under, or None for the install's voice. Raises on a malformed id."""
+    if agent in (None, ""):
+        return None
+    a = str(agent).strip().lower()
+    if not _AGENT_ID.match(a):
+        raise ValueError("agent must be an agent id")
+    return a
 
 
 class VoiceChoiceStore:
-    """ONE global record every surface reads and writes (the operator 2026-10-10: "one change on any surface ... applies
-    to all surfaces"). It remembers one pick PER ENGINE ({hume: {...}, openai: {...}}), never per device, so
-    switching vendor and back keeps each pick. A legacy single-hume file is read as the hume pick."""
+    """ONE record every surface reads and writes ("one change on any surface ... applies to all surfaces"). It
+    remembers one pick PER ENGINE ({hume: {...}, openai: {...}}), never per device, so switching vendor and back
+    keeps each pick. Those are the install's voices; an agent may have its own under "agents" ({agent id: {hume:
+    {...}}}), and an agent with none uses the install's. A legacy single-hume file is read as the hume pick."""
     def __init__(self, path=DEFAULT_PATH, log_path=DEFAULT_LOG):
         self.path = Path(path)
         self.log_path = Path(log_path)
@@ -52,16 +66,55 @@ class VoiceChoiceStore:
             return {}
         if "voice_id" in d:                                  # legacy: one record, hume only
             return {str(d.get("vendor") or "hume"): {k: d.get(k) for k in _EMPTY}}
-        return {v: r for v, r in d.items() if v in VENDORS and isinstance(r, dict)}
+        out = {v: r for v, r in d.items() if v in VENDORS and isinstance(r, dict)}
+        agents = d.get("agents")
+        if isinstance(agents, dict):
+            out["agents"] = {a: {v: r for v, r in recs.items() if v in VENDORS and isinstance(r, dict)}
+                             for a, recs in agents.items() if isinstance(recs, dict)}
+        return out
 
-    def get(self, vendor):
-        return (self._read().get(vendor) or {}).get("voice_id") or None
+    def _rec(self, vendor, agent=None):
+        """(record, scope): the agent's own pick when it has one, else the install's."""
+        d = self._read()
+        a = agent_key(agent)
+        own = ((d.get("agents") or {}).get(a) or {}).get(vendor) if a else None
+        if own and own.get("voice_id"):
+            return own, "agent"
+        return d.get(vendor) or {}, "install"
 
-    def state(self, vendor="hume"):
-        rec = self._read().get(vendor) or {}
-        return {"vendor": vendor, **{k: rec.get(k) for k in _EMPTY}}
+    def get(self, vendor, agent=None):
+        return self._rec(vendor, agent)[0].get("voice_id") or None
 
-    def set(self, vendor, voice_id, by="settings", source="settings", device=None):
+    def state(self, vendor="hume", agent=None):
+        rec, scope = self._rec(vendor, agent)
+        return {"vendor": vendor, **{k: rec.get(k) for k in _EMPTY}, "scope": scope,
+                **({"agent": agent_key(agent)} if agent_key(agent) else {})}
+
+    def _save(self, d, log_entry):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(self.path)
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+
+    def clear(self, vendor, agent, by="settings", source="settings", device=None):
+        """The agent goes back to the install's voice for this vendor."""
+        a = agent_key(agent)
+        if not a:
+            raise ValueError("only an agent's own voice can be cleared")
+        with self._lock:
+            d = self._read()
+            recs = (d.get("agents") or {}).get(a) or {}
+            if recs.pop(vendor, None) is not None:
+                if not recs:
+                    d["agents"].pop(a, None)
+                self._save(d, {"vendor": vendor, "agent": a, "voice_id": None, "action": "clear",
+                               "changed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                               "changed_by": str(by)[:40], "source": str(source)[:40], "device": device})
+        return self.state(vendor, a)
+
+    def set(self, vendor, voice_id, by="settings", source="settings", device=None, agent=None):
         if vendor not in VENDORS:
             raise ValueError(f"voice choice is server-side for {', '.join(VENDORS)} only "
                              "(elevenlabs voices are picked client-side)")
@@ -71,18 +124,17 @@ class VoiceChoiceStore:
         rec = {"voice_id": voice_id,
                "changed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "changed_by": str(by)[:40], "source": str(source)[:40]}
+        a = agent_key(agent)
         with self._lock:
             d = self._read()
-            d[vendor] = rec
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(d))
-            tmp.replace(self.path)
-            with open(self.log_path, "a") as f:
-                # audit: who (by, the client's label), how (source), and WHICH DEVICE (the gateway's
-                # resolved caller, never the body) - gm ruling msg_f3c2cec6 condition 2
-                f.write(json.dumps({"vendor": vendor, **rec, "device": device}) + "\n")
-        return {"vendor": vendor, **rec}
+            if a:
+                d.setdefault("agents", {}).setdefault(a, {})[vendor] = rec
+            else:
+                d[vendor] = rec
+            # audit: who (by, the client's label), how (source), and WHICH DEVICE (the gateway's resolved caller,
+            # never the body)
+            self._save(d, {"vendor": vendor, **({"agent": a} if a else {}), **rec, "device": device})
+        return {"vendor": vendor, **rec, "scope": "agent" if a else "install", **({"agent": a} if a else {})}
 
 
 def _secret(k):
@@ -222,25 +274,30 @@ def voice_rows(vendor, raw=None):
     return sorted(rows, key=lambda r: r["order"])
 
 
-def in_effect(vendor):
-    """The voice the NEXT call on this vendor will use (None for hume = the pinned config's voice)."""
-    v = _default.get(vendor)
+def in_effect(vendor, agent=None):
+    """The voice the NEXT call on this vendor will use (None for hume = the pinned config's voice). With an agent:
+    its own voice, else the install's."""
+    v = _default.get(vendor, agent)
     return v or (OPENAI_DEFAULT if vendor == "openai" else None)
 
 
-def get_voice(vendor):
-    return _default.get(vendor)
+def get_voice(vendor, agent=None):
+    return _default.get(vendor, agent)
 
 
-def state(vendor="hume"):
-    return _default.state(vendor)
+def state(vendor="hume", agent=None):
+    return _default.state(vendor, agent)
 
 
-def set_voice(vendor, voice_id, by="settings", source="settings", device=None):
+def clear_voice(vendor, agent, by="settings", source="settings", device=None):
+    return _default.clear(vendor, agent, by=by, source=source, device=device)
+
+
+def set_voice(vendor, voice_id, by="settings", source="settings", device=None, agent=None):
     """The PUT cannot be fooled: voice_id must be one of THAT vendor's voices. Hume is checked against the cached
     list and FAILS CLOSED when Hume has never answered (a stale list is fine)."""
     if vendor not in VENDORS:
-        return _default.set(vendor, voice_id, by=by, source=source, device=device)   # refuses: plain reason
+        return _default.set(vendor, voice_id, by=by, source=source, device=device, agent=agent)   # refuses: plain reason
     vid = str(voice_id or "").strip()
     if vendor == "openai":
         if vid not in OPENAI_VOICES:
@@ -252,4 +309,4 @@ def set_voice(vendor, voice_id, by="settings", source="settings", device=None):
             raise ValueError(f"hume voice list unavailable ({e}); try again") from None
         if vid not in ids:
             raise ValueError(f"{vid!r} is not a hume voice")
-    return _default.set(vendor, vid, by=by, source=source, device=device)
+    return _default.set(vendor, vid, by=by, source=source, device=device, agent=agent)

@@ -8,24 +8,52 @@
  * This is the single chat rendering grammar intended to be shared with iOS
  * (ConversationView). Send transport reuses the existing gateway injection.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { isNearBottom } from '../../lib/liveFeedScroll';
-import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
-import { subscribeTranscriptStream } from '../../lib/transcriptStream';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useStickToBottom } from '../../lib/useStickToBottom';
+import { addNotice, latestNotice, withNotices, type CompactionItem } from '../../lib/compaction';
+import { fetchCallCards, withCallCards, type AgentCallRow } from '../../lib/callCards';
+import { useCallStore } from '../../stores/callStore';
+import { useCompactionNotices } from '../../stores/compactionNotices';
+import { stepFrom } from '../../lib/liveStep';
+import { useAgentSteps } from '../../stores/agentSteps';
+import { CallAgentContext } from './callAgentContext';
+import { useAgentRecord } from '../avatar/agentState';
+import { buildRenderList, fetchOlderTranscript, fetchTranscript, type ChatItem } from '../../lib/transcript';
+import { useNearTop, useOlderPages } from '../../lib/threadKit/useOlderPages';
+import { firstCursor, transcriptKey } from '../../lib/threadKit/paging';
+import OlderPagesNote from '../kit/OlderPagesNote';
+import { liveTextOf, subscribeTranscriptStream } from '../../lib/transcriptStream';
+import type { LiveTextEvent } from '../../lib/transcript.gen';
 import { GroupedNodeView } from './TranscriptCards';
-import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
+import { groupToolRuns } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import { styleForAgentState, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 import { AgentSide } from './DecisionCard';
 import { ChatAgentContext } from './chatAgent';
-import DecisionBubble from './DecisionBubble';
 import { useQuery } from '@tanstack/react-query';
+import { BatchRecordsContext, fetchBatchRecords } from '../../lib/batchRecords';
 import { fetchDecisions, interleave, takeFocusRequest, focusTarget, FOCUS_DECISION_EVENT, type FocusRequest } from '../../lib/decisions';
 import { userRows, visiblePending, type PendingSend } from '../../lib/pendingSends';
 import { usePendingSends } from '../../stores/pendingSends';
 import { foldCardAnswers } from '../../lib/systemMessages';
-import { PendingBubble } from './TranscriptCards';
+import { markResults } from '../../lib/threadKit/results';
+import ThreadView from '../kit/ThreadView';
+import { ReactionNotice } from '../kit/Reactions';
+import { ReactionsContext, type ReactionsCtx } from '../kit/reactionsContext';
+import { useReactions } from '../../lib/useReactions';
+import type { Reactor } from '../../lib/reactionState';
+import { TRANSCRIPT_REFRESH_EVENT } from '../../lib/agentCalls';
+import { useAgentTyping } from '../../stores/agentTyping';
+import { REPLY_RISE_A, WORKING_ROW_AVATAR } from '../../lib/workingRowLook';
+import { LiveJobsContext } from '../kit/liveJobsContext';
+import { useAgentJobs } from '../../stores/agentJobs';
+import { jobsByToolUse } from '../../lib/agentJobs';
+import { agentRows, type LiveText } from '../../lib/threadKit/view';
+import { stableLiveBlocks } from '../../lib/threadKit/liveBlocks';
+import { findReveal } from '../../lib/revealStore';
+import { motionReduced } from '../../lib/motion';
+import { useChatStyle } from '../../lib/agentPrefs';
 
 const NO_PENDING: PendingSend[] = [];
 
@@ -48,9 +76,12 @@ interface Props {
    *  very pill for an hour while the API was down. Optional so the fixture harness, which has
    *  no feed, renders unchanged. */
   feed?: FeedVerdict;
-  /** The agent page carries its own LiveStatusLine above the composer, so it suppresses this
+  /** The agent page carries its own working row above the composer, so it suppresses this
    *  bar. Two renderings of one fact is how the sidebar and the page came to disagree. */
   hideStatusBar?: boolean;
+  /** Words the agent is still writing that the transcript does not hold yet (a live-text stream): drawn at the end of
+   *  the thread until the finished message arrives (components/kit/ThreadView.tsx). */
+  liveText?: LiveText | null;
 }
 
 // State vocabulary + colors live in lib/agentStatus (shared with the title dot +
@@ -61,24 +92,56 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
   // One rule with every other surface: stale -> grey, updating -> dimmed last-known colour.
   const s = styleForAgentState(feed, STATE_STYLE[state] || STATE_STYLE.unknown);
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] ${s.text}`}>
+    <span className={`inline-flex items-center gap-1.5 text-px11 ${s.text}`}>
       <span className={`w-2 h-2 rounded-full ${s.dot}`} />
       {s.label}
     </span>
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar }: Props) {
-  const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar, liveText: liveTextProp }: Props) {
+  // Fixture mode (the QA harness) draws its items as given, in the same render as its live words, as the stream's
+  // items and live words are read together (liveTextOf below).
+  const [streamItems, setItems] = useState<ChatItem[]>([]);
+  const items = fixtureItems ?? streamItems;
+  // A headless seat's reply still being written, from this view's own stream (a caller's liveText wins).
+  // Kept with the agent it came from, so a page that switches agents never draws the last one's words.
+  const [liveEv, setLiveEv] = useState<{ agentId: string; ev: LiveTextEvent } | null>(null);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
+  // Compaction notices the stream sent (lib/compaction.ts), by id, kept with the agent they came from: the stream's
+  // snapshots and deltas carry the transcript's lines only, so these are laid into the items on read.
+  const [notices, setNotices] = useState<{ agentId: string; byId: Record<string, CompactionItem> }>({ agentId, byId: {} });
   const scrollRef = useRef<HTMLDivElement>(null);
-  const atBottom = useRef(true);
+  // Whose calls this chat's call cards are (their transcript and thumbs): this agent's.
+  const agentName = useAgentRecord(agentId).name || agentId;
+  const callAgent = useMemo(() => (fixtureItems ? null : { agentId, name: agentName }), [agentId, agentName, fixtureItems]);
+  const columnRef = useRef<HTMLDivElement>(null);
+  // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT, and otherwise keep what they are reading exactly where it is
+  // while the thread changes (lib/useStickToBottom.ts; the rows are the column's children).
+  const stick = useStickToBottom(scrollRef, { rows: columnRef });
 
-  // fixture mode: render given items, no polling
+  // fixture mode: render given items (above), no polling
+  // A hand-off moved a call's card (lib/agentCalls refreshTranscript): read the thread again (a fresh snapshot).
+  const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
-    if (fixtureItems) { setItems(fixtureItems); setLoading(false); }
-  }, [fixtureItems]);
+    const on = (e: Event) => { if ((e as CustomEvent<{ agentId?: string }>).detail?.agentId === agentId) setRefreshKey((k) => k + 1); };
+    window.addEventListener(TRANSCRIPT_REFRESH_EVENT, on);
+    return () => window.removeEventListener(TRANSCRIPT_REFRESH_EVENT, on);
+  }, [agentId]);
+
+  // This agent's calls, for their cards on the live stream (lib/callCards.ts): read on open, on a hand-off's refresh,
+  // and again once a call on this page ends (its journal is finalized a moment after the call bar goes).
+  const [calls, setCalls] = useState<{ agentId: string; rows: AgentCallRow[] }>({ agentId, rows: [] });
+  const onCallHere = useCallStore((s) => !!s.call && s.call.agentId === agentId);
+  useEffect(() => {
+    if (fixtureItems || onCallHere) return;
+    let alive = true;
+    const read = () => { void fetchCallCards(agentId).then((rows) => { if (alive) setCalls({ agentId, rows }); }); };
+    read();
+    const again = setTimeout(read, 2500);   // the call just ended: the journal's end time lands shortly after
+    return () => { alive = false; clearTimeout(again); };
+  }, [agentId, fixtureItems, refreshKey, onCallHere]);
 
   // live mode: SSE stream (F1) with the interval poll as the fallback lane.
   // One immediate poll fetch always runs first so the chat renders instantly
@@ -104,6 +167,12 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
 
     tick(); // instant backfill regardless of stream health
     const disposeStream = subscribeTranscriptStream(agentId, 150, {
+      onLiveText: (ev) => { if (!cancelled) setLiveEv(ev.text ? { agentId, ev } : null); },
+      // What the agent is doing now, for the line under the chat (stores/agentSteps).
+      onStep: (st) => { if (!cancelled) useAgentSteps.getState().set(agentId, stepFrom(st)); },
+      onCompaction: (n) => {
+        if (!cancelled) setNotices((s) => ({ agentId, byId: addNotice(s.agentId === agentId ? s.byId : {}, n) }));
+      },
       onItems: (its) => {
         if (cancelled) return;
         streamLive = true;
@@ -114,18 +183,56 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       onFallback: () => {
         if (cancelled || pollIv) return;
         streamLive = false;
+        setLiveEv(null);                          // the poll carries no live words
         pollIv = setInterval(tick, 3000); // today's poll cadence
       },
     });
 
     return () => {
       cancelled = true;
+      useAgentSteps.getState().drop(agentId);
       disposeStream();
       if (pollIv) clearInterval(pollIv);
     };
-  }, [agentId, fixtureItems]);
+  }, [agentId, fixtureItems, refreshKey]);
 
-  const flat = useMemo(() => buildRenderList(items), [items]);
+  // Scrolling up reads the chat's history a page at a time (lib/threadKit/useOlderPages.ts): the live window above,
+  // kept current by the stream or the poll, with older pages added above it. A page is read from the route's own
+  // cursor (`oldest_id`); the first from the first item of the live window that starts a log line of its own, since
+  // the window's top can start partway through one line (the older page brings that line back whole).
+  const loadPage = useCallback(async (before: string) => fetchOlderTranscript(agentId, before), [agentId]);
+  // The live window with the stream's notices in it (a notice the window already holds is updated where it stands).
+  // And each ended call's card where it started (lib/callCards.ts; the poll window may already hold it).
+  const liveItems = useMemo(() => {
+    const withN = (notices.agentId === agentId ? withNotices(items, notices.byId) : items) as ChatItem[];
+    return calls.agentId === agentId ? withCallCards(withN, calls.rows) : withN;
+  }, [items, notices, calls, agentId]);
+  // The newest notice, for "Compact now" in the slideout (stores/compactionNotices).
+  const newest = useMemo(() => latestNotice(liveItems), [liveItems]);
+  useEffect(() => { if (!fixtureItems) useCompactionNotices.getState().set(agentId, newest); }, [agentId, newest, fixtureItems]);
+  const paged = useOlderPages<ChatItem>({ live: liveItems, keyOf: transcriptKey, firstCursor, load: loadPage, resetKey: agentId,
+    enabled: !fixtureItems && !loading });
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useNearTop(scrollRef, sentinelRef, () => { void paged.loadOlder(); }, paged.items.length, !fixtureItems && !loading && paged.hasOlder);
+  const flat = useMemo(() => buildRenderList(paged.items), [paged.items]);
+  const streamedLive = useMemo(
+    // The live words belong after the newest line, so the live window is all they are checked against (older pages
+    // hold nothing still being written).
+    // Each block keeps its id across frames (lib/threadKit/liveBlocks.ts), so its word-by-word reveal follows it.
+    () => {
+      const lt = fixtureItems || liveEv?.agentId !== agentId ? null : liveTextOf(liveEv.ev, items);
+      const blocks = stableLiveBlocks(agentId, lt?.blocks ?? []);
+      return lt ? { ...lt, blocks } : null;
+    },
+    [liveEv, items, fixtureItems, agentId]);
+  const liveText = liveTextProp !== undefined ? liveTextProp : streamedLive;
+  // The agent is writing its reply: its working row says "Typing…" and its face melts into the dots.
+  const typingNow = !fixtureItems && !!liveText;
+  useEffect(() => {
+    if (fixtureItems) return;
+    useAgentTyping.getState().set(agentId, typingNow);
+  }, [agentId, typingNow, fixtureItems]);
+  useEffect(() => () => { useAgentTyping.getState().set(agentId, false); }, [agentId]);
   // Just-sent bubbles (lib/pendingSends): drawn until their own row arrives. Derived in render as
   // well as retired in the store, so the frame that brings the row never also draws the bubble.
   const rows = useMemo(() => userRows(items), [items]);
@@ -137,12 +244,19 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   useLayoutEffect(() => { if (!fixtureItems && !loading) setRows(agentId, rows); }, [agentId, rows, loading, fixtureItems, setRows]);
   // Folding consecutive tool calls (C3) means a new call can join an existing group without
   // changing the number of rendered nodes, so autoscroll keys on the UNGROUPED count below.
-  const nodes = useMemo(() => groupToolRuns(flat), [flat]);
+  // Finished work (a background job, a subagent's report) becomes a result card first, so a subagent call is not
+  // folded into a run of tool calls (lib/threadKit/results.ts).
+  const nodes = useMemo(() => groupToolRuns(markResults(flat, agentId)), [flat, agentId]);
   // The agent's approval cards, as bubbles under the messages they belong to (DecisionBubble). Polled, so a
   // card answered anywhere else shows as answered here too, and stays as history.
   const decisionsQ = useQuery({
     queryKey: ['agent-decisions', agentId], queryFn: () => fetchDecisions(agentId),
     enabled: !fixtureItems, refetchInterval: 10_000, staleTime: 5_000,
+  });
+  // Recorded multi-part answers: an answered AskUserQuestion in the thread is drawn from these where they exist.
+  const batchesQ = useQuery({
+    queryKey: ['agent-menu-batches', agentId], queryFn: () => fetchBatchRecords(agentId),
+    enabled: !fixtureItems, refetchInterval: 15_000, staleTime: 5_000,
   });
   // A machine line that answers a card drawn in this chat ([DECISION ANSWERED <id>], an approval, a
   // closed human task) is shown BY that card, its outcome row; it is not drawn a second time as its
@@ -150,8 +264,8 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const shownNodes = useMemo(
     () => foldCardAnswers(nodes as { kind: string; text?: string; machine?: string }[], new Set((decisionsQ.data ?? []).map((d) => d.id))) as typeof nodes,
     [nodes, decisionsQ.data]);
-  const entries = useMemo(() => interleave(shownNodes, decisionsQ.data ?? []), [shownNodes, decisionsQ.data]);
-  const lastNodeIndex = entries.reduce((last, e, i) => (e.kind === 'node' ? i : last), -1);
+  const entries = useMemo(() => interleave(shownNodes, decisionsQ.data ?? [], { cutAbove: paged.hasOlder }),
+    [shownNodes, decisionsQ.data, paged.hasOlder]);
   // "Needs you" sends you to this agent's first open decision; the bell, to a named one. A card that
   // is no longer here (answered and gone, or never drawn in this chat) says so instead of doing nothing.
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
@@ -165,7 +279,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       const target = focusTarget(decisionsQ.data ?? [], req.decisionId);
       const el = target ? document.getElementById(`decision-${target.id}`) : null;
       if (el) {
-        atBottom.current = false;
+        stick.hold();
         el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       } else if (req.decisionId) {
         setFocusNotice('That card is no longer waiting here — it may have been answered elsewhere.');
@@ -179,8 +293,46 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     };
     window.addEventListener(FOCUS_DECISION_EVENT, onFocusReq);
     return () => window.removeEventListener(FOCUS_DECISION_EVENT, onFocusReq);
-  }, [agentId, decisionsQ.data]);
+  }, [agentId, decisionsQ.data, stick.hold]); // eslint-disable-line react-hooks/exhaustive-deps
   const st = normalizeAgentState(state);
+  // The thread as the kit's thread view draws it: the feed's nodes and cards, then the sends still waiting for their rows.
+  // How you see this agent (lib/agentPrefs.ts): Bubbles, its own look, or Modern, Arturo's. A switch only re-draws the
+  // thread; the session, the draft and pending sends are untouched. The compact card (a dark box) stays Bubbles.
+  const chatStyle = useChatStyle(agentId);
+  const modern = !compact && chatStyle === 'modern';
+  // Its calls' transcripts are drawn in this chat's skin, so a call reads like the chat around it.
+  // Its background jobs (polled by the agent page): the launching tool card shows each one's live status.
+  const agentJobs = useAgentJobs(fixtureItems ? undefined : agentId);
+  const liveJobs = useMemo(() => jobsByToolUse(agentJobs), [agentJobs]);
+  const callAgentInSkin = useMemo(() => (callAgent ? { ...callAgent, skin: modern ? 'modern' as const : 'bubbles' as const } : null), [callAgent, modern]);
+  // Reactions on this chat's messages (lib/useReactions: read, kept live by the reactions stream, a tap shown at once),
+  // laid onto the rows by the server's message ref (lib/threadKit/view agentRows) and drawn by the kit (kit/Reactions).
+  const reactions = useReactions('agent-chat', agentId);
+  const reactionsCtx = useMemo<ReactionsCtx>(() => ({
+    map: reactions.map, me: reactions.me, error: reactions.error, toggle: reactions.toggle, agentId,
+    nameOf: (r: Reactor) => (r.kind === 'agent' && r.id === agentId ? agentName : r.id),
+  }), [reactions.map, reactions.me, reactions.error, reactions.toggle, agentId, agentName]);
+  const threadRows = useMemo(() => agentRows(entries, loading ? [] : pending, st, { modern, reactions: reactions.map }),
+    [entries, pending, loading, st, modern, reactions.map]);
+  // THE HAND-OFF: when the reply lands after "Typing…", it enters where the row was: up from 0.39 of the row's avatar
+  // size and from 35% to full in 165 ms, ease-out (transform and opacity only; nothing else moves).
+  const lastKey = threadRows.length ? threadRows[threadRows.length - 1].key : null;
+  const typedAt = useRef(0);
+  // when typing started or stopped (it stops in the very render the reply lands in); before the hand-off below
+  useLayoutEffect(() => { typedAt.current = Date.now(); }, [typingNow]);
+  const prevLast = useRef(lastKey);
+  useLayoutEffect(() => {
+    const before = prevLast.current;
+    prevLast.current = lastKey;
+    if (!lastKey || lastKey === before || Date.now() - typedAt.current > 2000) return;
+    // A reply that streamed in here is already in place, word by word: it carries on as it was, it does not enter.
+    if (findReveal(lastKey)) return;
+    const mark = columnRef.current?.querySelector(`[data-row-key="${CSS.escape(lastKey)}"]`);
+    const el = mark?.nextElementSibling as HTMLElement | null;
+    if (!el || motionReduced()) return;
+    el.animate([{ transform: `translateY(${REPLY_RISE_A * WORKING_ROW_AVATAR}px)`, opacity: 0.35 }, { transform: 'none', opacity: 1 }],
+      { duration: 165, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+  }, [lastKey]);
   // The idle backstop: a bubble no row could match (a long message arrives as a shorter banner)
   // goes once the agent is idle again. Only from a live feed: a stale "idle" proves nothing.
   const feedLive = !feed || !isDegraded(feed);
@@ -201,51 +353,40 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // "agent is working…" claim from it.
   const live = !feed || (!isDegraded(feed) && feed.health !== 'updating');
 
-  // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT. A reader who scrolled up stays where they
-  // are when a message lands; one at the bottom is kept there. A layout effect, so a new message
-  // is never painted once at the old position and then jumped.
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    atBottom.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight, 120);
-  };
   // Another seat's transcript (the panel and the page keep this view mounted across seats) opens
   // at ITS newest message, not wherever the previous one was left.
-  useLayoutEffect(() => { atBottom.current = true; }, [agentId]);
+  useLayoutEffect(() => { stick.toBottom(); }, [agentId, stick.toBottom]); // eslint-disable-line react-hooks/exhaustive-deps
   // Tapping into a composer, or the keyboard shrinking the column, brings the conversation to the
   // latest message (Shaw, 2026-10-11). The xterm's hidden textarea is the terminal, not a composer.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const toBottom = () => { el.scrollTop = el.scrollHeight; };
     const onFocus = (e: FocusEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t || !/^(TEXTAREA|INPUT)$/.test(t.tagName) || t.classList.contains('xterm-helper-textarea') || el.contains(t)) return;
-      atBottom.current = true;
-      toBottom();
-      window.setTimeout(toBottom, 350);   // after the keyboard has finished opening
+      stick.toBottom();
+      window.setTimeout(stick.toBottom, 350);   // after the keyboard has finished opening
     };
-    const ro = new ResizeObserver(() => { if (atBottom.current) toBottom(); });
-    ro.observe(el);
     document.addEventListener('focusin', onFocus);
-    return () => { ro.disconnect(); document.removeEventListener('focusin', onFocus); };
-  }, []);
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [flat.length, entries.length, pending.length, agentId]);
+    return () => document.removeEventListener('focusin', onFocus);
+  }, [stick.toBottom]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The thread view follows (or holds the reader) whenever its rows change, in a layout effect.
+  const follow = useMemo(() => ({ follow: stick.follow }), [stick.follow]);
 
   return (
+    <BatchRecordsContext.Provider value={batchesQ.data}>
+    <CallAgentContext.Provider value={callAgentInSkin}>
+    <LiveJobsContext.Provider value={liveJobs}>
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
       <div
         ref={scrollRef}
-        onScroll={onScroll}
+        onScroll={stick.onScroll}
         data-testid="transcript-scroll"
         className={
           compact
-            // `dark`: this box is always near-black, so theme-token prose inside it (Markdown)
-            // must resolve dark in the light theme too, or it renders black on black.
-            ? 'dark bg-neutral-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
+            // A step off the page in either theme (the tone scale: near-black in dark, near-white in light), so
+            // the theme-token prose inside it reads in both.
+            ? 'bg-tone-950 rounded-lg p-3 max-h-96 overflow-y-auto overflow-x-hidden space-y-2.5'
             // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
             // and the right edges of tool cards and user bubbles were 130px apart because each
             // sized itself to a different container). ONE column, one pair of edges, shared with
@@ -255,31 +396,41 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             // so a transcript taller than the pane could never be scrolled back (Shaw, 2026-10-11).
             // An auto margin only takes free space, so a short chat still sits on the composer and
             // a long one overflows downward and scrolls.
-            : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col'
+            // Never sideways (overflow-x-hidden, both layouts): nothing in the thread may widen it; wide code and
+            // tables scroll in their own boxes, popovers are portaled, sticky notes still stick (2026-11-04).
+            : 'flex-1 overflow-y-auto min-h-0 overflow-x-hidden overscroll-y-contain flex flex-col'
         }
       >
         {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the
             pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
         <ChatAgentContext.Provider value={agentId}>
-        <div
-          className={compact ? undefined : "mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5"}
+        {/* A screen and a half above the first row, the next older page is read (useNearTop). No height of its own,
+            and outside the rows, so neither it nor its "loading" line ever moves what the reader is looking at. */}
+        {!compact && <div ref={sentinelRef} data-anchor-skip data-older-sentinel aria-hidden className="h-0 shrink-0" />}
+        {!compact && <OlderPagesNote show={paged.loading} />}
+        <div ref={columnRef}
+          className={compact ? undefined : ["mt-auto w-full max-w-[calc(860px+var(--ui-col-extra,0px))] mx-auto px-4 pt-4 ui-feed-gap", modern ? 'kit-modern' : ''].join(' ').trim()}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
         >
         {loading ? (
           <div className="flex items-center gap-2 px-1 py-2">
-            <div className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />
-            <span className="text-xs text-neutral-500">Loading conversation…</span>
+            <div className="w-2 h-2 bg-tone-500 rounded-full animate-pulse" />
+            <span className="text-xs text-tone-500">Loading conversation…</span>
           </div>
         ) : entries.length === 0 ? (
-          <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
-        ) : (
-          entries.map((e, i) => e.kind === 'decision'
-            ? <DecisionBubble key={`decision-${e.decision.id}`} decision={e.decision} onAnswered={() => void decisionsQ.refetch()} />
-            : <GroupedNodeView key={e.node.key} node={e.node} interrupted={isInterrupted({ isLast: i === lastNodeIndex, state: st })} />)
+          <span className="text-xs text-tone-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
+        ) : null}
+        {/* The thread through the kit's thread view (components/kit/ThreadView.tsx), in the agent chat's own skin. */}
+        {!loading && (entries.length > 0 || pending.length > 0 || liveText) && (
+          <ReactionsContext.Provider value={reactionsCtx}>
+            <ThreadView rows={threadRows} skin={modern ? 'modern' : 'bubbles'} times={modern} stick={follow} liveText={liveText}
+              renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} look="lines" />}
+              onDecisionAnswered={() => void decisionsQ.refetch()} />
+            <ReactionNotice />
+          </ReactionsContext.Provider>
         )}
-        {!loading && pending.map((p) => <PendingBubble key={p.id} text={p.display} kind={p.kind} />)}
         {focusNotice && (
-          <div role="status" className="sticky bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-neutral-300 px-3 py-1.5 rounded-full border border-neutral-700 bg-neutral-900/95 shadow">
+          <div role="status" className="sticky z-[5] bottom-2 mx-auto w-fit max-w-[92%] text-px11 text-tone-300 px-3 py-1.5 rounded-full border border-tone-700 bg-tone-900/95 shadow">
             {focusNotice}
           </div>
         )}
@@ -302,27 +453,30 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {live && st === 'working' && !hideStatusBar && (
           <div className="flex items-center gap-2 px-1 py-1">
             <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-            <span className="text-[11px] text-neutral-500 italic">agent is working…</span>
+            <span className="text-px11 text-tone-500 italic">agent is working…</span>
           </div>
         )}
         </div>
         </ChatAgentContext.Provider>
       </div>
 
-      {/* Status bar. The AGENT PAGE now carries a LiveStatusLine above its composer, so this
+      {/* Status bar. The AGENT PAGE now carries a working row above its composer, so this
           bar is the compact/embedded surface's version of it (AgentCard). Two renderings of one
           fact is how the sidebar and the page came to disagree; they share lib/feedLiveness so
           they cannot say different things, and the page does not show both. */}
       {!hideStatusBar && (
-      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-neutral-800/50">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-tone-800/50">
         <StatePill state={st} feed={feed} />
         {strandedText && (
-          <span className="text-[10px] text-yellow-500/90 truncate">
+          <span className="text-px10 text-yellow-500/90 truncate">
             ✎ unsent: "{strandedText.slice(0, 60)}"
           </span>
         )}
       </div>
       )}
     </div>
+    </LiveJobsContext.Provider>
+    </CallAgentContext.Provider>
+    </BatchRecordsContext.Provider>
   );
 }

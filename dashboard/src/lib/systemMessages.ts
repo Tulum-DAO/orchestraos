@@ -17,6 +17,7 @@
  *   [questionnaire-answers <id>] <title>\n…
  *   [MSG from <sender> | <priority>] [banners] <subject> — Read /tmp/….md and act on it. …
  *   <task-notification> … <status>…</status> <summary>…</summary> </task-notification>
+ *   [TURN INTERRUPTED] … Message: "<words>"   a headless seat's cut turn (the API's chat, never resent)
  */
 export type MachineKind = 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
 
@@ -51,6 +52,7 @@ export function machineKindOf(text: string): MachineKind | null {
   if (t.startsWith('[HUMAN-TASK ')) return 'human_task';
   if (t.startsWith('[MSG from ')) return 'relay';
   if (t.startsWith('<task-notification>')) return 'task';
+  if (t.startsWith('[TURN INTERRUPTED]')) return 'system';
   return null;
 }
 
@@ -120,6 +122,13 @@ function approval(t: string): SystemMessage | null {
   msg.note = note;
   msg.cardId = idOf(t);
   return msg;
+}
+
+/** A turn that did not finish: its message reached the agent, the answer never came, nothing was resent. */
+function turnInterrupted(t: string): SystemMessage {
+  const m = t.match(/Message: "([\s\S]*)"\s*$/);
+  return { kind: 'system', headline: 'Turn interrupted', subject: m ? m[1] : null, detail: null,
+    note: 'Not sent again. Send it again if it still matters.', cardId: null, outcome: 'failed', urgent: false };
 }
 
 function humanTask(t: string): SystemMessage | null {
@@ -215,6 +224,7 @@ export function parseSystemMessage(text: string, kind?: MachineKind | null): Sys
   if (t.startsWith('[questionnaire-')) return questionnaireAnswers(t);
   if (t.startsWith('[MSG from ')) return relay(t);
   if (t.startsWith('<task-notification>')) return taskNotification(t);
+  if (t.startsWith('[TURN INTERRUPTED]')) return turnInterrupted(t);
   return null;                                  // a 'system' line keeps its existing rendering
 }
 

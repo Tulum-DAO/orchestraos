@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAgentState } from '../components/avatar/avatarCore.ts';
 import { applySavedLooks, pickLook, resetToDefault, showsLookCard, readDismissed, writeDismissed, canChangeLook } from './avatarLooks.ts';
+import { setInstallRole } from './myRole.ts';
 import { avatarStateFor, arturoState, arturoProvider, stepPatch, STEP_FRESH_MS } from './avatarStatus.ts';
 
 const DEF = { shape: 'star', color: 'ink', eyeColor: 'auto' };
@@ -52,9 +53,10 @@ test('the "Pick a look" card: unchosen, can save, not dismissed on this device',
   assert.equal(showsLookCard({ chosen: true, canSave: true, dismissed: false }), false);    // saved by anyone: gone
   assert.equal(showsLookCard({ chosen: false, canSave: false, dismissed: false }), false);  // cannot save: not offered
   assert.equal(showsLookCard({ chosen: false, canSave: true, dismissed: true }), false);
-  assert.equal(canChangeLook('admin'), true);
-  assert.equal(canChangeLook('viewer'), false);
-  assert.equal(canChangeLook(undefined), false);
+  // only an admin may change a look; a member (the default until the server says admin) may not
+  assert.equal(canChangeLook(), false);
+  setInstallRole('admin');
+  try { assert.equal(canChangeLook(), true); } finally { setInstallRole('member'); }
   const m = new Map<string, string>();
   const st = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); } };
   assert.equal(readDismissed(st, 'arturo'), false);
@@ -98,7 +100,7 @@ test('one picker: the drawer\'s Avatar page and the "Pick a look" popover both r
   const panel = readFileSync(new URL('../components/arturo/ArturoPanel.tsx', import.meta.url), 'utf-8');
   const picker = readFileSync(new URL('../components/avatar/LookPicker.tsx', import.meta.url), 'utf-8');
   const home = readFileSync(new URL('../pages/ArturoHome.tsx', import.meta.url), 'utf-8');
-  assert.match(panel, /page === 'avatar' \? <LookPicker agentId=\{ARTURO_ID\}/);
+  assert.match(panel, /page === 'avatar' \? <LookPicker agentId=\{agentId\}/);   // the panel's agent: Arturo or any other
   assert.match(picker, /export function LookPickerPopover[\s\S]*<LookPicker agentId=\{agentId\}/);
   assert.match(home, /<LookPickerPopover agentId=\{ARTURO_ID\}/);
   assert.equal((picker.match(/export function \w+/g) || []).length, 2);   // no second picker hiding in there

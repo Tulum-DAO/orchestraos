@@ -9,9 +9,10 @@ import { WebSocketServer } from 'ws';
 
 import agentsRouter from './routes/agents.js';
 import redAlertRouter from './routes/red-alert.js';
-import chatTranscriptRouter from './routes/chat-transcript.js';
+import chatTranscriptRouter, { chatItemsFor } from './routes/chat-transcript.js';
 import agentMessagesRouter from './routes/agent-messages.js';
 import transcriptStreamRouter from './routes/transcript-stream.js';
+import agentTreeRouter from './routes/agent-tree.js';
 import tasksRouter from './routes/tasks.js';
 import activityRouter from './routes/activity.js';
 import systemRouter from './routes/system.js';
@@ -21,7 +22,10 @@ import voiceRouter from './routes/voice.js';
 import awayRouter from './routes/away.js';
 import usageRouter from './routes/usage.js';
 import arturoRouter from './routes/arturo.js';
-import agentsNewRouter from './routes/agents-new.js';
+import agentsNewRouter, { loginShellSessionExists } from './routes/agents-new.js';
+import agentCallsRouter from './routes/agent-calls.js';
+import agentJobsRouter from './routes/agent-jobs.js';
+import { startLoginShellSweeper } from './lib/loginShells.js';
 import approvalsRouter from './routes/approvals.js';
 import analyticsRouter from './routes/analytics.js';
 import workflowsRouter from './routes/workflows.js';
@@ -30,6 +34,8 @@ import transitRouter from './routes/transit.js';
 import projectsRouter from './routes/projects.js';
 import authRouter from './routes/auth.js';
 import uploadsRouter from './routes/uploads.js';
+import libraryRouter from './routes/library.js';
+import { startLibraryIndex } from './services/library-index.js';
 import paneUrlRouter from './routes/pane-url.js';
 import adaptiveRouter from './routes/adaptive.js';
 import messagesRouter from './routes/messages.js';
@@ -37,6 +43,7 @@ import machinesRouter from './routes/machines.js';
 import signingRouter from './routes/signing.js';
 import learningRouter from './routes/learning.js';
 import questionnairesRouter from './routes/questionnaires.js';
+import { createAttentionRouter } from './routes/attention.js';
 import unifiedApprovalsRouter from './routes/unified-approvals.js';
 import tokenAuthRouter from './routes/token-auth.js';
 import tasksV2Router from './routes/tasks-v2.js';
@@ -45,16 +52,23 @@ import peopleRouter from './routes/people.js';
 import agentStateRouter from './routes/agent-state.js';
 import inspectFeedbackRouter from './routes/inspect-feedback.js';
 import telemetryRouter from './routes/telemetry.js';
-import agentSendRouter from './routes/agent-send.js';
+import agentSendRouter, { defaultAgentSendDeps, postAgentMessage } from './routes/agent-send.js';
+import { startReactionWake, messageTextIn } from './services/reaction-wake.js';
+import { reactionStore } from './lib/reactions-store.js';
 import runtimesAvailableRouter from './routes/runtimes-available.js';
+import providerConnectRouter, { connectManager, startConnectLoop } from './routes/provider-connect.js';
 import factsRouter from './routes/facts.js';
 import chatHistoryRouter from './routes/chat-history.js';
+import reactionsRouter from './routes/reactions.js';
+import settingsRouter from './routes/settings.js';
+import settingsAgentsRouter from './routes/settings-agents.js';
+import { ensureAgentReactToken } from './lib/agent-react-token.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
-import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket } from './routes/voice-live.js';
+import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket, createVoiceLiveReadyRouter } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
-import { principal } from './lib/principal.js';
+import { principal, installRole } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
@@ -168,6 +182,7 @@ app.get('/api/me', (req, res) => {
   res.json({
     username: p.username,
     role: p.role,
+    install_role: installRole(req),
     allowed_agents: p.allowedAgents,
     client_scope: p.clientScope,
     trusted: p.trusted,
@@ -181,10 +196,13 @@ app.get('/api/capabilities', (_req, res) => { res.json(capabilities()); });
 // /new and /login-shell must mount BEFORE the agents router, whose '/:id/spawn'
 // would otherwise swallow them as an agent id.
 app.use('/api/agents', agentsNewRouter);
+app.use('/api/agents', agentCallsRouter);   // a call made on an agent's page: its record and thumbs
+app.use('/api/agents', agentJobsRouter);    // the agent's own background work, for its job tray
 app.use('/api/agents', agentsRouter);
 app.use('/api/agents', chatTranscriptRouter); // /:id/transcript (falls through from agentsRouter)
 app.use('/api/agents', agentMessagesRouter); // /:id/messages/:msgId (the body behind a "Message from" line)
 app.use('/api/agents', transcriptStreamRouter); // /:id/transcript/stream (F1 SSE lane; poll path above is the fallback)
+app.use('/api/agents', agentTreeRouter); // /:id/tree + /:id/tree/stream (the subagent tree; same scope as the chat)
 app.use('/api/agents', agentSendRouter); // /:id/send (B1 send bridge, falls through from agentsRouter)
 app.use('/api/tasks', tasksRouter);
 app.use('/api/red-alert', redAlertRouter); // the report button = ticket gateway (docs/RED_ALERT.md)
@@ -192,6 +210,7 @@ app.use('/api/activity', activityRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/api/roadmaps', roadmapsRouter);
+app.use('/api/voice', createVoiceLiveReadyRouter());   // GET /live/ready: will a call start (read-only)
 app.use('/api/voice', voiceRouter);
 app.use('/api', awayRouter); // /api/away + /api/presence (RFC 0002, the away card)
 app.use('/api', usageRouter); // /api/usage: plan usage per provider (admin only)
@@ -204,6 +223,7 @@ app.use('/api/transit', transitRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/system/vps-auth', authRouter);
 app.use('/api/uploads', uploadsRouter);
+app.use('/api/library', libraryRouter);
 // G21: recover a hard-wrapped sign-in URL from a terminal pane so the UI can make it clickable.
 app.use('/api/agents', paneUrlRouter);
 app.use('/api/adaptive', adaptiveRouter);
@@ -213,6 +233,7 @@ app.use('/api/signing', signingRouter);
 app.use('/api/approvals/unified', unifiedApprovalsRouter);
 app.use('/api/learning', learningRouter);
 app.use('/api/questionnaires', questionnairesRouter);
+app.use('/api/attention', createAttentionRouter());
 app.use('/api/auth', tokenAuthRouter);
 app.use('/api/v2/tasks', tasksV2Router);
 app.use('/api/north-stars', northStarsRouter);
@@ -221,8 +242,12 @@ app.use('/api/agent-state', agentStateRouter);
 app.use('/api/inspect-feedback', inspectFeedbackRouter);
 app.use('/api/telemetry', telemetryRouter); // Build B: read-only telemetry query/stream (INERT — no cron/systemd)
 app.use('/api/runtimes', runtimesAvailableRouter);
+app.use('/api/providers', providerConnectRouter); // install + sign in to a provider with no terminal (admin only; routes/provider-connect.ts)
 app.use('/api/facts', factsRouter);
 app.use('/api/chat-history', chatHistoryRouter); // the /chat-history page's list + thread reads (router existed, was never mounted)
+app.use('/api/reactions', reactionsRouter); // message reactions: GET/PUT/DELETE + /stream SSE (routes/reactions.ts)
+app.use('/api/settings/agents', settingsAgentsRouter); // Settings › Agents: override counts, background programs + Stop (routes/settings-agents.ts)
+app.use('/api/settings', settingsRouter); // Settings: the registry's rows; PUT one (routes/settings.ts)
 
 const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 // Stored-XSS fix (attach spec §B.2.4, agent-state-truth): uploads are USER
@@ -241,9 +266,29 @@ app.use('/uploads', (req, res, next) => {
 initActivityStream();
 initStatusStream();
 
+// The agent react token (lib/agent-react-token.ts): <data dir>/state/agent-react-token, 0600, made now if missing so
+// an agent's `orchestra react` can read it. Fail-soft: without it no request is an agent, and reactions still work
+// for the operator.
+try { ensureAgentReactToken(); } catch (e) { console.warn(`[reactions] agent react token not created: ${String(e)}`); }
+
+// The reaction wake (services/reaction-wake.ts): the operator's reaction in an agent's chat reaches that agent 3 s after
+// the last change, through the gateway with no hold and no force (nothing stored; refused twice = dropped). The
+// reacted message's first words come from the chat itself, by ref. Its emoji-only answer is stored as its reaction.
+const stopReactionWake = startReactionWake({
+  agentExists: defaultAgentSendDeps.agentExists,
+  resolveSession: defaultAgentSendDeps.resolveSession,
+  inject: (session, text) => postAgentMessage(session, text, { hold: false, actor: 'operator:reaction' }),
+  messageText: (agentId, ref) => messageTextIn(chatItemsFor(agentId), ref),
+  // The agent's emoji answer to a wake becomes its reaction on that message (opened on first use, like the route).
+  chatItems: (agentId) => chatItemsFor(agentId),
+  reactions: { list: (surface, conv) => reactionStore().list(surface, conv), toggle: (key, emoji) => reactionStore().toggle(key, emoji) },
+});
+
 // PORT (supervisor) > ORCHESTRA_API_PORT (orchestra-env.sh) > [api] port in orchestra.toml.
 const PORT = process.env.PORT || process.env.ORCHESTRA_API_PORT || loadConfig().apiPort;
 const server = createServer(app);
+// Shutdown: server.close() tears the wake down too (unsubscribes from the bus, clears its pending timers).
+server.on('close', () => stopReactionWake());
 
 // WebSocket terminal server on /ws/terminal. It is a shell into a seat's pane and browsers do
 // not apply the same-origin policy to WebSockets, so every handshake passes lib/ws-origin.ts.
@@ -289,6 +334,14 @@ const HOST = process.env.ORCHESTRA_API_HOST || loadConfig().apiHost || '127.0.0.
 
 server.listen(Number(PORT), HOST, () => console.log(
   `OrchestraOS API on ${HOST}:${PORT} (WebSocket terminal enabled)`));
+
+// The library index (parity 4g.1): what each agent made, kept in <data dir>/state/library.db. Not under tests.
+if (!process.env.NODE_TEST_CONTEXT) startLibraryIndex(process.env.ORCHESTRA_DIR || loadConfig().dataDir);
+
+// The web terminal's list of login shells (lib/loginShells.ts): drop entries whose tmux session is gone or that
+// expired, now and every 30 s, so a shell that ended is no longer attachable.
+if (!process.env.NODE_TEST_CONTEXT) startConnectLoop(connectManager);
+if (!process.env.NODE_TEST_CONTEXT) startLoginShellSweeper(process.env.ORCHESTRA_DIR || loadConfig().dataDir, loginShellSessionExists);
 
 // A 60 s memory heartbeat so a supervisor restart leaves a trend in the API log
 // (heap cap vs event-loop stall was unanswerable without it — docs/RED_ALERT.md api_health_fail).

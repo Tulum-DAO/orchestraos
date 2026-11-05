@@ -1,9 +1,6 @@
 /**
- * The sidebar's plan-usage panel (one line per provider), from GET /api/usage (scripts/usage_meter.py).
- *
- * Pure so it can be tested without a browser. Rules carried over from the meter: a provider with no
- * reading shows its reason (never a number), and a stale reading says "as of <time>" so it is never
- * read as current.
+ * GET /api/usage (scripts/usage_meter.py): its row shape, the shared query, and the clock format the model
+ * picker's usage rings use. The sidebar's plan-usage panel that also read it was removed.
  */
 export interface UsageRow {
   provider: string;
@@ -16,77 +13,22 @@ export interface UsageRow {
   reason?: string | null;
 }
 
-export interface UsagePart {
-  key: string;
-  provider: string;
-  /** The name the text starts with ("Claude", or "Claude (work)" when there are two logins). */
-  who: string;
-  text: string;
-  title: string;
-  stale: boolean;
-  high: boolean;
-  missing: boolean;
-}
-
-const NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok' };
-const WINDOWS: Record<string, string> = { '5h': '5 h', weekly: 'weekly' };
-
-function clock(epochS: number, now: Date): string {
+export function clock(epochS: number, now: Date): string {
   const d = new Date(epochS * 1000);
   const sameDay = d.toDateString() === now.toDateString();
   const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return sameDay ? hm : `${d.toLocaleDateString([], { weekday: 'short' })} ${hm}`;
 }
 
-function isPct(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
-}
+/** GET /api/usage's rows. A caller the API will not show usage to gets a 404: UsageHidden, so a surface can show
+ *  nothing at all rather than "no usage". Read by the model picker's rings. */
+export class UsageHidden extends Error {}
 
-/** One part per row with a number, then one per provider that has none (its reason in the title). */
-export function usageParts(rows: unknown, now: Date = new Date()): UsagePart[] {
-  if (!Array.isArray(rows)) return [];
-  const parts: UsagePart[] = [];
-  const multiAccount = new Set(rows.filter((r: any) => r?.provider === 'claude' && r?.account)
-    .map((r: any) => r.account)).size > 1;
-  for (const r of rows as UsageRow[]) {
-    if (!r || typeof r.provider !== 'string') continue;
-    const name = NAMES[r.provider] || r.provider;
-    if (!isPct(r.used_pct)) {
-      parts.push({ key: `${r.provider}:none`, provider: r.provider, who: name, text: `${name} —`, title: r.reason || `${name}: no usage reading`,
-                   stale: false, high: false, missing: true });
-      continue;
-    }
-    const who = multiAccount && r.account ? `${name} (${r.account})` : name;
-    const win = (r.window && WINDOWS[r.window]) || r.window || '';
-    const resets = typeof r.resets_at === 'number' && r.resets_at > 0 ? `, resets ${clock(r.resets_at, now)}` : '';
-    const asOf = r.stale && typeof r.as_of === 'number' ? `, as of ${clock(r.as_of, now)}` : '';
-    // A stale reading says its time IN the text, not only on hover: a phone has no hover, and a
-    // dimmed number alone still reads as now.
-    const seen = r.stale && typeof r.as_of === 'number' ? ` (as of ${clock(r.as_of, now)})` : '';
-    const text = `${who} ${Math.round(r.used_pct)}% ${win}`.trim() + seen;
-    parts.push({ key: `${r.provider}:${r.account || ''}:${r.window || ''}`, provider: r.provider, who, text,
-                 title: `${who}: ${Math.round(r.used_pct)}% of the ${win} limit used${resets}${asOf}`,
-                 stale: !!r.stale, high: r.used_pct >= 80, missing: false });
-  }
-  return parts;
-}
+export const USAGE_QUERY_KEY = ['usage'] as const;
 
-/** The providers the panel shows, one line each, in this order. Any other the API reports (Gemini,
- *  Grok) is left out of the display only: the API and the meter still collect it. */
-const SHOWN = ['claude', 'codex'];
-
-export interface UsageLineRow { provider: string; parts: UsagePart[] }
-
-/** One line per shown provider, its name said once: "Claude 10% 5 h · 23% weekly", then "Codex —".
- *  A name is repeated only when it changes within the line (two Claude logins). */
-export function usageLines(rows: unknown, now: Date = new Date()): UsageLineRow[] {
-  const parts = usageParts(rows, now);
-  const lines: UsageLineRow[] = [];
-  for (const provider of SHOWN) {
-    const mine = parts.filter((p) => p.provider === provider);
-    if (mine.length === 0) continue;
-    lines.push({ provider, parts: mine.map((p, i) => (i > 0 && p.who === mine[i - 1].who
-      ? { ...p, text: p.text.slice(p.who.length).trimStart() } : p)) });
-  }
-  return lines;
+export async function fetchUsage(): Promise<unknown> {
+  const res = await fetch('/api/usage');
+  if (res.status === 404) throw new UsageHidden();
+  if (!res.ok) throw new Error(`/usage: ${res.status}`);
+  return (await res.json())?.usage;
 }

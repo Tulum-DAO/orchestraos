@@ -21,9 +21,6 @@ test('a slash command survives as the command the operator typed', () => {
   assert.equal(sanitizeClaudeUserText(
     '<command-name>/login</command-name>\n<command-message>login</command-message>\n<command-args></command-args>'),
     '/login');
-  assert.equal(sanitizeClaudeUserText(
-    '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>'),
-    '/model opus');
 });
 
 test('command output and the interrupt marker are dropped', () => {
@@ -44,4 +41,24 @@ test('ordinary text is returned byte-identical (the guard on the guard)', () => 
   // prose that merely TALKS about the markup is not plumbing
   const about = 'the transcript shows a <command-name> envelope around each slash command';
   assert.equal(sanitizeClaudeUserText(about), about);
+});
+
+test('a model switch is not shown as something the operator said', () => {
+  assert.equal(sanitizeClaudeUserText('<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>claude-opus-5-5[1m]</command-args>'), '');
+  assert.equal(sanitizeClaudeUserText('<command-name>/model</command-name><command-args></command-args>'), '');
+  // other commands still show what was typed
+  assert.equal(sanitizeClaudeUserText('<command-name>/cost</command-name><command-args></command-args>'), '/cost');
+  // a sentence that merely mentions /model is kept
+  assert.equal(sanitizeClaudeUserText('why did /model fail?'), 'why did /model fail?');
+});
+
+test('leaving the TUI (/exit, /quit) never shows as a message; other commands still do', () => {
+  const cmd = (name: string, args = '') =>
+    `<command-name>${name}</command-name>\n<command-message>${name.slice(1)}</command-message>\n<command-args>${args}</command-args>`;
+  assert.equal(sanitizeClaudeUserText(cmd('/exit')), '');
+  assert.equal(sanitizeClaudeUserText(cmd('/quit')), '');
+  assert.equal(sanitizeClaudeUserText('<local-command-stdout>Goodbye!</local-command-stdout>'), '', 'nor its reply');
+  assert.equal(sanitizeClaudeUserText(cmd('/review', 'the plan')), '/review the plan');
+  // a person's /compact is hidden too now (the compaction notice shows instead): chat-transcript.compaction.test.ts
+  assert.equal(sanitizeClaudeUserText('please /exit when you are done'), 'please /exit when you are done', 'words that mention it are kept');
 });

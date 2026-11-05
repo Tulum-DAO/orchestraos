@@ -2,7 +2,8 @@ import { Router, type Request, type Response } from 'express';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, renameSync } from 'fs';
 import { routeTask } from '../lib/taskRouting.js';
 import { join } from 'path';
-import { getAllTasks, getPendingContext, getCompletedReports } from '../services/state-reader.js';
+import { getAllTasks, getPendingContext, getCompletedReports, getRegistry } from '../services/state-reader.js';
+import { gatewayAgentMessage } from '../lib/gatewayMessage.js';
 import { logInteraction } from '../services/learning.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
@@ -342,14 +343,21 @@ router.post('/', (req: Request, res: Response) => {
       let apiBase = 'http://127.0.0.1:8888';
       try { apiBase = apiBaseForSeats(); } catch { /* keep the default; never spawn over it */ }
       try {
+        // The seat's own session (a rotated seat's differs from its id), for the check and the delivery.
+        const session = String((getRegistry() as any)?.agents?.[routeTo]?.tmux_session || routeTo);
         // Check if agent tmux session exists
-        tmuxCheck('tmux', ['has-session', '-t', routeTo], { timeout: 3000 });
+        tmuxCheck('tmux', ['has-session', '-t', session], { timeout: 3000 });
         // Agent is alive — inject the task directly for immediate execution
         const taskPrompt = `You have a new task (${taskId}): ${description}` +
           (client ? `. Client: ${client}.` : '') +
           (inboxMsg.context_files ? ` Read these files first: ${inboxMsg.context_files.join(', ')}` : '') +
           `. Priority: ${(task as any).priority}. Start immediately and update task status when done via: curl -X PATCH ${apiBase}/api/tasks/${taskId} -H "Content-Type: application/json" -d '{"status":"completed"}'`;
-        execFile('tmux', ['send-keys', '-t', routeTo, taskPrompt, 'Enter'], { timeout: 5000 }, () => {});
+        // Through the gateway, never typed into the pane: a headless seat's pane is its supervisor, and the gateway's
+        // inject never types over a draft. Not awaited, as the keystrokes were not: the task is already in the inbox
+        // above, so a busy or refused delivery is picked up from there.
+        void gatewayAgentMessage(session, taskPrompt, { actor: 'automation:tasks', source: 'mail' }).then((r) => {
+          if (!r.ok) console.warn(`[tasks] ${taskId} not delivered to ${session} now (${r.error || r.body.reason || r.status}); it waits in the inbox`);
+        });
 
         // Mark task as in_progress
         (task as any).status = 'in_progress';

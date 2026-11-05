@@ -10,6 +10,9 @@
  * 1.0 ~= the body's half height. Angles are radians, -PI/2 is straight up.
  */
 
+import { NEUTRAL, HUB, ACTIVITY_HUB, ACTIVITIES, clipDur, gestureFrame, hubClip, pickGesture, remember, settle, GESTURES, type Activity,
+  type GestureKey, type GestureName, type GesturePose } from './avatarGesture';
+
 export type Pt = [number, number];
 type Vert = [number, number, number];
 
@@ -384,7 +387,9 @@ function mulberry32(a: number): () => number {
 // status dot at the bottom-right of the body. Idle is a quiet neutral grey
 // (#85858D: >= 3:1 on white, #F7F7F8 and the selected row; >= 4.4:1 on the dark surfaces) with no glyph; the others carry
 // a glyph at 40 px and up. Which roles show the dot at all: see dotFor().
-export type AvatarState = 'working' | 'needs_input' | 'finished' | 'failed' | 'idle';
+// The call states (a live voice call, components/call): listening while you talk, thinking from the moment you stop
+// until the agent answers (the body becomes three dots with a brightness wave: `meltT` in the Pose, meltFrame), talking while it speaks.
+export type AvatarState = 'working' | 'needs_input' | 'finished' | 'failed' | 'idle' | 'listening' | 'thinking' | 'talking';
 export type Glyph = 'dots' | 'question' | 'check' | 'alert' | null;
 export type ReactionName = 'nod' | 'shake' | 'bounce' | 'spin' | 'jump' | 'wink';
 interface StateDef {
@@ -392,16 +397,97 @@ interface StateDef {
   gaze: 'work' | 'viewer' | 'free' | 'down';
   enter?: ReactionName; repeat?: ReactionName; repeatEvery?: number; pulse?: boolean;
   settleMood?: string; settleAfter?: number; sleeps?: boolean;
+  /** The body melts into three dots (thinking; meltFrame); it reforms as the state leaves. */
+  melt?: boolean;
+  /** Thinking gestures (avatarGesture.ts): eyes on a sphere, clips picked at random, the body still between them
+   *  (no breathing, no random blinks: the clips carry their own). */
+  gestures?: boolean;
 }
+
+// The melt (thinking, and an agent's "Typing…" row): ONE continuous change of the body itself, matched to the
+// reference design frame by frame at 60 fps. Over MELT.dur seconds the body rounds into a circle (by
+// MELT.round), shrinks along the measured curve MELT.size into the middle dot and settles MELT.drop lower; the eyes
+// slide together into one slit (MELT.slit) and are gone by MELT.eyesGone; the two side dots slide out from under the
+// body (MELT.sideFrom..sideTo). Then three equal dots with a brightness wave left -> centre -> right: the lit dot full,
+// the others at MELT.dim, the peak moving on every MELT.step seconds, sine-eased. Leaving runs the same change
+// backwards. Unit space (1.0 ~ the body's half height; the reference square's half width is 0.86), so it scales
+// with the avatar. Shared with the Swift port.
+export const MELT = {
+  dur: 0.5,
+  /** Seconds the melt is already in when the state arrives (negative: a pause first). The state reaches the avatar
+   *  a frame after "Typing…" shows, so it starts one frame in, and the face's first change lands with the reference's. */
+  lag: -0.017,
+  round: 0.067,
+  /** The body as a circle's diameter, unit space, at seconds into the melt: the reference's measured shrink
+   *  (frames 07-40 at 60 fps; the melt starts on the frame "Typing…" appears). */
+  size: [[0, 1.72], [0.033, 1.58], [0.067, 1.55], [0.117, 1.26], [0.167, 1.01], [0.217, 0.84], [0.267, 0.77], [0.317, 0.69], [0.417, 0.56], [0.5, 0.48]] as [number, number][],
+  slit: 0.067, eyesGone: 0.1,
+  sideFrom: 0.017, sideTo: 0.1,
+  dotR: 0.24, gap: 0.79, drop: 0.17,
+  step: 0.383, dim: 0.53, centrePeak: 0.333,
+};
+
+const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+const smooth = (k: number) => { const c = k < 0 ? 0 : k > 1 ? 1 : k; return c * c * (3 - 2 * c); };
+
+/** One frame of the melt at `t` seconds into it (0 = the face; past MELT.dur the dots keep their wave). Pure.
+ *  shrink: 0..1 along the measured size curve (1 = the middle dot); round: 0..1 square to circle; drop: unit space;
+ *  slit: 0..1 the eyes merged; eyes: eye opacity; side: each side dot's distance out (unit space; under the body
+ *  while small); lit: the three dots' brightness, left, centre, right (the centre is the body). */
+export interface MeltFrame { shrink: number; round: number; drop: number; slit: number; eyes: number; side: number; lit: [number, number, number] }
+export function meltFrame(t: number, reduced = false): MeltFrame {
+  if (reduced) return { shrink: 1, round: 1, drop: MELT.drop, slit: 1, eyes: 0, side: MELT.gap, lit: [1, 1, 1] };
+  const tt = Math.max(0, t);
+  const sz = MELT.size;
+  let d = sz[sz.length - 1][1];
+  for (let i = 1; i < sz.length; i++) if (tt <= sz[i][0]) { const [t0, d0] = sz[i - 1], [t1, d1] = sz[i]; d = lerp(d0, d1, (tt - t0) / (t1 - t0)); break; }
+  const shrink = (sz[0][1] - d) / (sz[0][1] - sz[sz.length - 1][1]);
+  const k = Math.min(1, tt / MELT.dur);
+  const out = smooth((tt - MELT.sideFrom) / (MELT.sideTo - MELT.sideFrom));
+  // the wave: each dot's peak MELT.step apart (left, centre, right), one pass every 3 steps
+  const period = 3 * MELT.step;
+  const glow = (peak: number) => {
+    let dd = ((tt - peak) % period + period) % period; if (dd > period / 2) dd -= period;
+    const w = Math.abs(dd) < MELT.step ? 0.5 + 0.5 * Math.cos(Math.PI * dd / MELT.step) : 0;
+    return MELT.dim + (1 - MELT.dim) * w;
+  };
+  // the body stays lit while it is still becoming the middle dot (until its peak), then joins the wave
+  const centre = tt < MELT.centrePeak ? 1 : glow(MELT.centrePeak);
+  return {
+    shrink, round: smooth(tt / MELT.round), drop: MELT.drop * smooth(k),
+    slit: smooth(tt / MELT.slit), eyes: 1 - smooth((tt - MELT.slit) / (MELT.eyesGone - MELT.slit)),
+    side: MELT.gap * out, lit: [glow(MELT.centrePeak - MELT.step), centre, glow(MELT.centrePeak + MELT.step)],
+  };
+}
+/** The shape's outline's mean distance from the body centre (unit space): the circle it rounds into. Cached. */
+const meanR = new Map<string, number>();
+export function outlineMeanRadius(key: string): number {
+  let r = meanR.get(key);
+  if (r === undefined) { const pts = shapeOutline(key); r = pts.reduce((a, p) => a + Math.hypot(p[0], p[1]), 0) / pts.length; meanR.set(key, r); }
+  return r;
+}
+/** The body's outline while it melts: each point slides toward that circle at its own angle, by `round` (0 the
+ *  shape, 1 the circle). The renderer then scales it by 1 + (MELT.dotR / outlineMeanRadius - 1) * shrink. */
+export function meltOutline(key: string, round: number): Pt[] {
+  const pts = shapeOutline(key);
+  if (round <= 0) return pts;
+  const R = outlineMeanRadius(key);
+  return pts.map(([x, y]) => { const d = Math.hypot(x, y) || 1; return [x + (x / d * R - x) * round, y + (y / d * R - y) * round] as Pt; });
+}
+// NO BOB in any state (the prototype's bob is gone). The bob fields stay at
+// 0 so the shape of a state is unchanged: breathing, blinks, glances, reactions and the melt are the motion.
 export const STATES: Record<AvatarState, StateDef> = {
-  working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0.025, bobHz: 2.2, gaze: 'work' },
-  needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0.010, bobHz: 1.0, gaze: 'viewer',
+  working:     { label: 'Working',     mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.1, 2.4], bob: 0, bobHz: 0, gaze: 'work', gestures: true },
+  needs_input: { label: 'Needs input', mood: 'attentive', dot: '#F59E0B', glyph: 'question', blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'viewer',
                  enter: 'nod', repeat: 'nod', repeatEvery: 2.8, pulse: true },
   finished:    { label: 'Finished',    mood: 'happy',     dot: '#22C55E', glyph: 'check',    blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'free',
                  enter: 'bounce', settleMood: 'content', settleAfter: 3.5 },
   failed:      { label: 'Failed',      mood: 'worried',   dot: '#EF4444', glyph: 'alert',    blink: [3.0, 6.0], bob: 0, bobHz: 0, gaze: 'down',
                  enter: 'shake' },
   idle:        { label: 'Idle',        mood: 'neutral',   dot: '#85858D', glyph: null,       blink: [2.2, 5.0], bob: 0, bobHz: 0, gaze: 'free', sleeps: true },
+  listening:   { label: 'Listening',   mood: 'attentive', dot: '#22C55E', glyph: null,       blink: [2.5, 5.0], bob: 0, bobHz: 0, gaze: 'viewer' },
+  thinking:    { label: 'Thinking',    mood: 'focused',   dot: '#3B82F6', glyph: 'dots',     blink: [1.4, 3.0], bob: 0, bobHz: 0, gaze: 'work', melt: true },
+  talking:     { label: 'Talking',     mood: 'happy',     dot: '#22C55E', glyph: null,       blink: [2.2, 4.5], bob: 0, bobHz: 0, gaze: 'viewer' },
 };
 export const STATE_KEYS = Object.keys(STATES) as AvatarState[];
 const isState = (s: unknown): s is AvatarState => typeof s === 'string' && s in STATES;
@@ -432,6 +518,14 @@ export interface Pose {
   wink?: number;
   mood: Mood; shape: string; color: string; state: AvatarState; dot: string; glyph: Glyph;
   eyeColor: EyeColor; eye: string | null; phase: number; pulse: number | null; asleep: boolean; zzz: number | null; reducedMotion: boolean;
+  /** 0..1: how far the body has melted into the middle dot (meltT / MELT.dur, capped). */
+  melt: number;
+  /** Seconds into the melt (meltFrame): it runs on while melted (the dots' wave), and back down as it reforms. */
+  meltT: number;
+  /** The bob's own share of dy (unit space). Every state's bob is 0 today. */
+  bobY: number;
+  /** While working: the head's pose (avatarGesture.ts); the renderer draws the eyes on a sphere from it. */
+  gesture?: GesturePose | null;
 }
 export interface Pointer { dx: number; dy: number }
 export interface ModelOpts {
@@ -439,6 +533,8 @@ export interface ModelOpts {
   sleepAfterMs?: number; followPointer?: boolean; wander?: boolean; reducedMotion?: boolean; state?: string;
   /** No constant motion (no breathing, no bob): blinks, glances and one-off reactions only. */
   calm?: boolean;
+  /** Seeds the gesture picker (tests); by default a fresh random seed per model. */
+  gestureSeed?: number;
 }
 
 export class AvatarModel {
@@ -472,6 +568,18 @@ export class AvatarModel {
   blinkAt: number;
   nextBlink: number;
   nextRepeat: number;
+  /** Seconds into the melt: up while the state melts (thinking), back down to 0 as it reforms. */
+  meltT: number;
+  /** The clip playing while working (null otherwise): its poses, when it started and the pose it started from. */
+  gesture: { name: GestureName | 'hub'; keys: GestureKey[]; t0: number; dur: number; from: GesturePose; seed?: number } | null;
+  /** The gestures played so far, most recent last (the picker avoids recent ones; capped). */
+  gestureHistory: GestureName[];
+  /** The gesture track's own random numbers: seeded fresh for each model (each time an avatar appears), so the
+   *  sequence differs every time, while the identity rand (breathing phase, blinks) stays tied to the agent id. */
+  gestureRand: () => number;
+  /** What the agent is doing (setActivity): tilts the gesture picker. A change re-picks at the next still moment. */
+  activity: Activity;
+  repick: boolean;
   version: number;
   // the ticker's per-frame cache for a shared model (one step per frame however many instances show it)
   __frame?: number;
@@ -508,6 +616,12 @@ export class AvatarModel {
     this.blinkAt = -1;
     this.nextBlink = this.t + this.rand() * 3;
     this.nextRepeat = Infinity;
+    this.meltT = STATES[this.state].melt ? MELT.dur : 0;
+    this.gesture = null;
+    this.gestureHistory = [];
+    this.activity = 'none';
+    this.repick = false;
+    this.gestureRand = mulberry32(opts.gestureSeed ?? Math.floor(Math.random() * 4294967296));
     this.version = 0; // bumps whenever a static (reduced motion) frame must redraw
   }
 
@@ -535,8 +649,19 @@ export class AvatarModel {
     this.version++;
     const def = STATES[next];
     this.nextRepeat = def.repeat ? this.t + (def.repeatEvery as number) : Infinity;
+    // a melt starts MELT.lag after the state changes (one frame in: see MELT.lag)
+    if (def.melt && this.meltT <= 0) this.meltT = -MELT.lag;
     if (this.asleep) { this.wake(); return; }
     if (def.enter) this.react(def.enter);
+  }
+
+  // What the agent is doing now (avatarGesture activityFor). When it changes, the next gesture follows the new activity,
+  // and a long hold is cut short at its next still moment, so the face doesn't stay on the old mood.
+  setActivity(a: string): void {
+    const next: Activity = (ACTIVITIES as string[]).includes(a) ? a as Activity : 'none';
+    if (next === this.activity) return;
+    this.activity = next;
+    this.repick = true;
   }
 
   react(name: string): void {
@@ -603,6 +728,11 @@ export class AvatarModel {
     // repeat cue (needs input keeps nodding)
     if (t >= this.nextRepeat && def.repeat) { this.react(def.repeat); this.nextRepeat = t + (def.repeatEvery as number); }
 
+    // melt (thinking): the body becomes the middle dot over MELT.dur and runs on (the dots' wave); leaving, the
+    // same change runs backwards from where it is
+    if (def.melt) this.meltT += dt;
+    else if (this.meltT !== 0) this.meltT = Math.max(0, Math.min(this.meltT, MELT.dur) - dt);
+
     // mood blend
     const target = MOODS[this.targetMoodKey()];
     const k = 1 - Math.exp(-dt * 7);
@@ -629,9 +759,16 @@ export class AvatarModel {
     this.look.x += (this.lookTarget.x - this.look.x) * lk;
     this.look.y += (this.lookTarget.y - this.look.y) * lk;
 
-    // blink
+    // thinking gestures (working): one clip after another, chained from where the last one ended
+    // (not while the melt is still reforming the face: the track then starts with a neutral hold, not the entrance)
+    let gesture: GesturePose | null = null;
+    if (def.gestures && this.meltT <= 0) gesture = this.stepGesture(t);
+    else if (def.gestures) this.gesture = { name: 'hub', keys: hubClip(HUB.min), t0: t, dur: clipDur(hubClip(HUB.min)), from: NEUTRAL };
+    else this.gesture = null;
+
+    // blink (while gesturing the clips carry the blinks)
     let lid = 1;
-    if (!this.asleep) {
+    if (!this.asleep && !def.gestures) {
       if (t >= this.nextBlink) {
         this.blinkAt = t;
         const [a, b] = def.blink;
@@ -642,14 +779,16 @@ export class AvatarModel {
     }
 
     // body motion
-    const breathHz = this.asleep ? 1 / 5 : 1 / 3.6, breathAmp = this.calm ? 0 : this.asleep ? 0.035 : 0.018;
+    const breathHz = this.asleep ? 1 / 5 : 1 / 3.6, breathAmp = this.calm || def.gestures ? 0 : this.asleep ? 0.035 : 0.018;
     const br = Math.sin(2 * Math.PI * breathHz * t + this.phase);
     const pose = {
       dx: 0, dy: 0, rot: 0,
       sx: 1 - breathAmp * 0.45 * br, sy: 1 + breathAmp * br,
       lookX: this.look.x, lookY: this.look.y, lid,
     };
-    if (def.bob && !this.asleep && !this.calm) pose.dy += def.bob * Math.sin(2 * Math.PI * def.bobHz * t + this.phase);
+    // the bob settles as the body melts (the dots do not bob)
+    const bobY = def.bob && !this.asleep && !this.calm ? def.bob * Math.sin(2 * Math.PI * def.bobHz * t + this.phase) * (1 - Math.max(0, Math.min(1, this.meltT / MELT.dur))) : 0;
+    pose.dy += bobY;
 
     let wink = 0;
     if (this.reaction) {
@@ -667,14 +806,50 @@ export class AvatarModel {
 
     const out = this.decorate(pose, def);
     out.wink = wink;
+    out.bobY = bobY;
+    out.gesture = gesture;
     return out;
+  }
+
+  // The gesture track: the clips run back to back from entering work, each from the pose the
+  // last one ended on, with a short neutral hold between them unless a clip chains straight on (HUB).
+  stepGesture(t: number): GesturePose {
+    let g = this.gesture;
+    // entering work: no pose of its own (the canvas grows the avatar in from nothing); the first clip is picked now
+    if (!g) g = this.gesture = { name: 'hub', keys: hubClip(0), t0: t, dur: 0, from: NEUTRAL };
+    // the activity changed: end the current clip now if the face is still (not mid-move), so the new pick comes soon
+    if (this.repick && t - g.t0 < g.dur) {
+      const a = gestureFrame(g.keys, t - g.t0, g.from, g.seed), b = gestureFrame(g.keys, t - g.t0 + 0.05, g.from, g.seed);
+      const still = Math.max(Math.abs(a.yaw - b.yaw), Math.abs(a.pitch - b.pitch), Math.abs(a.roll - b.roll), Math.abs(a.s - b.s), Math.abs(a.ew - b.ew), Math.abs(a.eh - b.eh)) < 1e-4;
+      if (still) g.dur = t - g.t0;
+    }
+    while (t - g.t0 >= g.dur) {
+      const from: GesturePose = settle(gestureFrame(g.keys, g.dur, g.from, g.seed)), t0: number = g.t0 + g.dur;
+      // each clip gets its own seed: which of its pauses wander, and where to (avatarGesture WANDER)
+      const r = this.gestureRand, seed = Math.floor(r() * 4294967296);
+      if (g.name !== 'hub' && !this.repick && r() >= HUB.chain) {
+        const keys = hubClip((HUB.min + r() * (HUB.max - HUB.min)) * ACTIVITY_HUB[this.activity]);
+        g = { name: 'hub', keys, t0, dur: clipDur(keys, from), from, seed };
+      } else {
+        const name = pickGesture(r, this.gestureHistory, this.activity);
+        this.repick = false;
+        this.gestureHistory = remember(this.gestureHistory, name);
+        g = { name, keys: GESTURES[name], t0, dur: clipDur(GESTURES[name], from), from, seed };
+      }
+      this.gesture = g;
+    }
+    return gestureFrame(g.keys, t - g.t0, g.from, g.seed);
   }
 
   // Reduced motion, Live Activities, complications: one still frame per state.
   staticPose(): Pose {
     const def = STATES[this.state];
     this.mood = { ...MOODS[def.settleMood || def.mood] };
-    return this.decorate({ dx: 0, dy: 0, rot: 0, sx: 1, sy: 1, lookX: 0, lookY: 0, lid: 1 }, def);
+    this.meltT = def.melt ? MELT.dur : 0;
+    this.gesture = null;
+    const pose = this.decorate({ dx: 0, dy: 0, rot: 0, sx: 1, sy: 1, lookX: 0, lookY: 0, lid: 1 }, def);
+    pose.gesture = def.gestures ? NEUTRAL : null;
+    return pose;
   }
 
   // Same still frame without touching the live model (pill role, shared models). `dozing`: an idle agent
@@ -685,6 +860,7 @@ export class AvatarModel {
     const sleeping = dozing && !!def.sleeps;
     pose.mood = { ...MOODS[sleeping ? 'asleep' : def.settleMood || def.mood] };
     pose.phase = 0; pose.pulse = null; pose.asleep = sleeping; pose.zzz = null;
+    pose.gesture = def.gestures ? NEUTRAL : null;
     return pose;
   }
 
@@ -711,6 +887,9 @@ export class AvatarModel {
       asleep: this.asleep,
       zzz: this.asleep ? (this.t * 0.45) % 1 : null,
       reducedMotion: this.reducedMotion,
+      melt: this.reducedMotion ? (def.melt ? 1 : 0) : Math.max(0, Math.min(1, this.meltT / MELT.dur)),
+      meltT: this.reducedMotion ? (def.melt ? MELT.dur : 0) : Math.max(0, this.meltT),
+      bobY: 0,
     });
   }
 }
@@ -726,13 +905,16 @@ export class AvatarModel {
 //             never a dot, no badge
 //   drawer    large face (drawer, home hero, picker): never a dot; badge;
 //             idle wander + eye-follow when selected
+//   gestures  which instances play the thinking gestures; the rest hold the neutral capsules still. The sidebar plays
+//             them on the selected agent only: people track about five movers, and a working list would be a wall
+//             of them (surfaces/avatar-ref-2/RESEARCH.md #8)
 export type Role = 'sidebar' | 'pill' | 'activity' | 'drawer';
-interface RoleDef { dot: 'always' | 'phone-working' | 'never'; glyph: boolean; badge: boolean; animate: boolean; wander: 'selected' | false; follow: boolean }
+interface RoleDef { dot: 'always' | 'phone-working' | 'never'; glyph: boolean; badge: boolean; animate: boolean; wander: 'selected' | false; follow: boolean; gestures: 'all' | 'selected' }
 export const ROLES: Record<Role, RoleDef> = {
-  sidebar:  { dot: 'always',        glyph: true,  badge: true,  animate: true,  wander: 'selected', follow: true },
-  pill:     { dot: 'phone-working', glyph: false, badge: true,  animate: false, wander: false,      follow: false },
-  activity: { dot: 'never',         glyph: false, badge: false, animate: true,  wander: false,      follow: false },
-  drawer:   { dot: 'never',         glyph: false, badge: true,  animate: true,  wander: 'selected', follow: true },
+  sidebar:  { dot: 'always',        glyph: true,  badge: true,  animate: true,  wander: 'selected', follow: true,  gestures: 'selected' },
+  pill:     { dot: 'phone-working', glyph: false, badge: true,  animate: false, wander: false,      follow: false, gestures: 'selected' },
+  activity: { dot: 'never',         glyph: false, badge: false, animate: true,  wander: false,      follow: false, gestures: 'all' },
+  drawer:   { dot: 'never',         glyph: false, badge: true,  animate: true,  wander: 'selected', follow: true,  gestures: 'all' },
 };
 export const ROLE_KEYS = Object.keys(ROLES) as Role[];
 export const PHONE_MAX = 640;                       // px; phone width = viewport <= this
@@ -756,6 +938,10 @@ export function dotFor({ role = 'sidebar', state = 'idle', size = 48, phone = fa
 export function followAllowed({ role = 'sidebar', selected = false, state = 'idle', dist = Infinity, radius = FOLLOW.radius, asleep = false }: { role?: string; selected?: boolean; state?: string; dist?: number; radius?: number; asleep?: boolean } = {}): boolean {
   const R = roleOf(role);
   return !!(R.follow && selected && state !== 'working' && !asleep && dist <= radius);
+}
+export function gesturesAllowed({ role = 'sidebar', selected = false }: { role?: string; selected?: boolean } = {}): boolean {
+  const g = roleOf(role).gestures;
+  return g === 'all' || (g === 'selected' && !!selected);
 }
 export function wanderAllowed({ role = 'sidebar', selected = false }: { role?: string; selected?: boolean } = {}): boolean {
   return roleOf(role).wander === 'selected' && !!selected;

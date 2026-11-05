@@ -176,6 +176,8 @@ export interface UnifiedApproval {
   // The seat that asked, so a card can say who it is from. Additive; null when
   // the source row does not name one (learning proposals).
   agent_id?: string | null;
+  /** The row's dedup key (canonical rows): a terminal menu bridged into a card has `menu:<session>:…`. */
+  op_key?: string | null;
 }
 
 function normalizeProposal(p: any): UnifiedApproval {
@@ -293,6 +295,8 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
     menu: r.menu ?? null,
     options: r.options ?? null,
     agent_id: r.from_agent || null,
+    // A terminal menu bridged into a card has a `menu:<session>:…` key: the dashboard keeps it to a pick OR words.
+    op_key: r.op_key ?? null,
   };
 }
 
@@ -594,7 +598,7 @@ router.post('/:id/approve', (req: Request, res: Response) => {
 
   // Agent approval -> CANONICAL answer (record_answer -> fire_resume). No more
   // filesystem move, no more queue/inbox side-channel; watch/iOS resolve too.
-  const result = canonicalAnswer(id, 'approve');
+  const result = canonicalAnswer(id, 'approve', undefined, undefined, { surface: req.body?.surface });
   if (result.ok && result.applied) {
     res.json({ status: 'approved', type: 'agent', id });
     return;
@@ -652,7 +656,7 @@ router.post('/:id/deny', (req: Request, res: Response) => {
   }
 
   // Agent approval -> CANONICAL answer, carrying the reason as the note text.
-  const result = canonicalAnswer(id, 'deny', reason);
+  const result = canonicalAnswer(id, 'deny', reason, undefined, { surface: req.body?.surface });
   if (result.ok && result.applied) {
     res.json({ status: 'rejected', type: 'agent', id, reason });
     return;
@@ -675,6 +679,30 @@ router.post('/:id/deny', (req: Request, res: Response) => {
 // route's — it forwards whatever the client submits.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// GET /api/approvals/unified/:id/card — one canonical card in ANY state (waiting, answered, dismissed…), for a
+// reference to it in a message: the dashboard draws a chip for the id and opens the card from this. Read-only;
+// scoped like every /:id route (an agent caller sees only its own pending cards).
+// ---------------------------------------------------------------------------
+
+router.get('/:id/card', async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    // Loaded here, not at the top: lib/db opens tasks.db on import, and this router is imported by tests.
+    const { queryDb: tasksDb } = await import('../lib/db.js');
+    const { cardLookup } = await import('./agents.js');
+    const rows = tasksDb(
+      `SELECT id, from_agent, kind, status, question, summary, options, menu, risk_level, reversibility, answer,
+              answer_text, option_n, answered_by, answer_surface, answer_device, created_at, answered_at,
+              expires_at, retired_at, superseded_by, resumed_at, op_key, origin
+         FROM approval_requests WHERE id = ? LIMIT 1`, [id]) as any[];
+    if (!rows.length) { res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` }); return; }
+    res.json({ card: cardLookup(rows[0]) });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to read the card', detail: String(err?.message || err) });
+  }
+});
+
 router.post('/:id/answer', (req: Request, res: Response) => {
   const id = String(req.params.id);
   const optionN = req.body?.option_n != null ? String(req.body.option_n) : undefined;
@@ -685,7 +713,7 @@ router.post('/:id/answer', (req: Request, res: Response) => {
     return;
   }
 
-  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText });
+  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface });
   if (result.ok && result.applied) {
     res.json({ status: 'answered', type: 'agent', id, option_n: optionN, answer_text: answerText });
     return;

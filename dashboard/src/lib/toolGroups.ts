@@ -90,7 +90,8 @@ function countWork(items: WorkItem[]): { files: number; unnamed: number; calls: 
 function workClause(items: WorkItem[], fileVerb: string, callNoun: string): string | undefined {
   const { files, unnamed, calls } = countWork(items);
   if (calls === 0) return undefined;
-  if (unnamed > 0) return `made ${plural(calls, callNoun, callNoun + 's')}`;
+  // "made 2 edits" reads naturally; "made 1 read" does not, so reads are counted bare ("1 read", "2 reads").
+  if (unnamed > 0) return `${callNoun === 'read' ? '' : 'made '}${plural(calls, callNoun, callNoun + 's')}`;
   return `${fileVerb} ${plural(files, 'file', 'files')}`;
 }
 
@@ -137,17 +138,15 @@ export function summarizeTurn(all: WorkItem[], opts: { interrupted?: boolean } =
   const cmdRunning = by('command', 'running').length;
   if (cmdRunning > 0) clauses.push(`running ${plural(cmdRunning, 'command', 'commands')}`);
 
-  // Reads and searches only matter when nothing outranks them.
-  if (clauses.length === 0) {
-    const read = workClause(by('read', 'ok'), 'read', 'read');
-    if (read) clauses.push(read);
-    const searched = by('search', 'ok').length;
-    if (searched > 0) clauses.push(`searched ${plural(searched, 'time', 'times')}`);
-  }
-  if (clauses.length === 0) {
-    const used = items.filter((it) => it.status === 'ok').length;
-    if (used > 0) clauses.push(`used ${plural(used, 'tool', 'tools')}`);
-  }
+  // Reads and searches come after what outranks them, but are always named: the headline accounts for every call
+  // in the run, so opening it never shows more than it said (review, 2026-11-02: "ran 2 commands" over 3 entries).
+  const read = workClause(by('read', 'ok'), 'read', 'read');
+  if (read) clauses.push(read);
+  const searched = by('search', 'ok').length;
+  if (searched > 0) clauses.push(`searched ${plural(searched, 'time', 'times')}`);
+  // Anything else that succeeded: "used N tools" alone, "used N other tools" after the named work.
+  const used = by('other', 'ok').length;
+  if (used > 0) clauses.push(clauses.length ? `used ${plural(used, 'other tool', 'other tools')}` : `used ${plural(used, 'tool', 'tools')}`);
 
   // Failures not already reported inside the command clause.
   const otherFailed = failed - cmdFailed;
@@ -227,22 +226,27 @@ const MIN_GROUP_TOOLS = 2;
  * sits BETWEEN calls joins the group; thinking at either edge stays outside it, and a run with
  * a single call is left exactly as it was. Nothing is dropped or reordered.
  */
+/** A routine job folded into the strip (lib/threadKit/results.ts markResults, view "folded"). */
+const isFolded = (n: RenderNode) => n.kind === 'result' && n.view === 'folded';
+const inRun = (n: RenderNode) => n.kind === 'tool' || n.kind === 'thinking' || isFolded(n);
+const anchors = (n: RenderNode) => n.kind === 'tool' || isFolded(n);
+
 export function groupToolRuns(nodes: RenderNode[]): GroupedNode[] {
   const out: GroupedNode[] = [];
   let i = 0;
   while (i < nodes.length) {
     const n = nodes[i];
-    if (n.kind !== 'tool' && n.kind !== 'thinking') {
+    if (!inRun(n)) {
       out.push(n);
       i += 1;
       continue;
     }
-    // A maximal run of tool/thinking nodes.
+    // A maximal run of tool/thinking nodes (and routine jobs folded among them).
     let j = i;
-    while (j < nodes.length && (nodes[j].kind === 'tool' || nodes[j].kind === 'thinking')) j += 1;
+    while (j < nodes.length && inRun(nodes[j])) j += 1;
     const run = nodes.slice(i, j);
-    const first = run.findIndex((x) => x.kind === 'tool');
-    const last = run.length - 1 - [...run].reverse().findIndex((x) => x.kind === 'tool');
+    const first = run.findIndex(anchors);
+    const last = run.length - 1 - [...run].reverse().findIndex(anchors);
     const tools = first < 0 ? 0 : run.slice(first, last + 1).filter((x) => x.kind === 'tool').length;
     if (tools >= MIN_GROUP_TOOLS) {
       out.push(...run.slice(0, first));

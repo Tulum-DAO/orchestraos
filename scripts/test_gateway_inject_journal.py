@@ -304,7 +304,7 @@ def _handler(monkeypatch, inject_result, accepts):
     monkeypatch.setattr(G, "_test_session_refusal", lambda r, s: None, raising=False)
     monkeypatch.setattr(G, "_protected_refusal", lambda r, s: None)
     monkeypatch.setattr(G, "_tmux_session_names", lambda: {"tgt"})
-    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: inject_result)
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail": inject_result)
     monkeypatch.setattr(G, "_hold_for_boundary", lambda s, t, a, origin="app": held.append((s, t)) or "msg_held1")
     monkeypatch.setattr(G, "_parse_actor", lambda r: ("device", "quest"))
 

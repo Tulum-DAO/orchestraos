@@ -54,6 +54,37 @@ def test_the_codex_tail_ends_in_resume_sid_and_a_fresh_seat_has_no_tail(tmp_path
     assert r.stdout.strip() == "rc=2"
 
 
+def test_the_tail_carries_the_agents_effort_as_a_config_override_before_resume(tmp_path):
+    """Codex has no --effort flag; `-c model_reasoning_effort=<level>` is a per-run override (nothing
+    is written to ~/.codex/config.toml). A global flag, so it goes before `resume`."""
+    r = _bash(f"build_codex_launch_tail gpt-5.6-terra {SID} high", tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == f"--model gpt-5.6-terra -c model_reasoning_effort=high resume {SID}"
+    assert _bash("build_codex_launch_tail '' '' xhigh", tmp_path).stdout.strip() == "-c model_reasoning_effort=xhigh"
+    assert _bash("build_codex_launch_tail m '' ''", tmp_path).stdout.strip() == "--model m"
+    r = _bash("build_codex_launch_tail m '' 'high;id' || echo rc=$?", tmp_path)
+    assert r.stdout.strip() == "rc=2", "only a known level ever reaches the command line"
+
+
+def test_spawn_passes_the_agents_effort_to_claude_and_codex():
+    """Static guard (as the branch test below): the claude branch adds --effort and the codex branch
+    hands the level to its tail, both from resolve_spawn_effort (scripts/agent_effort.py)."""
+    src = (ROOT / "spawn-agent.sh").read_text()
+    assert 'effort=$(resolve_spawn_effort "$agent_id" "$runtime")' in src
+    claude_branch = src[src.index('if [[ "$runtime" == "claude" ]]; then\n        [[ -n "$model" ]]'):]
+    claude_branch = claude_branch[:claude_branch.index('elif [[ "$runtime" == "codex" ]]; then')]
+    assert '[[ -n "$effort" ]] && launch_cmd+=" --effort $effort"' in claude_branch
+    assert 'build_codex_launch_tail "$model" "$resume_sid" "$effort"' in src
+
+
+def test_resolve_spawn_effort_reads_the_store_by_lineage_root(tmp_path):
+    (tmp_path / "tree" / "state").mkdir(parents=True)
+    (tmp_path / "tree" / "state" / "agent-efforts.json").write_text(json.dumps({"efforts": {"dev": "xhigh"}}))
+    env_line = f"AGENT_EFFORT_FILE={tmp_path}/tree/state/agent-efforts.json"
+    assert _bash(f"{env_line} resolve_spawn_effort dev-g4 codex", tmp_path).stdout.strip() == "xhigh"
+    assert _bash(f"{env_line} resolve_spawn_effort dev gemini", tmp_path).stdout.strip() == ""
+
+
 def test_the_codex_branch_appends_the_tail_and_never_assigns_launch_cmd():
     """Static guard: the branch must only ever `launch_cmd+=`; any assignment rebuilds the line and
     drops the prefixes. (A by-effect test through spawn_agent with stub tmux is still owed.)"""

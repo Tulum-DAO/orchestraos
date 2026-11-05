@@ -1,8 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Mic, PhoneCall, PhoneOff } from 'lucide-react';
+import { Mic } from 'lucide-react';
 import { useAgentSettings } from '../../stores/agentSettings';
-import { useAssistantName } from '../../lib/assistantName';
 import { VoiceSession } from '../../lib/voiceSession';
+import { useCallStore } from '../../stores/callStore';
+import { clearForAgentCall } from '../../lib/switchCall';
 
 interface VoiceControlsProps {
   /** Current route, for the page-aware VoiceLogo call (DEC §1: "carrying page context"). */
@@ -12,23 +13,28 @@ interface VoiceControlsProps {
   onPartial: (text: string) => void;
   /** Committed dictation / call speech — appended to the textarea by the integrator. */
   onFinal?: (text: string) => void;
-  /** `[voice-call: <id> <path>]` marker text to submit into the composer on call end (P1). */
-  onCallEnded?: (marker: string) => void;
-  /** true when the textarea is empty and there's no attachment — VoiceLogo shows; else hidden (Send owns that slot). */
-  showCallButton: boolean;
-  /** Extra classes for the call button while NO call is live (the composer hides it on narrow
-   *  phones and offers "Start voice call" from its overflow menu instead). A live call's End
-   *  button is never hidden: a call you cannot see is a call you cannot end. */
-  idleCallClassName?: string;
+  /** The call ended (its id, for the hand-off to the agent). Nothing about a call goes into the draft. */
+  onCallEnded?: (callId: string) => void;
   /** Told whenever a call starts connecting or ends, so a caller can render for it. */
   onInCallChange?: (inCall: boolean) => void;
+  /** The agent whose page this is: its call is for that agent (`agent=<id>` on the live call). */
+  agentId?: string;
+  /** Who the call is with, for the question asked before Arturo's live call is ended for this one. */
+  agentName?: string;
+  /** The agent's calls reach it (lib/agentCallsOn.ts); otherwise the call is Arturo's, and is marked so. */
+  agentCalls?: boolean;
+  /** Told when a call could not start, with why (a missing voice key, no microphone): the composer's round button
+   *  then offers no Call, and says why. */
+  onCallUnavailable?: (reason: string) => void;
 }
 
-/** For a caller that offers the call from elsewhere (the composer's overflow menu). START only,
- *  never a toggle: a menu row labelled "Call" must not hang up a live call (review of #351). */
+/** The call, started and ended by the composer's round button (lib/roundAction.ts): this keeps the mic only. */
 export interface VoiceControlsHandle {
   startCall: () => Promise<void>;
+  /** Start a call, or end the one that is on. */
+  toggleCall: () => Promise<void>;
 }
+
 
 /**
  * The composer's Mic button (hold/toggle per settings.micMode -> dictation
@@ -42,31 +48,33 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
   onPartial,
   onFinal,
   onCallEnded,
-  showCallButton,
-  idleCallClassName,
   onInCallChange,
+  onCallUnavailable,
+  agentId,
+  agentName,
+  agentCalls = false,
 }, ref) {
   const settings = useAgentSettings();
-  const aname = useAssistantName();
   const [unavailable, setUnavailable] = useState<string | null>(null);
   const [dictating, setDictating] = useState(false);
-  const [inCall, setInCall] = useState(false);
   const sessionRef = useRef<VoiceSession | null>(null);
 
+  // Dictation stays this composer's own (a session that never opens a call). The CALL is the app's one call
+  // (stores/callStore.ts): its bar, timer and waveform read it there, and it outlives this composer.
   function session(): VoiceSession {
     if (!sessionRef.current) {
       sessionRef.current = new VoiceSession({
         onPartial: (text, role) => { if (role === 'user') onPartial(text); },
         onFinal: (text, role) => { if (role === 'user') onFinal?.(text); },
         onUnavailable: (reason) => setUnavailable(reason),
-        onStateChange: (s) => { const c = s === 'live' || s === 'connecting'; setInCall(c); onInCallChange?.(c); },
-        onCallEnded: (marker) => onCallEnded?.(marker),
       });
     }
     return sessionRef.current;
   }
 
-  useEffect(() => () => { sessionRef.current?.stop(); sessionRef.current?.stopDictation(); }, []);
+  useEffect(() => () => { sessionRef.current?.stopDictation(); }, []);
+  const inCall = useCallStore((s) => !!s.call && s.call.agentId === agentId);
+  useEffect(() => { onInCallChange?.(inCall); }, [inCall]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startDictation = () => { setUnavailable(null); setDictating(true); session().startDictation(); };
   const stopDictation = () => { setDictating(false); session().stopDictation(); };
@@ -81,25 +89,31 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
     }
     : { onClick: () => (dictating ? stopDictation() : startDictation()) };
 
+  // A call never writes into the draft: not the words you say, not its end (the draft stays as you left it). The
+  // agent hears the call itself, or is handed it at the end (Composer).
+  const callListeners = {
+    onCallEnded: (_marker: string, callId: string) => onCallEnded?.(callId),
+    onUnavailable: (reason: string) => { setUnavailable(reason); if (/voice isn't configured|voice bridge/i.test(reason)) onCallUnavailable?.(reason); },
+  };
+  // The store's own state, not the render's: a second tap in the same frame still sees the call and ends it.
   const toggleCall = async () => {
     setUnavailable(null);
-    // The session's own state, not the render's `inCall`: a second tap in the same frame as the
-    // first still sees the call as connecting and cancels it rather than starting it twice.
-    const st = sessionRef.current?.state;
-    if (st === 'connecting' || st === 'live') {
-      session().stop();
-      return;
-    }
-    await session().start({ route, focusedEntity });
+    const store = useCallStore.getState();
+    if (store.call && store.call.agentId === agentId) { store.hangUp(); return; }
+    if (!agentId) return;
+    if (!(await clearForAgentCall(agentName || agentId))) return;
+    await useCallStore.getState().start({ route, focusedEntity, agentId, withArturo: !agentCalls }, callListeners);
   };
 
   const startCall = async () => {
-    const st = sessionRef.current?.state;
-    if (st === 'connecting' || st === 'live') return;
+    const store = useCallStore.getState();
+    if (store.call || !agentId) return;
     setUnavailable(null);
-    await session().start({ route, focusedEntity });
+    // Never switch silently: with Arturo's call up, ask first; only a yes ends it.
+    if (!(await clearForAgentCall(agentName || agentId))) return;
+    await useCallStore.getState().start({ route, focusedEntity, agentId, withArturo: !agentCalls }, callListeners);
   };
-  useImperativeHandle(ref, () => ({ startCall }));
+  useImperativeHandle(ref, () => ({ startCall, toggleCall }));
 
   return (
     <div className="flex items-center gap-1">
@@ -117,18 +131,6 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
       >
         <Mic size={18} />
       </button>
-      {(showCallButton || inCall) && (
-        <button
-          onClick={toggleCall}
-          aria-pressed={inCall}
-          aria-label={inCall ? 'End call' : 'Start voice call'}
-          title={inCall ? `End call with ${aname}` : `Call ${aname}`}
-          className={`touch-circle flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted ${inCall ? '' : idleCallClassName ?? ''}`}
-          style={{ color: inCall ? 'var(--accent-voice)' : undefined }}
-        >
-          {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
-        </button>
-      )}
     </div>
   );
 });

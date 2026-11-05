@@ -12,7 +12,8 @@ export type ChatItem =
   | ToolUseItem
   | ToolResultItem
   | QueuedBatchItem
-  | RotationItem;
+  | RotationItem
+  | CompactionItem;
 
 export interface TextItem {
   audience?: 'user' | 'agent';
@@ -22,6 +23,7 @@ export interface TextItem {
   text: string;
   is_system?: boolean;
   queued?: boolean;
+  mid_turn?: boolean;
   machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
   model?: string;
   usage?: TokenUsage;
@@ -106,13 +108,40 @@ export interface RotationItem {
   to_session: string;
 }
 
+export interface CompactionItem {
+  audience?: 'user' | 'agent';
+  kind: 'compaction';
+  id: string;
+  uuid?: string;
+  state: 'compacting' | 'compacted' | 'failed';
+  trigger?: 'auto' | 'manual';
+  ts: string;
+  finished_at?: string | null;
+  before_tokens?: number | null;
+  after_tokens?: number | null;
+}
+
+export interface LiveTextBlock {
+  uuid: string | null;
+  text: string;
+}
+
+export interface LiveTextEvent {
+  agent_id: string;
+  message_id: string | null;
+  text: string;
+  blocks: LiveTextBlock[];
+  done: boolean;
+}
+
 export type RenderItem =
   | RenderUser
   | RenderAssistant
   | RenderThinking
   | RenderTool
   | RenderQueuedBatch
-  | RenderRotation;
+  | RenderRotation
+  | RenderCompaction;
 
 export interface RenderUser {
   audience?: 'user' | 'agent';
@@ -180,11 +209,26 @@ export interface RenderRotation {
   key: string;
 }
 
+export interface RenderCompaction {
+  audience?: 'user' | 'agent';
+  kind: 'compaction';
+  id: string;
+  state: 'compacting' | 'compacted' | 'failed';
+  trigger?: 'auto' | 'manual';
+  ts: string;
+  finished_at?: string | null;
+  before_tokens?: number | null;
+  after_tokens?: number | null;
+  key: string;
+}
+
 export interface TranscriptEnvelope {
   agent_id: string;
   session_id: string | null;
   grammar_version: 2;
   items: ChatItem[];
   render_items: RenderItem[];
+  has_older?: boolean;
+  oldest_id?: string | null;
   error?: string;
 }

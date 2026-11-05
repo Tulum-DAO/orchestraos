@@ -400,3 +400,40 @@ test('sent_text: the exact text the agent got, markers included, on every accept
     assert.match(calls.json.sent_text, /^\[IMAGE: .*1791455816_dr29ix\.png\] look$/);
   }
 });
+
+// ── a person's /compact the gateway refused ─────────────────────────────
+
+test('compact_refused: 409 with the gateway\'s own words, and nothing is stored as mail', async () => {
+  for (const caps of [['send-states'], undefined]) {
+    const { res, calls } = fakeRes();
+    let wrote = false;
+    const d = deps({
+      gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'compact_refused', detail: "Compacting isn't turned on for this agent yet." }),
+      msgStoreSend: async () => { wrote = true; return { sent: true, id: 'should-not-happen' }; },
+    });
+    await handleAgentSend(d, req({ body: { text: '/compact', ...(caps ? { client_caps: caps } : {}) } }), res);
+    assert.equal(calls.status, 409);
+    assert.deepEqual(calls.json, { ok: false, reason: 'compact_refused', detail: "Compacting isn't turned on for this agent yet." });
+    assert.equal(wrote, false, 'never delivered as mail');
+  }
+  // no detail from the gateway: still refused, in plain words
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'compact_refused' }) }),
+                        req({ body: { text: '/compact' } }), res);
+  assert.equal(calls.status, 409);
+  assert.equal(calls.json.detail, "This agent can't compact right now.");
+});
+
+test('other refusals keep their durable-first fallback', async () => {
+  const { res, calls } = fakeRes();
+  let wrote = false;
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'send_failed', state: 'stopped', detail: 'sample detail' }),
+    msgStoreSend: async () => { wrote = true; return { sent: true, id: 'msg_q9' }; },
+  });
+  await handleAgentSend(d, req({ body: { text: '/compact', client_caps: ['send-states'] } }), res);
+  assert.equal(calls.status, 200);
+  assert.equal(calls.json.state, 'queued');
+  assert.equal(calls.json.message_id, 'msg_q9');
+  assert.equal(wrote, true);
+});

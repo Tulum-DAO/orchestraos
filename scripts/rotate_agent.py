@@ -1010,6 +1010,61 @@ def grade_successor_readback(successor_alias: str, seat_name: str, *,
     return result
 
 
+class RotationRefused(RuntimeError):
+    """The rotation must not start; the message says why and what to do."""
+
+
+def headless_rotation_refusal(seat_name: str) -> str | None:
+    """A seat switched headless (scripts/headless_switch.py) is not rotated: this rotation boots the successor as a TUI
+    in a new pane and promotes it, which would leave a TUI behind a switch that routes its mail to a supervisor that
+    no longer exists. Refused, with the way through, until headless rotation exists. None for every other seat (and
+    on any read failure: the switch defaults off)."""
+    try:
+        try:
+            import headless_switch as HS
+        except ImportError:
+            from scripts import headless_switch as HS
+        if not HS.is_headless(seat_name):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return (f"{seat_name} runs headless: it rotates through its supervisor, not here "
+            f"(`seat_supervisor.py rotate {seat_name}`, or `orchestra rotate {seat_name}`, which goes there).")
+
+
+def rotate_headless(seat_name: str, request=None) -> int:
+    """Ask the seat's supervisor to rotate (it starts at the next turn boundary). 0 when it took the request."""
+    try:
+        try:
+            import headless_switch as HS
+        except ImportError:
+            from scripts import headless_switch as HS
+        req = request or (lambda: HS.request(seat_name, {"cmd": "rotate"}))
+        out = req()
+    except Exception as e:  # noqa: BLE001 — the supervisor is down, or the socket refused
+        print(json.dumps({"ok": False, "seat": seat_name, "reason": f"its supervisor did not answer: {e}"}))
+        return 1
+    print(json.dumps({"seat": seat_name, "via": "supervisor", **out}))
+    return 0 if out.get("ok") else 1
+
+
+def preflight_refusal(seat_name: str, runtime_override: str | None = None) -> str | None:
+    """Why a rotation of `seat_name` would be refused before it changes anything, or None: the same early checks
+    execute_rotation makes (a headless seat, a runtime rotation does not support, a predecessor with no
+    authoritative generation), and nothing written. `orchestra rotate` asks this BEFORE it writes a baton, so a
+    refused rotation leaves no file behind."""
+    refusal = headless_rotation_refusal(seat_name)
+    if refusal:
+        return refusal
+    try:
+        pred = get_agent_registry(seat_name)
+        refuse_if_phase2_unsupported(runtime_override or pred.get("runtime"), "rotation")
+        resolve_pred_generation_or_refuse(seat_name, pred)
+    except Exception as e:  # noqa: BLE001 — each is a refusal with its own words
+        return str(e) or type(e).__name__
+    return None
+
+
 def execute_rotation(
     seat_name: str,
     runtime_override: str | None = None,
@@ -1021,6 +1076,9 @@ def execute_rotation(
 ) -> dict:
     """Execute complete on-demand mechanical rotation transaction."""
     log(f"Starting on-demand rotation for seat: {seat_name} (dry_run={dry_run}, force={force})")
+    refusal = headless_rotation_refusal(seat_name)
+    if refusal:
+        raise RotationRefused(refusal)
 
     # Step 1: Inspect predecessor
     pred = get_agent_registry(seat_name)
@@ -1332,8 +1390,19 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Simulate rotation without spawning or modifying state")
     parser.add_argument("--force", action="store_true", help="Force rotation regardless of context thresholds")
     parser.add_argument("--skip-spawn", action="store_true", help="Skip spawning new tmux session if already started")
+    parser.add_argument("--preflight", action="store_true",
+                        help="Only check whether the rotation would be refused (writes nothing): exit 0 when it may "
+                             "go ahead, 3 with the reason when refused")
 
     args = parser.parse_args()
+    if not args.preflight and not args.dry_run and headless_rotation_refusal(args.seat_name):
+        # A headless seat rotates in place, through its supervisor (seat_supervisor.py rotate): same boundary rule,
+        # same gate, no new pane.
+        return rotate_headless(args.seat_name)
+    if args.preflight:
+        why = preflight_refusal(args.seat_name, args.runtime)
+        print(json.dumps({"ok": why is None, **({"refused": why} if why else {})}))
+        return 3 if why else 0
     try:
         res = execute_rotation(
             seat_name=args.seat_name,

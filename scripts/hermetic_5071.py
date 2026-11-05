@@ -23,6 +23,8 @@ _LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0", ""}
 
 
 def _is_live_5071(address):
+    if not isinstance(address, tuple):
+        return False          # an AF_UNIX path (str/bytes) has no port
     try:
         host, port = address[0], address[1]
     except (TypeError, IndexError):

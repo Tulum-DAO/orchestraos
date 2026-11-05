@@ -1,0 +1,40 @@
+/* RevealText (lib/reveal.ts): each word is in place from the start, transparent, and fades in when released.
+   Opacity only, on the compositor; nothing else moves. */
+.reveal-w { opacity: 0; }
+.reveal-w.is-on { animation: reveal-in 400ms cubic-bezier(0.22, 0.61, 0.36, 1) both; will-change: opacity; }
+@keyframes reveal-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .reveal-w.is-on { animation: none; opacity: 1; }
+}
+
+/* StreamMarkdown (a streamed reply; lib/revealStore.ts switches units on). A unit not switched on yet is
+   in place and transparent; `is-on` fades it in (opacity only), `is-shown` is a unit shown without the fade (released
+   long ago, or a drawing mounted after the hand-off). Once on, no rule of ours sets its opacity, so its own look (a
+   link's hover) is untouched. A list item's marker and a quote's bar come in with their first word. */
+.rv:not(.is-on):not(.is-shown) { opacity: 0; }
+.rv.is-on { animation: reveal-in 400ms cubic-bezier(0.22, 0.61, 0.36, 1) backwards; }
+.rv-mark:not(.is-on):not(.is-shown)::marker { color: transparent; }
+.rv-mark.is-on::marker { transition: color 400ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+.rv-bar:not(.is-on):not(.is-shown) { border-left-color: transparent !important; }
+.rv-bar.is-on { transition: border-left-color 400ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .rv.is-on { animation: none; }
+  .rv-mark.is-on::marker, .rv-bar.is-on { transition: none; }
+}
+
+/* Modern (and Arturo's page): a reply's .txt is as wide as its words (a flex item that fits its content, its
+   max-width a share of a box that fits it in turn), so while words are added it widens and words already shown
+   re-wrap. A streamed reply's .txt takes its full measure from the first word instead (92% of the reply's row, as a
+   long reply has), live and after the hand-off alike: nothing re-wraps as it grows.
+   In PERCENTAGES OF THE ROW, never container units: a query container (container-type, for cqw) makes WebKit lay
+   the container out before it styles a subtree just put in it, with that subtree as no height. At the hand-off the
+   finished row goes in whole, so for that layout the thread was a reply shorter, Safari clamped the scroller to it
+   and the reader at the bottom was thrown up by the reply's height and left there (an iPhone, 2026-11-02;
+   lib/revealWidth.test.ts). The row's child that holds the words (the words themselves, the reaction anchor they
+   are measured in, the live block's box) is 92% of the row and the words fill it; in a reply's parts (as wide as
+   the row) the words are 92% of them; the live parts' box is as wide as the row, as the finished reply's are. */
+.turn-assistant > .txt:has(> [data-reveal-md]),
+.turn-assistant > :not(.turn-parts):has(> .txt > [data-reveal-md]) { width: 92%; max-width: none; }
+.turn-assistant > :not(.turn-parts) > .txt:has(> [data-reveal-md]) { width: auto; max-width: none; }
+.turn-parts > .txt:has(> [data-reveal-md]) { width: 92%; max-width: none; }
+.turn-assistant > :not(.turn-parts):has(> .turn-parts > .txt > [data-reveal-md]) { align-self: stretch; }

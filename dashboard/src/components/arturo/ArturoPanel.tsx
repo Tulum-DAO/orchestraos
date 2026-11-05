@@ -1,5 +1,7 @@
 /**
- * ArturoPanel — Arturo's slide-out from the top bar's gear: a short menu about Arturo. Each row shows its
+ * ArturoPanel — an agent's slide-out from the top bar's gear: a short menu about that agent. Arturo's page and
+ * every agent page use this one panel; Arturo adds his own rows (status, brain, memory, his jobs), every other agent
+ * shows its model and its subagents. Each row shows its
  * current value (the voice, how many facts, what is running), so often there is no need to tap; a tap
  * opens the row's page with a back arrow, the way an iPhone settings screen works. Settings holds a
  * second level for set-once things. Closing always starts the next opening at the top.
@@ -15,32 +17,70 @@
  *
  * Only what the dashboard can already read is shown: /api/arturo/health (status, brain), /api/arturo/ptt/*
  * (the live voice: providers set up, the voices, the current pick), /api/facts
- * (Memory), a thread's ?jobs=1 (Activity), the assistant settings store (On this device). Rows with
- * nothing behind them yet are shown disabled, marked "Coming soon".
+ * (Memory), a thread's ?jobs=1 (Activity). Settings for the whole install or for this device live in Settings
+ * (components/settings): "Server settings" and the voice provider rows open it.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from 'lucide-react';
 import { arturoHealth, ARTURO_DISABLED_TEXT, handsFreeReady, isArturoDisabled, type ArturoHealth } from '../../lib/arturo';
-import { panelStatus, pathTo, factsValue, activityValue, type PanelPage } from '../../lib/arturoPanel';
-import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, pickVoice, voiceRowValue, canChangeVoice, ADMIN_ONLY_NOTE, GPT_LIVE,
+import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
+         type PanelPage, type DrawerSection } from '../../lib/arturoPanel';
+import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceProviderValue, voiceNameValue, PROVIDER_SCOPE_NOTE, ADMIN_ONLY_NOTE, GPT_LIVE,
          type VoiceVendor, type VoiceRow, type CurrentVoice } from '../../lib/arturoVoice';
+import { styleOptions, styleLabel, chooseStyle, loadPrefs, useChatStyle, useAgentPrefsStore } from '../../lib/agentPrefs';
+import { HeadlessDevNote } from './HeadlessDevNote';
+import { Row, Info, LinkRow } from './PanelRows';
+import { TakesCalls } from './TakesCalls';
+import { useOpenSettings } from '../settings/useOpenSettings';
+import { applyNote, fetchAgentModel, switchAgentModel, switchableModels, pickRefusal,
+         type AgentModelInfo } from '../../lib/agentModel';
+import { useLiveSwitch } from '../../hooks/useLiveSwitch';
+import ModelPicker from '../kit/ModelPicker';
+import { agentModelTitle } from '../../lib/modelTitle';
+import { renameAgent } from '../../lib/railAgents';
+import '../kit/panel.css';
+import './arturo.css';
 import { fetchJobs, elapsed, type ArturoJob } from '../../lib/arturoJobs';
 import { currentThread } from '../../lib/arturoCurrent';
+import { DrawerHistory } from './DrawerHistory';
 import { factsApi, type Fact } from '../../lib/factsApi';
-import { useAgentSettings } from '../../stores/agentSettings';
-import { useUser } from '../../hooks/useUser';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { LookPicker } from '../avatar/LookPicker';
+import { DrawerLibrary } from './DrawerLibrary';
+import { RotationSettings } from './RotationSettings';
+import { ExportChatButton } from '../agent/ExportChatButton';
 import { useAgentRecord, ARTURO_ID } from '../avatar/agentState';
 import { PROVIDER_LABEL } from '../../lib/agentRail';
 import { providerMark } from '../avatar/brandMarks';
-import { canChangeLook, shapeName, colorName } from '../../lib/avatarLooks';
-import { useAssistantName, named, saveAssistantName, resetAssistantName, canRename, DEFAULT_ASSISTANT_NAME, NAME_MAX } from '../../lib/assistantName';
+import { shapeName, colorName } from '../../lib/avatarLooks';
+import { useInstallAdmin } from '../../lib/myRole';
+import { useAssistantName, named, saveAssistantName, resetAssistantName, DEFAULT_ASSISTANT_NAME, NAME_MAX } from '../../lib/assistantName';
 
 const TITLES: Record<PanelPage, string> = {
-  voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain', device: 'On this device',
-  avatar: 'Avatar', name: 'Name', edit: 'Edit',
+  voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain',
+  avatar: 'Avatar', name: 'Name', edit: 'Edit', style: 'Chat style', model: 'Model',
+  library: 'Library', history: 'History', setup: 'Setup',
 };
+
+/** The agent the panel is about, when it is not Arturo (Arturo's comes from his own stores). */
+export interface PanelAgent {
+  id: string;
+  /** Its short name (seat name, else its id). */
+  name: string;
+  /** The runtime that runs it ("claude"), for the badge under its face. */
+  provider?: string;
+  /** Its subagents running now, for Activity. */
+  subagents?: number;
+  /** How much of its context window is left (the status chip's reading), for the header's meter. */
+  contextLeftPct?: number | null;
+  /** Something of its is waiting on the operator: the drawer opens on History. */
+  waiting?: boolean;
+}
+
+const LAST_SECTION_KEY = 'orchestra.drawer.section';
+const readLast = () => { try { return localStorage.getItem(LAST_SECTION_KEY); } catch { return null; } };
+
+type SaveName = (name: string) => Promise<{ ok: true; name: string } | { ok: false; error: string }>;
 const SLIDE_MS = 200;
 
 // Tailwind's `md` breakpoint: a drawer beside the page from here up, a full-screen sheet below it.
@@ -61,18 +101,26 @@ async function loadJobs(): Promise<ArturoJob[]> {
   return id ? (await fetchJobs(id)) ?? [] : [];
 }
 
-export function ArturoPanel({ open, onClose, returnFocusTo, brain }: {
+export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }: {
   open: boolean;
   onClose: () => void;
   /** The gear: focus goes back to it when the panel closes. */
   returnFocusTo: RefObject<HTMLElement | null>;
-  /** The composer chip's brain text ("Claude CLI"), so the status line names the same brain. */
-  brain: string;
+  /** The composer chip's brain text ("Claude CLI"), so the status line names the same brain (Arturo only). */
+  brain?: string;
+  /** Any agent but Arturo; absent, the panel is Arturo's. */
+  agent?: PanelAgent;
 }) {
   const desktop = useSyncExternalStore(subscribeDesktop, isDesktopNow, () => true);
-  const arturoRec = useAgentRecord(ARTURO_ID);
-  const aname = useAssistantName();
-  const canSaveLook = canChangeLook(useUser().data?.role);
+  const agentId = agent?.id ?? ARTURO_ID;
+  const isArturo = agentId === ARTURO_ID;
+  const arturoRec = useAgentRecord(agentId);
+  const assistantName = useAssistantName();
+  const aname = isArturo ? assistantName : agent!.name;
+  const saveName: SaveName = isArturo ? saveAssistantName : (n) => renameAgent(agentId, n);
+  const style = useChatStyle(agentId);
+  const admin = useInstallAdmin();   // subscribed: an admin answer after the first render unlocks the look and the name
+  const canSaveLook = admin;
   // Mounted while open or sliding out; `shown` drives the slide, a frame after mount so it animates in.
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
@@ -82,17 +130,34 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain }: {
   const [editDraft, setEditDraft] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
-  const canEditName = canRename(useUser().data);
+  const canEditName = admin;
+  const openSettings = useOpenSettings();
+  // Leaving the panel for Settings: focus goes to the gear first, so Settings returns it there when it closes.
+  const toSettings = (go: () => void) => { onClose(); returnFocusTo.current?.focus({ preventScroll: true }); go(); };
   const [health, setHealth] = useState<ArturoHealth | null>(null);
   const [factCount, setFactCount] = useState<number | null>(null);
   const [jobs, setJobs] = useState<ArturoJob[] | null>(null);
   const [vendor, setVendor] = useState<VoiceVendor | null>(null);
   const [voice, setVoice] = useState<CurrentVoice | null>(null);
+  const [model, setModel] = useState<AgentModelInfo | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(open);
   // The page just left by Back, so focus lands on the row that opened it.
   const leftPage = useRef<PanelPage | null>(null);
   const page = stack.length ? stack[stack.length - 1] : null;
+  // Desktop: the section shown under the name (tabs); a phone opens each as its own page instead.
+  // The section picked since it opened; until then, where it opens (History when something waits or runs, else the
+  // last one used). Closing clears the pick.
+  const [picked, setPicked] = useState<DrawerSection | null>(null);
+  const tab: DrawerSection = picked ?? openingSection(arturoRec.status, !!agent?.waiting, readLast());
+  const setTab = (s: DrawerSection) => { setPicked(s); try { localStorage.setItem(LAST_SECTION_KEY, s); } catch { /* private mode */ } };
+  // The live status line counts minutes: re-read the clock while open.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    const iv = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(iv);
+  }, [open]);
 
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | undefined;
@@ -101,7 +166,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain }: {
       t = setTimeout(() => { setMounted(true); raf = requestAnimationFrame(() => setShown(true)); }, 0);
     } else {
       t = setTimeout(() => setShown(false), 0);
-      const done = setTimeout(() => { setMounted(false); setStack([]); }, SLIDE_MS);
+      const done = setTimeout(() => { setMounted(false); setStack([]); setPicked(null); }, SLIDE_MS);
       return () => { clearTimeout(t); clearTimeout(done); };
     }
     return () => { clearTimeout(t); cancelAnimationFrame(raf); };
@@ -113,13 +178,20 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain }: {
   useEffect(() => {
     if (!open || !atRoot) return;
     let alive = true;
-    void arturoHealth().then((h) => { if (alive) setHealth(h); });
-    factsApi.getFacts().then((d) => { if (alive) setFactCount((d.facts || []).length); }).catch(() => {});
-    void loadJobs().then((j) => { if (alive) setJobs(j); });
+    // Arturo's voice is the install's; any other agent's is its own, else the install's.
+    const voiceAgent = isArturo ? undefined : agentId;
+    if (isArturo) {
+      void arturoHealth().then((h) => { if (alive) setHealth(h); });
+      factsApi.getFacts().then((d) => { if (alive) setFactCount((d.facts || []).length); }).catch(() => {});
+      void loadJobs().then((j) => { if (alive) setJobs(j); });
+    } else {
+      void fetchAgentModel(agentId).then((m) => { if (alive) setModel(m); });
+    }
     void fetchOpenAiVendor().then((v) => { if (alive) setVendor(v); });
-    void fetchCurrentVoice().then((v) => { if (alive) setVoice(v); });
+    void fetchCurrentVoice(voiceAgent).then((v) => { if (alive) setVoice(v); });
+    void loadPrefs(agentId);
     return () => { alive = false; };
-  }, [open, atRoot]);
+  }, [open, atRoot, isArturo, agentId]);
 
   // Focus in once the slide has landed; back to the gear on close.
   useEffect(() => {
@@ -174,108 +246,145 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain }: {
     const next = editDraft.trim();
     if (!canEditName || !next || next === aname) { back(); return; }
     setEditBusy(true); setEditError(null);
-    const r = await saveAssistantName(next);
+    const r = await saveName(next);
     setEditBusy(false);
     if (r.ok) back(); else setEditError(r.error);
   };
 
   // Desktop closes with an X at the right; the phone sheet with Done, and its chevron closes at the root.
   const bar = (
-    <div className="arturo-panel-bar">
+    <div className="panel-bar">
       {page ? (
-        <button type="button" data-panel-back className="arturo-panel-icon" aria-label="Back" onClick={back}>
+        <button type="button" data-panel-back className="panel-icon" aria-label="Back" onClick={back}>
           <ChevronLeft size={22} />
         </button>
       ) : !desktop ? (
-        <button type="button" className="arturo-panel-icon" aria-label="Close" onClick={onClose}>
+        <button type="button" className="panel-icon" aria-label="Close" onClick={onClose}>
           <ChevronLeft size={22} />
         </button>
-      ) : <span className="arturo-panel-icon" aria-hidden />}
-      <h2 className="arturo-panel-title">{title}</h2>
+      ) : <span className="panel-icon" aria-hidden />}
+      <h2 className="panel-title">{title}</h2>
       {page === 'edit' ? (
-        <button type="button" className="arturo-panel-done" onClick={() => void editDone()} disabled={editBusy}>Done</button>
+        <button type="button" className="panel-done" onClick={() => void editDone()} disabled={editBusy}>Done</button>
       ) : desktop ? (
-        <button type="button" className="arturo-panel-icon" aria-label="Close" onClick={onClose}>
+        <button type="button" className="panel-icon" aria-label="Close" onClick={onClose}>
           <X size={20} />
         </button>
       ) : (
-        <button type="button" className="arturo-panel-done" onClick={onClose}>Done</button>
+        <button type="button" className="panel-done" onClick={onClose}>Done</button>
       )}
     </div>
   );
 
+  const sections = DRAWER_SECTIONS;
+  const activityText = isArturo ? activityValue(jobs) : subagentsValue(agent?.subagents);
+  // A phone's drill-in rows carry a live value each, so often there is no need to open them.
+  const sectionValue = (s: DrawerSection): string => s === 'history' ? (agent?.waiting ? 'Waiting for you' : activityText)
+    : s === 'setup' ? (isArturo ? styleLabel(style) : agentModelTitle(model) ?? '') : '';
+  // Each section shows what exists today until its own step fills it, never an empty page. Dev is a chat style,
+  // chosen in Setup; there is no terminal row.
+  const sectionBody = (s: DrawerSection): ReactNode => s === 'history'
+    ? <DrawerHistory agentId={agentId} isArturo={isArturo} name={aname} subagents={agent?.subagents} onClose={onClose} />
+    : s === 'library' ? <DrawerLibrary agentId={agentId} name={aname} />
+    : (
+      <div className="panel-list" data-drawer-setup>
+        {isArturo
+          ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
+          : <Row id="model" label="Model" value={agentModelTitle(model) ?? ''} onOpen={push} />}
+        <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
+        <Row id="settings" label="Settings" onOpen={push} />
+        {!isArturo && <TakesCalls agentId={agentId} />}
+        <RotationSettings key={agentId} agentId={agentId} isArturo={isArturo} />
+        <LinkRow label="Server settings" data="server-settings" onClick={() => toSettings(() => openSettings('server'))} />
+      </div>
+    );
+
   const content = (
     <>
       {bar}
-      <div className="arturo-panel-body" key={page ?? 'root'}>
-        {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} />
+      <div className="panel-body" key={page ?? 'root'}>
+        {page === 'voice' ? <VoicePage health={health} onPicked={setVoice} agentId={isArturo ? undefined : agentId} onProvider={() => toSettings(() => openSettings('server-voice'))} />
           : page === 'memory' ? <MemoryPage />
-          : page === 'activity' ? <ActivityPage />
+          : page === 'activity' ? (isArturo ? <ActivityPage /> : <SubagentsPage running={agent?.subagents} name={aname} />)
+          : page === 'style' ? <StylePage agentId={agentId} />
+          : page === 'model' ? <ModelPage agentId={agentId} onChanged={setModel} onClose={onClose} />
           : page === 'settings' ? (
-            <div className="arturo-panel-list">
+            <div className="panel-list">
               <Row id="name" label="Name" value={aname} onOpen={push} />
-              <Row id="brain" label="Brain" value={brain} onOpen={push} />
-              <Row label="Keys" soon />
-              <Row label="Notifications" soon />
-              <Row id="device" label="On this device" onOpen={push} />
-              <Row label="About" soon />
+              {isArturo && <Row id="brain" label="Brain" value={brain} onOpen={push} />}
             </div>
           )
           : page === 'brain' ? <BrainPage health={health} brain={brain} />
-          : page === 'device' ? <DevicePage />
-          : page === 'name' ? <NamePage />
+          : page === 'name' ? (isArturo ? <NamePage /> : <AgentNamePage agentId={agentId} name={aname} save={saveName} />)
           : page === 'edit' ? (
-            <EditPage draft={editDraft} onDraft={setEditDraft} error={editError} canName={canEditName}
-                      onDone={() => void editDone()} onAvatar={() => push('avatar')} />
+            <EditPage agentId={agentId} name={aname} draft={editDraft} onDraft={setEditDraft} error={editError} canName={canEditName}
+                      onDone={() => void editDone()} onAvatar={() => push('avatar')}
+                      provider={voiceProviderValue(vendor, health ? handsFreeReady(health) : null)}
+                      voice={(() => { const n = voiceNameValue(vendor, voice, health ? handsFreeReady(health) : null); return n && !isArturo && voice?.scope === 'install' ? `${n} (default)` : n; })()}
+                      onVoice={() => push('voice')} onProvider={() => toSettings(() => openSettings('server-voice'))} />
           )
-          : page === 'avatar' ? <LookPicker agentId={ARTURO_ID} heroSize={160} canSave={canSaveLook} />
+          : page === 'avatar' ? <LookPicker agentId={agentId} heroSize={160} canSave={canSaveLook} />
+          : page === 'library' || page === 'history' || page === 'setup' ? sectionBody(page)
           : (
             <>
-              <DrawerFace canSave={canSaveLook} canName={canEditName} desktop={desktop}
+              {!isArturo && <ExportChatButton agentId={agentId} />}
+              <DrawerFace agentId={agentId} name={aname} save={saveName} canSave={canSaveLook} canName={canEditName} desktop={desktop}
+                          subtitle={liveStatus(arturoRec.status, arturoRec.since, now)}
+                          meter={isArturo ? null : contextUsedLabel(agent?.contextLeftPct)}
+                          meterPct={isArturo ? null : agent?.contextLeftPct ?? null}
                           onOpen={() => push('avatar')} onEdit={openEdit} />
-              {status.fix ? (
+              {isArturo && status.fix && (
                 <button type="button" className="arturo-panel-status is-fix" role="status"
                         onClick={() => setStack(pathTo(status.fix!))}>
                   <span>{status.text}</span>
                   <ChevronRight size={14} />
                 </button>
-              ) : (
-                <p className="arturo-panel-status" role="status">{status.text}</p>
               )}
-              <div className="arturo-panel-list">
-                <Row id="avatar" label="Avatar" value={`${shapeName(arturoRec.shape)} · ${colorName(arturoRec.color)}`} onOpen={push} />
-                <Row id="voice" label="Voice" value={voiceRowValue(vendor, voice, health ? handsFreeReady(health) : null)} onOpen={push} />
-                <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
-                <Row id="activity" label="Activity" value={activityValue(jobs)} onOpen={push} />
-                <Row id="settings" label="Settings" onOpen={push} />
-              </div>
+              {desktop ? (
+                <>
+                  <div className="arturo-panel-pills" role="tablist" aria-label={`${aname}'s drawer`}>
+                    {sections.map((s) => (
+                      <button key={s} type="button" role="tab" aria-selected={tab === s} data-drawer-tab={s}
+                              className={`arturo-panel-pill${tab === s ? ' is-on' : ''}`} onClick={() => setTab(s)}>
+                        {SECTION_LABEL[s]}
+                      </button>
+                    ))}
+                  </div>
+                  <div role="tabpanel" data-drawer-section={tab}>{sectionBody(tab)}</div>
+                </>
+              ) : (
+                <div className="panel-list" data-drawer-rows>
+                  {sections.map((s) => <Row key={s} id={s} label={SECTION_LABEL[s]} value={sectionValue(s)} onOpen={push} />)}
+                </div>
+              )}
             </>
           )}
       </div>
     </>
   );
 
+  // .agent-panel-host carries the panel's colours (kit/panel.css), so it looks the same on an agent page as on Arturo's.
   if (!desktop) {
     return (
-      <div ref={panelRef} id="arturo-panel" role="dialog" aria-modal="true" aria-label={aname}
-           className={`arturo-panel arturo-panel-sheet${shown ? ' is-shown' : ''}`}>
-        {content}
+      <div className="agent-panel-host">
+        <div ref={panelRef} id="arturo-panel" role="dialog" aria-modal="true" aria-label={aname}
+             className={`arturo-panel arturo-panel-sheet${shown ? ' is-shown' : ''}`}>
+          {content}
+        </div>
       </div>
     );
   }
   return (
-    <>
+    <div className="agent-panel-host">
       <div className={`arturo-panel-scrim${shown ? ' is-shown' : ''}`} onClick={onClose} aria-hidden />
       <div ref={panelRef} id="arturo-panel" role="dialog" aria-modal="true" aria-label={aname}
            className={`arturo-panel arturo-panel-drawer${shown ? ' is-shown' : ''}`}>
         {content}
       </div>
-    </>
+    </div>
   );
 }
 
-/** One 52px row: the label, its current value in grey, a chevron. A row with nothing behind it yet is
- *  disabled and says so, rather than opening an empty page. */
 /** Arturo's face at the top of the drawer: its picture, not its status (only the sidebar avatar shows
  *  that), with the badge of the brain that runs it; under it the name, that brain and the voice it calls
  *  with (a different vendor, so labelled as the voice). Tapping it opens the look picker; until a look is
@@ -283,21 +392,32 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain }: {
 const MARK_NAME: Record<string, string> = { claude: 'Claude', openai: 'OpenAI', gemini: 'Gemini', grok: 'Grok' };
 const brainName = (p: string) => MARK_NAME[providerMark(p) ?? ''] || PROVIDER_LABEL[p] || p;
 
-function DrawerFace({ canSave, canName, desktop, onOpen, onEdit }: {
+function DrawerFace({ agentId, name, save, subtitle, meter, meterPct, canSave, canName, desktop, onOpen, onEdit }: {
+  agentId: string; name: string; save: SaveName; subtitle?: string; meter?: string | null; meterPct?: number | null;
   canSave: boolean; canName: boolean; desktop: boolean; onOpen: () => void; onEdit: () => void;
 }) {
-  const rec = useAgentRecord(ARTURO_ID);
-  const aname = useAssistantName();
+  const rec = useAgentRecord(agentId);
   return (
     <div className="arturo-face">
-      <button type="button" className="arturo-face-btn la-on-panel" onClick={onOpen} aria-label={`${aname}'s look`}>
-        <AgentAvatar agentId={ARTURO_ID} role="drawer" size={112} selected showStatus={false} label={aname} />
+      <button type="button" className="arturo-face-btn la-on-panel" onClick={onOpen} aria-label={`${name}'s look`}>
+        <AgentAvatar agentId={agentId} role="drawer" size={112} selected showStatus={false} label={name} />
         {canSave && !rec.chosen && <span className="look-pencil" aria-hidden><Pencil size={14} /></span>}
       </button>
-      {desktop && canName ? <InlineName /> : <p className="arturo-face-name">{aname}</p>}
-      {/* Phone: the name is edited on its own screen, opened from this pill (as Grok Bot's profile does). */}
-      {!desktop && (canName || canSave) && <button type="button" className="arturo-face-edit" onClick={onEdit}>Edit</button>}
-      <p className="arturo-face-status">{rec.provider ? `${brainName(rec.provider)} · ` : ''}Voice: {GPT_LIVE}</p>
+      {desktop && canName ? <InlineName name={name} save={save} /> : <p className="arturo-face-name">{name}</p>}
+      {/* Edit opens the identity screen: name, avatar and voice, like a chat app's profile screen. */}
+      <button type="button" className="arturo-face-edit" onClick={onEdit} data-drawer-edit>Edit</button>
+      <p className="arturo-face-status" data-drawer-status>
+        {subtitle ?? `${rec.provider ? `${brainName(rec.provider)} · ` : ''}Voice: ${GPT_LIVE}`}
+      </p>
+      {meter && (
+        <div className="arturo-face-meter" data-drawer-context>
+          <span className="arturo-face-meter-bar" aria-hidden>
+            <span style={{ width: `${Math.max(0, Math.min(100, 100 - (meterPct ?? 100)))}%` }}
+                  className={(meterPct ?? 100) <= 20 ? 'is-low' : ''} />
+          </span>
+          <span>{meter}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -305,8 +425,7 @@ function DrawerFace({ canSave, canName, desktop, onOpen, onEdit }: {
 /** Desktop: the name as plain text that is a field in disguise. Hovering fades in a textbox background and
  *  border; clicking edits it in place. Enter or leaving the field saves (the same setting as Settings → Name),
  *  Esc puts the name back. */
-function InlineName() {
-  const aname = useAssistantName();
+function InlineName({ name: aname, save }: { name: string; save: SaveName }) {
   // null while not editing: the field shows the saved name (and follows a rename made elsewhere)
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -317,14 +436,14 @@ function InlineName() {
     const next = (draft ?? '').trim();
     if (draft === null || !next || next === aname) { setDraft(null); setError(null); return; }
     setBusy(true);
-    const r = await saveAssistantName(next);
+    const r = await save(next);
     setBusy(false);
     if (r.ok) { setDraft(null); setError(null); } else setError(r.error);
   };
   return (
     <>
       <input ref={ref} className="arturo-face-name arturo-face-name-edit" value={text} maxLength={NAME_MAX}
-             size={Math.max(4, text.length + 1)} aria-label="Assistant name" disabled={busy} data-inline-name
+             size={Math.max(4, text.length + 1)} aria-label="Name" disabled={busy} data-inline-name
              onFocus={() => setDraft((d) => d ?? aname)}
              onChange={(e) => { setDraft(e.target.value); setError(null); }}
              onBlur={() => void commit()}
@@ -332,67 +451,51 @@ function InlineName() {
                if (e.key === 'Enter') { e.preventDefault(); ref.current?.blur(); }
                else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setDraft(null); setError(null); requestAnimationFrame(() => ref.current?.blur()); }
              }} />
-      {error && <p className="arturo-panel-error arturo-face-error" role="alert">{error}</p>}
+      {error && <p className="panel-error arturo-face-error" role="alert">{error}</p>}
     </>
   );
 }
 
-/** Phone: the Edit screen (as Grok Bot's): the avatar with a pencil badge, the Name field, then Appearance with
+/** Phone: the Edit screen (like a chat app's): the avatar with a pencil badge, the Name field, then Appearance with
  *  the Avatar row that opens the look picker. Done in the bar saves the name; the back arrow leaves it. */
-function EditPage({ draft, onDraft, error, canName, onDone, onAvatar }: {
+function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, provider, voice, onVoice, onProvider }: {
+  agentId: string; name: string;
   draft: string; onDraft: (v: string) => void; error: string | null; canName: boolean; onDone: () => void; onAvatar: () => void;
+  /** The voice provider ("GPT-Live"): set for the whole install, so its row opens Settings › Server › Voice & calls. */
+  provider: string;
+  voice: string; onVoice: () => void; onProvider: () => void;
 }) {
-  const rec = useAgentRecord(ARTURO_ID);
-  const aname = useAssistantName();
+  const rec = useAgentRecord(agentId);
   return (
     <div className="arturo-edit">
       <button type="button" className="arturo-face-btn arturo-edit-face la-on-panel" onClick={onAvatar} aria-label={`Change ${aname}'s look`}>
-        <AgentAvatar agentId={ARTURO_ID} role="drawer" size={96} selected showStatus={false} label={aname} />
+        <AgentAvatar agentId={agentId} role="drawer" size={96} selected showStatus={false} label={aname} />
         <span className="look-pencil" aria-hidden><Pencil size={14} /></span>
       </button>
       <form onSubmit={(e) => { e.preventDefault(); onDone(); }}>
         <label className="arturo-edit-label" htmlFor="arturo-edit-name">Name</label>
-        <input id="arturo-edit-name" className="arturo-panel-input arturo-edit-input" value={draft} maxLength={NAME_MAX}
+        <input id="arturo-edit-name" className="panel-input arturo-edit-input" value={draft} maxLength={NAME_MAX}
                readOnly={!canName} onChange={(e) => onDraft(e.target.value)} data-edit-name />
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-      {!canName && <p className="arturo-panel-note">Only an admin can rename the assistant.</p>}
-      <h3 className="arturo-panel-section">Appearance</h3>
-      <div className="arturo-panel-list">
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      {!canName && <p className="panel-note">Only an admin can rename the assistant.</p>}
+      <h3 className="panel-section">Appearance</h3>
+      <div className="panel-list">
         <Row id="avatar" label="Avatar" value={`${shapeName(rec.shape)} · ${colorName(rec.color)}`} onOpen={onAvatar} />
+        {/* The server's provider: set for the whole install in Settings › Server › Voice & calls, so this row opens it there.
+            The voice is this agent's own, tappable as ever. Two short lines, never cut off. */}
+        <button type="button" className="panel-row" data-voice-provider onClick={onProvider}>
+          <span>Provider</span>
+          <span className="panel-rowend">
+            <span className="panel-rowvalue" style={{ whiteSpace: 'normal', textAlign: 'right', padding: '6px 0' }}>
+              <span style={{ display: 'block' }}>{provider}</span>
+              {provider && provider !== 'Not set up' ? <span style={{ display: 'block', fontSize: 'calc(12px * var(--ui-text-scale, 1))' }}>{PROVIDER_SCOPE_NOTE}</span> : null}
+            </span>
+            <ChevronRight size={18} />
+          </span>
+        </button>
+        <Row id="voice" label="Voice" value={voice} onOpen={onVoice} />
       </div>
-    </div>
-  );
-}
-
-function Row({ id, label, value, onOpen, soon }: {
-  id?: PanelPage; label: string; value?: string; onOpen?: (p: PanelPage) => void; soon?: boolean;
-}) {
-  if (soon || !id || !onOpen) {
-    return (
-      <button type="button" className="arturo-panel-row" disabled>
-        <span>{label}</span>
-        <span className="arturo-panel-rowvalue">Coming soon</span>
-      </button>
-    );
-  }
-  return (
-    <button type="button" data-panel-row={id} className="arturo-panel-row" onClick={() => onOpen(id)}>
-      <span>{label}</span>
-      <span className="arturo-panel-rowend">
-        {value ? <span className="arturo-panel-rowvalue">{value}</span> : null}
-        <ChevronRight size={18} />
-      </span>
-    </button>
-  );
-}
-
-/** A read-only row: a label and its value, no chevron. */
-function Info({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="arturo-panel-field">
-      <span>{label}</span>
-      <span className="arturo-panel-rowvalue">{children}</span>
     </div>
   );
 }
@@ -401,61 +504,206 @@ function Info({ label, children }: { label: string; children: ReactNode }) {
  *  the one the next call uses. A pick shows at once and is put back, with the server's reason, if refused.
  *  Fast replies and captions are always on, so there is nothing to switch here. Anyone may look; only an
  *  admin may change it, so for everyone else the list is read-only and says why. */
-function VoicePage({ health, onPicked }: { health: ArturoHealth | null; onPicked: (v: CurrentVoice) => void }) {
+function VoicePage({ health, onPicked, agentId, onProvider }: {
+  health: ArturoHealth | null; onPicked: (v: CurrentVoice) => void;
+  /** The provider is the install's: its row opens Settings › Server › Voice & calls. */
+  onProvider: () => void;
+  /** Any agent but Arturo: its own voice, else the install's (Arturo's voice IS the install's). */
+  agentId?: string;
+}) {
   const [vendor, setVendor] = useState<VoiceVendor | null | undefined>(undefined);
   const [voices, setVoices] = useState<VoiceRow[] | null | undefined>(undefined);
   const [current, setCurrent] = useState<string | null>(null);
+  const [scope, setScope] = useState<CurrentVoice['scope']>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const editable = canChangeVoice(useUser().data?.role);
+  const editable = useInstallAdmin();
   const aname = useAssistantName();
   useEffect(() => {
     let alive = true;
     void fetchOpenAiVendor().then((v) => { if (alive) setVendor(v); });
     void fetchVoices().then((v) => { if (alive) setVoices(v); });
-    void fetchCurrentVoice().then((v) => { if (alive && v) setCurrent(v.voice_id); });
+    void fetchCurrentVoice(agentId).then((v) => { if (alive && v) { setCurrent(v.voice_id); setScope(v.scope); } });
     return () => { alive = false; };
-  }, []);
+  }, [agentId]);
   // The server's own key check decides; an older API without the voice routes falls back to the health check.
   const available = vendor ? vendor.available : vendor === null && health ? handsFreeReady(health) : null;
   const pick = (id: string) => {
     if (!editable || id === current) return;
     const title = voices?.find((v) => v.id === id)?.title ?? null;
     const before = current;
-    void pickVoice(before, id, putVoice, (s) => { setCurrent(s.current); setError(s.error); }).then((ok) => {
-      if (ok) onPicked({ voice_id: id, title });
+    void pickVoice(before, id, (v) => putVoice(v, agentId), (s) => { setCurrent(s.current); setError(s.error); }).then((ok) => {
+      if (ok) { setScope(agentId ? 'agent' : 'install'); onPicked({ voice_id: id, title, scope: agentId ? 'agent' : 'install' }); }
+    });
+  };
+  const useDefault = () => {
+    if (!agentId) return;
+    void clearVoice(agentId).then((r) => {
+      if (!r.ok) { setError(`Couldn't change the voice: ${r.error || 'unknown error'}`); return; }
+      void fetchCurrentVoice(agentId).then((v) => {
+        if (!v) return;
+        setCurrent(v.voice_id); setScope(v.scope); setError(null); onPicked(v);
+      });
     });
   };
   return (
     <>
-      <h3 className="arturo-panel-section">Provider</h3>
-      <div className="arturo-panel-list arturo-panel-list-tight">
-        <div className={`arturo-panel-field${available === false ? ' is-disabled' : ''}`}>
+      <h3 className="panel-section">Provider</h3>
+      <div className="panel-list panel-list-tight">
+        <button type="button" className="panel-row" data-voice-provider onClick={onProvider}>
           <span>{GPT_LIVE} (OpenAI)</span>
-          {available ? <Check size={18} className="arturo-panel-check" aria-label="Selected" /> : null}
-        </div>
+          <span className="panel-rowend">
+            <span className="panel-rowvalue">{PROVIDER_SCOPE_NOTE}</span>
+            <ChevronRight size={18} />
+          </span>
+        </button>
       </div>
-      {available === false && <p className="arturo-panel-note">Add an OpenAI key to use {GPT_LIVE}.</p>}
+      {available === false && <p className="panel-note">Add an OpenAI key to use {GPT_LIVE}.</p>}
       {available && (
         <>
-          <h3 className="arturo-panel-section">Voice</h3>
-          {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-          {voices === undefined ? <p className="arturo-panel-empty">Loading…</p>
-            : voices === null ? <p className="arturo-panel-empty">Couldn't load the voices.</p>
+          <h3 className="panel-section">Voice</h3>
+          {error && <p className="panel-error" role="alert">{error}</p>}
+          {voices === undefined ? <p className="panel-empty">Loading…</p>
+            : voices === null ? <p className="panel-empty">Couldn't load the voices.</p>
             : (
-              <div className="arturo-panel-list arturo-panel-list-tight" role="radiogroup" aria-label="Voice">
+              <div className="panel-list panel-list-tight" role="radiogroup" aria-label="Voice">
                 {voices.map((v) => (
                   <button key={v.id} type="button" role="radio" aria-checked={v.id === current} data-voice={v.id}
-                          disabled={!editable} className="arturo-panel-row arturo-panel-choice" onClick={() => pick(v.id)}>
+                          disabled={!editable} className="panel-row panel-choice" onClick={() => pick(v.id)}>
                     <span>{v.title}</span>
-                    {v.id === current ? <Check size={18} className="arturo-panel-check" /> : null}
+                    {v.id === current ? <Check size={18} className="panel-check" /> : null}
                   </button>
                 ))}
               </div>
             )}
-          <p className="arturo-panel-note">{editable ? 'Applies from your next call.' : `${named(ADMIN_ONLY_NOTE, aname)}.`}</p>
+          {agentId && scope === 'agent' && editable && (
+            <button type="button" className="panel-link" onClick={useDefault}>Use the default voice</button>
+          )}
+          <p className="panel-note">
+            {!editable ? `${named(ADMIN_ONLY_NOTE, aname)}.`
+              : agentId && scope !== 'agent' ? 'Using the default voice. Pick one to give this agent its own. Applies from your next call.'
+              : 'Applies from your next call.'}
+          </p>
         </>
       )}
     </>
+  );
+}
+
+/** How you see this agent: Modern, Bubbles or Dev, saved for you on the server. A style it cannot show yet is
+ *  listed with why, rather than hidden. */
+function StylePage({ agentId }: { agentId: string }) {
+  const style = useChatStyle(agentId);
+  const error = useAgentPrefsStore((s) => s.errors[agentId]);
+  return (
+    <>
+      <div className="panel-list panel-list-tight" role="radiogroup" aria-label="Chat style">
+        {styleOptions(agentId).map((o) => (
+          <button key={o.id} type="button" role="radio" aria-checked={o.id === style} data-style={o.id}
+                  disabled={!o.available} className="panel-row panel-choice"
+                  onClick={() => { if (o.id !== style) void chooseStyle(agentId, o.id); }}>
+            <span>{o.label}</span>
+            {o.id === style ? <Check size={18} className="panel-check" />
+              : o.reason ? <span className="panel-rowvalue">{o.reason}</span> : null}
+          </button>
+        ))}
+      </div>
+      <HeadlessDevNote agentId={agentId} />
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      <p className="panel-note">Saved for you on every device. Dev is the agent's live terminal.</p>
+    </>
+  );
+}
+
+/** The model this agent runs, and the ones it can switch to (lib/agentModel.ts: live where its CLI allows, at its
+ *  next rotation otherwise; a busy agent switches when its turn ends). */
+function ModelPage({ agentId, onChanged, onClose }: { agentId: string; onChanged: (m: AgentModelInfo | null) => void; onClose: () => void }) {
+  // Kept with the agent it was read for, so another agent's late answer never shows here.
+  const [infoOf, setInfoOf] = useState<{ id: string; info: AgentModelInfo | null } | null>(null);
+  const info = infoOf?.id === agentId ? infoOf.info : undefined;
+  useEffect(() => {
+    let alive = true;
+    void fetchAgentModel(agentId).then((m) => { if (alive) setInfoOf({ id: agentId, info: m }); });
+    return () => { alive = false; };
+  }, [agentId]);
+  // A re-read after a switch (lib/liveSwitch.ts: a failure, a confirmed live switch once its record caught up) updates
+  // this page and the Model row behind it.
+  const resync = useCallback(() => fetchAgentModel(agentId).then((m) => {
+    setInfoOf({ id: agentId, info: m });
+    if (m) onChanged(m);
+    return m;
+  }), [agentId, onChanged]);
+  // Picks go through the agent's live-switch sequencer, the one the composer uses too: one request out, the latest pick
+  // waiting, the newest shown at once and only the newest outcome said.
+  const live = useLiveSwitch(agentId, {
+    send: switchAgentModel,
+    resync,
+    baseModel: info?.pending?.model ?? info?.model ?? null,
+    // The Model row behind this page moves on a confirmed live switch only; a switch waiting for the turn to end or for
+    // the next rotation is said by the notice, and the re-read after it updates the row.
+    onApplied: ({ model }) => { if (info) onChanged({ ...info, model }); },
+  });
+  if (info === undefined) return <p className="panel-empty">Loading…</p>;
+  if (info === null) return <p className="panel-empty">Couldn't read this agent's model.</p>;
+  const shown = { ...info, ...live.shown };
+  const why = pickRefusal(info, { providerId: info.runtime ?? '', modelLabel: '' });
+  const pick = (id: string, label: string) => {
+    // The model it shows, with nothing out: nothing to do. While a switch is out, the sequencer decides.
+    if (!live.busy && id === shown.model) return;
+    live.pick({ model: { id, label } });
+  };
+  const notice = live.notice;
+  return (
+    <>
+      {why ? <p className="panel-note">{why}</p> : (
+        <ModelPicker variant="inline" value={{ providerId: shown.runtime ?? '', modelId: shown.model ?? '' }}
+          agentModels={{ providerId: shown.runtime ?? '', models: switchableModels(shown) }} note={applyNote(shown)} onBeforeNewAgent={onClose}
+          onValueChange={(p) => pick(p.modelId, p.modelLabel)} />
+      )}
+      {notice && <p className={notice.tone === 'error' ? 'panel-error' : 'panel-note'} role="status">{notice.text}</p>}
+    </>
+  );
+}
+
+/** What an agent has running on the side: its subagents (background tasks and subagents are its jobs). */
+function SubagentsPage({ running, name }: { running?: number; name: string }) {
+  return (
+    <div className="arturo-panel-activity">
+      <h3 className="panel-section">Running</h3>
+      <p className="panel-empty">
+        {running ? `${name} has ${running} subagent${running === 1 ? '' : 's'} working.` : `Nothing running beside ${name}'s own turn.`}
+      </p>
+    </div>
+  );
+}
+
+/** An agent's short name: shown everywhere it appears. Its old names stay its own, so mail sent to them still
+ *  reaches it; its id never changes. */
+function AgentNamePage({ agentId, name, save }: { agentId: string; name: string; save: SaveName }) {
+  const [text, setText] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const changed = text.trim() !== name;
+  const submit = () => {
+    if (!changed || !text.trim()) return;
+    setBusy(true); setError(null); setSaved(false);
+    void save(text.trim()).then((r) => {
+      setBusy(false);
+      if (r.ok) { setText(r.name); setSaved(true); } else setError(r.error);
+    });
+  };
+  return (
+    <div>
+      <form className="arturo-panel-add" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <input value={text} onChange={(e) => { setText(e.target.value); setSaved(false); }} aria-label="Agent name"
+               maxLength={40} className="panel-input" data-name-input />
+        <button type="submit" className="panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>
+      </form>
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      <p className="panel-note" role="status">
+        {saved ? 'Saved. Its old name still reaches it.' : `Shown everywhere this agent appears. Its id stays ${agentId}.`}
+      </p>
+    </div>
   );
 }
 
@@ -469,12 +717,12 @@ function BrainPage({ health, brain }: { health: ArturoHealth | null; brain: stri
     : null;
   return (
     <>
-      <div className="arturo-panel-list">
+      <div className="panel-list">
         <Info label="Default brain">{brain || '…'}</Info>
         <Info label="Status">{panelStatus(health, brain, aname).text.split(' · ')[0]}</Info>
       </div>
-      {why && <p className="arturo-panel-note">{why}</p>}
-      <p className="arturo-panel-note">Change the brain for a message from the chip under the composer.</p>
+      {why && <p className="panel-note">{why}</p>}
+      <p className="panel-note">Change the brain for a message from the chip under the composer.</p>
     </>
   );
 }
@@ -484,7 +732,7 @@ function BrainPage({ health, brain }: { health: ArturoHealth | null; brain: stri
  *  so a half-typed name never reaches the assistant. */
 function NamePage() {
   const aname = useAssistantName();
-  const editable = canRename(useUser().data);
+  const editable = useInstallAdmin();
   const [text, setText] = useState(aname);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -500,14 +748,14 @@ function NamePage() {
     <div>
       <form className="arturo-panel-add" onSubmit={(e) => { e.preventDefault(); save(); }}>
         <input value={text} onChange={(e) => { setText(e.target.value); setSaved(false); }} aria-label="Assistant name"
-               maxLength={NAME_MAX} readOnly={!editable} className="arturo-panel-input" data-name-input />
-        {editable && <button type="submit" className="arturo-panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>}
+               maxLength={NAME_MAX} readOnly={!editable} className="panel-input" data-name-input />
+        {editable && <button type="submit" className="panel-primary" disabled={!changed || !text.trim() || busy}>Save</button>}
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
+      {error && <p className="panel-error" role="alert">{error}</p>}
       {editable && aname !== DEFAULT_ASSISTANT_NAME && (
-        <button type="button" className="arturo-panel-link" onClick={reset} disabled={busy}>Use the default name ({DEFAULT_ASSISTANT_NAME})</button>
+        <button type="button" className="panel-link" onClick={reset} disabled={busy}>Use the default name ({DEFAULT_ASSISTANT_NAME})</button>
       )}
-      <p className="arturo-panel-note" role="status">
+      <p className="panel-note" role="status">
         {!editable ? 'Only an admin can rename the assistant.'
           : saved ? `Saved. Every device now calls it ${aname}.`
           : 'Shown on every device and used in what it says about itself. Letters, numbers and spaces.'}
@@ -552,23 +800,23 @@ function MemoryPage() {
     <div>
       <form className="arturo-panel-add" onSubmit={(e) => { e.preventDefault(); void add(); }}>
         <input value={newText} onChange={(e) => setNewText(e.target.value)} aria-label="New fact"
-               placeholder={`Add something ${aname} should know`} className="arturo-panel-input" />
-        <button type="submit" className="arturo-panel-primary" disabled={!newText.trim() || busy === 'new'}>Add</button>
+               placeholder={`Add something ${aname} should know`} className="panel-input" />
+        <button type="submit" className="panel-primary" disabled={!newText.trim() || busy === 'new'}>Add</button>
       </form>
-      {error && <p className="arturo-panel-error" role="alert">{error}</p>}
-      {facts === null ? (!error && <p className="arturo-panel-empty">Loading…</p>)
-        : facts.length === 0 ? <p className="arturo-panel-empty">Nothing remembered yet.</p>
+      {error && <p className="panel-error" role="alert">{error}</p>}
+      {facts === null ? (!error && <p className="panel-empty">Loading…</p>)
+        : facts.length === 0 ? <p className="panel-empty">Nothing remembered yet.</p>
         : (
           <ul className="arturo-panel-facts">
             {facts.map((f) => (
               <li key={f.id}>
                 {editing?.id === f.id ? (
                   <>
-                    <textarea value={editing.text} aria-label="Edit fact" className="arturo-panel-input arturo-panel-textarea"
+                    <textarea value={editing.text} aria-label="Edit fact" className="panel-input panel-textarea"
                               onChange={(e) => setEditing({ id: f.id, text: e.target.value })} />
                     <div className="arturo-panel-actions">
-                      <button type="button" className="arturo-panel-link" onClick={() => setEditing(null)}>Cancel</button>
-                      <button type="button" className="arturo-panel-primary" disabled={!editing.text.trim() || busy === f.id} onClick={() => void save()}>Save</button>
+                      <button type="button" className="panel-link" onClick={() => setEditing(null)}>Cancel</button>
+                      <button type="button" className="panel-primary" disabled={!editing.text.trim() || busy === f.id} onClick={() => void save()}>Save</button>
                     </div>
                   </>
                 ) : (
@@ -580,8 +828,8 @@ function MemoryPage() {
                         {f.freshness?.stale ? ' · may be out of date' : ''}
                       </span>
                       <span className="flex-1" />
-                      <button type="button" className="arturo-panel-link" onClick={() => setEditing({ id: f.id, text: f.text })}>Edit</button>
-                      <button type="button" className="arturo-panel-link" disabled={busy === f.id}
+                      <button type="button" className="panel-link" onClick={() => setEditing({ id: f.id, text: f.text })}>Edit</button>
+                      <button type="button" className="panel-link" disabled={busy === f.id}
                               onClick={() => void run(f.id, () => factsApi.markFresh(f.id), 'Could not update that')}>Still true</button>
                     </div>
                   </>
@@ -603,8 +851,8 @@ function ActivityPage() {
     void loadJobs().then((j) => { if (alive) setJobs(j); });
     return () => { alive = false; };
   }, []);
-  if (!hasThread) return <p className="arturo-panel-empty">No conversation open.</p>;
-  if (jobs === null) return <p className="arturo-panel-empty">Loading…</p>;
+  if (!hasThread) return <p className="panel-empty">No conversation open.</p>;
+  if (jobs === null) return <p className="panel-empty">Loading…</p>;
   const running = jobs.filter((j) => j.status === 'running');
   const recent = jobs.filter((j) => j.status !== 'running');
   const list = (js: ArturoJob[]) => (
@@ -619,37 +867,10 @@ function ActivityPage() {
   );
   return (
     <div className="arturo-panel-activity">
-      <h3 className="arturo-panel-section">Running</h3>
-      {running.length ? list(running) : <p className="arturo-panel-empty">Nothing running in this conversation.</p>}
-      <h3 className="arturo-panel-section">Recent</h3>
-      {recent.length ? list(recent) : <p className="arturo-panel-empty">No background jobs yet.</p>}
-    </div>
-  );
-}
-
-/** Settings kept in this browser only (they are not synced), one row each, saved as they change. */
-function DevicePage() {
-  const s = useAgentSettings();
-  return (
-    <div className="arturo-panel-list">
-      <label className="arturo-panel-field">
-        <span>Voice colour</span>
-        <input type="color" value={s.accentVoice} onChange={(e) => s.setAccentVoice(e.target.value)} className="arturo-panel-swatch" />
-      </label>
-      <label className="arturo-panel-field">
-        <span>Transcript</span>
-        <select value={s.transcriptMode} onChange={(e) => s.setTranscriptMode(e.target.value === 'as-spoken' ? 'as-spoken' : 'all-at-once')} className="arturo-panel-value">
-          <option value="all-at-once">All at once</option>
-          <option value="as-spoken">As spoken</option>
-        </select>
-      </label>
-      <label className="arturo-panel-field">
-        <span>Microphone</span>
-        <select value={s.micMode} onChange={(e) => s.setMicMode(e.target.value === 'toggle' ? 'toggle' : 'hold')} className="arturo-panel-value">
-          <option value="hold">Hold to talk</option>
-          <option value="toggle">Tap to talk</option>
-        </select>
-      </label>
+      <h3 className="panel-section">Running</h3>
+      {running.length ? list(running) : <p className="panel-empty">Nothing running in this conversation.</p>}
+      <h3 className="panel-section">Recent</h3>
+      {recent.length ? list(recent) : <p className="panel-empty">No background jobs yet.</p>}
     </div>
   );
 }

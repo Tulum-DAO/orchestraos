@@ -14,6 +14,9 @@ export function isTerminalRelay(req: { headers: Record<string, string | string[]
   const got = req.headers[HEADER];
   const value = Array.isArray(got) ? got[0] : got;
   const expected = secret();
-  if (!value || !expected || value.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(value), Buffer.from(expected));
+  if (!value || !expected) return false;
+  const a = Buffer.from(value);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;   // byte lengths: a non-ASCII header can differ from its string length
+  return timingSafeEqual(a, b);
 }

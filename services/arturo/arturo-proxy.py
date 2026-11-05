@@ -334,6 +334,8 @@ from services.arturo import thread_store as _thread_store   # G20 durable thread
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
 from services.arturo import live_steps as _live_steps     # the dashboard's "what Arturo is doing now" line
+from services.arturo import screen_cards as _screen_cards
+from services.arturo import card_answers as _card_answers   # a choice card answered by the turn that answers it   # the cards on the operator's screen, per text turn
 # The assistant's name on this install (assistant_name.py: "Arturo" until renamed; the id stays "arturo").
 # Read per call, so a rename reaches the next turn with no restart.
 from services.arturo import assistant_name as _assistant_name
@@ -636,6 +638,11 @@ def _finalize_journal_file(path):
     if _origin not in ("funnel", "relay"):
         log.info(f"finalized {call_id} -> ended ({n_turns} turns); NO inject (origin={_origin}, not genuine the operator)")
         return True
+    if d.get("agent"):
+        # A call answered by the agent's own session: its turns are already in that session (typed path), and the
+        # call is listed in the agent's own chat. Nothing to tell gm.
+        log.info(f"finalized {call_id} -> ended ({n_turns} turns); NO inject (the call was with {d['agent']})")
+        return True
     gm_summary, full_transcript = _gm_call_note(turns, summary)
     _call_key = d.get("conv_id") or call_id
     def _inject():
@@ -800,6 +807,11 @@ def finalize_from_client(client_call_id="", conv_id=""):
         client.setdefault("ended_at", client.get("ended_at") or time.time())
         if server_id:
             client["merged_server"] = server_id
+            if server_d.get("agent") and not client.get("agent"):
+                # The call was with an agent (its own session answered): the merged record says so too, and gm gets
+                # nothing (the turns are already in that agent's session).
+                client["agent"] = server_d["agent"]
+                client["gm_inject_suppressed"] = True
         # DELIB-BUG-1: gm_injected stays FALSE until an inject SUCCEEDS. It is set True only by
         # _attempt_gm_inject on a 200 from gm. Preserve any existing retry counters on re-notify.
         client.setdefault("gm_injected", False)
@@ -880,7 +892,7 @@ def _attempt_gm_inject(cpath):
             except Exception:
                 return False
             if (d.get("gm_injected") or d.get("gm_inject_gaveup")
-                    or d.get("gm_inject_suppressed") or d.get("source") != "client"):
+                    or d.get("gm_inject_suppressed") or d.get("source") != "client" or d.get("agent")):
                 return False
             call_id = d.get("call_id", "")
             summary = d.get("summary") or ""
@@ -1624,6 +1636,22 @@ TOOLS = [
                     "exclusive": {"type": "string", "description": "On a multi card, the one option that rules out the others (e.g. 'Just this computer')."},
                 },
                 "required": ["options"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_screen_card",
+            "description": "Answer one of the cards on the operator's screen FOR them, only when they ask you to (\"answer B\", \"pick Circle\", \"approve it\"). `card` is its ref from CARDS ON THE OPERATOR'S SCREEN (never say the ref). The card itself sends the answer the same way as their own tap, through its own route, on its CURRENT part, and shows them the result; a multi-part card then moves to its next part. picks: option letters or labels as shown (one for a pick-one part, several for pick-any; 'Approve' or 'Deny' on an approval). words: their own words, when the card takes words (a deny's reason goes here). One card per turn.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "card": {"type": "string", "description": "The card's ref, e.g. c1."},
+                    "picks": {"type": "array", "items": {"type": "string"}, "description": "Option letters or labels."},
+                    "words": {"type": "string", "description": "Their own words, if any."},
+                },
+                "required": ["card"],
             },
         },
     },
@@ -2977,6 +3005,13 @@ _CHOICE_PURPOSES = ("starter_team", "devices", "other")
 _CHOICE_STRIP = re.compile(r"[*_`#>\[\]()~|]")
 
 
+def answer_screen_card(card, picks=None, words=None):
+    """Hand an answer to a card on the operator's screen (screen_cards.answer_for holds the rules). Nothing is
+    answered here: the page's own card sends it through that card's route, exactly as a tap would."""
+    turn = _TEAM_TURN.get()
+    return _screen_cards.answer_for(turn, _is_fleet(turn), card, picks, words)
+
+
 def ask_choices(options, multi=False, purpose="other", exclusive=None):
     """Show the operator a tap-to-pick card whose options the brain wrote. The card is data: picking
     an option sends its words as the operator's next message, never a tool call."""
@@ -3028,6 +3063,8 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
     if purpose == "devices" and turn.get("conversation_id"):
         with _TEAM_OFFERS_LOCK:
             _DEVICE_CARDS[turn["conversation_id"]] = (time.time(), tuple(clean), turn.get("principal"))
+    # Its id: the page dismisses it by this, and the thread keeps it with the reply (_record_text_turn).
+    card["card_id"] = _uuid.uuid4().hex[:16]
     turn["choices"] = card
     return f"Card shown with: {', '.join(clean)}{note}. Wait for their answer."
 
@@ -4182,6 +4219,8 @@ def _execute_tool_raw(name, args, user_turns=None):
     if name == "ask_choices":
         return ask_choices(args.get("options"), args.get("multi", False), args.get("purpose", "other"),
                            args.get("exclusive"))
+    if name == "answer_screen_card":
+        return answer_screen_card(args.get("card"), args.get("picks"), args.get("words"))
     if name == "finish_onboarding":
         return finish_onboarding()
     if name == "pair_device":
@@ -4295,6 +4334,20 @@ def _execute_tool_raw(name, args, user_turns=None):
         # visibility (the old false-positive). A retry sends ANOTHER C-m ONLY — never a re-paste —
         # which is the actual cure for the AGY duplicate.
         import time as _t
+
+        # A headless seat on this host (scripts/headless_switch.py): its pane holds the seat's supervisor, so a
+        # paste there would type into the wrong process. Its words go through the gateway's /agent-message (the
+        # supervisor's stdin), held for the turn's end when it is mid-turn.
+        from scripts import gateway_deliver as _gd
+        if _gd.headless_seat(session):
+            _r = _gd.deliver(session, message, source="mail", accepts_held=True, actor="automation:arturo-inject")
+            if _r["delivered"]:
+                return f"Message injected into '{session}' on vps (verified landed)."
+            if _r["held"]:
+                return (f"'{session}' is mid-turn: the message is queued and reaches it when this turn ends. "
+                        f"Tell the operator it's queued, not delivered yet.")
+            return (f"Failed to deliver to '{session}' ({_r['reason'] or 'the gateway refused it'}). "
+                    f"Tell the operator it did not go through.")
 
         def _paste(mach):
             return _run_on_machine(
@@ -6822,17 +6875,23 @@ if _STREAM_RELAY is not None:
         # item(1): stamp the call's surface from the phone's X-Surface header (forwarded by the
         # gateway). Missing (watch) -> normalized to 'watch' inside feed_audio; set once at creation.
         surface_device = request.headers.get("X-Surface")
+        # The agent the call is with (the gateway's /live?agent=): its own voice, stamped once at the first chunk.
+        # None for Arturo's own calls (the server voice). A malformed id is refused, never guessed at.
+        _agent = (request.headers.get("X-Arturo-Agent") or "").strip() or None
+        if _agent is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", _agent):
+            return jsonify({"ok": False, "error": "bad agent id"}), 400
         # G1': only the call's own caller may speak into it (recorded at its first chunk).
         _caller = _stamped_principal(request)
         _ok_caller, _claimed = _bind_call(cid, _caller, claim=True)
         if not _ok_caller:
             return jsonify({"ok": False, "error": "not this call's caller"}), 403
-        r = _STREAM_RELAY.feed_audio(cid, pcm, surface_device=surface_device)
+        r = _STREAM_RELAY.feed_audio(cid, pcm, surface_device=surface_device, agent=_agent)
         if _claimed and not r.get("ok"):
             _unclaim_call(cid)
         _thread = request.headers.get("X-Arturo-Thread")
         if (r.get("ok") and _thread and _CALL_THREADS is not None and _CALL_THREADS.thread(cid) is None
-                and _thread_refusal(_thread, _caller) is None):
+                and not _STREAM_RELAY.agent_mode(cid) and _thread_refusal(_thread, _caller) is None):
+            # (A call answered by the agent's own session lives in that agent's chat, not in an Arturo thread.)
             # The browser's call names the Arturo thread it was started from: its lines are archived there.
             _CALL_THREADS.bind(cid, _thread, principal=_thread_key(_caller))
         if not r.get("ok"):
@@ -6977,8 +7036,12 @@ if _STREAM_RELAY is not None:
         if not _relay_loopback_ok():
             return jsonify({"ok": False, "error": "loopback only"}), 403
         vendor = _voice_vendor_arg()
-        st = _voice_choice.state(vendor)
-        st["voice_id"] = _voice_choice.in_effect(vendor)
+        try:
+            agent = _voice_choice.agent_key(request.args.get("agent"))
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        st = _voice_choice.state(vendor, agent)
+        st["voice_id"] = _voice_choice.in_effect(vendor, agent)
         title = None
         if st["voice_id"]:
             try:
@@ -6997,10 +7060,24 @@ if _STREAM_RELAY is not None:
                                          str(body.get("voice_id", "")),
                                          by=str(body.get("by", "settings"))[:40],
                                          source=str(request.headers.get("X-Voice-Source", "settings"))[:40],
-                                         device=_writer_device())
+                                         device=_writer_device(), agent=body.get("agent"))
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
-        log.info(f"{st['vendor']} voice -> {st['voice_id']} by {st['changed_by']}")
+        log.info(f"{st['vendor']} voice{' for ' + st['agent'] if st.get('agent') else ''} -> {st['voice_id']} "
+                 f"by {st['changed_by']}")
+        return jsonify({"ok": True, **st}), 200
+
+    @app.route("/ptt/voice", methods=["DELETE"])
+    def ptt_voice_delete():
+        """An agent back to the install's voice for one vendor."""
+        if not _relay_loopback_ok():
+            return jsonify({"ok": False, "error": "loopback only"}), 403
+        try:
+            st = _voice_choice.clear_voice(_voice_vendor_arg(), request.args.get("agent"),
+                                           source=str(request.headers.get("X-Voice-Source", "settings"))[:40],
+                                           device=_writer_device())
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
         return jsonify({"ok": True, **st}), 200
 
 
@@ -7104,6 +7181,18 @@ def _context_line(ctx):
     if ctx.get("hint"):
         bits.append(f"hint={ctx['hint']}")
     return f"[Context: {' '.join(bits)}]"
+
+
+def _screen_of(page_ctx):
+    """(the bounded cards-on-screen record or None, a refusal or None) for a context that passed _valid_context.
+    `cards` is the only context field that is not a short string (contract/notes/arturo-screen-context.md)."""
+    raw = page_ctx.get("cards") if isinstance(page_ctx, dict) else None
+    if raw is None:
+        return None, None
+    picked = _screen_cards.pick_cards(raw)
+    if picked is None:
+        return None, {"ok": False, "error": "bad_context", "field": "context.cards"}
+    return picked, None
 
 
 def _valid_context(ctx):
@@ -7238,7 +7327,7 @@ def _onboarding_progress_ctx():
     return out
 
 
-def text_turn(text, conversation_id, brain=None, context=None, principal=None, turn_id=None):
+def text_turn(text, conversation_id, brain=None, context=None, principal=None, turn_id=None, card_answer=None):
     """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called}).
     `brain` = {provider, model} names this turn's brain (None = the default); `context` = the
     web client's ArturoContext {route, entityKind?, entityId?, hint?} (None = none)."""
@@ -7252,6 +7341,12 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
             return refusal
     if page_ctx is not None and not _valid_context(page_ctx):
         return 400, {"ok": False, "error": "bad_context", "field": "context"}
+    screen, refusal = _screen_of(page_ctx)
+    if refusal:
+        return 400, refusal
+    card_answer, refusal = _card_answers.pick(card_answer)
+    if refusal:
+        return 400, refusal
     text = (text or "").strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
@@ -7271,6 +7366,10 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
         return 403, dict(_ONBOARDING_ONLY)
     if _thread_refusal(conversation_id, principal):
         return 403, dict(_NOT_YOUR_THREAD)
+    # Under the conversation's turn lock (both endpoints hold it), so no other send can answer the card in between.
+    refusal = _card_refusal(conversation_id, card_answer)
+    if refusal:
+        return refusal
     operator_text = text                     # before the page context: what the operator sent
     _note_page_project(conversation_id, page_ctx)
     if page_ctx is not None:
@@ -7325,6 +7424,9 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
                               window=min(len(history), _ptt.DEFAULT_MAX_HISTORY))
         if _tc:
             context = f"{context}\n\n{_tc}".strip() if context else _tc
+    _sc = _screen_cards.cards_block(screen)
+    if _sc:
+        context = f"{context}\n\n{_sc}".strip() if context else _sc
     messages = _ptt.build_messages(context, history, text, current_brain=effective)
     brain_tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
     fail_tok = _brain.TURN_FAILURE.set(None)
@@ -7335,6 +7437,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
     if team_turn is None:
         team_turn = _begin_team_turn(conversation_id, step, principal, operator_text)
         team_tok = _TEAM_TURN.set(team_turn)
+    team_turn["screen_refs"] = _screen_cards.refs(screen)
     try:
         _res = _brain_reply(messages, conversation_id)
         # Tolerant unpack: a stub (and any older caller) may still return the 2-tuple.
@@ -7367,7 +7470,8 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
         _hold_returning_reply(conversation_id, reply)
     else:
         _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
-                          effective=effective, turn_id=turn_id, principal=principal)
+                          effective=effective, turn_id=turn_id, principal=principal, card=team_turn.get("choices"),
+                          card_answer=card_answer)
     from services.arturo import operator_store as _ops
     body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -7394,6 +7498,8 @@ def _turn_extras(team_turn, onboarding_turn):
         out["choices"] = team_turn["choices"]
     if team_turn.get("pair_card"):
         out["pair_card"] = team_turn["pair_card"]
+    if team_turn.get("answer_card"):
+        out["answer_card"] = dict(team_turn["answer_card"])
     if team_turn.get("paired"):
         out["paired"] = list(team_turn["paired"])
     if onboarding_turn:
@@ -7442,6 +7548,24 @@ def thread_detail_endpoint(conversation_id):
     if request.args.get("jobs"):
         # The job tray's poll: this thread's running and just-finished jobs, without loading the transcript.
         return jsonify({"ok": True, "jobs": _JOBS.for_thread(conversation_id) if _JOBS is not None else []})
+    if request.args.get("before") is not None or request.args.get("limit") is not None:
+        # A long thread read a page at a time (scrolling up): the newest `limit` turns, or the `limit` just older
+        # than the turn `before` names, each with its seq, plus has_older and oldest_seq (thread_store
+        # get_thread_page). Without either, the whole thread exactly as before.
+        try:
+            before = int(request.args["before"]) if request.args.get("before") is not None else None
+            limit = int(request.args.get("limit") or _thread_store.DEFAULT_PAGE_TURNS)
+        except ValueError:
+            return jsonify({"ok": False, "error": "bad_paging"}), 400
+        if limit < 1:
+            return jsonify({"ok": False, "error": "bad_paging"}), 400
+        page = _THREADS.get_thread_page(conversation_id, before=before, limit=limit)
+        if page is None:
+            return jsonify({"ok": True, "thread": None, "has_older": False, "oldest_seq": None})
+        has_older, oldest = page.pop("has_older"), page.pop("oldest_seq")
+        error = page.pop("error", None)
+        return jsonify({"ok": True, "thread": page, "has_older": has_older, "oldest_seq": oldest,
+                        **({"error": error} if error else {})})
     thread = _THREADS.get_thread(conversation_id)
     if thread is None:
         # A thread that has no turns yet is the NORMAL state the first time the pill opens (the
@@ -7464,17 +7588,37 @@ _WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
 atexit.register(_WARM_POOL.close_all)
 
 
-def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None):
+def _card_refusal(conversation_id, card_answer):
+    """(status, body) when this turn answers a choice card that cannot take it (unknown, dismissed, already
+    answered, an option it does not have): nothing runs and nothing is stored. None otherwise."""
+    if card_answer is None:
+        return None
+    body = _card_answers.check(_THREADS.card(conversation_id, card_answer["card_id"]), card_answer)
+    if body is None:
+        return None
+    return (400 if body["error"] == "bad_card_answer" else 409), body
+
+
+def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None, card=None,
+                      card_answer=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row.
     `brain` = what the operator chose (None = default); `effective` = what actually wrote the
     reply, kept on the turn so a later turn on another model knows it was not its own.
-    A tool-call envelope is never stored: history is replayed and shown, so it would surface again."""
+    A tool-call envelope is never stored: history is replayed and shown, so it would surface again.
+    `card` = the choice card the reply showed (ask_choices): kept on the reply's row, so the thread shows it again
+    after a reload, answered by the message that followed it or dismissed. `card_answer` = the choice card this turn's
+    message answers (card_answers.pick): its answer is kept on that card's row in the same write as the turn."""
     reply = _brain.without_envelope(reply)
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
+    meta = {"kind": "card", "card_id": card.get("card_id"), "choices": card} if isinstance(card, dict) and card.get("card_id") else None
     stored = _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
-                                  principal=_thread_key(principal), **({"turn_id": turn_id} if turn_id else {}))
+                                  principal=_thread_key(principal), **({"turn_id": turn_id} if turn_id else {}),
+                                  **({"assistant_meta": meta} if meta else {}),
+                                  **({"card_answer": {"card_id": card_answer["card_id"],
+                                                      "answer": _card_answers.stored(card_answer, time.time())}}
+                                     if card_answer else {}))
     if stored:
         _speak_into_live_call(conversation_id, text, reply)
         _thread_grew(conversation_id)
@@ -7786,6 +7930,12 @@ def text_stream_endpoint():
             return jsonify(refusal[1]), refusal[0]
     if page_ctx is not None and not _valid_context(page_ctx):
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
+    screen, refusal = _screen_of(page_ctx)
+    if refusal:
+        return jsonify(refusal), 400
+    card_answer, refusal = _card_answers.pick(data.get("card_answer"))
+    if refusal:
+        return jsonify(refusal), 400
 
     # Refused before the lock and before _begin_team_turn: a refused turn takes no card off the book.
     principal = _stamped_principal(request)
@@ -7826,6 +7976,14 @@ def text_stream_endpoint():
             _token.release()
             _TURN_IDS.drop(conversation_id, tid, _turn["req"])
             return jsonify(answered[1]), answered[0]
+    refusal = _card_refusal(conversation_id, card_answer)
+    if refusal:
+        # After the replay check (a retry of the send that answered it is replayed, never refused), before the
+        # cards come off the book: a refused turn runs nothing.
+        _token.release()
+        if _turn is not None:
+            _TURN_IDS.drop(conversation_id, tid, _turn["req"])
+        return jsonify(refusal[1]), refusal[0]
     try:
         _started = []
         # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
@@ -7840,6 +7998,10 @@ def text_stream_endpoint():
         # build_context(), the same call the tool loop makes. Streaming without it answers as a
         # bare model with no identity and no tools.
         _stream_context = _as_turn(_team_turn, _context_as, chosen, calling_channel="text")
+        _team_turn["screen_refs"] = _screen_cards.refs(screen)
+        _sc = _screen_cards.cards_block(screen)
+        if _sc:
+            _stream_context = f"{_stream_context}\n\n{_sc}" if _stream_context else _sc
         messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
 
         def _spawn(cmd):
@@ -7872,7 +8034,8 @@ def text_stream_endpoint():
             team_tok = _TEAM_TURN.set(_team_turn)
             try:
                 return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx,
-                                 principal=_team_turn.get("principal"), **({"turn_id": tid} if tid else {}))
+                                 principal=_team_turn.get("principal"), **({"turn_id": tid} if tid else {}),
+                                 card_answer=data.get("card_answer"))
             finally:
                 _TEAM_TURN.reset(team_tok)
                 _TURN_DEDUP.reset(ledger_tok)
@@ -7937,7 +8100,8 @@ def text_stream_endpoint():
             return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
 
         def _record(**kw):
-            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal)
+            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal, card=_team_turn.get("choices"),
+                              card_answer=card_answer)
             _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
         from services.arturo import onboarding as _onb
@@ -8078,7 +8242,8 @@ def text_endpoint():
         try:
             code, result = text_turn(data.get("text"), data.get("conversation_id"),
                                      brain=data.get("brain"), context=data.get("context"),
-                                     principal=principal, **({"turn_id": tid} if tid else {}))
+                                     principal=principal, **({"turn_id": tid} if tid else {}),
+                                     card_answer=data.get("card_answer"))
         finally:
             if turn is not None:
                 _TURN_DEDUP.reset(ledger_tok)
@@ -8159,6 +8324,7 @@ def health():
         # stream relay (services/arturo/relay_live_bridge.py) when that is the chosen, available vendor.
         "live": _live_engine() is not None,
         "live_engine": _live_engine(),
+        "live_reason": _live_state()[1],         # why there is no live engine, in plain words (None when there is)
         # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
         "stt": _local_stt.state(),
         "tools": [t["function"]["name"] for t in TOOLS],
@@ -8168,17 +8334,20 @@ def health():
     })
 
 
-def _live_engine():
-    """Which engine answers the browser's Live voice mode: "gemini", "relay" (GPT-Live), or None."""
-    if "GEMINI_API_KEY" in VOICE_VENDORS_PRESENT:
-        return "gemini"
-    if _STREAM_RELAY is None:
-        return None
-    from services.arturo import voice_vendor as _vv
+def _live_state():
+    """(engine, reason) for the Live voice mode, from the server-wide voice provider only (live_engine.choose):
+    "relay" (GPT-Live) for openai, None with a plain reason otherwise. A Gemini key alone never picks Gemini."""
+    from services.arturo import live_engine as _le, voice_vendor as _vv
     try:
-        return "relay" if _vv.get_vendor() == "openai" and not _vv.unavailable_reason("openai") else None
+        return _le.choose(_vv.get_vendor(), _STREAM_RELAY is not None, _vv.unavailable_reason,
+                          gemini_key="GEMINI_API_KEY" in VOICE_VENDORS_PRESENT)
     except Exception:  # noqa: BLE001 — health never fails on a vendor read
-        return None
+        return None, "The voice provider couldn't be read, so live calls aren't available right now"
+
+
+def _live_engine():
+    """Which engine answers the browser's Live voice mode: "relay" (GPT-Live), "gemini" (never today), or None."""
+    return _live_state()[0]
 
 
 _PLAIN_CONV_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -8335,18 +8504,38 @@ def _openai_delegate(cid, messages):
 
 def _openai_journal(cid, role, text, **meta):
     """GPT-Live turns that never reach the CLM (answered without delegating; an interrupted answer) go into
-    the same call journal, flagged."""
+    the same call journal, flagged. A call answered by an agent's own session (agent=<id>) also journals its turns
+    here, and its call file says whose call it is: "agent" (the API lists it in that agent's chat)."""
+    agent = meta.pop("agent", None)
     call_id = _find_live_by_conv_id(cid)
     if not call_id:
         call_id = _resolve_or_create([{"role": "assistant", "content": "(GPT-Live call)"},
                                       {"role": "user", "content": text or "(GPT-Live)"}],
                                      page="voice", origin="relay", conv_id=cid)
+    if agent and call_id:
+        _stamp_call_agent(call_id, agent)
     _journal_append(call_id, role, text=text, **meta)
+
+
+def _stamp_call_agent(call_id, agent):
+    """The call file's top-level "agent" (once): the call was with that agent, not Arturo's own."""
+    from services.arturo.call_journal import _atomic_write
+    try:
+        with _JOURNALS_LOCK:
+            p = VOICE_CALLS_DIR / f"{call_id}.json"
+            d = json.loads(p.read_text())
+            if d.get("agent") != agent:
+                d["agent"] = agent
+                _atomic_write(p, d)
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never the call
+        log.warning(f"call {call_id}: agent not stamped ({e!r})")
 
 
 def _wire_openai(relay):
     """Give a relay manager the proxy's CLM delegation and call journal (late-bound, so tests can patch)."""
     relay.openai_delegate = lambda cid, messages: _openai_delegate(cid, messages)
+    from services.arturo import agent_call as _agent_call
+    relay.agent_calls = _agent_call
     relay.journal_hook = lambda cid, role, text, **meta: _openai_journal(cid, role, text, **meta)
     relay.scrub = lambda text: _VAULT.scrub(text)
 
@@ -8551,6 +8740,22 @@ def _helpers_shown(text):
 
 
 _JOBS = _jobs_mod.JobBoard(ARTURO_STATE / "jobs.json", on_done=_post_job_result, spawn=_spawn_in_context)
+
+
+@app.route("/threads/<path:conversation_id>/cards/<card_id>/dismiss", methods=["POST"])
+def thread_card_dismiss(conversation_id, card_id):
+    """Close a choice card without answering it: it stays in the thread, marked dismissed. Same checks as a job's
+    cancel: loopback only (the gateway forwards it), and only in a thread the caller may see."""
+    if not _loopback_only():
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    if not re.fullmatch(r"[0-9a-f]{8,32}", card_id or ""):
+        return jsonify({"ok": False, "error": "bad card id"}), 400
+    principal = _stamped_principal(request)
+    if principal != "fleet" and _THREADS.started_by(conversation_id) not in (None, _thread_key(principal)):
+        return jsonify({"ok": False, "error": "no such card"}), 404
+    if not _THREADS.dismiss_card(conversation_id, card_id):
+        return jsonify({"ok": False, "error": "no such card"}), 404
+    return jsonify({"ok": True, "card_id": card_id, "dismissed": True}), 200
 
 
 @app.route("/threads/<path:conversation_id>/jobs/<job_id>/cancel", methods=["POST"])

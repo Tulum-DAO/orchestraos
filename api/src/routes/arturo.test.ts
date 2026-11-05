@@ -24,6 +24,7 @@ function makeDeps(over: Partial<ArturoDeps> = {}): ArturoDeps & { urls: string[]
     token: () => 'test-token',
     fetchJson: async (url: string) => { urls.push(url); return { status: 200, body: { ok: true, threads: [] } }; },
     forwardStream: async (url: string) => { urls.push(url); return { status: 200, body: { ok: true, text: '' } }; },
+    installRole: () => 'admin',
     ...over,
   };
   deps.urls = urls;
@@ -318,6 +319,18 @@ test('a turn read-back (?turn=) survives the hop, escaped', async () => {
   assert.equal(deps.urls[1], `${GATEWAY_URL}/arturo/threads/c1?turn=a%26b%3Dc`);
 });
 
+test('a thread read a page at a time (?before=&limit=) survives the hop; anything else is not passed on', async () => {
+  const deps = makeDeps();
+  await get(deps, '/api/arturo/threads/c1?before=120&limit=100');
+  assert.equal(deps.urls[0], `${GATEWAY_URL}/arturo/threads/c1?before=120&limit=100`);
+  await get(deps, '/api/arturo/threads/c1?limit=50');
+  assert.equal(deps.urls[1], `${GATEWAY_URL}/arturo/threads/c1?limit=50`);
+  await get(deps, '/api/arturo/threads/c1?before=' + encodeURIComponent('1&x=y') + '&offset=3');
+  assert.equal(deps.urls[2], `${GATEWAY_URL}/arturo/threads/c1`, 'not a whole number: the whole thread, as before');
+  await get(deps, '/api/arturo/threads/c1');
+  assert.equal(deps.urls[3], `${GATEWAY_URL}/arturo/threads/c1`);
+});
+
 // --- the voice picker's pass-throughs: GET vendor / voices / voice, PUT voice ---
 
 async function put(deps: ArturoDeps, path: string, body: unknown, headers: Record<string, string> = {}) {
@@ -399,19 +412,45 @@ test('PUT /ptt/voice without a vendor and voice id is refused before the gateway
   assert.deepEqual(deps.urls, []);
 });
 
-test('PUT /ptt/voice: an admin may change the voice', async () => {
-  const deps = makeDeps({ isAdmin: () => true });
+test('PUT /ptt/voice: an admin may change the install\'s voice', async () => {
+  const deps = makeDeps({ installRole: () => 'admin' });
   const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' });
   assert.equal(r.status, 200);
   assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/ptt/voice`]);
 });
 
-test('PUT /ptt/voice: anyone else is refused with a plain reason, before the gateway', async () => {
-  const deps = makeDeps({ isAdmin: () => false });
+test('PUT /ptt/voice: a member may not change the install\'s voice (403, with the reason), and the gateway is not asked', async () => {
+  const deps = makeDeps({ installRole: () => 'member' });
   const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' });
   assert.equal(r.status, 403);
-  assert.deepEqual(r.json, { ok: false, error: "Only an admin can change the assistant's voice" });
+  assert.deepEqual(r.json, { ok: false, error: "Only an admin can change the install's voice" });
   assert.deepEqual(deps.urls, []);
+});
+
+test("PUT /ptt/voice: a member may still change an agent's own voice", async () => {
+  const deps = makeDeps({ installRole: () => 'member' });
+  const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: 'dev-demo' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/ptt/voice`]);
+});
+
+test("an agent's own voice: the id is passed on, checked; DELETE puts it back on the install's voice", async () => {
+  const seen: { url: string; method: string; body?: string }[] = [];
+  const deps = makeDeps({ fetchJson: async (url: string, init: RequestInit) => {
+    seen.push({ url, method: String(init.method), body: init.body ? String(init.body) : undefined });
+    return { status: 200, body: { ok: true } };
+  } });
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: 'dev-demo' })).status, 200);
+  assert.equal((await get(deps, '/api/arturo/ptt/voice?vendor=openai&agent=dev-demo')).status, 200);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai&agent=dev-demo')).status, 200);
+  assert.deepEqual(seen.map((x) => [x.method, x.url, x.body]), [
+    ['PUT', `${GATEWAY_URL}/arturo/ptt/voice`, '{"vendor":"openai","voice_id":"cedar","agent":"dev-demo"}'],
+    ['GET', `${GATEWAY_URL}/arturo/ptt/voice?vendor=openai&agent=dev-demo`, undefined],
+    ['DELETE', `${GATEWAY_URL}/arturo/ptt/voice?vendor=openai&agent=dev-demo`, undefined],
+  ]);
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: '../x' })).status, 400);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai')).status, 400);   // no agent: nothing to clear
+  assert.equal(seen.length, 3);
 });
 
 test('the voice reads stay open to a non-admin', async () => {
@@ -422,25 +461,33 @@ test('the voice reads stay open to a non-admin', async () => {
   assert.equal(deps.urls.length, 3);
 });
 
-test('the real role check decides when an authenticating proxy names the caller', async () => {
+test('behind an authenticating proxy, only its admin changes the install\'s voice; anyone changes an agent\'s', async () => {
   const before = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
   try {
-    const deps = makeDeps();                                    // no injected check: the real one
-    const viewer = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' },
-      { 'x-orchestra-user': 'demo-user', 'x-orchestra-role': 'viewer' });
-    assert.equal(viewer.status, 403);
-    const noRole = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' },
-      { 'x-orchestra-user': 'demo-user' });
-    assert.equal(noRole.status, 403);                           // no role is never an admin
-    assert.deepEqual(deps.urls, []);
-    const admin = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' },
-      { 'x-orchestra-user': 'demo-admin', 'x-orchestra-role': 'admin' });
-    assert.equal(admin.status, 200);
+    const deps = makeDeps({ installRole: undefined });          // no injected check: the real one
+    const viewer = { 'x-orchestra-user': 'demo-user', 'x-orchestra-role': 'viewer' };
+    const noRole = { 'x-orchestra-user': 'demo-user' };
+    const admin = { 'x-orchestra-user': 'demo-admin', 'x-orchestra-role': 'admin' };
+    const install = { vendor: 'openai', voice_id: 'cedar' };
+    assert.equal((await put(deps, '/api/arturo/ptt/voice', install, viewer)).status, 403);
+    assert.equal((await put(deps, '/api/arturo/ptt/voice', install, noRole)).status, 403);
+    assert.equal((await put(deps, '/api/arturo/ptt/voice', install, admin)).status, 200);
+    for (const headers of [viewer, noRole, admin]) {
+      assert.equal((await put(deps, '/api/arturo/ptt/voice', { ...install, agent: 'dev-demo' }, headers)).status, 200);
+    }
+    assert.equal(deps.urls.length, 4);
   } finally {
     if (before === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
     else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = before;
   }
+});
+
+test('with no Tailscale login (a local caller), the install\'s voice is refused: no login is a member', async () => {
+  delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  const deps = makeDeps({ installRole: undefined });
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' })).status, 403);
+  assert.deepEqual(deps.urls, []);
 });
 
 // --- avatar looks: GET /avatars, GET/PUT/DELETE /avatar ---
@@ -496,14 +543,11 @@ test('an admin may reset a look', async () => {
   assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/avatar?agent=arturo`]);
 });
 
-test('anyone else is refused a PUT or a DELETE before the gateway', async () => {
+test('anyone may change or reset a look for now, not only an admin', async () => {
   const deps = makeDeps({ isAdmin: () => false });
-  const put = await send(deps, 'PUT', '/api/arturo/avatar', { agent: 'arturo', shape: 'heart' });
-  const del = await send(deps, 'DELETE', '/api/arturo/avatar?agent=arturo');
-  assert.equal(put.status, 403);
-  assert.equal(del.status, 403);
-  assert.deepEqual(put.json, { ok: false, error: "Only an admin can change an agent's look" });
-  assert.deepEqual(deps.urls, []);
+  assert.equal((await send(deps, 'PUT', '/api/arturo/avatar', { agent: 'arturo', shape: 'heart' })).status, 200);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/avatar?agent=arturo')).status, 200);
+  assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/avatar`, `${GATEWAY_URL}/arturo/avatar?agent=arturo`]);
 });
 
 test('bad avatar values are refused before the gateway', async () => {
@@ -542,15 +586,14 @@ test('anyone reads the name; an admin renames it with only the name forwarded, o
   ]);
 });
 
-test('only an admin renames; an empty or oversized name is refused before the gateway', async () => {
+test('anyone may rename the assistant for now; an empty or oversized name is refused before the gateway', async () => {
   const user = makeDeps({ isAdmin: () => false });
-  const put = await send(user, 'PUT', '/api/arturo/name', { name: 'Nova' });
-  assert.equal(put.status, 403);
-  assert.deepEqual(put.json, { ok: false, error: 'Only an admin can rename the assistant' });
-  assert.equal((await send(user, 'DELETE', '/api/arturo/name')).status, 403);
-  const admin = makeDeps({ isAdmin: () => true });
+  assert.equal((await send(user, 'PUT', '/api/arturo/name', { name: 'Nova' })).status, 200);
+  assert.equal((await send(user, 'DELETE', '/api/arturo/name')).status, 200);
+  assert.equal(user.urls.length, 2);
+  const other = makeDeps({ isAdmin: () => false });
   for (const body of [{}, { name: '' }, { name: '   ' }, { name: 42 }, { name: 'x'.repeat(65) }]) {
-    assert.equal((await send(admin, 'PUT', '/api/arturo/name', body)).status, 400, JSON.stringify(body));
+    assert.equal((await send(other, 'PUT', '/api/arturo/name', body)).status, 400, JSON.stringify(body));
   }
-  assert.deepEqual([...user.urls, ...admin.urls], []);
+  assert.deepEqual(other.urls, []);
 });

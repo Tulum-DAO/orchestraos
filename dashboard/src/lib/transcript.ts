@@ -16,8 +16,17 @@
 // synced transcript.gen.ts). Do not hand-declare wire shapes here — that is
 // the exact web-vs-iOS drift the contract exists to kill.
 import type { ChatItem as GenChatItem, TranscriptEnvelope } from './transcript.gen';
+import { transcriptUrl } from './transcriptUrl';
+import type { ResultNode } from './threadKit/results';
+import { compactionText, isCompaction, type CompactionItem } from './compaction';
+import { isTranscriptLine } from './threadKit/paging';
 
-export type ChatItem = GenChatItem;
+// The compaction notice (lib/compaction.ts) is a transcript item the generated contract types do not name yet; it
+// joins the union here until they do.
+// `ref`: the server's message id for reactions, `<session>~<uuid>#<part>` (api/src/lib/messageRef.ts), stamped by the
+// API on agent-chat log items (poll route and stream). Synthetic rows have none, and the client never builds one.
+// Not in the generated contract yet (reactions build step 5).
+export type ChatItem = (GenChatItem | CompactionItem) & { ref?: string };
 export type TranscriptResponse = TranscriptEnvelope;
 export { GRAMMAR_VERSION } from './transcript.gen';
 
@@ -31,6 +40,8 @@ export interface ToolBlock {
   ts?: string;
   /** When the paired tool_result arrived; the call's own `ts` is when it STARTED. */
   resultTs?: string;
+  /** The tool call's id (tool_use id): a background job's notice names the call that started it. */
+  id?: string;
   key: string;
 }
 
@@ -39,11 +50,21 @@ export interface BatchEntryNode { agent: string; sent_ts: string; body: string }
 export type RenderNode =
   | { kind: 'user'; text: string; ts?: string; key: string; isSystem?: boolean; queued?: boolean;
       /** The server's tag for a line a machine wrote (a decision answer, another agent's message, ...). */
-      machine?: string }
-  | { kind: 'assistant'; text: string; ts?: string; key: string }
+      machine?: string;
+      /** A job notice that arrived while the agent was mid-turn: it does not start a turn. */
+      midTurn?: boolean;
+      /** The server's message ref (ChatItem.ref): what a reaction to it is stored under. */
+      ref?: string }
+  /** afterReaction: the node right after a hidden reaction wake (api chat-transcript reaction_wake), i.e. the agent's
+   *  answer to the operator's reaction; never folded into the message before it (view.ts withReactions). */
+  | { kind: 'assistant'; text: string; ts?: string; key: string; afterReaction?: boolean; ref?: string }
   | { kind: 'thinking'; text: string; ts?: string; key: string }
   | { kind: 'queued_batch'; count: number; entries: BatchEntryNode[]; ts?: string; key: string }
-  | ToolBlock;
+  /** The chat's compaction notice (lib/compaction.ts): one line that changes in place, keyed by the notice's id. */
+  | { kind: 'compaction'; state: CompactionItem['state']; trigger?: CompactionItem['trigger']; ts?: string; key: string }
+  | ToolBlock
+  /** Finished work (lib/threadKit/results.ts markResults): one result or a stack. Built on the client. */
+  | ResultNode;
 
 /**
  * Pair tool_result items under their originating tool_use, drop empty items,
@@ -62,14 +83,34 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
   const nodes: RenderNode[] = [];
   let firstUserSeen = false;
   let i = 0;
+  // A row's key is its item's own (its uuid, and which of that log line's items it is), never its place in the list:
+  // older pages added above, or the live window's top moving down, must not rename (and so redraw) every row.
+  const seen = new Map<string, number>();
+  // Where the node after each hidden reaction wake lands (marked at the end when it is the agent's reply).
+  const afterWake: number[] = [];
   for (const it of items) {
-    const key = 'uuid' in it && it.uuid ? `${it.uuid}:${i}` : `n${i}`;
+    if (it.kind === 'compaction') {
+      if (isCompaction(it) && compactionText(it.state, it.trigger)) {
+        nodes.push({ kind: 'compaction', state: it.state, ...(it.trigger ? { trigger: it.trigger } : {}), ts: it.ts, key: it.id });
+      }
+      i++;
+      continue;
+    }
+    let key: string;
+    if ('uuid' in it && it.uuid) {
+      const n = seen.get(it.uuid) ?? 0;
+      seen.set(it.uuid, n + 1);
+      key = `${it.uuid}:${n}`;
+    } else key = `n${i}`;
     i++;
     if (it.kind === 'tool_result') continue; // consumed via pairing
     if (it.kind === 'text') {
+      if (it.role === 'user' && (it as { reaction_wake?: boolean }).reaction_wake === true) { afterWake.push(nodes.length); continue; }
       const text = it.text?.trim();
       if (!text) continue;
       if (it.role === 'user') {
+        // Said on a voice call and handed to the agent (api chat-transcript voice_said): the call's card holds it.
+        if ((it as { voice_said?: boolean }).voice_said === true) continue;
         // Not the operator's words, so never a blue bubble: what the server already flagged (codex's
         // developer brief and its <environment_context>/<multi_agent_mode> envelopes), the spawn
         // boot line ("You are gm. Read /tmp/agent-init-gm.md ..."), and the first user text of a
@@ -79,9 +120,11 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         const isSystem = flagged || bootLine || (!firstUserSeen && (text.length > 800 || /^You are\b/.test(text)));
         if (!flagged) firstUserSeen = true;
         const machine = (it as { machine?: string }).machine;
-        nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}) });
+        const midTurn = (it as { mid_turn?: boolean }).mid_turn === true;
+        nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}),
+          ...(midTurn ? { midTurn } : {}), ...(it.ref ? { ref: it.ref } : {}) });
       } else {
-        nodes.push({ kind: 'assistant', text, ts: it.ts, key });
+        nodes.push({ kind: 'assistant', text, ts: it.ts, key, ...(it.ref ? { ref: it.ref } : {}) });
       }
       continue;
     }
@@ -113,10 +156,15 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         isError: paired?.isError,
         ts: it.ts,
         ...(paired?.ts ? { resultTs: paired.ts } : {}),
+        ...(it.id ? { id: it.id } : {}),
         key,
       });
       continue;
     }
+  }
+  for (const at of afterWake) {
+    const n = nodes[at];
+    if (n?.kind === 'assistant') nodes[at] = { ...n, afterReaction: true };
   }
   return nodes;
 }
@@ -209,8 +257,30 @@ export function shortPath(p: string): string {
 }
 
 const API_BASE = '/api';
-export async function fetchTranscript(agentId: string, limit = 120): Promise<TranscriptResponse> {
-  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/transcript?limit=${limit}`);
+/** The seat's transcript, or with `subagentId` one subagent's own (agent-tree drill-in, read-only). */
+export async function fetchTranscript(agentId: string, limit = 120, opts: { subagentId?: string } = {}): Promise<TranscriptResponse> {
+  const res = await fetch(transcriptUrl(agentId, { limit, subagentId: opts.subagentId }));
   if (!res.ok) throw new Error(`transcript ${agentId}: ${res.status}`);
   return res.json();
+}
+
+/** The page of the chat just older than `before` (a page's own `oldest_id`, or an item's uuid): its items, whether
+ *  there is more before it, and the cursor for the next. An unknown cursor answers an empty page, no more. */
+export async function fetchOlderTranscript(agentId: string, before: string, limit = 100):
+    Promise<{ items: ChatItem[]; hasOlder: boolean; next: string | null }> {
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/transcript?before=${encodeURIComponent(before)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`transcript ${agentId}: ${res.status}`);
+  const body = await res.json() as TranscriptResponse & { has_older?: boolean; oldest_id?: string | null };
+  const items = body.items || [];
+  // The next cursor is the route's own oldest_id, a transcript line's uuid; should it ever name a notice or a marker
+  // between conversations instead, the page's first real line stands in (the route pages only from those).
+  const oldest = body.oldest_id ?? null;
+  const next = oldest && isTranscriptLine({ uuid: oldest }) ? oldest : firstLineUuid(items);
+  return { items, hasOlder: !!body.has_older && !body.error, next };
+}
+
+/** The uuid of a page's first real transcript line (not a notice, not a marker), or null. */
+function firstLineUuid(items: readonly object[]): string | null {
+  const it = items.find(isTranscriptLine) as { uuid?: string } | undefined;
+  return it?.uuid ?? null;
 }

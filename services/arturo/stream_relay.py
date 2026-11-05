@@ -173,7 +173,7 @@ def _default_socket_factory(conversation_id):
     return _el_sock(ws)
 
 
-def hume_socket_factory(conversation_id, resumed_chat_group_id=None):
+def hume_socket_factory(conversation_id, resumed_chat_group_id=None, agent=None):
     """Real Hume EVI socket (spec §4.2). verbose_transcription=true is what makes Hume emit
     interim user_message frames (our native-partials replacement for the Scribe fork).
     HUME_CONFIG_VERSION comes from .env.secrets — pinned, never hardcoded."""
@@ -208,7 +208,13 @@ def hume_socket_factory(conversation_id, resumed_chat_group_id=None):
     # session_settings.voice_id per connect — no config re-pin, no restart per pick.
     # Absent pref => the pinned config's default voice governs.
     from services.arturo import voice_choice as _voice_choice
-    _vid = _voice_choice.get_voice("hume")
+    _vid = None
+    if agent:
+        try:
+            _vid = _voice_choice.get_voice("hume", agent)  # the agent's own voice, else the install's
+        except ValueError:
+            _vid = None
+    _vid = _vid or _voice_choice.get_voice("hume")         # Arturo's own calls: the install's voice, as before
     if _vid:
         settings["voice_id"] = _vid
     ws.send(json.dumps(settings))
@@ -241,7 +247,41 @@ OPENAI_SPEAK_GAP_S = 1.2       # the caller quiet this long before Arturo volunt
 OPENAI_SPEAK_WAIT_S = 20.0     # how long a volunteered line waits for a pause before it is said anyway
 OPENAI_CALL_CAP_S = openai_live.CALL_CAP_S          # per-call cap (gm: 20 min); the daily cap is voice_usage
 OPENAI_CALL_WARN_S = openai_live.CALL_WARN_S
+AGENT_CALL_TOUCH_S = 10.0      # an agent call's live marker is refreshed this often (agent_call.CALL_MARK_TOUCH_S)
 OPENAI_SPAN_TAIL_S = 0.8        # seconds of non-speech AUDIO (not wall clock) that close an Arturo speech span
+# Agent calls (services/arturo/agent_call.py): the agent's own session answers EVERY line and GPT-Live is
+# only its voice. GPT-Live answered every turn itself instead of delegating, so the relay decides: each caller line goes
+# to the agent once the caller is quiet, and a GPT-Live utterance is heard only when it is the greeting or reads out the
+# next sentence the agent sent (its words open with that sentence's). Everything else it says is muted at the source.
+AGENT_CHAT_POLL_S = 0.3       # voice mode: how often the agent's own chat is read for what to mirror into the call
+AGENT_FORCE_QUIET_S = 0.8      # the caller quiet this long = their line is over: it goes to the agent
+AGENT_MATCH_WORDS = 3          # the words of an utterance compared with the agent's next sentence
+AGENT_LEAD_WORDS = 2           # a read-out may open with this many words of its own ("Okay, so ...")
+AGENT_SHORT_WORDS = 4          # a sentence shorter than this ("One sec.") must open the utterance, and be recent:
+AGENT_SHORT_FRESH_S = 15.0     # GPT-Live's own "Sure, let me check..." must never pass for the agent's ack
+AGENT_LEAD_FILLERS = frozenset({"okay", "ok", "so", "sure", "alright", "right", "well", "um", "uh", "yeah", "yes",
+                                "and", "now", "here's", "here", "oh"})   # the only words a read-out may open with
+AGENT_HOLD_MAX_S = 0.6         # its audio held this long while that is decided (the words lead the audio by ~0.2 s)
+AGENT_SAID_TTL_S = 90.0        # an agent sentence never read out is forgotten after this
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _words(text):
+    return _WORD_RE.findall((text or "").lower().replace("\u2019", "'"))
+
+
+def _sentences(text):
+    return [p for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p.strip()]
+
+
+def _opens_with(words, target, n):
+    """The utterance's first words are the sentence's (one slip in three allowed: the voice may say "One second" for
+    "One sec")."""
+    a, b = words[:n], target[:n]
+    if len(a) < len(b):
+        return False
+    hits = sum(1 for x, y in zip(a, b) if x == y)
+    return hits >= len(b) - (1 if len(b) >= 3 else 0)
 SUPERSEDE_VENDORS = ("hume", "openai")              # vendors whose CLM requests feed SUPERSEDE / ASYNC-HOLD
 _ACK_RE = re.compile(r"\b(i'?m on it|on it|done|sent|i'?ve (sent|started|messaged|checked|done))\b", re.I)
 
@@ -287,10 +327,38 @@ def _default_scribe(pcm):
 class _Holder:
     """One live conversation: EL socket + reader thread + reconnect + partials fork."""
 
-    def __init__(self, conversation_id, manager, vendor="elevenlabs"):
+    def __init__(self, conversation_id, manager, vendor="elevenlabs", agent=None):
         self.cid = conversation_id
         self.m = manager
         self.vendor = vendor
+        self.agent = agent            # the agent the call is with (its own voice); None: Arturo's own call
+        # The agent's OWN session takes this call's turns (services/arturo/agent_call.py): GPT-Live, an agent, its
+        # switch on and the seat streaming. Decided once, at the call's first chunk; off: the call runs as before.
+        # agent_voice (the default "voice" mode): GPT-Live answers AS the agent, naturally, with its recent
+        # conversation; delegated turns go to our CLM as on Arturo's calls, and work is commissioned into the agent's
+        # session from there. agent_mode is the "forced" mode only. Neither: Arturo's own call.
+        self.agent_mode = False
+        self.agent_voice = False
+        ac = getattr(manager, "agent_calls", None)
+        if agent and vendor == "openai" and ac is not None:
+            try:
+                if ac.enabled(agent):
+                    forced = getattr(ac, "mode", lambda _a: "forced")(agent) == "forced"
+                    self.agent_mode, self.agent_voice = forced, not forced
+            except Exception as e:  # noqa: BLE001 — an unreadable switch: the call runs as before
+                log.warning(f"relay {conversation_id}: agent-call switch unreadable for {agent}: {e!r}")
+        self._call_touched = 0.0
+        if self.agent_mode or self.agent_voice:
+            ac.mark_call(agent, conversation_id)   # its supervisor neither rotates nor restarts while it is live
+        # voice mode: the agent's recent conversation, read and scrubbed ONCE (a reconnect reuses it; it goes to OpenAI)
+        self._agent_context = ""
+        self._chat_watch = None       # voice mode: the agent's own chat mirrored into the call (_agent_chat_watch)
+        self._voice_turns = {}        # voice mode: requests said on the call and handed to the session (key -> count)
+        if self.agent_voice:
+            try:
+                self._agent_context = manager.scrub(ac.voice_context(agent) or "")
+            except Exception as e:  # noqa: BLE001 — the call runs without it
+                log.warning(f"relay {conversation_id}: agent context unreadable for {agent}: {e!r}")
         self.sock = None
         self.gate = ptt_stream.UplinkGate()
         self.turn_pcm = ptt_stream.TurnPcmBuffer()
@@ -313,6 +381,15 @@ class _Holder:
         self._oa_spans = 0            # Arturo speech spans so far: the first is the greeting
         self._oa_echo_pending = 0     # spoken read-outs sent (speak()) whose span has not started yet
         self._oa_span_echo = False    # this span reads out something the thread already holds: not a new line
+        # Agent calls: which GPT-Live utterance is heard (AGENT_* above). None: between utterances; "pending": its first
+        # words are being compared (its events held); "agent": heard (normal path); "muted": dropped at the source.
+        self._oa_gate = None
+        self._oa_gate_ev = []         # the held utterance's events, in order
+        self._oa_gate_t0 = 0.0
+        self._oa_gate_quiet = 0.0     # a muted utterance's non-speech audio so far (its end, like a span's tail)
+        self._oa_said = []            # the agent's sentences sent and not yet read out: [(sent_at, words)]
+        self._oa_heard_caller = False
+        self._oa_force_timer = None
         self._oa_warned = False
         self._oa_capped = False
         self.oa_nondelegated = 0
@@ -393,10 +470,13 @@ class _Holder:
                     and (not from_reconnect or self._frameless_fail)):
                 return False
         try:
+            who = {"agent": self.agent} if self.agent else {}     # Arturo's own calls: as before
             if self.vendor == "hume":
-                s = self.m.factories["hume"](self.cid, resumed_chat_group_id=self.chat_group_id)
+                s = self.m.factories["hume"](self.cid, resumed_chat_group_id=self.chat_group_id, **who)
             elif self.vendor == "openai":
-                s = self.m.factories["openai"](self.cid)
+                mode = ({"agent_mode": True} if self.agent_mode
+                        else {"agent_voice": True, "agent_context": self._agent_context} if self.agent_voice else {})
+                s = self.m.factories["openai"](self.cid, **who, **mode)
             else:
                 s = self.m.socket_factory(self.cid)
         except Exception as e:
@@ -419,6 +499,11 @@ class _Holder:
             self._agent_output_seen = False      # fresh session: greeting-clip guard re-arms
         threading.Thread(target=self._reader, args=(s,), daemon=True,
                          name=f"relay-reader-{self.cid[:8]}").start()
+        if self.agent_voice:
+            with self._lock:
+                first, self._chat_watch = self._chat_watch is None, self._chat_watch or "starting"
+            if first:                                   # once per call, whatever reconnects or races follow
+                self._start_chat_watch()
         # B2 (deep-review blocker): the resume timer is armed OUTSIDE the holder lock — arming
         # under it deadlocks the very first hume connect (_arm_timer takes the lock itself).
         if self.vendor == "hume" and self.m.hume_session_s:
@@ -707,7 +792,26 @@ class _Holder:
                 ev["echo"] = True
             self.m.buffer.put(self.cid, ev)
 
+    def touch_call(self):
+        """While the call runs, its marker stays fresh (the supervisor treats one older than 90 s as gone)."""
+        if not (self.agent_mode or self.agent_voice):
+            return
+        now = time.time()
+        if now - self._call_touched >= AGENT_CALL_TOUCH_S:
+            self._call_touched = now
+            try:
+                self.m.agent_calls.touch_call(self.agent)
+            except Exception:  # noqa: BLE001
+                pass
+
     def close(self):
+        if self.agent_mode or self.agent_voice:
+            if self.agent_mode:
+                self._oa_cancel_force()
+            try:
+                self.m.agent_calls.clear_call(self.agent, self.cid)
+            except Exception:  # noqa: BLE001
+                pass
         self._cancel_timers()
         # speaking teardown: NO speaking:false on close (finalize owns end-of-call; the
         # client treats end/410 as implicitly not-speaking) — but bump the gen so a
@@ -1083,6 +1187,9 @@ class _Holder:
         t = d.get("type", "")
         self.m.registry.touch(self.cid)
         now = time.time()
+        if self.agent_mode and t in ("session.output_audio.delta", "session.output_transcript.delta"):
+            if self._oa_agent_gate(d, t, now, sock):
+                return
         if t == "session.output_audio.delta":
             try:
                 pcm = base64.b64decode(d.get("delta") or "")
@@ -1189,12 +1296,24 @@ class _Holder:
                 text, turn, rev = self._oa_user.strip(), self._turn_no, self._rev
             if text:
                 self.m.buffer.put(self.cid, {"type": "user_partial", "text": text, "turn": turn, "revision": rev})
+                if self.agent_mode:
+                    self._oa_heard_caller = True
+                    self._oa_arm_force()
             return
         if t == "session.delegation.created":
             did = (d.get("delegation") or {}).get("id")
+            if self.agent_mode:
+                self._oa_cancel_force()
             with self._lock:
-                q, self._oa_user = self._oa_user.strip(), ""
-                early, self._oa_early = self._oa_early, None
+                empty = self.agent_mode and not self._oa_user.strip() and not self._oa_early
+                if not empty:
+                    q, self._oa_user = self._oa_user.strip(), ""
+                    early, self._oa_early = self._oa_early, None
+            if empty:
+                # GPT-Live delegating a line the relay already gave the agent (AGENT-FORCED): never a second turn
+                log.info(f"relay {self.cid}: AGENT-DELEG-EMPTY {did}: the line already went to the agent")
+                return
+            with self._lock:
                 if early:
                     # shown final when Arturo began (a filler before delegating): same line, same turn
                     q, turn = (f"{early[0]} {q}".strip() if q else early[0]), early[1]
@@ -1251,6 +1370,8 @@ class _Holder:
         span_t0 = self._span_t0
         self._oa_span_open = False
         self._oa_quiet_s = 0.0
+        if self.agent_mode:
+            self._oa_gate = None                       # the next utterance is decided afresh (every exit below)
         over, self._oa_over = self._oa_over, None
         self._log_audio_span("assistant_end")
         with self._lock:
@@ -1269,6 +1390,19 @@ class _Holder:
             return
         if text and _ACK_RE.search(text):
             log.info(f"relay {self.cid}: OPENAI-ACK {text[:80]!r}")
+        if self.agent_mode:
+            # the agent's words were read out: those sentences are done. The caller's line is never committed here
+            # (it would be logged as answered without the agent); the force timer gives it to the agent.
+            self._oa_said_consume(text)
+            self._oa_gate = None
+            if text:
+                with self._lock:
+                    self._agent_buf = [text]
+                self._flush_agent_buf()
+            self._awaiting_reply = False
+            self._oa_span_echo = False
+            self.m.buffer.put(self.cid, {"type": "assistant_end"})
+            return
         with self._lock:
             early, self._oa_early = self._oa_early, None
         if early:
@@ -1294,6 +1428,110 @@ class _Holder:
         self._oa_span_echo = False
         self.m.buffer.put(self.cid, {"type": "assistant_end"})
 
+    # -- voice mode: the agent's own chat during the call (agent_call.ChatMirror) --
+    def _start_chat_watch(self):
+        ac = self.m.agent_calls
+        try:
+            tail = ac.EventTail(ac.events_path(self.agent))       # from where the log stands now: only what's new
+            mirror = ac.ChatMirror(ac.display_name(self.agent), agent=self.agent)
+            typed = ac.EventTail(ac.typed_path(self.agent)) if hasattr(ac, "typed_path") else None
+        except Exception as e:  # noqa: BLE001 — the call runs without the mirror
+            log.warning(f"relay {self.cid}: agent chat mirror unavailable for {self.agent}: {e!r}")
+            return
+        # The agent's own reactions in its chat (`orchestra react`), told to the voice as silent notes (spec "Voice calls").
+        reactions = None
+        if hasattr(ac, "ReactionTail"):
+            try:
+                reactions = ac.ReactionTail(self.agent)
+            except Exception as e:  # noqa: BLE001 — the call runs without them
+                log.warning(f"relay {self.cid}: reactions unavailable for {self.agent}: {e!r}")
+        self._chat_watch = threading.Thread(target=self._agent_chat_watch, args=(tail, mirror, typed),
+                                            kwargs={"reactions": reactions}, daemon=True,
+                                            name=f"agent-chat-{self.cid[:8]}")
+        self._chat_watch.start()
+
+    def _agent_chat_watch(self, tail, mirror, typed=None, poll_s=None, reactions=None):
+        """What the operator types in the agent's chat reaches GPT-Live as context the moment it is sent (typed.jsonl,
+        from the API), or else when the agent's session takes it; what the agent answers there (to that, or to work
+        commissioned on the call) GPT-Live says as its own words. One worker, so lines keep their order."""
+        pending: list = []          # lines not yet delivered (the socket was down mid-reconnect): retried, in order
+        heard: dict = {}            # typed text -> [sends not yet echoed, last send] (the session's echo is not noted again)
+        while not self._closed:
+            try:
+                now = time.time()
+                for rec in (typed.read() if typed is not None else []):
+                    text = " ".join(str(rec.get("text") or "").split())
+                    if text:
+                        h = heard.setdefault(text, [0, now])
+                        h[0], h[1] = h[0] + 1, now
+                        pending.append(("note", self.m.agent_calls.typed_note(mirror.name, text), text))
+                for k in [k for k, h in heard.items() if now - h[1] > 600]:
+                    del heard[k]
+                for ch in (reactions.read() if reactions is not None else []):
+                    pending.extend(mirror.reaction(ch))     # ("note", ...): _oa_note below, never spoken
+                for act in mirror.feed(tail.read()):
+                    said = (" ".join(act[1].split()) if act[0] == "done" else
+                            " ".join(act[3].split()) if act[0] == "say" and len(act) > 3 else
+                            " ".join(act[2].split()) if act[0] == "note" and len(act) > 2 else None)
+                    with self._lock:
+                        for k in [k for k, c in self._voice_turns.items() if now - c[1] > 600]:
+                            del self._voice_turns[k]            # a turn whose end never came: not held forever
+                        mine = said is not None and said in self._voice_turns
+                    if act[0] == "done":
+                        if mine:
+                            self._voice_turn_done(said)         # this call's own request has ended
+                        continue
+                    if mine:
+                        continue                                # spoken as it streamed (_oa_agent_turn)
+                    key = " ".join(act[2].split()) if act[0] == "note" and len(act) > 2 else None
+                    if key is not None and key in heard:
+                        heard[key][0] -= 1                  # the session's echo of a message told on send
+                        if heard[key][0] <= 0:
+                            del heard[key]
+                        continue
+                    pending.append(act)
+                while pending and not self._closed:
+                    act = pending[0]
+                    ok = (self._oa_note(act[1]) if act[0] == "note"
+                          else self.oa_speak(act[1], note=act[2], echo=True))
+                    if not ok:
+                        break                       # kept; tried again next round
+                    pending.pop(0)
+                    if act[0] == "say":
+                        log.info(f"relay {self.cid}: AGENT-CHAT-SAID {len(act[1])} chars")
+            except Exception as e:  # noqa: BLE001 — never the call
+                log.warning(f"relay {self.cid}: agent chat mirror failed: {e!r}")
+            time.sleep(AGENT_CHAT_POLL_S if poll_s is None else poll_s)
+        if reactions is not None:
+            try:
+                reactions.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if pending:
+            log.info(f"relay {self.cid}: AGENT-CHAT {len(pending)} line(s) undelivered at the call's end (in the chat)")
+
+    def _voice_turn_done(self, key):
+        with self._lock:
+            c = self._voice_turns.get(key)
+            if c is not None:
+                c[0] -= 1
+                if c[0] <= 0:
+                    del self._voice_turns[key]
+
+    def _oa_note(self, note):
+        """Background context GPT-Live keeps but does not read out (session.thinking.append)."""
+        sock = self.sock
+        if sock is None or self._closed or not note:
+            return False
+        try:
+            sock.send(json.dumps({"type": "session.thinking.append", "delegation_id": None,
+                                  "content": self.m.scrub(note)[:openai_live.COMMENTARY_MAX_CHARS]}))
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"relay {self.cid}: openai note failed: {e!r}")
+            return False
+        log.info(f"relay {self.cid}: AGENT-CHAT-NOTE {len(note)} chars")
+        return True
+
     # -- Arturo speaking without being asked (a typed turn's reply, a result that landed) --
     def _oa_claim_echo(self):
         with self._lock:
@@ -1314,7 +1552,7 @@ class _Holder:
         already holds this reply as text, so its spoken span is tagged and not shown or archived twice.
         Blocking (a worker thread's job). Returns True once sent."""
         deadline = clock() + (OPENAI_SPEAK_WAIT_S if wait_s is None else wait_s)
-        while self._oa_caller_busy(clock()) and clock() < deadline:
+        while self._oa_caller_busy(clock()) and clock() < deadline and not self._closed:
             sleep(0.2)
         sock = self.sock
         if sock is None or self._closed:
@@ -1421,6 +1659,8 @@ class _Holder:
 
     def _oa_split_user_line(self):
         """He cut in with a backchannel: what they said so far is a line of its own, and their next words a new one."""
+        if self.agent_mode:
+            return                                     # an agent call: their line goes to the agent whole
         with self._lock:
             pending = self._oa_user.strip()
         if pending and not self._oa_early:
@@ -1431,6 +1671,7 @@ class _Holder:
         operator's last sentence vanished when the call ended)."""
         if self.vendor != "openai":
             return
+        self._oa_cancel_force()                        # the last line is committed here, once, never also forced
         try:
             if self._oa_span_open:
                 self._oa_end_span()
@@ -1455,6 +1696,8 @@ class _Holder:
             text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
         self._oa_over, self._oa_held = None, []
         self._oa_hold, self._oa_hold_quiet = "talkover", 0.0
+        if self.agent_mode:
+            self._oa_gate = None
         log.info(f"relay {self.cid}: OPENAI-OVERLAP cut (talking over the caller) {text[:60]!r}")
         if text:
             text = heard_part(text, span_t0, span_pcm, now)
@@ -1470,6 +1713,8 @@ class _Holder:
         An answer cut off mid-speech is posted to the transcript, never silently lost (gm condition 3)."""
         self._oa_barged = True
         self._oa_hold, self._oa_hold_quiet = "talkover", 0.0   # his run-on is dropped (_oa_floor)
+        if self.agent_mode:
+            self._oa_gate = None
         self._oa_over, self._oa_held = None, []
         span_t0, span_pcm, now = self._span_t0, self._span_pcm, time.time()
         self._log_audio_span("user_interruption", forwarded=True)
@@ -1478,9 +1723,11 @@ class _Holder:
         with self._lock:
             text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
             ans = self._oa_answer
-            answered = self._oa_user.strip()
+            answered = "" if self.agent_mode else self._oa_user.strip()   # agent call: the line goes to the agent
             last_word = getattr(self, "_oa_user_last", None)
-            early, self._oa_early = self._oa_early, None
+            early = None
+            if not self.agent_mode:
+                early, self._oa_early = self._oa_early, None
         if early:
             # already shown final when he began: journal it with what he got out; new words start fresh
             self._oa_commit_user(early[0], text, shown=True)
@@ -1514,8 +1761,321 @@ class _Holder:
                                              "text": f"(You cut in before I finished) {ans['answer']}"})
             self._oa_journal("arturo", ans["answer"], delegated=True, interrupted=True)
 
+    # -- Agent calls: the relay, not GPT-Live, decides who answers (AGENT_* above) --
+    def _oa_said_push(self, text):
+        now = time.time()
+        with self._lock:
+            self._oa_said = [x for x in self._oa_said if now - x[0] < AGENT_SAID_TTL_S]
+            self._oa_said += [(now, w) for w in (_words(p) for p in _sentences(text)) if w]
+
+    def _oa_said_consume(self, text):
+        """The sentences this read-out covered are done (it may read several in one utterance)."""
+        words = _words(text)
+        with self._lock:
+            while self._oa_said:
+                target = self._oa_said[0][1][:AGENT_MATCH_WORDS]
+                n = len(target)
+                if any(words[i:i + n] == target for i in range(max(0, len(words) - n + 1))):
+                    self._oa_said.pop(0)
+                else:
+                    break
+
+    def _oa_match(self, words, anywhere=False, now=None):
+        """(index of the queued agent sentence these words read out, the word it starts at), or None. A sentence of
+        AGENT_SHORT_WORDS or more may open at word 0-AGENT_LEAD_WORDS (or anywhere, `anywhere`); a shorter one only at
+        word 0 and only if sent in the last AGENT_SHORT_FRESH_S. The whole queue is searched: a sentence skipped or cut
+        off never blocks the next."""
+        now = time.time() if now is None else now
+        for i, (sent_at, target) in enumerate(self._oa_said):
+            n = min(AGENT_MATCH_WORDS, len(target))
+            if len(target) < AGENT_SHORT_WORDS:
+                if now - sent_at > AGENT_SHORT_FRESH_S:
+                    continue
+                last = 0
+            else:
+                last = len(words) - n if anywhere else min(AGENT_LEAD_WORDS, len(words) - n)
+            for off in range(0, max(-1, last) + 1):
+                if off and not anywhere and not all(w in AGENT_LEAD_FILLERS for w in words[:off]):
+                    break
+                if _opens_with(words[off:], target, n):
+                    return i, off
+        return None
+
+    def _oa_could_match(self, words):
+        """Too few words yet to tell, and what there is could still open a queued sentence (after filler lead-in words,
+        one slip in three allowed). Anything else is GPT-Live's own and is muted at once."""
+        for _, target in self._oa_said:
+            n = min(AGENT_MATCH_WORDS, len(target))
+            for off in range(0, (0 if len(target) < AGENT_SHORT_WORDS else AGENT_LEAD_WORDS) + 1):
+                if off and (off > len(words) or not all(w in AGENT_LEAD_FILLERS for w in words[:off])):
+                    break
+                rest = words[off:]
+                if len(rest) >= n:
+                    continue
+                slips = sum(1 for x, y in zip(rest, target) if x != y)
+                if slips <= (1 if n >= 3 else 0):
+                    return True
+        return False
+
+    def _oa_gate_decide(self, words, now, timed_out=False):
+        """For a pending utterance: "agent" (its words read out a queued agent sentence; that sentence and the ones
+        before it are done), "muted", "provisional" (held past AGENT_HOLD_MAX_S with no telling words yet, while the
+        agent sent a sentence in the last 10 s: played, and decided again as its words arrive), or None (wait)."""
+        with self._lock:
+            self._oa_said = [x for x in self._oa_said if now - x[0] < AGENT_SAID_TTL_S]
+            if not self._oa_said:
+                return "muted"
+            hit = self._oa_match(words, now=now)
+            if hit is not None:
+                del self._oa_said[:hit[0] + 1]
+                return "agent"
+            if self._oa_could_match(words):
+                if not timed_out:
+                    return None
+                recent = now - self._oa_said[-1][0] < 10.0
+                log.info(f"relay {self.cid}: AGENT-PROVISIONAL words={len(words)} "
+                         f"{'played until its words decide' if recent else 'muted (nothing sent recently)'}")
+                return "provisional" if recent else "muted"
+            return "muted"
+
+    def _oa_gate_words(self):
+        return _words("".join(e.get("delta") or "" for e in self._oa_gate_ev
+                              if e.get("type") == "session.output_transcript.delta"))
+
+    def _oa_agent_gate(self, d, t, now, sock):
+        """Agent calls only. True: the event was held or dropped here; False: the normal path handles it (heard)."""
+        audio = t == "session.output_audio.delta"
+        speech = False
+        if audio:
+            try:
+                speech = openai_live.is_speech(base64.b64decode(d.get("delta") or ""))
+            except Exception:  # noqa: BLE001
+                speech = False
+        gate = self._oa_gate
+        if gate is None:
+            if audio and not speech:
+                return False                           # quiet between utterances: the normal path ignores it
+            if not audio and not (d.get("delta") or "").strip():
+                return False
+            if self._oa_spans == 0 and not self._oa_heard_caller:
+                self._oa_gate = "agent"                # the greeting, before the caller has said anything
+                return False
+            gate = self._oa_gate = "pending"
+            self._oa_gate_ev, self._oa_gate_t0, self._oa_gate_quiet = [], now, 0.0
+        if gate == "agent":
+            return False
+        if gate == "provisional":
+            # its audio plays; its words are held until they decide it: a read-out is shown and stays heard,
+            # anything else is muted from here and none of its words are shown
+            if not audio:
+                self._oa_gate_ev.append(d)
+                decision = self._oa_gate_decide(self._oa_gate_words(), now)
+                if decision == "agent":
+                    held, self._oa_gate_ev = self._oa_gate_ev, []
+                    self._oa_gate = "agent"
+                    for e in held:
+                        self._dispatch_openai(e, sock)
+                elif decision == "muted":
+                    self._oa_mute(self._oa_gate_ev)
+                    log.info(f"relay {self.cid}: AGENT-MUTED (after a provisional start)")
+                return True
+            return False
+        if gate == "pending":
+            self._oa_gate_ev.append(d)
+            words = self._oa_gate_words()
+            decision = self._oa_gate_decide(words, now, timed_out=now - self._oa_gate_t0 >= AGENT_HOLD_MAX_S)
+            if decision is None:
+                return True
+            if decision in ("agent", "provisional"):
+                # what was held plays now, in order, through this gate again (a provisional one re-reads its words)
+                held, self._oa_gate_ev = self._oa_gate_ev, []
+                self._oa_gate = decision
+                for e in held:
+                    self._dispatch_openai(e, sock)
+                return True
+            self._oa_mute([e for e in self._oa_gate_ev if e.get("type") == "session.output_transcript.delta"])
+            log.info(f"relay {self.cid}: AGENT-MUTED GPT-Live's own words {' '.join(words)[:60]!r}")
+            return True
+        # muted: dropped. Its words are still read: a queued agent sentence starting inside it switches it to heard
+        if not audio:
+            prev = "".join(e.get("delta") or "" for e in self._oa_gate_ev
+                           if e.get("type") == "session.output_transcript.delta")
+            self._oa_gate_ev.append(d)
+            with self._lock:
+                hit = self._oa_match(self._oa_gate_words(), anywhere=True, now=now)
+                if hit is not None:
+                    del self._oa_said[:hit[0] + 1]
+            if hit is not None:
+                self._oa_gate, self._oa_gate_ev = "agent", []
+                # the shown line starts where the agent's sentence does: the words before this delta, from there
+                starts = [mo.start() for mo in _WORD_RE.finditer((prev + (d.get("delta") or "")).lower().replace("\u2019", "'"))]
+                at = starts[hit[1]] if hit[1] < len(starts) else len(prev)
+                with self._lock:
+                    self._oa_out, self._oa_out_started = (prev[at:] if at < len(prev) else ""), False
+                if at > len(prev):
+                    d["delta"] = " " + (d.get("delta") or "")[at - len(prev):]   # it starts inside this fragment
+                log.info(f"relay {self.cid}: AGENT-UNMUTED: the agent's sentence began inside a muted utterance")
+                return False
+            return True
+        if speech:
+            self._oa_gate_quiet = 0.0
+        else:
+            self._oa_gate_quiet += len(base64.b64decode(d.get("delta") or "")) / BYTES_PER_S
+            if self._oa_gate_quiet >= OPENAI_SPAN_TAIL_S:
+                self._oa_gate, self._oa_gate_quiet, self._oa_gate_ev = None, 0.0, []
+        return True
+
+    def _oa_close_span_silently(self):
+        """An utterance turned out to be GPT-Live's own while a span is open: the span ends with nothing of it shown,
+        journaled or counted as read out, so the call is not left 'speaking' (the next span starts clean)."""
+        with self._lock:
+            self._oa_out, self._oa_out_started = "", False
+        if self._oa_span_open:
+            self._oa_end_span()
+
+    def _oa_mute(self, keep):
+        self._oa_close_span_silently()                 # resets the gate: set muted after it
+        self._oa_gate, self._oa_gate_ev, self._oa_gate_quiet = "muted", keep, 0.0
+        self._oa_spans += 1
+
+    def _oa_cancel_force(self):
+        with self._lock:
+            t, self._oa_force_timer = self._oa_force_timer, None
+        if t:
+            t.cancel()
+
+    def _oa_arm_force(self):
+        """(Re)start the wait for the caller's quiet: AGENT_FORCE_QUIET_S after their last word, the line goes."""
+        if not self.agent_mode or self._closed:
+            return
+        t = threading.Timer(AGENT_FORCE_QUIET_S, self._oa_force_fire)
+        t.daemon = True
+        with self._lock:
+            old, self._oa_force_timer = self._oa_force_timer, t
+        if old:
+            old.cancel()
+        t.start()
+
+    def _oa_force_fire(self):
+        """The caller's line is over: it goes to the agent's session (the same turn a delegation would run). Taken under
+        the lock, so a delegation of the same words finds nothing (AGENT-DELEG-EMPTY), and the line goes once."""
+        if self._closed:
+            return
+        now = time.time()
+        with self._lock:
+            last = getattr(self, "_oa_user_last", None) or 0.0
+            if self._oa_user.strip() and now - last < AGENT_FORCE_QUIET_S - 0.05:
+                rearm, q = True, ""
+            else:
+                rearm = False
+                pending, early = self._oa_user.strip(), self._oa_early
+                self._oa_user, self._oa_early = "", None
+                if early:
+                    q, turn = (f"{early[0]} {pending}".strip() if pending else early[0]), early[1]
+                else:
+                    q, turn = pending, self._turn_no
+                    if q:
+                        self._turn_no += 1
+                self._rev = 0
+                if q:
+                    self._oa_hist.append({"role": "user", "content": q})
+        if rearm:
+            self._oa_arm_force()
+            return
+        if not q:
+            return
+        if not early:
+            self.m.replay_log(self.cid).add("user", q)
+            self.m.buffer.put(self.cid, {"type": "user_transcript", "text": q, "turn": turn})
+        log.info(f"relay {self.cid}: AGENT-FORCED {q[:60]!r}")
+        threading.Thread(target=self._oa_agent_turn, args=(self.sock, None, q), daemon=True,
+                         name=f"agent-turn-{self.cid[:8]}").start()
+
+    def _oa_agent_turn(self, sock, did, q):
+        """Worker, for a call in agent mode: the words go into the agent's own session (the typed path) and its reply
+        is spoken as it streams, sentence by sentence on this delegation; a long turn's rest out of band."""
+        ac = self.m.agent_calls
+        seat = self.agent
+        self.touch_call()
+        if ac.in_dev(seat):
+            # Dev: never forced out. The caller hears why, and the call bar offers Back to chat; the next turn after it
+            # goes to the agent's own session.
+            self.m.buffer.put(self.cid, {"type": "agent_in_dev", "agent": seat})
+            self._oa_said_push(ac.DEV_LINE)
+            for f in openai_live.commentary_frames(did, ac.DEV_LINE):
+                try:
+                    sock.send(f)
+                except Exception:  # noqa: BLE001
+                    return
+            self._oa_journal("user", q, agent=seat)
+            self._oa_journal("assistant", ac.DEV_LINE, agent=seat)
+            try:
+                ac.record_turn({"seat": seat, "ack": None, "outcome": "in_dev"}, self.cid)
+            except Exception:  # noqa: BLE001
+                pass
+            log.info(f"relay {self.cid}: AGENT-TURN {seat} in Dev: asked to go back to chat")
+            return
+
+        def say(text):
+            text = self.m.scrub(text)
+            self._oa_said_push(text)                   # before it is sent: its utterance is heard (_oa_agent_gate)
+            try:
+                for f in openai_live.commentary_frames(did, text):
+                    sock.send(f)
+            except Exception as e:  # noqa: BLE001 — the socket died; its own recovery runs elsewhere
+                log.warning(f"relay {self.cid}: agent-call commentary send failed: {e!r}")
+                return
+            with self._lock:
+                self._oa_hist.append({"role": "assistant", "content": text})
+
+        def say_later(text):
+            self._oa_said_push(self.m.scrub(text))
+            self.oa_speak(text, echo=True)
+        if not getattr(self, "_agent_warm_said", False):
+            self._agent_warm_said = True           # once per call, at its first turn
+            try:
+                line = ac.warm_line(seat)
+            except Exception:  # noqa: BLE001
+                line = None
+            if line:
+                say(line)
+        deliver = ac.deliver
+        if self.agent_voice:
+            # the agent knows the line was said on the call and its reply is spoken; the chat mirror skips this turn
+            # (it is spoken here, as it streams)
+            key = " ".join(q.split())
+            with self._lock:
+                c = self._voice_turns.setdefault(key, [0, 0.0])
+                c[0], c[1] = c[0] + 1, time.time()
+            deliver = lambda s, t: ac.deliver(s, f"{t} {ac.VOICE_SAID_TAG}")  # noqa: E731
+        try:
+            rec = ac.run_turn(seat, q, deliver=deliver, tail=ac.EventTail(ac.events_path(seat)), say=say,
+                              say_out_of_band=say_later, page=getattr(self, "page_context", None),
+                              ack_after=ac.ack_after_s(seat), ended=lambda: self._closed)
+        except Exception as e:  # noqa: BLE001 — a failure is said, never silence
+            log.error(f"relay {self.cid}: agent turn failed: {e!r}")
+            say("Something went wrong passing that to my session.")
+            if self.agent_voice:
+                self._voice_turn_done(" ".join(q.split()))
+            return
+        if self.agent_voice and rec.get("outcome") in ("empty", "slash_refused", "not_delivered", "failed"):
+            self._voice_turn_done(" ".join(q.split()))     # never reached the session: no reply to skip
+        try:
+            ac.record_turn(rec, self.cid)
+        except Exception:  # noqa: BLE001
+            pass
+        self._oa_journal("user", q, agent=seat)
+        if rec.get("spoken"):
+            self._oa_journal("assistant", rec["spoken"], agent=seat)
+        self._oa_answer = {"id": did, "q": q, "answer": rec.get("spoken") or "", "sent_at": time.time()}
+        log.info(f"relay {self.cid}: AGENT-TURN {seat} ack={rec.get('ack')} first_speech_s={rec.get('first_speech_s')} "
+                 f"tool={rec.get('tool_started')} turn_s={rec.get('turn_s')} outcome={rec.get('outcome')}")
+
     def _oa_delegate(self, sock, did, q, msgs):
-        """Worker: our CLM answers the delegated turn; the reply goes back as commentary on the same id."""
+        """Worker: our CLM answers the delegated turn; the reply goes back as commentary on the same id. On a call in
+        agent mode the agent's own session answers instead (_oa_agent_turn)."""
+        if self.agent_mode or self.agent_voice:
+            return self._oa_agent_turn(sock, did, q)
         ans = ""
         fn = getattr(self.m, "openai_delegate", None)
         try:
@@ -1538,6 +2098,8 @@ class _Holder:
 
     def _oa_journal(self, role, text, **meta):
         hook = getattr(self.m, "journal_hook", None)
+        if self.agent_mode or self.agent_voice:
+            meta.setdefault("agent", self.agent)   # every line of the call says whose call it is
         if hook:
             try:
                 hook(self.cid, role, text, **meta)
@@ -1668,6 +2230,7 @@ class RelayManager:
         self.factories.setdefault("hume", hume_socket_factory)
         self.factories.setdefault("openai", openai_live.openai_socket_factory)
         self.openai_delegate = None   # (cid, messages) -> reply text: the proxy wires its own CLM endpoint
+        self.agent_calls = None       # services/arturo/agent_call (the proxy wires it): calls answered by the agent
         self.journal_hook = None      # (cid, role, text, **meta): the proxy wires its call journal
         # B1 hermeticity pin: a test-injected EL socket_factory with NO vendor plumbing must
         # never read the live vendor file (or touch the network) — pin it to elevenlabs so the
@@ -1811,7 +2374,7 @@ class RelayManager:
             return ts is not None and now - ts < self.tombstone_ttl_s
 
     # -- api --
-    def feed_audio(self, conversation_id, pcm, surface_device=None):
+    def feed_audio(self, conversation_id, pcm, surface_device=None, agent=None):
         # An ENDED conversation must never be resurrected by a late uplink callback (build-206
         # kept POSTing ~43s past End). Reject the tombstoned id outright -> route 410 (hard stop)
         # rather than re-claiming the slot and re-creating a holder that sole_live() then trips on.
@@ -1847,12 +2410,13 @@ class RelayManager:
         with self._lock:
             h = self._holders.get(conversation_id)
             if h is None:
-                h = self._holders[conversation_id] = _Holder(conversation_id, self, vendor)
+                h = self._holders[conversation_id] = _Holder(conversation_id, self, vendor, agent=agent)
                 _dev = normalize_surface(surface_device)
                 self._surface[conversation_id] = _dev      # stamped ONCE at creation (first chunk's X-Surface)
                 log.info(f"surface: cid={conversation_id[:8]} device={_dev} x_surface={surface_device or '-'}")
                 self._conv_started[conversation_id] = time.time()
             self._last_contact[conversation_id] = time.time()
+        h.touch_call()
         h.feed(pcm)
         return {"ok": True}
 
@@ -1975,6 +2539,19 @@ class RelayManager:
         except Exception as e:
             log.error(f"relay finalize error ({conversation_id}): {e}")
         return True
+
+    def agent_mode(self, conversation_id) -> bool:
+        """The call is an agent's own (either mode, decided at its first chunk): it lives in that agent's chat."""
+        with self._lock:
+            h = self._holders.get(conversation_id)
+        return bool(h is not None and (h.agent_mode or h.agent_voice))
+
+    def agent_voice_seat(self, conversation_id):
+        """The agent GPT-Live is speaking as on this call ("voice" mode), or None. A callback's id is resolved."""
+        cid = self.resolve(conversation_id) or conversation_id
+        with self._lock:
+            h = self._holders.get(cid) if cid else None
+        return h.agent if h is not None and h.agent_voice else None
 
     def is_ended(self, conversation_id):
         """Tombstoned-within-TTL check for the routes (the events route 410s an ended cid)."""

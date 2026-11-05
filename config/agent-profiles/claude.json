@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "claude",
+  "label": "Claude Code",
+  "proven": true,
+  "process": { "basenames": ["claude"] },
+  "prompt_char": "❯",
+  "launch": { "bin": "claude", "model_flag": "--model", "resume": ["claude", "--resume", "{session_id}"] },
+  "state": { "source": "hooks" },
+  "session_log": { "format": "claude-jsonl", "find": ["claude-projects"] },
+  "context": "statusline",
+  "tokens": "session-log",
+  "model_switch": "live",
+  "menus": "chat",
+  "rotation": "supported"
+}

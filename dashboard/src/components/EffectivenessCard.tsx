@@ -15,13 +15,13 @@ export function EffectivenessCard({ agent, tasksDone, successRate, errors, spark
   ).join(' ');
 
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg border border-neutral-800 bg-neutral-900">
-      <div className="w-8 h-8 rounded-full bg-neutral-700 flex items-center justify-center text-sm font-bold shrink-0">
+    <div className="flex items-center gap-3 p-3 rounded-lg border border-tone-800 bg-tone-900">
+      <div className="w-8 h-8 rounded-full bg-tone-700 flex items-center justify-center text-sm font-bold shrink-0">
         {initial}
       </div>
       <div className="flex-1 min-w-0">
         <p className="font-medium text-sm truncate">{agent}</p>
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-tone-500">
           {tasksDone} done &middot; {successRate}% rate{errors > 0 && ` \u00b7 ${errors} errors`}
         </p>
       </div>

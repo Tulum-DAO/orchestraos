@@ -4,19 +4,21 @@
  * POST /api/arturo/text        {text, conversation_id?, brain?, context?} -> gateway /arturo/text -> :5071/text
  * GET  /api/arturo/health                               -> gateway /arturo/health
  * GET  /api/arturo/threads     [?limit=&offset=]        -> gateway /arturo/threads      (G20)
- * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20)
+ * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20; ?before=&limit= pages it)
+ * POST /api/arturo/threads/:id/cards/:cardId/dismiss    -> gateway (close a choice card, unanswered)
  * POST /api/arturo/transcribe  multipart {audio}       -> gateway /arturo/transcribe -> :5071/transcribe (item C)
  * GET  /api/arturo/ptt/vendor                           -> gateway /arturo/ptt/vendor  (which voice providers are set up)
  * GET  /api/arturo/ptt/voices  ?vendor=                 -> gateway /arturo/ptt/voices  (the server's voice rows)
  * GET  /api/arturo/ptt/voice   ?vendor=                 -> gateway /arturo/ptt/voice   (the voice the next call uses)
- * PUT  /api/arturo/ptt/voice   {vendor, voice_id}       -> gateway /arturo/ptt/voice   (admins only; the server validates it)
+ * PUT  /api/arturo/ptt/voice   {vendor, voice_id, agent?} -> gateway /arturo/ptt/voice (the server validates it)
+ * DELETE /api/arturo/ptt/voice ?vendor=&agent=           -> gateway /arturo/ptt/voice   (that agent back to the install's voice)
  * GET  /api/arturo/avatars                              -> gateway /arturo/avatars     (every saved avatar look)
  * GET  /api/arturo/avatar      ?agent=                  -> gateway /arturo/avatar      (one agent's look, or its default)
- * PUT  /api/arturo/avatar      {agent, shape?, color?, eyeColor?} -> gateway /arturo/avatar (admins only)
- * DELETE /api/arturo/avatar    ?agent=                  -> gateway /arturo/avatar      (admins only: back to the default)
+ * PUT  /api/arturo/avatar      {agent, shape?, color?, eyeColor?} -> gateway /arturo/avatar
+ * DELETE /api/arturo/avatar    ?agent=                  -> gateway /arturo/avatar      (back to the default)
  * GET  /api/arturo/name                                 -> gateway /arturo/assistant/name (what the assistant is called)
- * PUT  /api/arturo/name        {name}                   -> gateway /arturo/assistant/name (admins only; the server validates it)
- * DELETE /api/arturo/name                               -> gateway /arturo/assistant/name (admins only: back to "Arturo")
+ * PUT  /api/arturo/name        {name}                   -> gateway /arturo/assistant/name (the server validates it)
+ * DELETE /api/arturo/name                               -> gateway /arturo/assistant/name (back to "Arturo")
  *
  * Same trust model as routes/voice.ts: this Node process is the only holder of the
  * gateway bearer; the browser never sees it and never reaches the gateway or :5071.
@@ -31,7 +33,7 @@ import { Router } from 'express';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
-import { tenantScope } from '../lib/principal.js';
+import { tenantScope, installRole, type InstallRole } from '../lib/principal.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
@@ -57,6 +59,9 @@ export interface ArturoDeps {
   /** Whether the caller is an admin (the same role check /api/usage uses). Injectable so both
    *  answers are tested without identity headers; absent means that real check. */
   isAdmin?: (req: any) => boolean;
+  /** The caller's role on the install (lib/principal installRole): the install's own voice is admin-only. Injectable for
+   *  tests; absent means the real check. */
+  installRole?: (req: any) => InstallRole;
 }
 
 // Per-turn brain + page context (DEC-1790669162399904 §1.1-1.2). Shape checks only, for an early
@@ -77,19 +82,96 @@ export function pickBrain(raw: unknown): Picked<{ provider: string; model: strin
   return { ok: true, value: { provider, model } };
 }
 
-export function pickContext(raw: unknown): Picked<Record<string, string>> {
-  const bad: Picked<Record<string, string>> = { ok: false, refusal: { error: 'bad_context', field: 'context' } };
+export function pickContext(raw: unknown): Picked<Record<string, unknown>> {
+  const bad: Picked<Record<string, unknown>> = { ok: false, refusal: { error: 'bad_context', field: 'context' } };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad;
   const src = raw as Record<string, unknown>;
   if (typeof src.route !== 'string' || !src.route) return bad;
-  const out: Record<string, string> = {};
+  const out: Record<string, unknown> = {};
   for (const k of CTX_FIELDS) {
     const v = src[k];
     if (v === undefined || v === null) continue;
     if (typeof v !== 'string' || v.length > CTX_MAX) return bad;
     out[k] = v;
   }
+  if (src.cards !== undefined && src.cards !== null) {
+    const cards = pickCards(src.cards);
+    if (!cards) return { ok: false, refusal: { error: 'bad_context', field: 'context.cards' } };
+    out.cards = cards;
+  }
   return { ok: true, value: out };
+}
+
+// The cards on the person's screen (contract/notes/arturo-screen-context.md): rebuilt from known fields only, every
+// string clipped and every list capped, so the block stays small whatever a client sends. The same rules as the
+// proxy's _pick_cards (services/arturo); fixture shared with its test: services/arturo/fixtures/screen_cards_cases.json.
+const CARD_REF = /^c\d{1,2}$/;
+const MAX_CARDS = 12;
+const MAX_OPTIONS = 12;
+
+function clip(v: unknown, n: number): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.replace(/\s+/g, ' ').trim();
+  if (!t) return undefined;
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+function clipList(v: unknown, n: number): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map((x) => clip(x, n)).filter((x): x is string => !!x).slice(0, MAX_OPTIONS);
+  return out.length ? out : undefined;
+}
+
+const smallInt = (v: unknown): number | undefined => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 50 ? v as number : undefined);
+
+function put(o: Record<string, unknown>, k: string, v: unknown) { if (v !== undefined) o[k] = v; }
+
+export function pickCards(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const src = raw as Record<string, unknown>;
+  if (!Array.isArray(src.cards)) return null;
+  const cards: Record<string, unknown>[] = [];
+  for (const c of src.cards.slice(0, MAX_CARDS)) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) continue;
+    const r = c as Record<string, unknown>;
+    if (typeof r.ref !== 'string' || !CARD_REF.test(r.ref) || cards.some((x) => x.ref === r.ref)) continue;
+    const line = clip(r.line, 200);
+    if (line) { cards.push({ ref: r.ref, line }); continue; }
+    const out: Record<string, unknown> = { ref: r.ref };
+    put(out, 'kind', clip(r.kind, 30)); put(out, 'from', clip(r.from, 60)); put(out, 'state', clip(r.state, 30));
+    put(out, 'surface', clip(r.surface, 30)); put(out, 'question', clip(r.question, 300));
+    put(out, 'summary', clip(r.summary, 400)); put(out, 'options', clipList(r.options, 100));
+    put(out, 'answer', clip(r.answer, 300));
+    if (r.part && typeof r.part === 'object' && !Array.isArray(r.part)) {
+      const p = r.part as Record<string, unknown>;
+      const part: Record<string, unknown> = {};
+      put(part, 'n', smallInt(p.n)); put(part, 'of', smallInt(p.of)); put(part, 'question', clip(p.question, 300));
+      put(part, 'select', p.select === 'multi' ? 'multi' : p.select === 'single' ? 'single' : undefined);
+      put(part, 'options', clipList(p.options, 100)); put(part, 'picked', clipList(p.picked, 100));
+      put(part, 'typed', clip(p.typed, 300));
+      if (Object.keys(part).length) out.part = part;
+    }
+    if (out.question || out.part) cards.push(out);
+  }
+  const focus = typeof src.focus === 'string' && cards.some((x) => x.ref === src.focus) ? src.focus : null;
+  return { v: 1, focus, cards };
+}
+
+// The choice card this turn's message answers (services/arturo/card_answers.py has the same rules and is the
+// authority: it alone knows the card, its options and whether it is still open). Shape checks only, rebuilt from
+// known fields.
+const CARD_ID_RE = /^[0-9a-f]{8,32}$/;
+
+export function pickCardAnswer(raw: unknown): Picked<{ card_id: string; picks: string[]; words: string }> {
+  const bad = { ok: false as const, refusal: { error: 'bad_card_answer', field: 'card_answer' } };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad;
+  const src = raw as Record<string, unknown>;
+  if (typeof src.card_id !== 'string' || !CARD_ID_RE.test(src.card_id)) return bad;
+  const picks = src.picks ?? [];
+  if (!Array.isArray(picks) || picks.length > 8 || !picks.every((p) => typeof p === 'string')) return bad;
+  const words = src.words ?? '';
+  if (typeof words !== 'string' || words.length > 1000) return bad;
+  return { ok: true, value: { card_id: src.card_id, picks: picks as string[], words } };
 }
 
 export function defaultArturoDeps(): ArturoDeps {
@@ -114,6 +196,7 @@ export function defaultArturoDeps(): ArturoDeps {
       return { status: r.status, body };
     },
     isAdmin: (req) => tenantScope(req).isAdmin,
+    installRole: (req) => installRole(req),
   };
 }
 
@@ -142,7 +225,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // The client's id for this send (DEC-1791518421640932): the proxy validates it and replays a send it has seen.
     const turnId = (req.body || {}).turn_id;
     if (typeof turnId === 'string' && turnId) upstream.turn_id = turnId.slice(0, 64);
-    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
+    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext], ['card_answer', pickCardAnswer]] as const) {
       const raw = (req.body || {})[key];
       if (raw === undefined || raw === null) continue;
       const picked = pick(raw);
@@ -201,7 +284,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // The client's id for this send (DEC-1791518421640932): the proxy validates it and replays a send it has seen.
     const turnId = (req.body || {}).turn_id;
     if (typeof turnId === 'string' && turnId) upstream.turn_id = turnId.slice(0, 64);
-    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
+    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext], ['card_answer', pickCardAnswer]] as const) {
       const raw = (req.body || {})[key];
       if (raw === undefined || raw === null) continue;
       const picked = pick(raw);
@@ -290,8 +373,15 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // ?turn=<id>: one send's fate (running | done | lost | unknown), the read-back after a dropped turn.
     const turn = req.query.turn;
     // ?jobs=1: the job tray's poll (this thread's running and just-finished background jobs).
+    // ?before=<seq>&limit=<n>: a long thread a page at a time (the turns older than seq `before`, or with `limit`
+    // alone the newest n), each with its seq, plus has_older and oldest_seq. Whole numbers only.
+    const page = new URLSearchParams();
+    for (const key of ['before', 'limit']) {
+      const v = req.query[key];
+      if (typeof v === 'string' && /^\d{1,12}$/.test(v)) page.set(key, v);
+    }
     const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}`
-      : req.query.jobs ? '?jobs=1' : '';
+      : req.query.jobs ? '?jobs=1' : page.toString() ? `?${page}` : '';
     await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000);
   });
 
@@ -303,6 +393,14 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     await forward(res, `/arturo/threads/${id}/jobs/${jobId}/cancel`, { method: 'POST' }, 10000);
   });
 
+  // Close one of Arturo's choice cards without answering it (it stays in the thread, marked dismissed).
+  router.post('/threads/:id/cards/:cardId/dismiss', async (req, res) => {
+    const id = encodeURIComponent(String(req.params.id || '').slice(0, 200));
+    const cardId = String(req.params.cardId || '');
+    if (!id || !/^[0-9a-f]{8,32}$/.test(cardId)) { res.status(400).json({ ok: false, error: 'bad card id' }); return; }
+    await forward(res, `/arturo/threads/${id}/cards/${cardId}/dismiss`, { method: 'POST' }, 10000);
+  });
+
   // The voice picker: the same server rows and the same validated PUT the phone's settings use. The
   // provider keys stay on the server (its own key check decides what is available); only names,
   // ids and availability come back. Only the vendor and the voice id are passed on, never the
@@ -311,6 +409,11 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     const v = typeof raw === 'string' ? raw : '';
     return /^[a-z0-9_-]{1,32}$/.test(v) ? `?vendor=${v}` : '';
   };
+  // An agent's own voice (voice_choice.py: with none, the agent uses the install's): the agent id, checked here
+  // too, appended to whatever query is already built.
+  const VOICE_AGENT_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+  const voiceAgent = (raw: unknown) => (typeof raw === 'string' && VOICE_AGENT_RE.test(raw) ? raw : null);
+  const withAgent = (q: string, agent: string | null) => (agent ? `${q}${q ? '&' : '?'}agent=${agent}` : q);
   router.get('/ptt/vendor', async (_req, res) => {
     await forward(res, '/arturo/ptt/vendor', { method: 'GET' }, 10000);
   });
@@ -318,33 +421,44 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     await forward(res, `/arturo/ptt/voices${vendorQuery(req.query.vendor)}`, { method: 'GET' }, 25000);
   });
   router.get('/ptt/voice', async (req, res) => {
-    await forward(res, `/arturo/ptt/voice${vendorQuery(req.query.vendor)}`, { method: 'GET' }, 10000);
+    await forward(res, `/arturo/ptt/voice${withAgent(vendorQuery(req.query.vendor), voiceAgent(req.query.agent))}`, { method: 'GET' }, 10000);
   });
-  // Changing the voice changes it for everyone who talks to Arturo, so it is an admin's call (the
-  // gateway itself only lets admin- or voice-scoped callers write it; this API holds a bearer with every
-  // scope, so the check has to happen here). Reading stays open to anyone who can open the dashboard.
+  // Anyone who can open the dashboard may read or change any agent's own voice for now: there is no per-agent ownership
+  // yet. The install's voice (no agent) is every agent's default, so only an admin changes it (Settings phase 1, the same
+  // rule as PUT /api/settings/voice.defaultVoice). (The gateway still scopes paired devices; this API holds a bearer with
+  // every scope.)
+  const roleOf = deps.installRole ?? ((req: any) => installRole(req));
   router.put('/ptt/voice', async (req, res) => {
-    const admin = deps.isAdmin ? deps.isAdmin(req) : tenantScope(req).isAdmin;
-    if (!admin) {
-      res.status(403).json({ ok: false, error: "Only an admin can change the assistant's voice" });
-      return;
-    }
-    const { vendor, voice_id } = (req.body || {}) as Record<string, unknown>;
+    const { vendor, voice_id, agent: rawAgent } = (req.body || {}) as Record<string, unknown>;
     if (typeof vendor !== 'string' || typeof voice_id !== 'string' || !vendor || !voice_id
         || vendor.length > 32 || voice_id.length > 200) {
       res.status(400).json({ ok: false, error: 'vendor and voice_id required' });
       return;
     }
+    const agent = voiceAgent(rawAgent);
+    if (rawAgent !== undefined && rawAgent !== null && rawAgent !== '' && !agent) {
+      res.status(400).json({ ok: false, error: 'agent must be an agent id' });
+      return;
+    }
+    if (!agent && roleOf(req) !== 'admin') {
+      res.status(403).json({ ok: false, error: "Only an admin can change the install's voice" });
+      return;
+    }
     await forward(res, '/arturo/ptt/voice', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vendor, voice_id }),
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vendor, voice_id, ...(agent ? { agent } : {}) }),
     }, 10000);
   });
+  router.delete('/ptt/voice', async (req, res) => {
+    const agent = voiceAgent(req.query.agent);
+    const q = vendorQuery(req.query.vendor);
+    if (!agent || !q) { res.status(400).json({ ok: false, error: 'vendor and agent required' }); return; }
+    await forward(res, `/arturo/ptt/voice${withAgent(q, agent)}`, { method: 'DELETE' }, 10000);
+  });
 
-  // Avatar looks, keyed by agent id (services/arturo/avatar_choice.py). Same split as the voice: anyone who
-  // can open the dashboard reads them; only an admin changes or resets one, since a look shows on every
-  // device. The values are checked here too, so a bad one never leaves this process, and only the known
-  // fields are passed on.
-  const isAdmin = (req: any) => (deps.isAdmin ? deps.isAdmin(req) : tenantScope(req).isAdmin);
+  // Avatar looks, keyed by agent id (services/arturo/avatar_choice.py). Like the voice, anyone may change one for
+  // now. The values are checked here too, so a bad one never leaves this process, and only the known fields are
+  // passed on.
   const agentParam = (raw: unknown) => {
     const v = typeof raw === 'string' ? raw : '';
     return AVATAR_AGENT_RE.test(v) ? v : null;
@@ -358,7 +472,6 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     await forward(res, `/arturo/avatar?agent=${encodeURIComponent(agent)}`, { method: 'GET' }, 10000);
   });
   router.put('/avatar', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can change an agent's look" }); return; }
     const picked = pickAvatar(req.body);
     if (!picked.ok) { res.status(400).json({ ok: false, error: picked.error }); return; }
     await forward(res, '/arturo/avatar', {
@@ -366,28 +479,25 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     }, 10000);
   });
   router.delete('/avatar', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can change an agent's look" }); return; }
     const agent = agentParam(req.query.agent);
     if (!agent) { res.status(400).json({ ok: false, error: 'agent required' }); return; }
     await forward(res, `/arturo/avatar?agent=${encodeURIComponent(agent)}`, { method: 'DELETE' }, 10000);
   });
 
-  // The assistant's name on this install ("Arturo" until renamed; the id stays "arturo"). Anyone reads it;
-  // only an admin renames it, since it shows on every device and in the assistant's own instructions. Only
-  // the name is passed on; Arturo's assistant_name.py decides what a valid name is.
+  // The assistant's name on this install ("Arturo" until renamed; the id stays "arturo"). Anyone may read or change
+  // it for now. Only the name is passed on; Arturo's assistant_name.py decides what a valid name is (it goes into
+  // the assistant's own instructions).
   router.get('/name', async (_req, res) => {
     await forward(res, '/arturo/assistant/name', { method: 'GET' }, 10000);
   });
   router.put('/name', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can rename the assistant" }); return; }
     const name = req.body?.name;
     if (typeof name !== 'string' || !name.trim() || name.length > 64) { res.status(400).json({ ok: false, error: 'name required' }); return; }
     await forward(res, '/arturo/assistant/name', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
     }, 10000);
   });
-  router.delete('/name', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can rename the assistant" }); return; }
+  router.delete('/name', async (_req, res) => {
     await forward(res, '/arturo/assistant/name', { method: 'DELETE' }, 10000);
   });
 

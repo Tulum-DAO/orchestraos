@@ -1,0 +1,191 @@
+[
+ {
+  "block_task": "Plug in the phone",
+  "blocks_what": "deploy",
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<human_task>",
+  "kind": "human_task",
+  "menu": null,
+  "options": [
+   "done",
+   "cant",
+   "snooze"
+  ],
+  "question": "Plug in the phone",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "summary": null
+ },
+ {
+  "block_task": "Send the invoice",
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": {
+   "due_ts": "2026-12-01T00:00:00+00:00"
+  },
+  "feature": "commitment",
+  "from_agent": "gm",
+  "id": "<commitment>",
+  "kind": "human_task",
+  "menu": null,
+  "options": [
+   "done",
+   "cant",
+   "snooze"
+  ],
+  "question": "Send the invoice",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "summary": null
+ },
+ {
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "dev",
+  "id": "<menu_multi>",
+  "kind": "menu",
+  "menu": {
+   "options": [
+    {
+     "input_kind": "direct",
+     "label": "X",
+     "n": "1"
+    }
+   ],
+   "part_count": 2,
+   "parts": [
+    {
+     "options": [
+      {
+       "label": "X",
+       "n": "1"
+      }
+     ],
+     "question": "Part one"
+    },
+    {
+     "options": [
+      {
+       "label": "Y",
+       "n": "1"
+      }
+     ],
+     "question": "Part two"
+    }
+   ],
+   "question": "Part one",
+   "walk_complete": true
+  },
+  "options": [
+   "X",
+   "Y"
+  ],
+  "question": "Two parts",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "summary": null
+ },
+ {
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "dev",
+  "id": "<menu_single>",
+  "kind": "menu",
+  "menu": {
+   "options": [
+    {
+     "input_kind": "direct",
+     "label": "A",
+     "n": "1"
+    },
+    {
+     "input_kind": "direct",
+     "label": "B",
+     "n": "2"
+    }
+   ],
+   "question": "Pick one"
+  },
+  "options": [
+   "A",
+   "B"
+  ],
+  "question": "Pick one",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "summary": null
+ },
+ {
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<approval>",
+  "kind": null,
+  "menu": null,
+  "options": [
+   "approve",
+   "deny",
+   "hold"
+  ],
+  "question": "Approve the deploy?",
+  "reversibility": "easy",
+  "risk_level": "medium",
+  "snoozed_until": null,
+  "summary": "why"
+ },
+ {
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": {
+   "tests": "12 passed",
+   "urls": [],
+   "verified": true
+  },
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<completion_pending>",
+  "kind": "completion",
+  "menu": null,
+  "options": [
+   "accept",
+   "respond"
+  ],
+  "question": "Voice panel live",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "summary": null
+ },
+ {
+  "created_at": "<ts>",
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<qnr_pending>",
+  "kind": "questionnaire",
+  "options": [],
+  "question": "Onboarding",
+  "questionnaire": {
+   "answered_count": 0,
+   "draft_rev": 0,
+   "question_count": 1
+  },
+  "summary": null
+ }
+]

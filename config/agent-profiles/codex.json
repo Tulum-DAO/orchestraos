@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "codex",
+  "label": "Codex",
+  "proven": true,
+  "process": { "basenames": ["codex"] },
+  "prompt_char": "›",
+  "launch": { "bin": "codex", "model_flag": "--model", "resume": ["codex", "resume", "{session_id}"] },
+  "state": { "source": "screen" },
+  "session_log": { "format": "codex-rollout", "find": ["session-files"] },
+  "context": "session-log",
+  "tokens": "session-log",
+  "model_switch": "live",
+  "menus": "terminal-only",
+  "rotation": "opt-in"
+}

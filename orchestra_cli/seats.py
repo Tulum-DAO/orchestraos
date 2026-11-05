@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import settings as S
 
-DEFAULT_MODEL = {"claude": "claude-opus-5[1m]", "gemini": "gemini-3.7-flash", "codex": "gpt-5.6-terra",
+DEFAULT_MODEL = {"claude": "claude-opus-5-5[1m]", "gemini": "gemini-3.7-flash", "codex": "gpt-5.6-terra",
                  "grok": "grok-4.7"}
 
 
@@ -70,8 +70,12 @@ def _tier_rule(st: S.Settings):
 
 def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, model: str | None,
                   tier: str | None, prompt: str | None, cwd: str | None = None,
-                  parent: str | None = None, role: str | None = None) -> dict:
+                  parent: str | None = None, role: str | None = None, test: bool = False) -> dict:
     """Idempotent: an existing row is kept verbatim (only missing fields are filled).
+
+    test=True registers a TEST seat (tier_rule: a T2 worker reporting to the integrator, which is
+    not a registered seat) and records `test: true` on the row, which the identity store keeps in
+    the seat's registry doc. An existing seat is never turned into a test seat (refused).
 
     A NEW non-gm seat gets its tier from its position (scripts/tier_rule.py): no parent or a T0
     parent -> T1, any other parent -> that parent's T2 (with reports_to), and a role (pm | worker,
@@ -80,11 +84,20 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     p, reg = _registry(st)
     existing = _seat_row(st, seat)                 # armed: the store's row, not a stale projection
     row = dict(existing or {})
+    # "Test" belongs to the whole lineage: a name first spawned with --test stays a test seat in every later
+    # generation, and test and real seats never share a name.
+    why = lineage_refusal(st, seat, test=test, gm=gm, live_row=existing)
+    if why:
+        raise _tier_rule(st).TierRefused(why)
     if existing is None and not gm:
         T = _tier_rule(st)
         prow = reg["agents"].get(parent) if parent else None
+        if test and (role or "worker").strip().lower() != "worker":
+            raise T.TierRefused(f"{seat}: a test seat is a worker, not a {role}")
         tier, reports_to, warning = T.tier_for(seat, parent, prow is not None,
-                                               (prow or {}).get("tier"), tier)
+                                               (prow or {}).get("tier"), tier, test=test)
+        if test:
+            row["test"] = True
         if warning:
             print(f"warning: {warning}", file=sys.stderr)
         if reports_to:
@@ -118,6 +131,51 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
     _record_armed(st, seat, row)
     return row
+
+
+def lineage_test_flag(st: S.Settings, seat: str, live_row: dict | None = None) -> bool | None:
+    """True: the name is a test lineage (spawned with --test, live or retired). False: a real seat's lineage (live,
+    or retired with its session record kept). None: a name never used. From the live row, then the identity
+    store's documents (its registry and session records, retired ones included), then the flat files."""
+    if live_row is not None:
+        return live_row.get("test") is True
+    docs = []
+    if (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        from .identity_cmd import stored_seat
+        try:
+            stored = stored_seat(st.repo_root, st.data_dir, seat)
+        except Exception:  # noqa: BLE001 — an unreadable store: the flat files below decide
+            stored = None
+        if stored:
+            docs += [d for d in stored if isinstance(d, dict)]
+    flat_row = _registry(st)[1]["agents"].get(seat)
+    if isinstance(flat_row, dict):
+        docs.append(flat_row)
+    try:
+        sess = json.loads((st.data_dir / "state" / "agent-sessions.json").read_text()).get(seat)
+    except (OSError, ValueError, AttributeError):
+        sess = None
+    if isinstance(sess, dict):
+        docs.append(sess)
+    if not docs:
+        return None
+    return any(d.get("test") is True for d in docs)
+
+
+def lineage_refusal(st: S.Settings, seat: str, *, test: bool, gm: bool = False,
+                    live_row: dict | None = None) -> str | None:
+    """Why `seat` may not be (re)spawned with or without --test, or None. A test lineage stays a test seat, and
+    test and real seats never share a name. Asked FIRST by spawn and agent create, before anything is written."""
+    if test and gm:
+        return "the gm seat cannot be a test seat"
+    if gm:
+        return None
+    lineage = lineage_test_flag(st, seat, live_row if live_row is not None else _seat_row(st, seat))
+    if test and lineage is False:
+        return f"{seat} is a real seat's name; spawn the test seat with a new name"
+    if not test and lineage is True:
+        return f"{seat} is a test seat; spawn it with --test, or use a new name"
+    return None
 
 
 def runtime_mismatch(st: S.Settings, seat: str, requested: str | None) -> str | None:
@@ -158,6 +216,10 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
         raise KeyError(seat)
     retired = {"status": "retired", "retired_at": datetime.now(timezone.utc).isoformat(),
                "retired_by": "orchestra retire", "retired_reason": reason}
+    if (row or {}).get("test") is True:
+        # The registry row goes; the retired session record keeps that it was a test seat, so a
+        # view of retired seats can leave it out (the identity rows themselves are kept).
+        retired["test"] = True
     entry = dict(meta.get(seat) or {}, **retired)
     from .identity_cmd import retire_seat_in_store
     stored = retire_seat_in_store(st.repo_root, st.data_dir, seat, reason, retired, dict(meta.get(seat) or {}))
@@ -171,6 +233,14 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
         for path, obj in ((p, reg), (sp, meta)):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(obj, indent=2) + "\n"); os.replace(tmp, path)
+    # Its effort level goes too (scripts/agent_effort.py, kept by lineage name): a seat made later under
+    # the same name starts on the default, never on this one's level. A resume by hand starts on the
+    # CLI's own default. Never fails the retire.
+    try:
+        from scripts import agent_effort as AE
+        AE.put(AE.store_path(str(st.data_dir)), AE.root_of(seat, {"agents": {seat: row or {}}}), None)
+    except Exception:  # noqa: BLE001
+        pass
     # Stop the seat's OWN session only: its row's tmux_session (the seat name when there is no row),
     # and never one another registered seat says is its own.
     target = (row or {}).get("tmux_session") or (meta.get(seat) or {}).get("tmux_session") or seat
@@ -183,7 +253,42 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
         stopped.append(target)
     return {"seat": seat, "armed": armed, "session_id": entry.get("session_id"),
             "transcript": entry.get("conversation_path") or None, "tmux": stopped,
-            "tmux_kept": None if stopped else target}
+            "tmux_kept": None if stopped else target, "headless_off": _headless_off(st, seat)}
+
+
+def _headless_off(st: S.Settings, seat: str) -> bool:
+    """A retired seat is switched off headless (scripts/headless_switch.py), and its Dev marker goes: stopping its
+    tmux session stopped its supervisor, and a later seat of the same name must not start headless by surprise.
+    Its supervisor folder (the event log) is kept. True when it had been on."""
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        import headless_switch as HS
+        entry = HS.load_switch(st.data_dir).get(seat)
+        if not isinstance(entry, dict):
+            return False
+        was_on = entry.get("headless") is True
+        HS.set_switch(seat, False, runtime=entry.get("runtime") or "", by="orchestra retire", orch_dir=st.data_dir)
+        try:
+            (HS.seat_dir(seat, st.data_dir) / "dev").unlink()
+        except FileNotFoundError:
+            pass
+        return was_on
+    except Exception as e:  # noqa: BLE001 — the retire itself is done; say what was left
+        print(f"warning: {seat}: its headless switch could not be turned off ({e})", file=sys.stderr)
+        return False
+
+
+def _is_headless(st: S.Settings, seat: str) -> bool:
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        import headless_switch as HS
+        return HS.is_headless(seat, orch_dir=st.data_dir)
+    except Exception:  # noqa: BLE001 — the switch defaults off
+        return False
 
 
 def cmd_retire(ns) -> int:
@@ -469,6 +574,9 @@ def cmd_spawn(ns) -> int:
     if refused is not None:
         return refused
     seat = ns.seat
+    why = lineage_refusal(st, seat, test=bool(getattr(ns, "test", False)), gm=bool(ns.gm))
+    if why:
+        print(f"spawn refused: {why}", file=sys.stderr); return 2
     mismatch = runtime_mismatch(st, seat, ns.runtime)
     if mismatch:
         print(f"spawn refused: {mismatch}", file=sys.stderr); return 2
@@ -478,7 +586,8 @@ def cmd_spawn(ns) -> int:
         return refused
     try:
         row = register_seat(st, seat, gm=ns.gm, runtime=runtime, model=ns.model, tier=ns.tier,
-                            prompt=ns.prompt, parent=getattr(ns, "parent", None), role=getattr(ns, "role", None))
+                            prompt=ns.prompt, parent=getattr(ns, "parent", None), role=getattr(ns, "role", None),
+                            test=bool(getattr(ns, "test", False)))
     except ValueError as e:      # tier_rule.TierRefused
         print(f"spawn refused: {e}", file=sys.stderr); return 2
     prompt_path = st.repo_root / row["system_prompt"]
@@ -558,6 +667,10 @@ def cmd_agent_create(ns) -> int:
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
     name = ns.name
+    # Before anything is written (the prompt, a project folder): a refused name leaves no trace.
+    why = lineage_refusal(st, name, test=bool(getattr(ns, "test", False)))
+    if why:
+        print(f"agent create refused: {why}", file=sys.stderr); return 2
     mismatch = runtime_mismatch(st, name, ns.runtime)
     if mismatch:
         print(f"agent create refused: {mismatch}", file=sys.stderr); return 2
@@ -607,7 +720,8 @@ def cmd_agent_create(ns) -> int:
     role = getattr(ns, "role", None) or ("pm" if ns.template == "pm" else None)
     try:
         row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel,
-                            cwd=getattr(ns, "cwd", None), parent=ns.parent, role=role)
+                            cwd=getattr(ns, "cwd", None), parent=ns.parent, role=role,
+                            test=bool(getattr(ns, "test", False)))
     except ValueError as e:      # tier_rule.TierRefused
         print(f"agent create refused: {e}", file=sys.stderr); return 2
     if ns.parent and row.get("reports_to") != ns.parent:
@@ -740,6 +854,42 @@ def cmd_rotate(ns) -> int:
     row = reg["agents"].get(seat)
     if not row:
         print(f"seat '{seat}' is not in {st.data_dir / 'registry.json'} — `orchestra spawn {seat}` first", file=sys.stderr); return 2
+    env = S.child_env(st)
+    # A runtime without a built and tested rotation adapter is refused, with the adapter's reason.
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        from rotation_adapters import refusal as _adapter_refusal
+        why = _adapter_refusal(ns.runtime or row.get("runtime") or "claude")
+    except ImportError:
+        why = None
+    if why:
+        print(f"rotate refused: {why}", file=sys.stderr)
+        return 2
+    # A headless seat rotates in place, through its supervisor: it starts at the next turn boundary, with the same
+    # gate; no baton, no new pane.
+    if _is_headless(st, seat):
+        r = subprocess.run([sys.executable, str(st.repo_root / "scripts" / "seat_supervisor.py"), "rotate", seat],
+                           env=env, cwd=str(st.repo_root), capture_output=True, text=True)
+        print((r.stdout or "").strip() or (r.stderr or "").strip())
+        return 0 if r.returncode == 0 else 2
+    # Every refusal BEFORE anything is written: the rotation's own early checks (a runtime it does not support, no
+    # authoritative generation), asked without changing anything, so a refused rotate leaves no baton, no prompt
+    # and no state behind.
+    env["AGENT_RUNTIME"] = ns.runtime or row.get("runtime", "claude")
+    pre = [sys.executable, str(st.repo_root / "scripts" / "rotate_agent.py"), seat, "--preflight"]
+    if ns.runtime:
+        pre += ["--runtime", ns.runtime]
+    pr = subprocess.run(pre, env=env, cwd=str(st.repo_root), capture_output=True, text=True)
+    if pr.returncode != 0:
+        try:
+            why = json.loads((pr.stdout or "").strip().splitlines()[-1]).get("refused")
+        except (ValueError, IndexError, AttributeError):
+            why = None
+        print(f"rotate refused: {why or (pr.stderr or pr.stdout or 'the rotation check failed').strip()[-400:]}",
+              file=sys.stderr)
+        return 2
     handoff = st.data_dir / "docs" / f"HANDOFF_{seat}-next.md"
     if ns.synthesize:
         handoff = _synthesize_handoff(st, seat, row)
@@ -754,8 +904,6 @@ def cmd_rotate(ns) -> int:
               f"Ask the seat to bank one (its prompt knows the format), or run `orchestra rotate {seat} --synthesize` "
               f"for a minimal baton (the successor then proves only that it can read its own seat).", file=sys.stderr)
         return 2
-    env = S.child_env(st)
-    env["AGENT_RUNTIME"] = ns.runtime or row.get("runtime", "claude")
     argv = [sys.executable, str(st.repo_root / "scripts" / "rotate_agent.py"), seat, "--force"]
     if ns.dry_run:
         argv.append("--dry-run")

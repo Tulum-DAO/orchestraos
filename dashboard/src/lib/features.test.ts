@@ -93,8 +93,8 @@ test('every gated surface is wired to its helper', () => {
     ['components/Sidebar.tsx', /navItemsFor\(coreNav\)/],
     ['pages/Overview.tsx', /showNewAgent\(\)/],
     ['pages/Agents.tsx', /showNewAgent\(\)/],
-    ['components/agent/ModelSelectorSheet.tsx', /providerTileAction\(/],
-    ['components/agent/ModelSelectorSheet.tsx', /showAddProvider\(\)/],
+    ['components/kit/ModelPicker.tsx', /providerTileAction\(/],
+    ['components/kit/ModelPicker.tsx', /showAddProvider\(\)/],
     ['layouts/DashboardLayout.tsx', /isViewHidden\(location\.pathname\) \? <NotFound \/> : <Outlet \/>/],
     ['components/CommandPalette.tsx', /navItemsFor\(PAGES\)/],
     // in-page view links (orchestra-builder msg_9b62f71a: every place a view is linked)

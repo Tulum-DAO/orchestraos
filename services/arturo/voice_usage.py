@@ -22,6 +22,16 @@ DEFAULT_PATH = ORCHESTRA_DIR / "state/voice-usage.json"
 # CODE (scripts/approval.py) lives in the checkout, never under the data dir (ORCHESTRA_DIR).
 CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parents[2])
 DEFAULT_CAP = int(os.environ.get("VOICE_DAILY_CAP_MIN", "120"))
+LIMITS_PATH = ORCHESTRA_DIR / "state/voice-limits.json"
+
+
+def cap_from_state(path=LIMITS_PATH, fallback=DEFAULT_CAP):
+    """The daily cap from Settings (state/voice-limits.json daily_cap_min, 1..1440), else the env/default."""
+    try:
+        v = json.loads(Path(path).read_text()).get("daily_cap_min")
+    except Exception:
+        return fallback
+    return v if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1440 else fallback
 
 
 def _card_alert(message):
@@ -45,9 +55,15 @@ def _card_alert(message):
 
 
 class UsageStore:
-    def __init__(self, path=DEFAULT_PATH, cap_min=DEFAULT_CAP, now=time.time, alert=_card_alert):
-        self.path = Path(path); self.cap_min = cap_min; self.now = now; self.alert = alert
+    def __init__(self, path=DEFAULT_PATH, cap_min=None, now=time.time, alert=_card_alert, limits_path=LIMITS_PATH):
+        self.path = Path(path); self._cap_min = cap_min; self.now = now; self.alert = alert
+        self.limits_path = Path(limits_path)
         self._lock = threading.Lock()
+
+    @property
+    def cap_min(self):
+        """An explicit cap (tests) wins; otherwise Settings' file, read on every check, so a change needs no restart."""
+        return self._cap_min if self._cap_min is not None else cap_from_state(self.limits_path)
 
     def _day(self):
         return time.strftime("%Y-%m-%d", time.gmtime(self.now()))
@@ -80,7 +96,7 @@ class UsageStore:
                 d["alerted"].append(vendor)
                 self._write(d)
                 self.alert(f"{vendor} voice usage is at 80% of today's {self.cap_min}-minute cap "
-                           f"({int(mins)} min). New calls on {vendor} stop at 100% — raise VOICE_DAILY_CAP_MIN "
+                           f"({int(mins)} min). New calls on {vendor} stop at 100% — raise the daily voice limit in Settings › Voice & calls "
                            f"or switch vendor if that's wrong.")
                 return
             self._write(d)

@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from approval_schema import ApprovalStore
 from questionnaire_schema import QuestionnaireStore
+from attention_store import AttentionStore
 import approval_resume
 import questionnaire_resume
 import pane_lock
@@ -109,6 +110,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/approvals/{id}"): "read",
     ("GET", "/agents"): "read",
     ("GET", "/agent-model"): "read",
+    # The seat's subagent tree and one subagent's own log: read, like /agents and /transcript.
+    ("GET", "/agent-tree"): "read",
+    ("GET", "/subagent-transcript"): "read",
     # Mail waiting for an agent and why (scripts/deliver_now.py): seeing it is read.
     ("GET", "/held"): "read",
     # Plan usage per provider (scripts/usage_meter.py). Its own verb, reserved in pairing for it:
@@ -128,6 +132,12 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/questionnaires"): "read",
     ("GET", "/questionnaires/{id}"): "read",
     ("GET", "/events"): "read",
+    # Attention list (one list every surface reads) and its timeout rules. Marking items seen is a
+    # self-report like /surface: it changes only the caller's own view. The completion-card accept it
+    # can trigger is checked against `approve` inside the handler, never granted by `read`.
+    ("GET", "/attention"): "read",
+    ("POST", "/attention/seen"): "read",
+    ("GET", "/attention/rules"): "read",
     ("GET", "/voice-call"): "read",
     ("GET", "/active-voice-call"): "read",
     ("GET", "/voice-calls"): "read",
@@ -163,6 +173,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/questionnaires/{id}/draft"): "approve",
     ("POST", "/questionnaires/{id}/submit"): "approve",
     ("POST", "/questionnaires/{id}/discard"): "approve",
+    # A timeout rule can answer or close cards for the operator (expire), so writing one is approve.
+    ("POST", "/attention/rules"): "approve",
+    ("PUT", "/attention/rules/{id}"): "approve",
+    ("DELETE", "/attention/rules/{id}"): "approve",
     # `approve`. FINAL per gm 2026-10-05T08:34Z ("record it as the final state"), after three
     # rulings as messages crossed: approve+condition (08:02), inject (08:11), then approve
     # confirmed once the guard was shown to exist and be pinned (08:34).
@@ -211,6 +225,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
     ("POST", "/agent-interrupt"): "inject",
+    # Dev round trip for a headless seat: stops its headless process and runs its TUI in the pane (or
+    # back): the same class as the stop button, a seat's process, never an answer or a message.
+    ("POST", "/agent-dev"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
     # --- ptt: the relay voice path -------------------------------------------------------
@@ -236,6 +253,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/arturo/text/stream"): "message",
     ("POST", "/arturo/text/prewarm"): "message",
     ("POST", "/arturo/threads/{conversation_id}/jobs/{job_id}/cancel"): "message",
+    # Close one of Arturo's choice cards without answering it (it stays in the thread): like cancelling a job.
+    ("POST", "/arturo/threads/{conversation_id}/cards/{card_id}/dismiss"): "message",
     ("POST", "/arturo/transcribe"): "voice",
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
@@ -250,6 +269,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # accept `voice` or `ptt`: see ROUTE_ANY_OF below (gm rulings msg_f3c2cec6 + msg_40832c2d).
     ("PUT", "/arturo/ptt/vendor"): "admin",
     ("PUT", "/arturo/ptt/voice"): "admin",
+    # An agent back to the install's voice: admin only, like the avatar (no any-of widening).
+    ("DELETE", "/arturo/ptt/voice"): "admin",
     # An agent's avatar look shows on every device for everyone: a setting for the whole box, like the
     # voice, but with no any-of widening (nothing but an admin changes it).
     ("PUT", "/arturo/avatar"): "admin",
@@ -470,7 +491,18 @@ def _validate_option_answer(row, option_n, answer_text):
         return f"answer_text exceeds {ANSWER_TEXT_MAX} chars"
     if input_kind == "free_text" and not answer_text:
         return "answer_text required for a free_text option"
+    # A menu bridged from an agent's terminal takes a pick OR words: the digit fires the option and only the
+    # write-in row carries words, so words sent with another pick would be kept as a note the agent never sees.
+    # A card an agent posts itself takes both (its words reach the agent with the answer).
+    if answer_text and input_kind != "free_text" and _is_terminal_menu(row):
+        return "pick an option or type your own answer, not both"
     return None
+
+
+def _is_terminal_menu(row):
+    """A row the menu bridge made from an agent's on-screen menu: origin 'menu_bridge' (where the column exists) or
+    the bridge's `menu:<session>:<digest>` op_key."""
+    return row.get("origin") == "menu_bridge" or str(row.get("op_key") or "").startswith("menu:")
 
 
 def _free_text_option_n(row):
@@ -1089,6 +1121,13 @@ def _options_n_str(opts):
 async def handle_pending(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
+    return _json({"ok": True, "pending": _pending_rows(request)})
+
+
+def _pending_rows(request):
+    """The /pending-approvals list, as served. Shared with /attention (whose waiting cards carry these rows
+    unchanged) and the attention detector. `request` None (the detector): no client capability gate and no
+    served-instance bookkeeping, since no client is being served."""
     store = ApprovalStore(); store.migrate()
     rows = store.pending_to_notify()
     out = [{"id": r["id"], "from_agent": r["from_agent"], "question": r["question"],
@@ -1127,14 +1166,15 @@ async def handle_pending(request):
     # rewritten to a read-only echo. A capable client gets it raw + hydrates via
     # /agent-menu-capture. This makes store-but-mark safe WITHOUT an atomic
     # server/client deploy. The detail endpoint serves through the SAME seam.
-    out = gate_menu_rows_for_client(out, request)
+    if request is not None:
+        out = gate_menu_rows_for_client(out, request)
     # R8 (§3.1): the queue is PRIORITY-SORTED server-side; the ONE ordering brain, since the
     # watch renders server order as-is. Ties -> NEWEST first (see _sort_queue).
     _sort_queue(out)
     for r in out:      # remember which permission instance this device is being shown
-        if r.get("kind") == "permission" and r.get("instance_id"):
+        if request is not None and r.get("kind") == "permission" and r.get("instance_id"):
             _note_served(request, r.get("session"), r["instance_id"])   # the ledger's digest:n
-    return _json({"ok": True, "pending": out})
+    return out
 
 
 def _gateway_answer_tags(body):
@@ -1153,6 +1193,12 @@ def _gateway_answer_tags(body):
     if surface not in ("watch", "phone"):
         surface = "watch"
     return surface, "operator"
+
+
+def _device_label(stored):
+    """The label of a stored "<device_id>:<label>" answer device (attention_items._device_label)."""
+    import attention_items as AI
+    return AI._device_label(stored)
 
 
 def _answer_device(request) -> str | None:
@@ -1412,7 +1458,12 @@ async def handle_history(request):
             "kind": r.get("kind"), "evidence": _evidence(r),
             # §6.1 human_task feed export (additive; None on legacy/unarmed rows).
             "block_task": r.get("block_task"), "blocks_what": r.get("blocks_what"),
-            "snoozed_until": r.get("snoozed_until")} for r in rows]
+            "snoozed_until": r.get("snoozed_until"),
+            # Who answered and where (attention part 1). Additive; installed apps ignore unknown keys.
+            "answered_by": r.get("answered_by"), "answer_surface": r.get("answer_surface"),
+            # The device's label only, never its paired-device id (attention_items does the same).
+            "answer_device": _device_label(r.get("answer_device")),
+            "option_n": r.get("option_n")} for r in rows]
     for e, r in zip(out, rows):
         _safe_retired(e, r)
     # R8 everything-to-history: submitted/discarded questionnaires appear as
@@ -1462,6 +1513,287 @@ async def handle_approval_detail(request):
     # already-hydrated rows are no-ops.
     row = gate_menu_rows_for_client([row], request)[0]
     return _json({"ok": True, "approval": row})
+
+
+# ---------------------------------------------------------------------------
+# Attention (part 1): ONE list every surface reads — waiting cards, the Updates record and what was
+# answered — plus the person's seen marks and timeout rules. Pure logic lives in attention_items /
+# attention_push / attention_rules; these handlers only gather the inputs and serve the result.
+# /pending-approvals and /history are untouched for the installed apps (golden-tested).
+# ---------------------------------------------------------------------------
+
+ATTENTION_TABS = ("waiting", "update", "answered")
+ATTENTION_SURFACES = ("web", "phone", "watch", "chat")
+
+
+def _attention_person(request=None):
+    """Whose list this is. Every caller is the install's operator today (device tokens name no owner);
+    this is the one seam multi-user replaces."""
+    try:
+        import notify_policy
+        return notify_policy.install_user_and_zone()
+    except Exception:  # noqa: BLE001 — an unreadable config is the default operator, UTC
+        return "operator", ""
+
+
+def _attention_query(q):
+    """Validated GET /attention query -> dict, or raise ValueError (the handler answers 400)."""
+    from datetime import datetime as _dt
+    tabs = [t.strip() for t in (q.get("tab") or "waiting,update").split(",") if t.strip()]
+    if not tabs or any(t not in ATTENTION_TABS for t in tabs):
+        raise ValueError(f"tab must be a comma list of {', '.join(ATTENTION_TABS)}")
+
+    def lim(name, default, top):
+        raw = q.get(name)
+        if raw is None:
+            return default
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be an integer")
+        if not 1 <= v <= top:
+            raise ValueError(f"{name} must be 1..{top}")
+        return v
+    since = q.get("since")
+    if since:
+        try:
+            _dt.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("since must be an ISO time")
+    agents = None
+    if q.get("agents") is not None:
+        agents = [a.strip() for a in q.get("agents").split(",") if a.strip()]
+        if len(agents) > 500:
+            raise ValueError("agents takes at most 500 ids")
+    return {"tabs": tabs, "limit_updates": lim("limit_updates", 100, 500),
+            "limit_answered": lim("limit_answered", 50, 200), "since": since or None, "agents": agents}
+
+
+def _attention_rule_maps(astore):
+    try:
+        import attention_rules
+        if astore.armed:
+            rs = attention_rules.RuleStore(astore)
+            return rs.reminders(), rs.on_behalf_map()
+    except Exception as e:  # noqa: BLE001 — rules never break the list
+        log.warning(f"attention: rule state unreadable: {e!r}")
+    return {}, {}
+
+
+def _attention_build(request, query):
+    """The GET /attention body. Sync (the permission scan touches tmux): run it in the executor."""
+    import dataclasses
+    from datetime import datetime as _dt, timezone as _tz
+    import attention_items as AI
+    import notify_policy
+    tabs, agents, since = query["tabs"], query["agents"], query["since"]
+    keep = (lambda a: a in agents) if agents is not None else (lambda a: True)
+    person, tz = _attention_person(request)
+    now = _dt.now(_tz.utc)
+    store = ApprovalStore(); store.migrate()
+    astore = AttentionStore(); astore.migrate()
+    reminders, on_behalf = _attention_rule_maps(astore)
+    cached = _agents_cache.get("data")
+    states = {r.get("id"): r.get("state") for r in cached} if isinstance(cached, list) else {}
+    ctx = AI.Ctx(person=person, prefs=notify_policy.load_prefs(_data_dir(), person), tz=tz, now=now,
+                 agent_states=states, reminders=reminders, on_behalf=on_behalf)
+
+    # Waiting is always computed (the counts need it), filtered by agent before anything else.
+    pending = [r for r in _pending_rows(request)
+               if AI.kind_of(r) is not None and keep(r.get("from_agent") or r.get("session"))]
+    try:
+        qstore = QuestionnaireStore(); qstore.migrate()
+        ctx = dataclasses.replace(ctx, urgency={q["id"]: q.get("urgency") for q in qstore.list_pending()})
+    except Exception:  # noqa: BLE001
+        qstore = None
+
+    events = astore.list_events(since=since, limit=query["limit_updates"], agents=agents) \
+        if "update" in tabs else []
+    linked = store.get_many([e["source_id"] for e in events if e["kind"] == "done" and e.get("source_id")])
+    answered_raw = []
+    if "answered" in tabs:
+        lim = query["limit_answered"]
+        answered_raw = list(store.history(lim, agents=agents))       # filtered before the limit
+        try:
+            if qstore is not None:
+                answered_raw += qstore.history(lim, agents=agents)
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"attention: questionnaire history unreadable: {e!r}")
+    ids = [r["id"] for r in pending] + [e["id"] for e in events] + [r["id"] for r in answered_raw]
+    ctx = dataclasses.replace(ctx, seen=astore.seen_map(person, ids), cards=linked)
+    waiting = [AI.from_pending_row(r, ctx) for r in pending]
+    updates = [AI.from_event(e, ctx) for e in events]
+    answered = []
+    for r in answered_raw:
+        it = AI.from_history(r, ctx)
+        if it is None or not keep(it["agent"]):
+            continue
+        if since and (it["answered_at"] or "") < since:
+            continue
+        answered.append(it)
+    answered = AI.order_answered(answered)[:query["limit_answered"]]
+    counts = AI.counts(waiting)
+    counts["updates_unread"] = astore.unread_count(person, agents=agents)
+    items = []
+    if "waiting" in tabs:
+        items += AI.order_waiting(waiting)
+    items += AI.order_updates(updates)
+    items += answered
+    return {"ok": True, "person": person, "rev": astore.rev(), "generated_at": now.isoformat(),
+            "armed": bool(astore.armed), "counts": counts, "items": items}
+
+
+async def handle_attention(request):
+    import asyncio
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        query = _attention_query(request.query)
+    except ValueError as e:
+        return _json({"ok": False, "error": str(e)}, status=400)
+    body = await asyncio.get_event_loop().run_in_executor(None, _attention_build, request, query)
+    return _json(body)
+
+
+def _attention_seen(request, ids, surface, may_approve):
+    """POST /attention/seen, sync. Every id is validated first; a done note whose linked completion card
+    is still pending is marked seen only after that card is accepted (and only for a caller holding
+    approve; others just mark it seen)."""
+    import attention_store as AS
+    person, _ = _attention_person(request)
+    store = ApprovalStore(); store.migrate()
+    astore = AttentionStore(); astore.migrate()
+    skipped, accepted, ok_ids = [], [], []
+    evt = [i for i in ids if i.startswith("evt_")]
+    known_evt = astore.exists(evt) if astore.armed else set()
+    rows = store.get_many([i for i in ids if i.startswith("apr_")])
+    perm_ids = None
+    qstore = None
+    for i in ids:
+        if i.startswith("evt_") and i in known_evt:
+            ev = astore.get(i)
+            card = rows.get(ev.get("source_id")) if ev and ev.get("source_id") else None
+            if ev and ev["kind"] == "done" and ev.get("source_id") and card is None:
+                card = store.get(ev["source_id"])
+            if card is not None and card.get("status") == "pending" and may_approve:
+                # No surface given: the fleet bearer is the web; a paired device's surface stays unrecorded.
+                dflt = None if _answer_device(request) else "web"
+                res = apply_answer(store, card["id"], "accept", fire=False, surface=surface or dflt,
+                                   answered_by="operator", device=_answer_device(request))
+                after = store.get(card["id"]) or {}
+                if res.get("ok") and (res.get("applied") or after.get("status") != "pending"):
+                    accepted.append(card["id"])
+                else:
+                    skipped.append({"id": i, "why": f"accept_failed: {res.get('error') or 'not applied'}"})
+                    continue
+            ok_ids.append(i)
+        elif i.startswith("apr_") and i in rows:
+            ok_ids.append(i)
+        elif i.startswith("qnr_"):
+            if qstore is None:
+                qstore = QuestionnaireStore(); qstore.migrate()
+            if qstore.get(i):
+                ok_ids.append(i)
+            else:
+                skipped.append({"id": i, "why": "unknown_id"})
+        elif i.startswith("perm:"):
+            if perm_ids is None:
+                perm_ids = {r.get("id") for r in _perm_pseudo_rows()}
+            (ok_ids.append(i) if i in perm_ids else skipped.append({"id": i, "why": "unknown_id"}))
+        else:
+            skipped.append({"id": i, "why": "unknown_id"})
+    seen = 0
+    if ok_ids:
+        try:
+            seen = astore.mark_seen(person, ok_ids, surface)
+        except AS.AttentionNotArmed:
+            skipped += [{"id": i, "why": "not_armed"} for i in ok_ids]
+    return {"ok": True, "seen": seen, "accepted_cards": accepted, "skipped": skipped}
+
+
+async def handle_attention_seen(request):
+    import asyncio
+    from scripts.device_tokens import scopes_allow
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    ids = data.get("ids") if isinstance(data, dict) else None
+    if not isinstance(ids, list) or not ids or len(ids) > 200 or not all(isinstance(i, str) for i in ids):
+        return _json({"ok": False, "error": "ids must be a list of 1..200 ids"}, status=400)
+    surface = data.get("surface") if data.get("surface") in ATTENTION_SURFACES else None
+    resolved, principal = _resolved_principal(request)
+    if not resolved:
+        principal = resolve_principal(request)
+    may_approve = bool(principal) and scopes_allow(principal.get("scopes") or [], "approve")
+    # A paired device is a phone or a watch: it cannot record a mark (or a card it accepts) as web or chat.
+    # The fleet bearer (the API, legacy apps) is trusted to say which surface it is.
+    if surface in ("web", "chat") and principal and principal.get("id") not in (None, "legacy"):
+        surface = None
+    body = await asyncio.get_event_loop().run_in_executor(
+        None, _attention_seen, request, list(dict.fromkeys(ids)), surface, may_approve)
+    return _json(body)
+
+
+def _attention_rule_store():
+    """(RuleStore with the person's defaults seeded, person), or (None, person) while unarmed."""
+    import attention_rules as AR
+    person, _ = _attention_person()
+    astore = AttentionStore(); astore.migrate()
+    if not astore.armed:
+        return None, person
+    rs = AR.RuleStore(astore)
+    rs.seed_defaults(person)
+    return rs, person
+
+
+async def handle_attention_rules(request):
+    import asyncio
+    import attention_rules as AR
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    rule_id = request.match_info.get("id")
+    body = None
+    if request.method in ("POST", "PUT"):
+        try:
+            body = await request.json()
+        except Exception:
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(body, dict):
+            return _json({"ok": False, "error": "body must be an object"}, status=400)
+
+    def work():
+        rs, person = _attention_rule_store()
+        meta = {"person": person, "available_actions": AR.available_actions(),
+                "min_after_s": {t: AR.min_after_s(t) for t in AR.TRIGGERS}, "armed": rs is not None}
+        if request.method == "GET":
+            return 200, {"ok": True, **meta, "rules": rs.list(person) if rs else []}
+        if rs is None:
+            return 409, {"ok": False, "error": "not_armed",
+                         "detail": "timeout rules arrive when m20261104_attention is armed"}
+        if body is not None and "enabled" in body and not isinstance(body["enabled"], bool):
+            return 422, {"ok": False, "error": "invalid", "detail": "enabled must be true or false"}
+        try:
+            if request.method == "POST":
+                fields = {k: body.get(k) for k in ("trigger", "after_s", "actions", "scope_agent", "scope_kind",
+                                                   "scope_risk", "name") if k in body}
+                rule = rs.create(person, enabled=body.get("enabled", True), **fields)
+                return 200, {"ok": True, **meta, "rule": rule}
+            if request.method == "PUT":
+                fields = {k: v for k, v in body.items() if k in AR.RuleStore.FIELDS}
+                rule = rs.update(person, rule_id, **fields)
+                return (200, {"ok": True, **meta, "rule": rule}) if rule else (404, {"ok": False, "error": "not found"})
+            if rs.delete(person, rule_id):
+                return 200, {"ok": True, "deleted": rule_id}
+            return 404, {"ok": False, "error": "not found"}
+        except AR.RuleInvalid as e:
+            return 422, {"ok": False, "error": e.code, "detail": e.detail}
+        except TypeError as e:
+            return 422, {"ok": False, "error": "invalid", "detail": str(e)}
+    status, out = await asyncio.get_event_loop().run_in_executor(None, work)
+    return _json(out, status=status)
 
 
 # ---------------------------------------------------------------------------
@@ -1519,7 +1851,9 @@ def _load_json(path):
 # (agent-state-truth) adds stranded_input + stalled — passed through.
 _STATE_MAP = {"working": "working", "thinking": "working", "waiting_permission": "waiting",
               "idle": "idle", "stopped": "stopped", "unknown": "idle",
-              "stranded_input": "stranded", "stalled": "stalled"}
+              "stranded_input": "stranded", "stalled": "stalled",
+              # a headless seat whose supervisor gave up restarting its CLI (agent-status)
+              "crashed": "crashed"}
 
 
 # Voice-call annotation (§7.3): Arturo voice summaries + end-call transcripts route to canonical
@@ -1673,6 +2007,10 @@ def compute_agents():
             "voice_call": voice if sess == VOICE_BRAIN_SESSION else None,
             # §2: cheap badge signal — True when detector emits pending_menu
             **({"has_pending_menu": True} if st.get("pending_menu") else {}),
+            # A headless seat (scripts/headless_switch.py): read from its supervisor, not its
+            # pane. A held question rides as a summary; it is not a pane menu (no pending_menu).
+            **({"headless": True} if st.get("headless") else {}),
+            **({"held_request": st["held_request"]} if isinstance(st.get("held_request"), dict) else {}),
         })
     # Every live session was just read, so this is the sweep that may observe a permission
     # prompt as gone (the /pending-approvals fast path reads only flagged sessions). Fail-open.
@@ -1684,6 +2022,11 @@ def compute_agents():
     # (GM triage 2026-08-09: kai-gm etc. dead since April). Those read offline.
     for sess, (name, meta) in sess_meta.items():
         if sess in seen:
+            continue
+        root_meta = reg_agents.get(meta.get("lineage_root")) if meta.get("lineage_root") else None
+        if meta.get("test") is True or (isinstance(root_meta, dict) and root_meta.get("test") is True):
+            # A test seat with no session, or an old generation of a test lineage: a leftover throwaway,
+            # not a down agent.
             continue
         self_status = ""
         blob = _load_json(ORCH_DIR / "state" / "agents" / f"{name}.json")
@@ -1877,48 +2220,12 @@ def _stamp_chips(rows, meta_by_name):
                              pending_cards=cards.get(r.get("id"), 0))
 
 
-SUBAGENT_STALE_S = 15 * 60
-_SUBAGENT_TAIL_BYTES = 8192
-# A final answer can be longer than the first tail (measured on a live fleet: the last complete
-# record started up to ~43 KB from the end), so the tail grows until a whole record parses.
-_SUBAGENT_TAIL_STEPS = (_SUBAGENT_TAIL_BYTES, 64 * 1024, 256 * 1024)
+from subagent_files import (SUBAGENT_STALE_S, TAIL_STEPS as _SUBAGENT_TAIL_STEPS,  # noqa: E402
+                            subagent_finished as _subagent_finished)
 _SUBAGENT_TAIL_CACHE_MAX = 1024
 # path -> (mtime, size, finished). A file is re-read only when it changes; /agents refreshes
 # every few seconds and most subagent files are idle between refreshes.
 _SUBAGENT_TAIL_CACHE: dict = {}
-
-
-def _subagent_finished(path):
-    """True iff the last conversational record is an assistant message that stopped with
-    end_turn/stop_sequence (its final answer). Trailing `attachment`/system records written
-    after that answer are skipped: measured 2026-10-08, 2 of 300 finished files end that way.
-    The tail grows (_SUBAGENT_TAIL_STEPS) until a whole conversational record is in it, because
-    a long final answer can be longer than the first tail.
-    Older Claude CLIs write the final answer with stop_reason null; such a subagent reads as
-    running until its file is SUBAGENT_STALE_S old."""
-    try:
-        with open(path, "rb") as f:
-            size = os.fstat(f.fileno()).st_size
-            for tail in _SUBAGENT_TAIL_STEPS:
-                f.seek(max(0, size - tail))
-                lines = f.read().decode("utf-8", "replace").splitlines()
-                if size > tail and lines:
-                    lines = lines[1:]          # the first line of a mid-file tail is partial
-                for line in reversed(lines):
-                    try:
-                        rec = json.loads(line)
-                    except ValueError:
-                        continue
-                    kind = rec.get("type") if isinstance(rec, dict) else None
-                    if kind not in ("assistant", "user"):
-                        continue
-                    return kind == "assistant" and (rec.get("message") or {}).get("stop_reason") in (
-                        "end_turn", "stop_sequence")
-                if tail >= size:
-                    break
-    except OSError:
-        return False
-    return False
 
 
 def count_running_subagents(transcript_path, now=None):
@@ -2709,17 +3016,119 @@ def _status_runtime(st) -> str:
     return (rt or "").strip().lower()
 
 
-def verified_inject(session, text, force=False, idle_only=False):
+def verified_inject(session, text, force=False, idle_only=False, source="mail"):
     """_verified_inject_locked under the ONE cross-process pane lock (pane_lock.py) for the WHOLE
     call, gates included: the composer read that protects the operator's typed text must not race another
     typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
     mid-delivery looked like the operator's draft). Busy past PANE_LOCK_WAIT_S -> 'busy', nothing typed.
-    Runs on executor threads only (the /agent-message handler, approval_resume's cron)."""
+    Runs on executor threads only (the /agent-message handler, approval_resume's cron).
+
+    A seat switched to headless (scripts/headless_switch.py, Claude only, default off) is not
+    typed into: its words go to the seat's supervisor over stdin instead (_headless_inject)."""
+    hl_seat = _headless_seat_for(session)
+    if source == "person" and (text or "").strip() == "/compact" and not _compact_allowed(session, hl_seat):
+        # A person's /compact is our switch, never the CLI's own; until it is turned on for a seat, nothing is sent
+        # anywhere: not to the pane, not to the supervisor.
+        return False, {"reason": "compact_refused", "detail": COMPACT_OFF}
+    if hl_seat:
+        return _headless_inject(hl_seat, text, idle_only=idle_only, source=source)
     with _pane_guard(session) as _pane_held:
         if not _pane_held:
             return False, {"reason": "busy", "state": "busy",
                            "activity": "another sender is typing into this pane"}
         return _verified_inject_locked(session, text, force, idle_only)
+
+
+COMPACT_OFF = "Compacting isn't turned on for this agent yet."
+
+
+def _is_test_seat(session) -> bool:
+    """Its registry row says test: true (by seat id or tmux session), the router's own test-seat rule."""
+    reg = (_load_json(ORCH_DIR / "registry.json") or {}).get("agents") or {}
+    for name, row in reg.items():
+        if isinstance(row, dict) and row.get("test") is True and session in (name, row.get("tmux_session")):
+            return True
+    return False
+
+
+COMPACT_GATE = Path(__file__).resolve().parent.parent / "contract" / "compact-gate.json"
+_compact_gate_cache = {"mtime": None, "doc": None}
+
+
+def _compact_gate():
+    """contract/compact-gate.json ({"needs_headless", "needs_test_seat", "cases"}), re-read when it changes; None
+    when it cannot be read (and then nothing is allowed)."""
+    try:
+        m = COMPACT_GATE.stat().st_mtime
+    except OSError:
+        return None
+    if _compact_gate_cache["mtime"] != m:
+        try:
+            doc = json.loads(COMPACT_GATE.read_text())
+            doc = doc if isinstance(doc, dict) else None
+        except (OSError, ValueError):
+            doc = None
+        _compact_gate_cache.update(mtime=m, doc=doc)
+    return _compact_gate_cache["doc"]
+
+
+def _compact_allowed(session, hl_seat=None) -> bool:
+    """Whether a person's /compact may run for this seat, by the rule in contract/compact-gate.json (today: only a
+    TEST seat that runs headless; a seat in Dev reads as not headless). An unreadable rule refuses."""
+    gate = _compact_gate()
+    if gate is None:
+        return False
+    if gate.get("needs_headless", True) and not hl_seat:
+        return False
+    if gate.get("needs_test_seat", True) and not _is_test_seat(session):
+        return False
+    return True
+
+
+def _headless_seat_for(session):
+    """The seat id when `session` is a switched-on headless Claude seat, else None. Any failure
+    to read the switch reads as off: the seat keeps its tmux path."""
+    try:
+        import headless_switch
+        return headless_switch.headless_seat(session, orch_dir=ORCH_DIR)
+    except Exception as e:  # noqa: BLE001 — the switch file is advisory; tmux is the default path
+        log.warning(f"headless switch unreadable for {session}: {e!r}")
+        return None
+
+
+def _headless_inject(seat, text, idle_only=False, source="mail"):
+    """verified_inject for a headless seat: the message is handed to the seat's supervisor,
+    which writes it to the warm process's stdin once (it dedupes by id) and reports queued,
+    then delivered when the CLI echoes it. Same reply shape as the pane path, so every caller
+    (/agent-message, approval_resume) is unchanged.
+
+    Refused, nothing sent: /exit and /quit (as on the pane path); slash commands that must run
+    on an idle prompt (idle_only: the model switch), which a headless seat does not take yet;
+    a held question or permission (the pane path refuses a menu the same way); no supervisor."""
+    import uuid as _uuid
+    import headless_switch
+    if _SLASH_CMD_RE.match(text or ""):
+        return False, {"reason": "slash_command_refused",
+                       "detail": "session-ending command (/exit, /quit) refused "
+                                 "on the message path"}
+    if idle_only:
+        return False, {"reason": "busy", "state": "headless", "headless": True,
+                       "activity": "this seat runs headless; slash commands are not sent to it yet"}
+    text = (text or "").rstrip("\r\n")
+    msg_id = f"gw-{_uuid.uuid4().hex}"
+    try:
+        out = headless_switch.send(seat, text, msg_id, source=source)
+    except headless_switch.SupervisorDown as e:
+        return False, {"reason": "busy", "state": "offline", "headless": True,
+                       "activity": f"the seat's headless supervisor is not running ({e})"}
+    if not out.get("ok"):
+        if out.get("reason") == "waiting":
+            return False, {"reason": "busy", "state": "waiting", "headless": True,
+                           "activity": "A question or permission is waiting — needs the operator"}
+        return False, {"reason": "send_failed", "state": "headless", "headless": True,
+                       "detail": out.get("reason")}
+    return True, {"state": "headless", "attempts": 1, "headless": True, "message_id": msg_id,
+                  "msg_state": out.get("state")}
 
 
 def _verified_inject_locked(session, text, force=False, idle_only=False):
@@ -4113,7 +4522,13 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
     # takes its own — the lock is non-reentrant, so dispatching inside _run's
     # locked region would DEADLOCK). The Claude AUQ replay below can't drive agy.
     _fam_probe = read_fn()
+    _skips = sorted(a["part"] for a in (answers or [])
+                    if isinstance(a, dict) and a.get("skipped") is True)
     if isinstance(_fam_probe, dict) and _fam_probe.get("menu_family") == "agy":
+        # The agy replay has no skip leg (and no Submit tab to carry an unanswered part through):
+        # refused here, with zero keys sent, rather than approximated.
+        if _skips:
+            return False, {"reason": "skip_not_supported", "family": "agy", "parts": _skips}
         return menu_submit_agy(
             session, answers=answers, armed=armed, read_fn=read_fn,
             key_fn=key_fn, type_fn=type_fn, settle_s=settle_s,
@@ -4144,6 +4559,9 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
         plan = []
         for pi in range(min(n_parts, max_parts)):
             ans = by_part.get(pi) or {}
+            if ans.get("skipped") is True:
+                plan.append({"part": pi, "skipped": True, "toggle": []})
+                continue
             want = set(ans.get("ns") or [])
             step = {"part": pi, "toggle": sorted(want)}
             # Per-part free-text (v14 field-test pre-arm fix): carry the own-words
@@ -4174,13 +4592,20 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
         # batch (a part with neither ns nor text) can never verified-submit -> fail-
         # closed BEFORE actuating anything. This is the load-bearing anti-silent-under-
         # answer guard (§1): the old blind-Right loop would submit a skipped part BLANK.
+        # A part EXPLICITLY skipped ({part, skipped: true}) is not missing: it is stepped past with
+        # nothing pressed, and the CLI's review screen submits it unanswered. Only an absent part
+        # (neither answered nor skipped) is the silent under-answer this guard exists for.
         n_all = min(n_parts, max_parts)
+        skipped = {pi for pi in range(n_all) if (by_part.get(pi) or {}).get("skipped") is True}
         pre_missing = [pi for pi in range(n_all)
-                       if not ((by_part.get(pi) or {}).get("ns")
-                               or (by_part.get(pi) or {}).get("text"))]
+                       if pi not in skipped
+                       and not ((by_part.get(pi) or {}).get("ns")
+                                or (by_part.get(pi) or {}).get("text"))]
         if pre_missing:
             return False, {"reason": "parts_unanswered", "phase": "pre_submit",
                            "parts": pre_missing}
+        if len(skipped) >= n_all:
+            return False, {"reason": "nothing_answered", "phase": "pre_submit"}
 
         for pi in range(n_all):
             # Navigate to the EXPECTED part (Right/Left as needed), NOT a blind advance —
@@ -4206,6 +4631,14 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
                                        "detail": "the pane is not the menu this answer "
                                                  "was drafted against"}
             ans = by_part.get(pi) or {}
+            if pi in skipped:
+                # Nothing is pressed for a skipped part. A tick already on screen (someone answered
+                # it at the terminal) would be submitted as an answer the person chose to skip, so
+                # that refuses rather than unticking what someone else chose.
+                if _part_current_checked(menu):
+                    return False, {"reason": "skipped_part_answered_on_screen", "part": pi,
+                                   "phase": f"skip{pi}"}
+                continue
             text = ans.get("text")
             ft_n = _part_free_text_n(menu)           # from the fresh current-part read
             want = set(ans.get("ns") or [])
@@ -4276,9 +4709,16 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
                 # explicit ☐ only (answered is False); answered None = ambiguous = fail-open.
                 unanswered = [i for i, t in enumerate(_ts)
                               if isinstance(t, dict) and t.get("answered") is False]
-                if unanswered:
+                # A skipped part SHOULD read ☐; any other ☐ is a keypress that did not land.
+                not_landed = [i for i in unanswered if i not in skipped]
+                if not_landed:
                     return False, {"reason": "parts_unanswered", "phase": "confirm",
-                                   "parts": unanswered}
+                                   "parts": not_landed}
+                skip_answered = [i for i, t in enumerate(_ts)
+                                 if i in skipped and isinstance(t, dict) and t.get("answered") is True]
+                if skip_answered:
+                    return False, {"reason": "skipped_part_answered_on_screen", "phase": "confirm",
+                                   "parts": skip_answered}
 
         # Submit tab: Enter through the confirm chain, DRIVEN BY on-screen state
         # (verify the menu is gone; the "Ready to submit? -> 1. Submit answers"
@@ -4346,6 +4786,7 @@ def _validate_batch_answer(row, answers):
             by_index[p["index"]] = p
     part_count = menu.get("part_count") or len(by_index)
     answered = set()
+    skipped = set()
     for a in answers:
         if not isinstance(a, dict):
             return "each answer must be an object"
@@ -4353,6 +4794,11 @@ def _validate_batch_answer(row, answers):
         if not isinstance(pi, int) or pi not in by_index:
             return f"answer references unknown part {pi!r}"
         part = by_index[pi]
+        if a.get("skipped") is True:
+            if a.get("ns") or a.get("text"):
+                return f"part {pi}: a skipped part cannot carry an answer"
+            skipped.add(pi)
+            continue
         valid_ns = {str(o.get("n")) for o in (part.get("options") or [])
                     if isinstance(o, dict)}
         ns = a.get("ns") or []
@@ -4364,12 +4810,21 @@ def _validate_batch_answer(row, answers):
         has_text = bool(a.get("text"))
         if not ns and not has_text:
             return f"part {pi}: no option selected and no own-words text"
+        # A single-choice part takes ONE answer: the replay types the words into the write-in row
+        # and would then press the option's digit, which replaces them on screen.
+        if ns and has_text and part.get("select") != "multi":
+            return f"part {pi}: pick an option or type your own words, not both"
         answered.add(pi)
-    # COMPLETE-answer guard (mirrors menu_batch_submit's pre-flight): every part
-    # must be answered, else the durable record would be a silent under-answer.
-    missing = [i for i in range(part_count) if i not in answered]
+    # COMPLETE-batch guard (mirrors menu_batch_submit's pre-flight): every part is either
+    # answered or EXPLICITLY skipped, so the durable record says "skipped" rather than being a
+    # silent under-answer. A part simply absent from the batch is a client bug and is refused.
+    # The CLI's review screen submits with unanswered parts (it warns, "You have not answered all
+    # questions", and still offers Submit answers), so a skip is deliverable as itself.
+    missing = [i for i in range(part_count) if i not in answered and i not in skipped]
     if missing:
         return f"parts unanswered: {missing}"
+    if not answered:
+        return "nothing answered: answer at least one part"
     return None
 
 
@@ -4431,7 +4886,7 @@ def _batch_key(answers):
     for a in answers or []:
         if isinstance(a, dict):
             out[a.get("part")] = (sorted(str(n) for n in (a.get("ns") or [])),
-                                  str(a.get("text") or "").strip())
+                                  str(a.get("text") or "").strip(), a.get("skipped") is True)
     return out
 
 
@@ -4448,6 +4903,35 @@ def _already_or_answered_elsewhere(stored_row, answers):
                       "id": stored_row.get("id")}
     return False, {"reason": "answered_elsewhere", "id": (stored_row or {}).get("id"),
                    "answers": stored if isinstance(stored, list) else None}
+
+
+def _headless_batch_submit(session, answers, *, store, surface=None, answered_by=None, device=None,
+                           expect_row_id=None, deliver_fn=None):
+    """durable_first_batch_submit for a headless card, or None when the session's card is not one.
+    Same answer-once ledger write (record_batch_answer) and the same validation; the delivery is the
+    held request's control response (headless_cards.deliver), once."""
+    import headless_cards
+    row = store.pending_menu_row_for_session(session)
+    if row is None:
+        latest = store.latest_menu_row_for_session(session)
+        if latest is not None and headless_cards.is_bridged(latest) and latest.get("answer") == "batch":
+            if expect_row_id is None or latest.get("id") == expect_row_id:
+                return _already_or_answered_elsewhere(latest, answers)
+        return None
+    if not headless_cards.is_bridged(row):
+        return None
+    if expect_row_id is not None and row.get("id") != expect_row_id:
+        return False, {"reason": "card_mismatch", "card_id": expect_row_id, "anchor_id": row.get("id")}
+    err = _validate_batch_answer(row, answers)
+    if err:
+        return False, {"reason": "batch_validation", "detail": err, "id": row["id"]}
+    if not store.record_batch_answer(row["id"], answers, surface=surface, answered_by=answered_by,
+                                     device=device):
+        return _already_or_answered_elsewhere(store.get(row["id"]) or row, answers)
+    row = store.get(row["id"])
+    out = (deliver_fn or headless_cards.deliver)(row, store)
+    return True, {"durable": True, "delivered": bool(out.get("delivered")), "headless": True,
+                  "id": row["id"], **({} if out.get("delivered") else {"delivery": out.get("reason")})}
 
 
 def durable_first_batch_submit(session, answers, *, store, armed=False,
@@ -4476,6 +4960,13 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
     card. So unarmed is a pure dry-run; the arm (MENU_MULTIPART_SUBMIT_ARMED)
     covers the live submit, exactly as today. Seams injectable for hermetic tests.
     """
+    # A headless seat's card (scripts/headless_cards.py) has no pane menu behind it: it is answered
+    # over the held request, persisted first, armed or not (the arm guards a pane replay, and there is
+    # none), and never replayed into a pane.
+    hl = _headless_batch_submit(session, answers, store=store, surface=surface,
+                                answered_by=answered_by, device=device, expect_row_id=expect_row_id)
+    if hl is not None:
+        return hl
     submit_fn = submit_fn or menu_batch_submit
     if resume_fn is None:
         import approval_resume
@@ -4896,10 +5387,14 @@ def _kick_router():
     while a pass is already running; the waiver lasts 5 minutes either way."""
     import subprocess
     router = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message-router.py")
+    # Beside the router beat's own log (`orchestra up` writes <data dir>/logs/router.log): what this pass says
+    # belongs where the router is read, not nowhere.
+    logf = Path(ORCH_DIR) / "logs" / "router.log"
     try:
-        subprocess.Popen([sys.executable, router], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True, env={**os.environ, "ORCHESTRA_DIR": str(ORCH_DIR)})
+        with (open(logf, "ab") if logf.parent.is_dir() else open(os.devnull, "wb")) as sink:
+            subprocess.Popen([sys.executable, router], stdin=subprocess.DEVNULL,
+                             stdout=sink, stderr=sink,
+                             start_new_session=True, env={**os.environ, "ORCHESTRA_DIR": str(ORCH_DIR)})
         return True
     except OSError:
         return False
@@ -4973,12 +5468,17 @@ async def handle_agent_message(request):
     session = str(data.get("session", "")).strip()
     text = str(data.get("text", "")).strip()
     force = bool(data.get("force"))
+    # Who is sending: a person's surface (the dashboard, the phone, the watch) unless the caller says it is mail
+    # (the lineage daemon's deliveries do). Only a person's /compact starts a switch.
+    source = "mail" if data.get("source") == "mail" else "person"
     if not session or not text:
         return _json({"ok": False, "error": "session and text required"}, status=400)
     refusal = _protected_refusal(request, session)
     if refusal is not None:
         return _json(refusal, status=403)
-    if session not in _tmux_session_names():
+    # A headless seat is known by its switch, not by tmux: its words go to the supervisor's socket, so the tmux
+    # session list (a subprocess, ~5 ms) is only asked for a pane seat.
+    if not _headless_seat_for(session) and session not in _tmux_session_names():
         return _json({"ok": False, "error": "no such session"}, status=404)
 
     accepts = data.get("accepts")
@@ -4986,7 +5486,10 @@ async def handle_agent_message(request):
 
     import asyncio
     ok, info = await asyncio.get_event_loop().run_in_executor(
-        None, verified_inject, session, text, force)
+        None, lambda: verified_inject(session, text, force, source=source))
+    if not ok and info.get("reason") == "compact_refused":
+        # A plain refusal the person reads as is ("Compacting isn't turned on for this agent yet."): nothing was sent.
+        return _json({"ok": False, "delivered": False, **info}, status=409)
     if not ok and info.get("reason") == "busy":
         # §9.6 P0: ONLY the pure mid-turn 'working' refusal converts to hold.
         # A stranded dict or an unsubmitted composer_text keeps the legacy 409
@@ -5049,6 +5552,55 @@ async def _record_operator_message(request, session, text):
         log.warning(f"operator-actions ledger write failed: {e!r}")
 
 
+#: Detector states (read off the TUI's screen while in Dev) in which Back to chat would cut something.
+DEV_EXIT_BLOCKING_STATES = frozenset({"working", "thinking", "waiting_permission", "stranded_input",
+                                      "queued_input", "stalled"})
+
+
+async def handle_agent_dev(request):
+    """POST /agent-dev {session, on: bool, force?} -> a headless seat's Dev round trip.
+    on=true: its headless process closes (from idle only) and its TUI starts in the pane, same session,
+    same environment (scripts/seat_supervisor.py cmd_dev). on=false (Back to chat): the TUI exits by its
+    own /exit and the headless process starts again; refused while the TUI is mid-turn, holding a menu
+    or a typed draft (its screen says so), unless force. 404 for a seat that is not headless."""
+    import asyncio
+    import headless_switch
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    session = str((data or {}).get("session", "")).strip()
+    if not session or not isinstance((data or {}).get("on"), bool):
+        return _json({"ok": False, "error": "session and on (true|false) required"}, status=400)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    seat = headless_switch.headless_seat(session, orch_dir=ORCH_DIR, include_dev=True)
+    if not seat:
+        return _json({"ok": False, "error": "not a headless seat"}, status=404)
+    loop = asyncio.get_event_loop()
+    if not data["on"] and headless_switch.in_dev(seat, orch_dir=ORCH_DIR) and not data.get("force"):
+        # Busy = what the TUI shows and what its hooks said (a turn, a menu or permission, a typed draft), never
+        # the process-activity deriver: a TUI that has just started reads busy there while it idles at its prompt.
+        st = await loop.run_in_executor(None, lambda: _agent_status().get_agent_status(session, deriver=False))
+        if (st or {}).get("state") in DEV_EXIT_BLOCKING_STATES:
+            return _json({"ok": False, "busy": True, "state": _STATE_MAP.get(st.get("state"), st.get("state")),
+                          "error": "the agent is busy in the terminal: let it finish (or send force)"},
+                         status=409)
+    cmd = "dev" if data["on"] else "chat"
+    try:
+        out = await loop.run_in_executor(
+            None, lambda: headless_switch.request(seat, {"cmd": cmd}, orch_dir=ORCH_DIR, timeout=45.0))
+    except headless_switch.SupervisorDown as e:
+        return _json({"ok": False, "error": "headless supervisor not running", "detail": str(e)}, status=503)
+    log.info(f"AGENT-DEV {session} {cmd}: {out}")
+    if out.get("ok"):
+        return _json({"ok": True, "mode": "dev" if data["on"] else "chat", **out})
+    return _json({"ok": False, **out}, status=409 if out.get("reason") == "busy" else 502)
+
+
 async def handle_agent_interrupt(request):
     """POST /agent-interrupt {session} -> send Escape to a WORKING agent (the
     app's stop button). Gated the opposite way from inject: only allowed while
@@ -5068,6 +5620,21 @@ async def handle_agent_interrupt(request):
     if st.get("state") not in ("working", "thinking"):
         return _json({"ok": False, "error": "not mid-turn",
                       "state": _STATE_MAP.get(st.get("state"), st.get("state"))}, status=409)
+    hl_seat = _headless_seat_for(session)
+    if hl_seat:
+        # A headless seat's turn is stopped by the CLI's own interrupt control request (through its
+        # supervisor), not an Esc into a pane that holds no TUI. The turn ends with a result event,
+        # so its state goes back to idle without a hook marker.
+        import asyncio
+        import headless_switch
+        try:
+            out = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: headless_switch.request(hl_seat, {"cmd": "interrupt"}))
+        except headless_switch.SupervisorDown as e:
+            return _json({"ok": False, "error": "headless supervisor not running", "detail": str(e)},
+                         status=503)
+        return _json({"ok": bool(out.get("ok")), "interrupted": bool(out.get("ok")), "headless": True,
+                      "hook_cleared": False}, status=200 if out.get("ok") else 502)
     r = _tmux("send-keys", "-t", _st(session), "Escape")
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
@@ -5167,12 +5734,82 @@ def _is_person_surface(request):
     return is_device or cls in ("operator", "interactive", "app")
 
 
+def _public_tree(node, all_finished):
+    """A tree as clients get it: transcript_path (absolute host paths) dropped at every depth, and
+    all_finished on the root (the same shape as /api/agents/:id/tree, api/src/routes/agent-tree.ts)."""
+    def strip(n):
+        out = {k: v for k, v in n.items() if k not in ("transcript_path", "children")}
+        out["children"] = [strip(c) for c in n.get("children") or []]
+        return out
+    return {**strip(node), "all_finished": all_finished}
+
+
+async def handle_agent_tree(request):
+    """GET /agent-tree?session=<seat>[&all=1] -> {"ok": true, "tree": <node>}: the seat's Claude subagents at
+    every depth, scripts/agent_tree.py's JSON contract (the API serves the same at /api/agents/:id/tree).
+    For the phone, watch and Quest: who is working on what, not just a count. all=1 keeps every finished
+    node, not just the last hour's. 404 when the seat has no Claude session on this box."""
+    import asyncio
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    session = request.query.get("session", "").strip()
+    if not session:
+        return _json({"ok": False, "error": "session required"}, status=400)
+    # A headless seat is known by its switch, not by tmux (the same rule as /agent-message): its Claude session
+    # and subagents are real while it has no pane. Only a known seat name is ever looked up.
+    seat = _headless_seat_for(session)
+    if not seat and session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    target = seat or session
+    all_finished = request.query.get("all") == "1"
+
+    def _snap():
+        from scripts import agent_tree
+        trees = agent_tree.snapshot(target, all_finished=all_finished)
+        return trees[0] if trees else None
+    tree = await asyncio.get_event_loop().run_in_executor(None, _snap)
+    if tree is None:
+        return _json({"ok": False, "error": "no Claude session for this seat"}, status=404)
+    return _json({"ok": True, "tree": _public_tree(tree, all_finished)})
+
+
+_SAFE_AGENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")     # api/src/lib/agentPaths.ts SAFE_AGENT_ID
+_SAFE_SUBAGENT_ID = re.compile(r"^[a-f0-9]{6,40}$")                   # chat-transcript.ts SAFE_SUBAGENT_ID
+
+
+async def handle_subagent_transcript(request):
+    """GET /subagent-transcript?agent=<seat>&id=<subagent>&limit= -> the API's v2 envelope of ONE subagent's
+    own log, any depth: tap a node of /agent-tree and read what it is doing. Thin proxy to
+    /api/agents/:id/subagents/:aid/transcript, exactly like /transcript (same auth, same API scope).
+    Both ids are checked here because they go into the upstream URL path."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    agent = request.query.get("agent", "").strip()
+    sub = request.query.get("id", "").strip()
+    if not _SAFE_AGENT_ID.match(agent) or not _SAFE_SUBAGENT_ID.match(sub):
+        return _json({"ok": False, "error": "agent and id required"}, status=400)
+    try:
+        limit = max(1, min(500, int(request.query.get("limit", 120))))
+    except (TypeError, ValueError):
+        limit = 120
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{API_URL}/api/agents/{agent}/subagents/{sub}/transcript",
+                             params={"limit": str(limit)},
+                             timeout=aiohttp.ClientTimeout(total=15)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001 — surface cleanly to the app
+        return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
+
+
 async def handle_agent_model(request):
     """GET /agent-model?session= -> which models this agent can switch to (the Arturo engine
     picker's shape: every row, available or not with a reason). PUT /agent-model {session,
-    model} -> switch it: Claude live (`/model` typed into the idle pane, confirmed by the CLI's
+    model, effort?} -> switch it: Claude live (`/model` typed into the idle pane, confirmed by the CLI's
     own "Set model to" line, the host's default model put back), every other runtime at its
-    next rotation. scripts/agent_model.py has the why."""
+    next rotation. scripts/agent_model.py has the why. `effort` (a level id) is applied too: Claude
+    by `/effort <level>`, Codex in its picker (scripts/agent_effort.py), and kept for the next spawn."""
     import asyncio
     from scripts import agent_model as AM
     if not _authorized(request):
@@ -5188,6 +5825,9 @@ async def handle_agent_model(request):
         model = str(data.get("model", "")).strip()
         if not session or not model:
             return _json({"ok": False, "error": "session and model required"}, status=400)
+        effort = data.get("effort")
+        if effort is not None and not (isinstance(effort, str) and re.fullmatch(r"[a-z]{1,16}", effort)):
+            return _json({"ok": False, "error": "effort must be a level id"}, status=400)
     else:
         session = request.query.get("session", "").strip()
         if not session:
@@ -5206,9 +5846,10 @@ async def handle_agent_model(request):
         f = AMP.state_path(ORCH_DIR)
         def _read():       # file I/O: off the event loop
             try:
-                return {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
+                out = {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
             except AMP.StateUnreadable as e:
-                return {"pending": None, "last_switch": None, "pending_error": str(e)}
+                out = {"pending": None, "last_switch": None, "pending_error": str(e)}
+            return {**out, **_effort_view(session, root, runtime, desc)}
         extra = await loop.run_in_executor(None, _read)
         return _json({"ok": True, "session": session, **desc, **extra})
 
@@ -5221,11 +5862,15 @@ async def handle_agent_model(request):
     if model not in desc["allowed"]:
         why = desc["unavailable"].get(model) or "not offered for this agent"
         return _json({"ok": False, "error": why}, status=422)
+    if effort is not None:
+        why = await loop.run_in_executor(None, _effort_refusal, session, runtime, desc, effort)
+        if why:
+            return _json({"ok": False, "error": why, "effort": effort}, status=422)
     by = _parse_actor(request)[1] or ((_resolved_principal(request)[1] or {}).get("label")) or "?"
     from scripts import agent_model_pending as AMP
     try:
         status, body = await loop.run_in_executor(
-            None, lambda: _put_model(session, model, catalog, by))
+            None, lambda: _put_model(session, model, catalog, by, effort))
     except AMP.StateUnreadable as e:
         log.error(f"agent-model: {e}")
         return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
@@ -5235,6 +5880,66 @@ async def handle_agent_model(request):
         return _json({"ok": False, "error": "another model switch for this agent is still in "
                       "progress; nothing changed, try again", "detail": str(e)}, status=503)
     return _json(body, status=status)
+
+
+def _effort_how(session, runtime, desc):
+    """'live' when a level picked for this agent is applied now (Claude by `/effort`, Codex in its
+    picker, a headless seat through its supervisor's set_effort; kept for its next spawn), None when
+    it cannot be applied at all: a runtime with no effort setting, one that cannot switch here, or a
+    headless seat whose supervisor does not take set_effort (one started before effort support, until
+    it restarts) or is not answering."""
+    from scripts import agent_effort as AE
+    if not AE.levels(runtime) or desc.get("how") != "live":
+        return None
+    hl_seat = _headless_seat_for(session)
+    if hl_seat and not _headless_effort_control(hl_seat):
+        return None
+    return "live"
+
+
+def _headless_effort_control(seat) -> bool:
+    """Whether this headless seat's supervisor takes set_effort: its status says effort_control. An
+    older supervisor (its status has no such field) or one not answering reads as no."""
+    import headless_switch
+    try:
+        st = headless_switch.request(seat, {"cmd": "status"}, timeout=3.0)
+    except Exception:  # noqa: BLE001 — SupervisorDown, a timeout: no control shown, nothing sent
+        return False
+    return isinstance(st, dict) and st.get("effort_control") is True
+
+
+def _effort_view(session, root, runtime, desc):
+    """GET /agent-model's effort fields: the level kept for this agent (None: the CLI's default), the
+    runtime's levels, and whether a pick applies (_effort_how)."""
+    from scripts import agent_effort as AE
+    return {"effort": AE.get(AE.store_path(ORCH_DIR), AE.root_of(root or session)),
+            "effort_levels": AE.levels(runtime), "effort_how": _effort_how(session, runtime, desc)}
+
+
+def _effort_now(session, meta, runtime, root):
+    """The level this agent's session is on, when the session itself says so: a Codex rollout's
+    latest turn. None otherwise (Claude): the kept level is not proof of the session's (a reapply
+    may have failed), and typing /effort again is cheap, so a re-pick is always applied."""
+    if (runtime or "").lower() == "codex":
+        from scripts import agent_model_codex as AMC
+        roll = _seat_codex_rollout(session, meta)
+        return AMC.current_effort(roll) if roll else None
+    return None
+
+
+def _effort_refusal(session, runtime, desc, effort):
+    """Why `effort` cannot be applied to this agent, or None."""
+    from scripts import agent_effort as AE
+    rt = (runtime or "").lower()
+    if not AE.levels(rt):
+        return "this agent's runtime has no effort setting"
+    if not AE.valid(rt, effort):
+        return f"{rt} has no effort level {effort!r}"
+    if _effort_how(session, runtime, desc) is None:
+        return ("a headless seat cannot change its effort until its supervisor restarts (or while it is not "
+                "running)" if desc.get("how") == "live"
+                else next(iter(desc.get("unavailable", {}).values()), None) or "this agent cannot switch now")
+    return None
 
 
 #: Bounded waits for the per-agent switch lock (codex R13 on #475): a PUT waits for a switch in
@@ -5255,9 +5960,12 @@ def _model_switch_lock(session, timeout):
     return AMP.session_lock(AMP.state_path(ORCH_DIR), session, timeout=timeout)
 
 
-def _put_model(session, model, catalog, by):
+def _put_model(session, model, catalog, by, effort=None):
     """PUT /agent-model's decision, under the session's switch lock, on a fresh read of the seat
-    (an apply that finished while this waited has changed its model). (status, body)."""
+    (an apply that finished while this waited has changed its model). (status, body). `effort`: a
+    level already checked against the runtime (_effort_refusal); a level the agent already has is
+    no change."""
+    from scripts import agent_effort as AE
     from scripts import agent_model as AM
     from scripts import agent_model_pending as AMP
     pend_file = AMP.state_path(ORCH_DIR)
@@ -5271,7 +5979,21 @@ def _put_model(session, model, catalog, by):
         desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
         if model not in desc["allowed"]:
             return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
-        if model == current:
+        waiting = AMP.get(pend_file, session)
+        if waiting:
+            # A pick never drops the other half of one still waiting: a pick of ANOTHER model keeps
+            # the waiting effort, and an effort pick sent with the model it is on keeps the waiting
+            # model. The model it is on with no effort stays the explicit cancel of everything waiting.
+            if effort is not None:
+                if model == current and waiting.get("model") not in (None, current):
+                    model = waiting["model"]
+            elif model != current:
+                effort = waiting.get("effort")
+            if model not in desc["allowed"]:
+                return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
+        if effort is not None and model == current and effort == _effort_now(session, meta, runtime, root):
+            effort = None                  # the level it is on already: nothing to type
+        if model == current and effort is None:
             # Picking the model it is already on cancels a switch still waiting for the turn to end.
             dropped = AMP.cancel(pend_file, session)
             body = {"ok": True, "model": model, "changed": False,
@@ -5289,39 +6011,114 @@ def _put_model(session, model, catalog, by):
             # tell that it is still the same agent (a rotation reuses the tmux name).
             st = (_agent_status().get_agent_status(session) or {}).get("state")
             if st in MID_TURN_STATES | STALLED_STATES and sids:
-                return 202, _defer_model_switch(session, model, current, sids, by)
+                return 202, _defer_model_switch(session, model, current, sids, by, effort)
         # A newer pick replaces an older one still waiting (as a deferred pick does), dropped BEFORE
         # the switch: a record that cannot be written now (LockBusy) is then a 503 with nothing
         # typed, never a switch whose older pick survives to undo it later (codex R14 on #475).
         dropped = AMP.cancel(pend_file, session) if AMP.get(pend_file, session) else None
         if dropped:
             log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by {model} ({by})")
-        status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by)
+        status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by,
+                                         effort=effort)
         if (desc["how"] == "live" and status == 409 and sids
                 and body.get("state") in MID_TURN_STATES | STALLED_STATES):
-            return 202, _defer_model_switch(session, model, current, sids, by)
+            if body.get("model_switched"):
+                # The model switched and a turn began before the effort: the effort waits, and the
+                # agent is on the NEW model now.
+                return 202, _defer_model_switch(session, model, model, sids, by, body.get("effort") or effort)
+            return 202, _defer_model_switch(session, model, current, sids, by, effort)
         return status, body
 
 
-def _defer_model_switch(session, model, current, sids, by):
-    """Record a busy agent's switch (a newer pick replaces an older one); the 202 body. Called
-    under the session's switch lock."""
+def _defer_model_switch(session, model, current, sids, by, effort=None):
+    """Record a busy agent's switch, effort included (a newer pick replaces an older one); the 202
+    body. Called under the session's switch lock."""
     from scripts import agent_model_pending as AMP
     f = AMP.state_path(ORCH_DIR)
     old = AMP.get(f, session)
     if old:
         log.info(f"AGENT-MODEL {session} pending -> {old.get('model')} REPLACED by {model} ({by})")
-    entry = AMP.put(f, session, model, current=current, sids=sids, by=by)
-    log.info(f"AGENT-MODEL {session} {current} -> {model} PENDING (busy) by {by}")
+    entry = AMP.put(f, session, model, current=current, sids=sids, by=by, effort=effort)
+    log.info(f"AGENT-MODEL {session} {current} -> {model}{f' effort {effort}' if effort else ''} PENDING (busy) by {by}")
     return {"ok": True, "status": "pending", "applies": "at turn end", "model": model,
-            "current": current, "pending_since": entry["since"]}
+            "current": current, "pending_since": entry["since"], **({"effort": effort} if effort else {})}
 
 
-def _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by):
+def _headless_switch_model(seat, model):
+    """(status, body) for a headless seat's live switch. 409 with the seat's state when it is
+    mid-turn (the caller defers it to the turn's end, as for a pane)."""
+    import headless_switch
+    try:
+        out = headless_switch.request(seat, {"cmd": "set_model", "model": model}, timeout=30.0)
+    except headless_switch.SupervisorDown as e:
+        return 503, {"ok": False, "error": "headless supervisor not running", "detail": str(e)}
+    if out.get("ok"):
+        return 200, {"ok": True, "switching": "switched", "headless": True, "how": out.get("how")}
+    if out.get("reason") == "busy":
+        return 409, {"ok": False, "error": "busy",
+                     "state": {"working": "working", "waiting": "waiting_permission"}.get(
+                         out.get("state"), out.get("state"))}
+    return 502, {"ok": False, "error": out.get("reason") or "refused"}
+
+
+def _headless_set_effort(seat, effort):
+    """(status, body) for a headless seat's effort, through its supervisor (seat_supervisor.py
+    set_effort: the CLI's apply_flag_settings, read back; a restart on --effort when the CLI refuses).
+    `effort` was checked against the runtime's levels; the supervisor checks it again. 409 with the
+    seat's state when it is mid-turn (the caller defers it to the turn's end, as for a pane)."""
+    import headless_switch
+    try:
+        out = headless_switch.request(seat, {"cmd": "set_effort", "effort": effort}, timeout=30.0)
+    except headless_switch.SupervisorDown as e:
+        return 503, {"ok": False, "error": "headless supervisor not running", "detail": str(e)}
+    if out.get("ok"):
+        how = out.get("how")
+        return 200, {"ok": True, "effort": effort, "headless": True, "how": how,
+                     "switching": "next_start" if how == "next-start" else "switched"}
+    if out.get("reason") == "busy":
+        return 409, {"ok": False, "error": "busy",
+                     "state": {"working": "working", "waiting": "waiting_permission"}.get(
+                         out.get("state"), out.get("state"))}
+    if out.get("reason") == "another level":
+        return 502, {"ok": False, "error": f"the agent is on {out.get('now')} effort, not {effort}",
+                     "detail": out.get("now")}
+    return 502, {"ok": False, "error": out.get("reason") or "refused"}
+
+
+def _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by, effort=None):
     """Switch now: Claude and Codex live (typed only into an IDLE pane), every other runtime at its
-    next rotation; then the seat's stored model. (status, body). Blocking: run in an executor."""
+    next rotation; then the seat's stored model. (status, body). Blocking: run in an executor.
+
+    `effort` (a level, already checked by _effort_refusal; None leaves the effort alone): Codex picks
+    it in the same picker pass; Claude gets `/effort <level>` after any model switch. A model equal
+    to `current` with an effort is an effort-only switch. The level is kept for the agent
+    (scripts/agent_effort.py) once it applied, so its next spawn passes it too."""
+    from scripts import agent_effort as AE
     from scripts import agent_model as AM
-    if desc["how"] == "live" and (runtime or "").lower() == "codex":
+    model_changes = model != current
+    hl_seat = _headless_seat_for(session) if desc["how"] == "live" else None
+    capture = lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout  # noqa: E731
+    send = lambda text: verified_inject(session, text, False, idle_only=True)  # noqa: E731
+    eff_result = None
+    if hl_seat:
+        # A headless seat switches through its supervisor (the CLI's set_model control request, or a
+        # restart on --model): nothing is typed, and the host's settings file is never touched. Its
+        # effort likewise (set_effort), after the model; a model-only pick sends none: the supervisor's
+        # level is a session flag the CLI keeps across set_model, and every restart passes --effort.
+        if model_changes:
+            status, body = _headless_switch_model(hl_seat, model)
+            if status != 200:
+                return status, {**body, "model": model, "current": current}
+        else:
+            body = {"ok": True, "model": model, "switching": "switched", "headless": True}
+        if effort:
+            est, ebody = _headless_set_effort(hl_seat, effort)
+            eff_result = (est, effort if est == 200 else ebody)
+            if est == 200:
+                body.update(effort=effort, effort_switching=ebody["switching"])
+            elif not model_changes:
+                return est, {**ebody, "model": model, "current": current, "effort": effort}
+    elif desc["how"] == "live" and (runtime or "").lower() == "codex":
         from scripts import agent_model_codex as AMC
 
         def _keys(k):
@@ -5330,27 +6127,66 @@ def _switch_model_now(session, model, root, meta, runtime, current, catalog, des
             else:
                 _tmux("send-keys", "-t", _st(session), "-l", str(k))
         status, body = AMC.switch_live(
-            model=model, config_path=AMC.codex_home() / "config.toml",
+            model=model, effort=effort, config_path=AMC.codex_home() / "config.toml",
             lock_path=AM.claude_settings_path(),
-            send=lambda text: verified_inject(session, text, False, idle_only=True), keys=_keys,
-            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
+            send=send, keys=_keys, capture=capture,
             rollout=_seat_codex_rollout(session, meta))
         if status != 200:
             return status, {**body, "model": model, "current": current}
+        if effort:
+            body.update(effort=effort, effort_switching="switched")
+            eff_result = (200, effort)
     elif desc["how"] == "live":
-        status, body = AM.switch_live(
-            model=model, settings_path=AM.claude_settings_path(),
-            title=next((r["title"] for r in catalog if r["id"] == model), None),
-            # Claude asks to confirm a switch on a seat with history; the switch answers it.
-            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
-            keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
-            send=lambda text: verified_inject(session, text, False, idle_only=True),
-            find_jsonl=lambda: _seat_transcript_path(session, meta))
-        if status != 200:
-            # Name the models, so a client's words say which one the agent is on (ios-watch-dev).
-            return status, {**body, "model": model, "current": current}
+        reapply = False
+        if model_changes and effort is None:
+            # Claude keeps a level per model (modelSettings.<model>.effortLevel): after /model the
+            # session may be on another level than the one kept for this agent, so it is set again.
+            effort = AE.get(AE.store_path(ORCH_DIR), AE.root_of(root or session))
+            reapply = effort is not None
+        if model_changes:
+            status, body = AM.switch_live(
+                model=model, settings_path=AM.claude_settings_path(),
+                title=next((r["title"] for r in catalog if r["id"] == model), None),
+                # Claude asks to confirm a switch on a seat with history; the switch answers it.
+                capture=capture,
+                keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
+                send=send, find_jsonl=lambda: _seat_transcript_path(session, meta))
+            if status != 200:
+                # Name the models, so a client's words say which one the agent is on.
+                return status, {**body, "model": model, "current": current}
+        else:
+            body = {"ok": True, "model": model, "switching": "switched"}
+        if effort:
+            # After the model: Claude keeps a level per model, so it is set on the model now in use.
+            est, ebody = AE.switch_effort_live(
+                effort=effort, settings_path=AM.claude_settings_path(), capture=capture,
+                keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
+                send=send, find_jsonl=lambda: _seat_transcript_path(session, meta))
+            eff_result = (est, effort if est == 200 else ebody)
+            if est == 200:
+                body.update(effort=effort, effort_switching="switched")
+            elif reapply:
+                # Not asked for: the model switch stands, and the response says the level did not.
+                # A turn that began (409) is no different: nothing is left waiting that a later pass
+                # would close as switched without typing; picking the level again sets it.
+                eff_result = None
+                body["effort_not_set"] = effort
+                body["effort_warning"] = (f"switched, but the agent's {effort} effort could not be set again "
+                                          f"on the new model: {ebody.get('error') or est}")
+            elif not model_changes:
+                return est, {**ebody, "model": model, "current": current, "effort": effort}
     else:
         body = {"ok": True, "model": model, "switching": "next_rotation"}
+
+    if eff_result and eff_result[0] == 200:
+        try:
+            AE.put(AE.store_path(ORCH_DIR), AE.root_of(root or session), effort)
+        except Exception as e:  # noqa: BLE001 — it applied; only the next spawn would miss it
+            log.error(f"agent-model: effort store write failed for {root}: {e!r}")
+            body["effort_warning"] = "set now, but not kept: the agent's next spawn starts on its old effort"
+        log.info(f"AGENT-MODEL {session} ({root}) effort -> {effort} by {by}")
+    if not model_changes:
+        return 200, body
 
     # The seat's stored model: what its next spawn passes as --model, and what rotation
     # thresholds read. For a next-rotation switch it IS the switch, so a failed write is an
@@ -5370,6 +6206,10 @@ def _switch_model_now(session, model, root, meta, runtime, current, catalog, des
                          "detail": "the seat's model could not be written; nothing changed"}
         body["warning"] = ("switched now, but the seat did not keep the new model: its next "
                            "spawn will start on the old one")
+    if eff_result and eff_result[0] != 200:
+        # The model switched (and is kept); the effort did not. Said as the failure it is.
+        return eff_result[0], {**eff_result[1], "ok": False, "model": model, "current": model,
+                               "effort": effort, "model_switched": True, "stored": stored}
     return 200, body
 
 
@@ -5478,16 +6318,25 @@ def _apply_pending_one(f, session, now):
         return close("failed", "the agent moved to a new session before its turn ended")
     if st not in INJECTABLE_STATES:
         return wait()
-    if e.get("model") == current:
+    from scripts import agent_effort as AE
+    effort = e.get("effort")
+    if effort and e.get("model") == current and effort == _effort_now(session, meta, runtime, root):
+        effort = None                  # it is on that level already
+    if e.get("model") == current and not effort:
         return close("switched")
     orch_root = _orchestra_root()
     catalog = AM.load_catalog((runtime or "").lower(), orch_root / "config" / "providers.json",
                               orch_root / "state")
     desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+    if effort:
+        # Checked again now: the seat may have gone headless (or the runtime away) since it was asked.
+        why = _effort_refusal(session, runtime, desc, effort)
+        if why:
+            return close("failed", why)
     if e.get("model") not in desc["allowed"] or desc["how"] != "live":
         return close("failed", desc["unavailable"].get(e.get("model")) or "no longer offered for this agent")
     status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
-                                     desc, e.get("by") or "deferred")
+                                     desc, e.get("by") or "deferred", effort=effort)
     if status == 200:
         # Residual, accepted (codex R18 on #475): a gateway that DIES between these keystrokes and
         # the record below (and whose registry write also failed) leaves the pick pending, and the
@@ -5540,6 +6389,208 @@ async def _stop_pending_model_switches(app):
         task.cancel()
 
 
+# ---------------------------------------------------------------------------
+# Attention detector (part 1): once a minute, off the event loop, mirror pending completion cards into
+# Updates, record failed transitions (crashed / out of usage / signed out), and run the person's timeout
+# rules over what is waiting and who has stalled. Fail-open: an exception is logged (once per class per
+# hour) and the tick is skipped. Read-only toward panes: capture-pane only, never a key.
+# ---------------------------------------------------------------------------
+
+_ATTN_ERRORS: dict = {}
+
+
+def _attention_interval_s() -> float:
+    import attention_config
+    return float(attention_config.load().detector_interval_s)
+
+
+def _attention_log_once(e):
+    import time as _time
+    k = type(e).__name__
+    if _time.time() - _ATTN_ERRORS.get(k, 0) >= 3600:
+        _ATTN_ERRORS[k] = _time.time()
+        log.error(f"attention: tick skipped: {e!r}")
+
+
+def _attention_agents(cfg):
+    """(rows, ok): the /agents rows, from the shared cache when it is younger than one tick."""
+    import time as _time
+    try:
+        if _agents_cache.get("data") is None or _time.time() - (_agents_cache.get("at") or 0) > \
+                cfg.detector_interval_s:
+            _refresh_agents_cache()
+        rows = _agents_cache.get("data")
+        return (rows, True) if isinstance(rows, list) else ([], False)
+    except Exception as e:  # noqa: BLE001 — a failed scan clears nothing (attention_detect.apply_tick)
+        _attention_log_once(e)
+        return [], False
+
+
+def _attention_conditions(rows, cfg):
+    """Failed conditions from the agents rows, each pane screen and each headless stream; per-source scans."""
+    import attention_detect as AD
+    conds, scans = list(AD.from_agents(rows, cfg)), {}
+    for r in rows:
+        agent, sess = r.get("id"), r.get("tmux_session") or r.get("id")
+        if not agent or r.get("unregistered") or r.get("state") in ("working", "offline", "crashed"):
+            # Only registered agents, and never a screen mid-turn. An unregistered session is not an
+            # agent (a provider sign-in session shows a login screen by design).
+            continue
+        seat = _headless_seat_for(sess) if r.get("headless") else None
+        try:
+            if seat:
+                home = ORCH_DIR / "state" / "headless" / seat
+                sid = (_load_json(home / "seat.json") or {}).get("session_id")
+                c = AD.from_headless_result(agent, AD.last_headless_result(home / "events.jsonl", sid), cfg)
+                scans[f"headless:{agent}"] = "ok"
+            else:
+                c = AD.from_screen(agent, _strip_ansi(_capture_pane(sess, lines=60)), cfg)
+                scans[f"pane:{agent}"] = "ok"
+            if c:
+                conds.append(c)
+        except Exception as e:  # noqa: BLE001 — this source failed: its rows stay as they are
+            scans[f"{'headless' if seat else 'pane'}:{agent}"] = "failed"
+            _attention_log_once(e)
+    return conds, scans
+
+
+def _attention_tick():
+    """One detector pass. Sync: runs in the executor."""
+    try:
+        _attention_tick_inner()
+    except Exception as e:  # noqa: BLE001 — fail-open: the next tick tries again
+        _attention_log_once(e)
+
+
+def _attention_tick_inner():
+    from datetime import datetime as _dt, timezone as _tz
+    import attention_config, attention_detect as AD, attention_items as AI, attention_rules as AR
+    import attention_store as AS
+    import approval_notify
+    cfg = attention_config.load()
+    if not attention_config.detector_on(cfg, _data_dir()):
+        return
+    astore = AttentionStore(); astore.migrate()
+    if not astore.armed:
+        return
+    now = _dt.now(_tz.utc)
+    ledger = ApprovalStore(); ledger.migrate()
+    qstore = QuestionnaireStore(); qstore.migrate()
+    AS.mirror_completions(astore, ledger)
+    rows, agents_ok = _attention_agents(cfg)
+    # Only registered agents: an unregistered session (a provider sign-in session, a scratch shell) is not
+    # an agent, so it never raises a failed / stuck Update or feeds a no-progress rule.
+    rows = [r for r in rows if not r.get("unregistered")]
+    conds, scans = _attention_conditions(rows, cfg)
+    scans["agents"] = "ok" if agents_ok else "failed"
+    person, tz = _attention_person()
+    try:
+        waiting = [AI.from_pending_row(r, AI.Ctx(person=person, tz=tz, now=now)) for r in _pending_rows(None)]
+        waiting = [w for w in waiting if w is not None]
+        scans["ledger"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        waiting, scans["ledger"] = [], "failed"
+        _attention_log_once(e)
+    reg = (_load_json(ORCH_DIR / "registry.json") or {}).get("agents") or {}
+    live = {r.get("id") for r in rows if r.get("id")} | set(reg if isinstance(reg, dict) else [])
+    AD.apply_tick(astore, conds, now, cfg, live_agents=live, scans=scans, ledger=ledger, qstore=qstore)
+    observations = AD.unanswered(waiting) + AD.no_progress(rows, now, AR.STALL_S)
+    rs = AR.RuleStore(astore)
+    rs.seed_defaults(person)
+
+    def resume(row):
+        try:
+            approval_resume.fire_resume(row, ledger)
+        except Exception as e:  # noqa: BLE001 — the answer is durable; the watchdog retries delivery
+            log.error(f"attention: resume after a rule answer failed for {row.get('id')}: {e!r}")
+    ctx = AR.EngineCtx(
+        person=person, ledger=ledger, qstore=qstore, apply_answer=apply_answer,
+        notify_card=lambda rid: approval_notify.notify(rid, store=ledger),
+        notify_questionnaire=lambda qid: approval_notify.notify_questionnaire(qid, store=qstore),
+        deliver_discarded=approval_resume.deliver_discarded,
+        qnr_deliver_discarded=questionnaire_resume.deliver_discarded,
+        schedule_resume=resume, is_protected=_session_is_protected)
+    AR.Engine(rs, astore, ctx).tick(now, observations, agents_ok=agents_ok)
+
+
+_ATTN_STOP_KEY = None
+_ATTN_TASK_KEY = None
+
+
+def _attn_keys():
+    global _ATTN_STOP_KEY, _ATTN_TASK_KEY
+    if _ATTN_STOP_KEY is None:
+        import asyncio
+        from aiohttp import web
+        _ATTN_STOP_KEY = web.AppKey("attention_stop", asyncio.Event)
+        _ATTN_TASK_KEY = web.AppKey("attention_task", asyncio.Task)
+    return _ATTN_STOP_KEY, _ATTN_TASK_KEY
+
+
+async def _attention_loop(app):
+    import asyncio
+    stop_key, _ = _attn_keys()
+    stop = app[stop_key]
+    loop = asyncio.get_event_loop()
+
+    async def until_stop(aw):
+        """`aw`, unless shutdown starts first (the handle_events shape): a tick still in the executor
+        finishes in the background, which is safe because each of its writes is one transaction."""
+        task = asyncio.ensure_future(aw)
+        waiter = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise _EventsStopped()
+        finally:
+            for f in (task, waiter):
+                if not f.done():
+                    f.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
+    try:
+        while not stop.is_set():
+            # Wait first: a (re)starting gateway is not loaded with a fleet scan in its first minute.
+            await until_stop(asyncio.sleep(_attention_interval_s()))
+            try:
+                await until_stop(loop.run_in_executor(None, _attention_tick))
+            except _EventsStopped:
+                raise
+            except Exception as e:  # noqa: BLE001
+                _attention_log_once(e)
+    except (_EventsStopped, asyncio.CancelledError):
+        pass
+
+
+async def _start_attention_detector(app):
+    import asyncio
+    stop_key, task_key = _attn_keys()
+    app[stop_key] = asyncio.Event()
+    app[task_key] = asyncio.ensure_future(_attention_loop(app))
+
+
+async def _attention_on_shutdown(app):
+    stop_key, _ = _attn_keys()
+    stop = app.get(stop_key)
+    if stop is not None:
+        stop.set()
+
+
+async def _stop_attention_detector(app):
+    import asyncio
+    stop_key, task_key = _attn_keys()
+    if app.get(stop_key) is not None:
+        app[stop_key].set()
+    task = app.get(task_key)
+    if task is None or task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), 5)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def handle_agent_menu_capture(request):
     """POST /agent-menu-capture {session} -> the full multi-part menu payload.
 
@@ -5568,8 +6619,14 @@ async def handle_agent_menu_capture(request):
     # actuating the live pane. Solves in-flight coalescing: once the first walk
     # wrote back, every later request (any surface) reads the stored payload.
     store = ApprovalStore(); store.migrate()
+    # The menu on screen now (the detector's read: no key pressed) names the one card a stored or fresh walk belongs
+    # to (menu_read_bridge): a walk of a menu that has since changed is neither served nor written back.
+    import menu_read_bridge as _mrb
+    _st = await asyncio.get_event_loop().run_in_executor(None, lambda: _agent_status().get_agent_status(session))
+    capture = _st.get("pending_menu") if isinstance(_st, dict) else None
+    menu_key = _mrb.op_key_for(session, capture)
     cached = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: store.cached_hydration(session))
+        None, lambda: store.cached_hydration(session, op_key=menu_key)) if menu_key else None
     if isinstance(cached, dict):
         return _json({"ok": True, "session": session, "cached": True,
                       "parts": cached.get("parts") or [],
@@ -5582,11 +6639,25 @@ async def handle_agent_menu_capture(request):
     # clears needs_hydration) so a later part-2 answer validates (AGY-caught 400)
     # and the ledger becomes the cache. An aborted/partial walk writes NOTHING.
     if isinstance(out, dict) and out.get("walk_complete") and out.get("parts"):
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None, lambda: store.hydrate_menu(session, out))
-        except Exception as e:  # noqa: BLE001 — write-back best-effort, never 500 the walk
-            print(f"[watch_gateway] hydrate_menu write-back failed ({session}): {e}",
+        if menu_key and _mrb.walk_is_of(capture, out):
+            # No card yet for this multi-part menu (the bridge's tick has not run, or skipped it as incomplete): make
+            # it now from this walk, so it is born with every part's question. Then write the walk onto this menu's
+            # card, whichever made it (a card the tick stored marked needs_hydration is completed here).
+            try:
+                rid, why = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _mrb.bridge_on_read(store, session, capture, out, _st.get("state")))
+                if rid:
+                    print(f"[watch_gateway] menu card on read ({session}): {rid} {why}", file=sys.stderr)
+            except Exception as e:  # noqa: BLE001 — never 500 the walk; the next tick still bridges it
+                print(f"[watch_gateway] menu card on read failed ({session}): {e}", file=sys.stderr)
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: store.hydrate_menu(session, out, op_key=menu_key))
+            except Exception as e:  # noqa: BLE001 — write-back best-effort, never 500 the walk
+                print(f"[watch_gateway] hydrate_menu write-back failed ({session}): {e}",
+                      file=sys.stderr)
+        else:
+            print(f"[watch_gateway] walk not written back ({session}): the menu on screen is not the one walked",
                   file=sys.stderr)
     # The walk's instance (DEC-1791405753559307 phase 0), in the RESPONSE only, never in `out`:
     # hydrate_menu persists the walk onto the session's pending rows, and an id there would be a
@@ -6575,6 +7646,10 @@ async def handle_arturo_threads(request):
     cid = request.match_info.get("conversation_id") or ""
     path = f"/threads/{quote(cid, safe='')}" if cid else "/threads"
     params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn", "jobs")}
+    # Older pages of a thread: `before` is a turn position, a whole number; anything else is not passed on.
+    before = request.query.get("before")
+    if isinstance(before, str) and re.fullmatch(r"[0-9]+", before):
+        params["before"] = before
     try:
         async with aiohttp.ClientSession() as s:
             # Who is reading: a turn's result goes only to the principal that sent it (DEC-1791518421640932).
@@ -6608,6 +7683,26 @@ async def handle_arturo_job_cancel(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+async def handle_arturo_card_dismiss(request):
+    """POST /arturo/threads/{id}/cards/{card_id}/dismiss — close a choice card in a thread (:5071)."""
+    import aiohttp
+    from urllib.parse import quote
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    cid, card = request.match_info.get("conversation_id") or "", request.match_info.get("card_id") or ""
+    if not re.match(r"^[0-9a-f]{8,32}$", card):
+        return _json({"ok": False, "error": "bad card id"}, status=400)
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{ARTURO_TEXT_BASE}/threads/{quote(cid, safe='')}/cards/{card}/dismiss",
+                              headers=_arturo_principal_headers(request, voice=False),
+                              timeout=aiohttp.ClientTimeout(total=10)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo card dismiss forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
 async def handle_arturo_health(request):
     """GET /arturo/health — :5071/health passthrough (brain kind/model, voice vs text-only) so
     the home's header chip and the onboarding thread can read the install's state."""
@@ -6629,16 +7724,19 @@ ARTURO_PTT_VOICE_BASE = os.environ.get("ARTURO_PTT_VOICE_BASE") or (_loopback("O
 
 
 async def handle_arturo_ptt_voice(request):
-    """GET /arturo/ptt/voices, GET/PUT /arturo/ptt/voice — the operator's Hume voice picker
-    (contract msg_f5b57c9d). Bearer here, loopback upstream; a PUT takes effect on the
-    NEXT conversation via session_settings.voice_id, no restart."""
+    """GET /arturo/ptt/voices, GET/PUT/DELETE /arturo/ptt/voice — the voice picker (contract msg_f5b57c9d).
+    Bearer here, loopback upstream; a PUT takes effect on the NEXT conversation via session_settings.voice_id, no
+    restart. ?vendor= and ?agent= (an agent's own voice) are the only query passed on."""
     import aiohttp
     import asyncio
+    from urllib.parse import urlencode
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
-    upstream = (ARTURO_PTT_VOICE_BASE + "/ptt/voices?" + request.query_string
-                if request.path.endswith("/voices")
-                else ARTURO_PTT_VOICE_BASE + "/ptt/voice")
+    if request.path.endswith("/voices"):
+        upstream = ARTURO_PTT_VOICE_BASE + "/ptt/voices?" + request.query_string
+    else:
+        q = {k: request.query[k] for k in ("vendor", "agent") if request.query.get(k)}
+        upstream = ARTURO_PTT_VOICE_BASE + "/ptt/voice" + (("?" + urlencode(q)) if q else "")
     body = await request.read() if request.method == "PUT" else None
     try:
         async with aiohttp.ClientSession() as s:
@@ -7291,6 +8389,10 @@ async def handle_agent_key(request):
     refusal = _protected_refusal(request, session)
     if refusal is not None:
         return _json(refusal, status=403)
+    if _headless_seat_for(session):
+        # Its pane holds the supervisor, not a menu: a headless seat's questions are cards.
+        return _json({"ok": False, "reason": "headless",
+                      "error": "this seat runs headless: answer its question on the card"}, status=409)
     if text is not None and len(text) > ANSWER_TEXT_MAX:
         return _json({"ok": False, "error": f"text exceeds {ANSWER_TEXT_MAX} chars"},
                      status=400)
@@ -7772,7 +8874,9 @@ def _free_text_option_without_text(row, answers):
 
 def _clean_batch_answers(answers):
     """(clean, None) or (None, error). The ONE shape every multi-part submit replays: answers[] of
-    {part: distinct int, ns: [digit strings], text?: non-blank str <= ANSWER_TEXT_MAX}. The arm
+    {part: distinct int, ns: [digit strings], text?: non-blank str <= ANSWER_TEXT_MAX}, or
+    {part, skipped: true} for a part the person chose to leave unanswered (no ns, no text: a skip
+    that carries an answer is a contradiction, refused rather than guessed at). The arm
     gates read `text` from THIS result, so a value they would not count (whitespace, a non-string)
     can never reach the replay that types it; ints in ns become strings because the validator
     compares str(n) while the replay presses the RAW value."""
@@ -7788,6 +8892,11 @@ def _clean_batch_answers(answers):
         if not isinstance(pi, int) or isinstance(pi, bool) or pi in seen_parts:
             return None, "each answer needs a distinct integer part"
         seen_parts.add(pi)
+        if a.get("skipped") is True:
+            if a.get("ns") or (isinstance(t, str) and t.strip()):
+                return None, f"part {pi}: a skipped part cannot carry an answer"
+            clean.append({"part": pi, "skipped": True})
+            continue
         ns = a.get("ns") or []
         if not isinstance(ns, list):
             return None, f"part {pi}: ns must be a list"
@@ -7816,7 +8925,10 @@ def _agy_identity_refusal(session):
 
 
 def _menu_submit_text_armed() -> bool:
-    return os.environ.get("MENU_MULTIPART_TEXT_ARMED") == "1"
+    """Own words in a multi-part answer are typed into the pane unless the operator opts out
+    (MENU_MULTIPART_TEXT_ARMED=0), the same posture as the option arm: the submit is bound to its card
+    and replays only through the identity gate."""
+    return os.environ.get("MENU_MULTIPART_TEXT_ARMED", "1") != "0"
 
 
 def _menu_multipart_armed() -> bool:
@@ -7826,8 +8938,8 @@ def _menu_multipart_armed() -> bool:
     card (/menu-submit card_required, /agent-key use_menu_submit), is bound to it on the
     orchestrator's own lookup, replays only with the identity gate, and never takes the
     identity-less pane-only leg. Unarmed, an app's answer is a dry run that reaches no agent,
-    which on a default install is the failure that matters. Own-words text stays a separate,
-    default-OFF arm (MENU_MULTIPART_TEXT_ARMED)."""
+    which on a default install is the failure that matters. Own-words text is its own arm
+    (MENU_MULTIPART_TEXT_ARMED), also on unless opted out."""
     return os.environ.get("MENU_MULTIPART_SUBMIT_ARMED", "1") != "0"
 
 
@@ -8329,9 +9441,10 @@ async def handle_surface_post(request):
     return _json({"ok": True})
 
 
-def _record_surface(device, route, hint, stack, focused, conv_id=None):
+def _record_surface(device, route, hint, stack, focused, conv_id=None, cards=None):
     """Write one device's slot of active-surface.json (+ the call's sidecar). Shared by POST /surface
-    and the browser's live call, which reports its page over the call socket."""
+    and the browser's live call, which reports its page over the call socket. `cards`, already
+    clipped (_screen_cards), rides in the slot for the voice brain's readout; absent = none."""
     import hashlib
     import time
     now = time.time()
@@ -8342,7 +9455,8 @@ def _record_surface(device, route, hint, stack, focused, conv_id=None):
     except (OSError, ValueError):
         doc = {"devices": {}}
     doc["devices"][device] = {"route": route, "hint": hint, "device": device,
-                              "stack": stack, "focused": focused, "updated_at": now}
+                              "stack": stack, "focused": focused, "updated_at": now,
+                              **({"cards": cards} if cards else {})}
     doc["current"] = _surface_current(doc["devices"], now)
     SURFACE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = SURFACE_PATH.with_suffix(".tmp")
@@ -8368,10 +9482,28 @@ def _record_surface(device, route, hint, stack, focused, conv_id=None):
 _WEB_ENTITY_KINDS = {"agents": "agent", "approvals": "approval", "projects": "project", "history": "approval"}
 
 
-def _record_web_call_surface(route, focused_entity, conv_id=None):
-    """The dashboard's page during a live call ({route, focusedEntity:"kind:id"} from the call socket)
-    as the `web` device's surface, so the voice brain's screen readout and read_screen_context see it
-    like the phone's. Bounded and validated like POST /surface; a bad route is ignored."""
+def _screen_cards(raw):
+    """The cards on screen, rebuilt by the same rules (and size limits) as a text turn's
+    context.cards (services/arturo/screen_cards.pick_cards; contract/notes/arturo-screen-context.md).
+    None when there are none, or the record is not a cards record, or the reader is missing."""
+    if raw is None:
+        return None
+    try:
+        from services.arturo.screen_cards import pick_cards
+    except Exception:  # noqa: BLE001 — no reader, no cards: the page alone still goes through
+        return None
+    try:
+        picked = pick_cards(raw)
+    except Exception:  # noqa: BLE001
+        return None
+    return picked if picked and picked.get("cards") else None
+
+
+def _record_web_call_surface(route, focused_entity, conv_id=None, cards=None):
+    """The dashboard's page during a live call ({route, focusedEntity:"kind:id", cards?} from the call
+    socket) as the `web` device's surface, so the voice brain's screen readout and read_screen_context
+    see it like the phone's, the cards on screen included. Bounded and validated like POST /surface; a
+    bad route is ignored."""
     if not isinstance(route, str) or not route.startswith("/"):
         return False
     route = route[:200]
@@ -8383,7 +9515,8 @@ def _record_web_call_surface(route, focused_entity, conv_id=None):
             entity = {"kind": kind[:40], "id": eid[:120]}
     hint = f"viewing {entity['kind']} {entity['id']}" if entity else None
     stack = [{"z": 0, "role": "base", "route": route, "entity": entity, "hint": hint}]
-    _record_surface("web", route, hint, stack, _surface_focused(stack), conv_id)
+    _record_surface("web", route, hint, stack, _surface_focused(stack), conv_id,
+                    cards=_screen_cards(cards))
     return True
 
 
@@ -8424,6 +9557,50 @@ class _EventsStopped(Exception):
     pass
 
 
+# Live permission prompts were not in the digest, so a prompt appearing reached other surfaces only on
+# their next poll. One process-wide cache of the scan, shared by every open stream (N phones are not N
+# scans). Measured on the reference box: ~0.2 s per uncached scan of 8 sessions, so a 2 s period.
+_PERM_IDS_CACHE_S = 2.0
+_PERM_IDS_CACHE = {"at": 0.0, "ids": ""}
+_PERM_IDS_LOCK = _threading.Lock()
+
+
+def _perm_ids_cached() -> str:
+    import time as _time
+    with _PERM_IDS_LOCK:
+        if _time.time() - _PERM_IDS_CACHE["at"] < _PERM_IDS_CACHE_S:
+            return _PERM_IDS_CACHE["ids"]
+        try:
+            ids = ",".join(sorted(str(r.get("id")) for r in _perm_pseudo_rows() if r.get("id")))
+        except Exception:  # noqa: BLE001 — fail-open: no permission segment this time
+            ids = ""
+        _PERM_IDS_CACHE.update(at=_time.time(), ids=ids)
+        return ids
+
+
+def _attention_armed() -> bool:
+    try:
+        import approval_schema
+        import attention_store
+        return bool(approval_schema.armed(attention_store.MIGRATION_ID))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _attention_rev() -> int:
+    """The attention store's change counter, 0 when unarmed or unreadable (never breaks the digest)."""
+    try:
+        import approval_schema
+        import attention_store
+        if not approval_schema.armed(attention_store.MIGRATION_ID):
+            return 0
+        st = AttentionStore()
+        st.armed = True                    # read only: no DDL on a 2 s cadence
+        return int(st.rev())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _events_digest(store):
     """Cheap change fingerprint: pending approval ids + live voice-call ids.
     (Agent liveness intentionally excluded — the fleet scan is heavy and the
@@ -8449,7 +9626,12 @@ def _events_digest(store):
                 continue
     except OSError:
         pass
-    return pend + "|" + ",".join(calls) + "|" + qnrs
+    # Attention (part 1): its change counter, then the live permission prompt ids. Appended segments, so
+    # digest.split('|')[0] (the pending count) means what it always did.
+    base = pend + "|" + ",".join(calls) + "|" + qnrs
+    if not _attention_armed():
+        return base                    # unarmed: the digest (and its cost) exactly as before part 1
+    return base + "|" + str(_attention_rev()) + "|" + _perm_ids_cached()
 
 
 async def handle_events(request):
@@ -8497,8 +9679,12 @@ async def handle_events(request):
                 last = digest
                 pending_n = digest.split("|", 1)[0]
                 n = len(pending_n.split(",")) if pending_n else 0
-                await until_stop(resp.write(
-                    f"data: {json.dumps({'changed': True, 'pending': n, 'ts': now})}\n\n".encode()))
+                try:
+                    attention_rev = int(digest.split("|")[3])
+                except (IndexError, ValueError):
+                    attention_rev = 0          # an older digest shape: fail-open
+                payload = {'changed': True, 'pending': n, 'ts': now, 'attention_rev': attention_rev}
+                await until_stop(resp.write(f"data: {json.dumps(payload)}\n\n".encode()))
             elif now - last_beat >= EVENTS_KEEPALIVE_S:
                 await until_stop(resp.write(b": keepalive\n\n"))
                 last_beat = now
@@ -8621,8 +9807,14 @@ def _validate_qnr_answer(question, option_n, answer_text):
     return None
 
 
-def _validate_qnr_delta(questions, answers):
-    """Validate every provided answer against its question. Error str/None."""
+def _validate_qnr_delta(questions, answers, allow_skip=False):
+    """Validate every provided answer against its question. Error str/None.
+
+    At submit (allow_skip) a question may be sent as {"skipped": true}: the person chose to leave it
+    unanswered. Any question can be skipped, required or not (a questionnaire is
+    accepted without every question answered; `required` only blocks a question simply LEFT OUT by
+    an app that sends no skips), and a skip carries no answer. What counts as answered enough is
+    checked by the store, against the draft merged with this delta."""
     qbyn = {q["n"]: q for q in questions}
     for n, a in (answers or {}).items():
         try:
@@ -8631,6 +9823,16 @@ def _validate_qnr_delta(questions, answers):
             return f"bad question index {n!r}"
         if not q:
             return f"no question {n}"
+        if not isinstance(a, dict):
+            return f"q{n}: answer must be an object"
+        if "skipped" in a:
+            if not allow_skip:
+                return f"q{n}: a skip is sent with the submit, not a draft"
+            if a.get("skipped") is not True:
+                return f"q{n}: skipped must be true"
+            if a.get("option_n") is not None or (a.get("answer_text") or "").strip():
+                return f"q{n}: a skipped question cannot carry an answer"
+            continue
         opt = a.get("option_n")
         txt = a.get("answer_text")
         txt = str(txt).strip() if txt is not None else None
@@ -8706,7 +9908,9 @@ async def handle_questionnaire_submit(request):
     d = store.get(qid)
     if not d:
         return _json({"ok": False, "error": "not found"}, status=404)
-    err = _validate_qnr_delta(d["questions"], answers)
+    if not isinstance(answers, dict):
+        return _json({"ok": False, "error": "answers must be an object keyed by question number"}, status=400)
+    err = _validate_qnr_delta(d["questions"], answers, allow_skip=True)
     if err:
         return _json({"ok": False, "error": err}, status=400)
     r = store.submit(qid, answers, surface=(data or {}).get("surface"))
@@ -8724,6 +9928,9 @@ async def handle_questionnaire_submit(request):
     body = {"ok": True, "applied": False, "id": qid}
     if "missing" in r:
         body["missing"] = r["missing"]
+    if r.get("nothing_answered"):
+        return _json({"ok": False, "applied": False, "id": qid,
+                      "error": "nothing answered: answer at least one question"}, status=400)
     if "status" in r:
         body["status"] = r["status"]
     return _json(body)
@@ -8790,17 +9997,31 @@ def _live_token_from_request(request) -> str:
     return token
 
 
+LIVE_NOT_NOW = "Live calls aren't available right now"
+LIVE_NOT_YET = "Live calls aren't available with this voice provider yet"
+_LIVE_REASON = {"reason": None}       # why the last _live_engine() answered None, in plain words
+_AGENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
 async def _live_engine():
-    """Arturo's /health live_engine ("gemini" | "relay" | None). Unreachable or older Arturo -> "gemini",
-    which is what /live always ran before."""
+    """Arturo's /health live_engine: "relay" (GPT-Live) | "gemini" | None. Arturo decides from the server-wide
+    voice provider alone; the gateway never picks an engine itself. Unreachable Arturo -> None (refused with
+    a plain reason), never Gemini on its own."""
     import aiohttp
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
             async with s.get(_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/health") as r:
-                return (await r.json(content_type=None)).get("live_engine", "gemini")
+                h = await r.json(content_type=None)
     except Exception as e:  # noqa: BLE001
-        log.warning(f"/live: arturo health unreachable, using gemini: {e!r}")
-        return "gemini"
+        log.warning(f"/live: arturo health unreachable, refusing: {e!r}")
+        _LIVE_REASON["reason"] = LIVE_NOT_NOW
+        return None
+    engine = h.get("live_engine") if isinstance(h, dict) else None
+    if engine in ("relay", "gemini"):
+        _LIVE_REASON["reason"] = None
+        return engine
+    _LIVE_REASON["reason"] = (h.get("live_reason") if isinstance(h, dict) else None) or LIVE_NOT_YET
+    return None
 
 
 async def handle_gemini_live(request):
@@ -8814,18 +10035,29 @@ async def handle_gemini_live(request):
         return web.Response(status=401, text="unauthorized")
 
     voice = request.query.get("voice", "Fenrir")
+    # ?agent=<id>: the agent the call is with (agreed with the API's voice-live route). Its own voice is used;
+    # absent -> Arturo's own call, the server voice. A malformed id is refused before the upgrade.
+    agent = (request.query.get("agent") or "").strip() or None
+    if agent is not None and not _AGENT_ID.fullmatch(agent):
+        return web.Response(status=400, text="bad agent id")
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
     try:
-        if await _live_engine() == "relay":
+        engine = await _live_engine()
+        if engine is None:
+            await ws.send_json({"event": "error", "reason": _LIVE_REASON.get("reason") or LIVE_NOT_YET})
+            await ws.close()
+            return ws
+        if engine == "relay":
             # No Gemini key, GPT-Live chosen: the same browser contract over the watch's stream relay.
             from services.arturo.relay_live_bridge import RelayLiveSession
             from scripts import arturo_stamp
             secret = arturo_stamp.ensure(_data_dir())
             headers = {"X-Arturo-Principal": "fleet", arturo_stamp.HEADER: secret} if secret else {}
             await RelayLiveSession(ws, ARTURO_PTT_STREAM_BASE, headers, voice=voice,
-                                   on_surface=_record_web_call_surface).run()
+                                   on_surface=_record_web_call_surface,
+                                   **({"agent": agent} if agent else {})).run()
             return ws
         live_session_cls = GeminiLiveSession
         if live_session_cls is None:
@@ -9064,13 +10296,22 @@ def build_app():
                           middlewares=[scope_middleware_factory()])
     app[_events_stop_key()] = asyncio.Event()
     app.on_shutdown.append(_events_on_shutdown)
+    app.on_shutdown.append(_attention_on_shutdown)
     app.on_shutdown.append(_terminal_on_shutdown)
     app.on_startup.append(_start_pending_model_switches)
+    app.on_startup.append(_start_attention_detector)
     app.on_cleanup.append(_stop_pending_model_switches)
+    app.on_cleanup.append(_stop_attention_detector)
     app.router.add_get("/pending-approvals", handle_pending)
     app.router.add_post("/approval-answers", handle_answer)
     app.router.add_get("/history", handle_history)
     app.router.add_get("/approvals/{id}", handle_approval_detail)
+    app.router.add_get("/attention", handle_attention)
+    app.router.add_post("/attention/seen", handle_attention_seen)
+    app.router.add_get("/attention/rules", handle_attention_rules)
+    app.router.add_post("/attention/rules", handle_attention_rules)
+    app.router.add_put("/attention/rules/{id}", handle_attention_rules)
+    app.router.add_delete("/attention/rules/{id}", handle_attention_rules)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
     app.router.add_get("/terminal/ws", handle_terminal_ws)
@@ -9086,6 +10327,7 @@ def build_app():
     app.router.add_get("/voice-memory", handle_voice_memory)
     app.router.add_post("/agent-message", handle_agent_message)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)
+    app.router.add_post("/agent-dev", handle_agent_dev)
     app.router.add_get("/agent-model", handle_agent_model)
     app.router.add_put("/agent-model", handle_agent_model)
     app.router.add_post("/presence", handle_presence)
@@ -9099,6 +10341,8 @@ def build_app():
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/agent-file", handle_agent_file)          # + HEAD (aiohttp allow_head)
     app.router.add_get("/transcript", handle_transcript)
+    app.router.add_get("/agent-tree", handle_agent_tree)
+    app.router.add_get("/subagent-transcript", handle_subagent_transcript)
     app.router.add_post("/upload", handle_upload)
     app.router.add_get("/upload/{name}", handle_upload_get)   # + HEAD (aiohttp allow_head)
     app.router.add_post("/red-alert/report", handle_red_alert_report)
@@ -9116,6 +10360,7 @@ def build_app():
     app.router.add_get("/arturo/threads", handle_arturo_threads)
     app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
     app.router.add_post("/arturo/threads/{conversation_id}/jobs/{job_id}/cancel", handle_arturo_job_cancel)
+    app.router.add_post("/arturo/threads/{conversation_id}/cards/{card_id}/dismiss", handle_arturo_card_dismiss)
     app.router.add_post("/arturo/ptt/stream/audio", handle_arturo_ptt_stream_audio)
     app.router.add_get("/arturo/ptt/stream/events", handle_arturo_ptt_stream_events)
     app.router.add_post("/arturo/ptt/stream/end", handle_arturo_ptt_stream_end)
@@ -9124,6 +10369,7 @@ def build_app():
     app.router.add_get("/arturo/ptt/voices", handle_arturo_ptt_voice)
     app.router.add_get("/arturo/ptt/voice", handle_arturo_ptt_voice)
     app.router.add_put("/arturo/ptt/voice", handle_arturo_ptt_voice)
+    app.router.add_delete("/arturo/ptt/voice", handle_arturo_ptt_voice)
     app.router.add_get("/arturo/avatars", handle_arturo_avatar)
     app.router.add_get("/arturo/avatar", handle_arturo_avatar)
     app.router.add_put("/arturo/avatar", handle_arturo_avatar)

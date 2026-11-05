@@ -34,6 +34,18 @@ test('a card no message names goes at the end of the turn it was filed in, or be
   assert.deepEqual(keys(interleave(nodes, [d({ id: 'late', created_at: '2026-10-24T21:00:00Z' })])).at(-1), 'late');
 });
 
+test('a thread read from partway: a card filed before its first message waits above it, not in the first turn shown', () => {
+  // Older pages are added above as the reader scrolls up; a card drawn at the end of the first turn shown would jump
+  // up past what they are reading when its own page lands.
+  const nodes = [tools('work', '2026-10-24T20:01:20Z'), node('reply', '2026-10-24T20:01:25Z'), user('next', '2026-10-24T20:05:00Z')];
+  const early = d({ id: 'early', created_at: '2026-10-24T20:00:00Z' });
+  assert.deepEqual(keys(interleave(nodes, [early], { cutAbove: true })), ['early', 'work', 'reply', 'next']);
+  assert.deepEqual(keys(interleave(nodes, [early])), ['work', 'reply', 'early', 'next']);          // the whole thread: as before
+  const named = [node('Raised req-n1 for you.', '2026-10-24T20:01:25Z'), user('next', '2026-10-24T20:05:00Z')];
+  assert.deepEqual(keys(interleave(named, [d({ id: 'req-n1', created_at: '2026-10-24T20:00:00Z' })], { cutAbove: true })).map((k) => k.slice(0, 6)),
+    ['Raised', 'req-n1', 'next']);                                                                  // a message naming it still holds it
+});
+
 test('a long summary previews at a line break and never shows a stray ** or backtick', () => {
   const text = 'This is a test.\n\nWhat a real card has:\n- **The question** — one line.\n- **Why it matters** ' + 'x'.repeat(300);
   const p = previewText(text, 120);
@@ -44,11 +56,21 @@ test('a long summary previews at a line break and never shows a stray ** or back
   assert.equal((noBreak.match(/`/g) ?? []).length % 2, 0);
 });
 
+test('a preview cut inside a code block ends before the block, with no stray backticks', () => {
+  const block = '```\n' + 'git -C ~/sample log --oneline   →  one commit\n'.repeat(8) + '```\n\nMore after the block.';
+  const p = previewText('Intro line.\n\n## The gap\n\n' + block, 280);
+  assert.equal(p, 'Intro line.\n\n## The gap…');
+  // a block closed before the cut is kept whole
+  const closed = previewText('Intro.\n\n```\nshort code\n```\n\n' + 'word '.repeat(80), 120);
+  assert.ok(closed.includes('```\nshort code\n```') && closed.endsWith('…'));
+  assert.equal((closed.match(/```/g) ?? []).length, 2);
+});
+
 test('an answered bubble says what was chosen, by whom, where and when', () => {
   const line = outcomeLine(d({ state: 'answered', option_n: '1', answered_by: operatorUserId(), answer_surface: 'web',
                                answered_at: '2026-10-24T17:20:00Z' }));
   assert.match(line, /^Give me scope now · answered by you · the dashboard · /);
-  assert.equal(chosenText(d({ state: 'answered', option_n: '2', answer_text: 'park them' })), '“park them”');
+  assert.equal(chosenText(d({ state: 'answered', option_n: '2', answer_text: 'park them' })), 'park them');
   assert.equal(outcomeLine(d({ state: 'withdrawn' })), 'Withdrawn by the agent');
   assert.equal(outcomeLine(d({ state: 'dismissed', answered_at: null })), 'Dismissed by you');
   assert.match(outcomeLine(d({ state: 'dismissed', answered_at: '2026-10-25T15:45:00Z' })), /^Dismissed by you · /);
@@ -58,7 +80,7 @@ test('an answered bubble says what was chosen, by whom, where and when', () => {
 test('menu answers read as a lasting line: dismissed, or the option chosen', () => {
   assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'dismiss', question: 'Proceed with the deploy?' })), 'You dismissed: Proceed with the deploy?');
   assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'answer', option_n: '1' })), 'Chose: 1 · Give me scope now');
-  assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'answer', option_n: '2', answer_text: 'do the small one' })), 'Chose: 2 — “do the small one”');
+  assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'answer', option_n: '2', answer_text: 'do the small one' })), 'Chose: 2 — do the small one');
   assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'dismiss', answered_by: 'gm', question: 'Q?' })), 'gm dismissed: Q?');
 });
 

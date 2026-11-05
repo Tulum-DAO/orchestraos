@@ -9,6 +9,7 @@
  * flashing the default until health answers; the server's answer always wins.
  */
 import { useSyncExternalStore } from 'react';
+import { isInstallAdmin } from './myRole.ts';
 
 export const DEFAULT_ASSISTANT_NAME = 'Arturo';
 export const NAME_MAX = 32;
@@ -55,10 +56,10 @@ export function named(text: string, name: string): string {
   return name === DEFAULT_ASSISTANT_NAME ? text : text.replace(/\bArturo\b/g, () => name);
 }
 
-/** Only an admin renames the assistant (it shows on every device and in its own instructions); anyone else
- *  sees the name read-only. A missing user is the single-user install, its operator. */
-export function canRename(user: { role?: string } | null | undefined): boolean {
-  return !user || user.role === 'admin';
+/** Anyone may rename the assistant for now (no per-agent ownership yet): the one place that will decide it. The
+ *  server still checks the characters, since the name goes into its instructions. */
+export function canRename(): boolean {
+  return isInstallAdmin();
 }
 
 export type NameResult = { ok: true; name: string } | { ok: false; error: string };

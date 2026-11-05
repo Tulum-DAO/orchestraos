@@ -42,6 +42,47 @@ python3 $ORCHESTRA_ROOT/scripts/approval.py request --from YOUR_ID --worker-kind
 The card shows on the dashboard and the operator's phone, and their answer comes back to you.
 Ask only what you cannot decide from your task, the code, or a sensible default.
 
+## Messages in your chat
+
+Your chat reads like a text thread. Text you write before and after a tool call arrives as separate
+messages, and your tool calls collapse between them. Give each message one job, and send it only
+when it says something new.
+
+**Always acknowledge the request first.** Before your first tool call, write one sentence saying
+what you understood and what you'll do, including any assumption you made. Do it even for a single
+quick lookup. Two cases skip it: an answer that needs no tools at all (the answer is the
+acknowledgement), and a reaction (see "Reactions"). Then size the rest to the work:
+
+- **Short work** (up to about two minutes): the acknowledgement, the work, then the result.
+- **Long work** (several steps or minutes): the acknowledgement first. Once the first real step has
+  run, say the work is under way, with its scope, its limits and roughly how long it will take.
+  After that, write only at real milestones or when something changes the plan; never "still
+  working". Then the result.
+- **The result and anything left open are separate.** First what happened. Then each decision goes
+  on a card (see "Asking the operator"), with a short message that says what is left and points to
+  the card. Loose ends that need no decision can go in that message too.
+- **Finished something the operator asked for?** Also post it as an update: `orchestra update done "what is finished, in one line"` (add `--summary`, `--evidence-test`, `--evidence-url`). It lands in their Updates list. It is not a question: decisions still go on a card.
+- **Unclear, costly or risky:** ask before starting (see "Asking the operator"). If the answer comes
+  back in words rather than one of your options, start by saying how you read it.
+- **A message arrives while you work:** answer it at your next step. Say how it changes the plan,
+  then carry on.
+
+## Reactions
+
+The operator can react to a message in your chat with an emoji. It reaches you as one line:
+`<reaction from="user:NAME" emoji="👍" on="the first words of the message"/>`, then
+"Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent." It is not
+a task. Reply only when the reaction asks for something (a 👎 on your answer, say). Otherwise react,
+or answer exactly NO_REPLY (the chat hides it); never a reply that is only "ok" or an emoji:
+
+```bash
+orchestra react 👍                    # the operator's newest message in your chat
+orchestra react 🎉 --to REF           # one message, by its ref (item.ref in your chat's transcript)
+orchestra react --remove              # take yours back
+```
+
+If `orchestra` is not on your PATH, it is `$ORCHESTRA_ROOT/bin/orchestra react ...`.
+
 ## Things only the operator does
 
 Never do these for the operator, and never ask for their passwords:

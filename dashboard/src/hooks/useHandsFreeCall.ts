@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { HandsFreeCall, isInCall } from '../lib/handsFree';
 import { VoiceSession, type CallToolEvent, type VoiceSessionStartOptions, type VoiceSessionState } from '../lib/voiceSession';
+import { useCallStore } from '../stores/callStore';
+import { askSwitchCall, useArturoCall } from '../lib/switchCall';
+import { ARTURO_ID, avatarHub } from '../components/avatar/agentState';
+import { callPartyId } from '../lib/agentCallsOn';
+import { assistantName } from '../lib/assistantName';
 
 /** Live voice mode for a composer: one HandsFreeCall (lib/handsFree.ts) plus the live
  *  captions as React state. The home composer and the Arturo pane both use it. */
@@ -32,10 +37,29 @@ export function useHandsFreeCall(ev: {
     });
   }
   useEffect(() => () => ctl.current?.dispose(), []);
+  // While this call is up the app can see it (lib/switchCall.ts): an agent's Call asks before ending it.
+  const live = isInCall(callState);
+  useEffect(() => {
+    if (!live) return;
+    const mine = { name: assistantName(), end: () => ctl.current?.end() };
+    useArturoCall.setState({ live: mine });
+    return () => { if (useArturoCall.getState().live === mine) useArturoCall.setState({ live: null }); };
+  }, [live]);
   return {
     callState, liveUser, liveArturo, inCall: isInCall(callState), muted,
     toggleMute: () => ctl.current!.toggleMute(),
-    toggle: (opts: VoiceSessionStartOptions) => ctl.current!.toggle(opts),
+    // One call at a time: with an agent's call live, starting this one asks first, and only a yes ends that call.
+    toggle: async (opts: VoiceSessionStartOptions) => {
+      const other = useCallStore.getState().call;
+      if (!ctl.current!.inCall && other) {
+        // Named for who answers it: the agent, or Arturo when the call went through him.
+        const party = callPartyId(other, ARTURO_ID);
+        const yes = await askSwitchCall(avatarHub.get(party)?.name || party, assistantName());
+        if (!yes) return;
+        useCallStore.getState().hangUp();
+      }
+      return ctl.current!.toggle(opts);
+    },
     setContext: (opts: VoiceSessionStartOptions) => ctl.current!.setContext(opts),
   };
 }

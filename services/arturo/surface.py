@@ -87,7 +87,23 @@ def readout_line(surface_path, now=None):
         human = f"{age // 60}m" if age >= 60 else f"{age}s"
         return f"OPERATOR'S SCREEN: last seen {route} {human} ago (app backgrounded)."
     hint_part = f' — "{hint}"' if hint else ""
-    return f"OPERATOR'S SCREEN: {route}{hint_part} ({age}s ago, {device})."
+    line = f"OPERATOR'S SCREEN: {route}{hint_part} ({age}s ago, {device})."
+    block = cards_text(cur)
+    return f"{line}\n{block}" if block else line
+
+
+def cards_text(cur):
+    """The cards on the operator's screen for the voice brain (the same block a dashboard text turn
+    gets), from the current device's slot, or "" when it carries none. The gateway writes the slot's
+    `cards` already clipped (watch_gateway._screen_cards); a stale slot never reaches here."""
+    cards = (cur or {}).get("cards")
+    if not isinstance(cards, dict) or not cards.get("cards"):
+        return ""
+    try:
+        from services.arturo.screen_cards import cards_block
+        return cards_block(cards) or ""
+    except Exception:  # noqa: BLE001 — no cards block, the page line alone
+        return ""
 
 
 def call_surface(surface_path, now=None):
@@ -333,10 +349,23 @@ def build_turn_context(surface_path, gw_get=None, recent_events=None, voice_call
     return blob, screen_focus
 
 
-def resolve_screen(surface_path, gw_get=None, voice_calls_dir=None, focus_path=None):
+def resolve_screen(surface_path, gw_get=None, voice_calls_dir=None, focus_path=None, now=None):
     """Mode 2 (read_screen_context tool): resolve what the operator is looking at RIGHT NOW into a
-    text blob Gemini can analyze. `gw_get`/`voice_calls_dir` are injectable for tests.
+    text blob Gemini can analyze, the cards on screen (when the slot is fresh and carries them)
+    after it. `gw_get`/`voice_calls_dir` are injectable for tests.
     Returns a human/agent-readable string. Never guesses on a dead/unknown route."""
+    out = _resolve_screen_page(surface_path, gw_get, voice_calls_dir, focus_path)
+    try:
+        cur = json.loads(Path(surface_path).read_text()).get("current") or {}
+    except Exception:
+        cur = {}
+    fresh = (now or time.time()) - (cur.get("updated_at") or 0) <= STALE_S
+    block = cards_text(cur) if fresh else ""
+    return f"{out}\n\n{block}" if block else out
+
+
+def _resolve_screen_page(surface_path, gw_get=None, voice_calls_dir=None, focus_path=None):
+    """resolve_screen's page part (unchanged)."""
     gw_get = gw_get or _gw_get
     route = _current_route(surface_path)
     kind, ident = route_kind(route)

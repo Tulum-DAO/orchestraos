@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import CallChip from '../components/call/CallChip';
+import SwitchCallDialog from '../components/call/SwitchCallDialog';
 import { createPortal } from 'react-dom';
 import { CommandPalette } from '../components/CommandPalette';
 import { Outlet, useLocation } from 'react-router-dom';
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
 import { Menu, X, Plus } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
+import { SidebarResizer } from '../components/SidebarResizer';
 import { useMatch } from 'react-router-dom';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
@@ -13,6 +16,7 @@ import { FloatingArturo } from '../components/arturo/FloatingArturo';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
+import { loadServerSettings } from '../stores/serverSettings';
 import { showArturoPill, isViewHidden, showNewAgent } from '../lib/features';
 import NotFound from '../components/NotFound';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
@@ -156,9 +160,7 @@ export function DashboardLayout() {
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
 
-  useEffect(() => {
-    initAutoDiscovery();
-  }, []);
+  useEffect(() => { initAutoDiscovery(); void loadServerSettings(); }, []);
 
   const bell = <NotificationBell />;
 
@@ -167,8 +169,9 @@ export function DashboardLayout() {
       {/* h-dvh, not h-screen: on iPhone Safari 100vh includes the strip behind the address bar, so a
           bottom-docked composer sat under it and could not be typed into (Shaw, 2026-10-11). */}
       {/* Desktop sidebar */}
-      <div className={hideDesktopSidebar ? 'hidden' : 'hidden md:block'}>
-        <Sidebar />
+      <div className={hideDesktopSidebar ? 'hidden' : 'hidden md:block relative shrink-0'}>
+        <Sidebar variant="desktop" />
+        <SidebarResizer />
       </div>
 
       {/* Mobile sidebar overlay. z 65/66: above the floating agent card (z-50, its toasts z-60), below Arturo (76). */}
@@ -185,16 +188,16 @@ export function DashboardLayout() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <Sidebar onNavigate={() => setSidebarOpen(false)} />
+        <Sidebar variant="drawer" onNavigate={() => setSidebarOpen(false)} />
       </div>
 
       {/* Main content */}
       <main className={`flex-1 min-w-0 flex flex-col safe-top safe-bottom ${isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-        {/* Mobile header with hamburger */}
-        <div ref={topbarRef} className={`dark sticky top-0 z-[25] items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden ${isChatRoute ? 'hidden' : 'flex'}`}>
+        {/* Mobile header with hamburger: it follows the theme (tone colours), so no forced dark scope here */}
+        <div ref={topbarRef} className={`sticky top-0 z-[25] items-center gap-3 border-b border-tone-800 bg-tone-950/90 backdrop-blur px-4 py-3 md:hidden ${isChatRoute ? 'hidden' : 'flex'}`}>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1 -ml-1 text-neutral-400 hover:text-white"
+            className="p-1 -ml-1 text-tone-400 hover:text-tone-white"
             aria-label="Toggle sidebar"
           >
             {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
@@ -202,16 +205,16 @@ export function DashboardLayout() {
           {/* The page's title lives HERE on a phone, not in a second row under this bar. */}
           {onAgents ? (
             <div className="flex items-center gap-1 min-w-0">
-              <span className="text-lg font-bold tracking-tight text-white">Agents</span>
+              <span className="text-lg font-bold tracking-tight text-tone-white">Agents</span>
               {showNewAgent() && (
                 <button type="button" onClick={() => window.dispatchEvent(new Event(NEW_AGENT_EVENT))} aria-label="New agent" title="New agent"
-                  className="touch-circle shrink-0 rounded-full flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800">
+                  className="touch-circle shrink-0 rounded-full flex items-center justify-center text-tone-400 hover:text-tone-white hover:bg-tone-800">
                   <Plus size={22} />
                 </button>
               )}
             </div>
           ) : (
-            <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
+            <span className="text-sm font-bold tracking-tight text-tone-white">orchestraOS</span>
           )}
           {/* Arturo's one spot, then the shared bell's phone home (portalled in below). */}
           <div className="ml-auto flex items-center gap-1">
@@ -219,6 +222,9 @@ export function DashboardLayout() {
           </div>
         </div>
         <CoachingToast />
+        {/* A live call follows you: its chip on every page but the called agent's own (that page has the call bar). */}
+        <CallChip onAgentPage={onAgentWithId?.params.id ?? null} />
+        <SwitchCallDialog />
         <HeaderEndSlotContext.Provider value={setPageBellSlot}>
         {isChatRoute ? (
           <div className="flex-1 min-h-0 flex flex-col" data-layout-chat>

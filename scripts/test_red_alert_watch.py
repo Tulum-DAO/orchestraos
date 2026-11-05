@@ -159,6 +159,8 @@ def test_resume_cmd_none_when_nothing_known():
 # --- provider ladder ---------------------------------------------------------
 
 def test_next_model_walks_the_ladder():
+    assert W.MODEL_LADDER[0] == "claude-opus-5-5[1m]"
+    assert W.next_model("claude-opus-5-5[1m]", enabled=["claude", "gemini", "codex"]) == "claude-opus-5[1m]"
     assert W.next_model("claude-opus-5[1m]", enabled=["claude", "gemini", "codex"]) == "claude-sonnet-5[1m]"
     assert W.next_model("claude-sonnet-5[1m]", enabled=["claude", "gemini", "codex"]) == "gemini"
     assert W.next_model("gemini", enabled=["claude", "gemini", "codex"]) == "codex"

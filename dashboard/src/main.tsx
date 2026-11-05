@@ -5,9 +5,11 @@ import { ThemeProvider } from './theme/ThemeProvider';
 import './index.css';
 import { loadRuntimeConfig, operatorUserId } from './lib/runtimeConfig';
 import { useConverseStore } from './stores/useConverseStore';
+import { applyStoredDisplay } from './lib/deviceSettings';
 
 // Deployment values (lib/runtimeConfig) land BEFORE the first render, so no page ever issues a
 // request under the placeholder user id. Never rejects; a missing or slow file means defaults.
+applyStoredDisplay();
 loadRuntimeConfig().then(() => {
   useConverseStore.setState({ user: operatorUserId() });
   createRoot(document.getElementById('root')!).render(

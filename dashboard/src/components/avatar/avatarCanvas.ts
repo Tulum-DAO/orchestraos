@@ -10,12 +10,13 @@
  * them changes. A shared model (one per agent, from the hub) steps once per frame however many instances
  * show it, so every animated instance of an agent is on the same clock.
  */
-import {
+import { meltFrame, meltOutline, outlineMeanRadius, MELT,
   shapeOutline, faceLayout, SHAPES, LAYOUT, statusDot, paint, dotFor, badgeFor, followAllowed, wanderAllowed,
-  STATES, FOLLOW, PHONE_MAX,
+  STATES, FOLLOW, PHONE_MAX, gesturesAllowed,
   type AvatarModel, type Pose, type Theme, type Glyph, type DotSpec, type BadgePlace, type Pt, type Role,
 } from './avatarCore';
 import { brandUrl, type ProviderId } from './brandMarks';
+import { NEUTRAL, entranceFrame, eyeOnSphere, faceSphere, ENTRANCE, type GesturePose } from './avatarGesture';
 
 const EYE = '#231F2E';
 // Cut-out ring behind the dot and the badge. It must match the surface the avatar sits on, so it reads as a
@@ -123,6 +124,7 @@ function drawBadge(ctx: CanvasRenderingContext2D, provider: string, x: number, y
   ctx.drawImage(img, x0, y0, w, h);
 }
 
+
 // One eye: a solid disc cut by a top and a bottom lid (lid model from bbot, MIT).
 // sg is -1 for the left eye, +1 for the right; +tilt drops the inner edge.
 function drawEye(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, lidT: number, lidB: number, tilt: number, sg: number, lineW: number) {
@@ -144,6 +146,37 @@ function drawEye(ctx: CanvasRenderingContext2D, x: number, y: number, r: number,
   ctx.restore();
 }
 
+// A capsule w x h centred on the origin (round ends on the shorter side).
+function capsulePath(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const r = Math.min(w, h) / 2;
+  ctx.beginPath();
+  if (h >= w) {
+    const k = h / 2 - r;
+    ctx.arc(0, -k, r, Math.PI, 0); ctx.arc(0, k, r, 0, Math.PI);
+  } else {
+    const k = w / 2 - r;
+    ctx.arc(k, 0, r, -Math.PI / 2, Math.PI / 2); ctx.arc(-k, 0, r, Math.PI / 2, Math.PI * 1.5);
+  }
+  ctx.closePath();
+}
+
+// The thinking gestures' face (avatarGesture.ts): each eye is a capsule on the surface of a sphere (centre cy, radius
+// r in body units), drawn through its tangent frame's projection so it foreshortens, tilts and narrows as the head
+// turns; the caller has clipped to the body, so eyes slide off the rim and come back from the other side.
+function drawSphereEyes(ctx: CanvasRenderingContext2D, g: GesturePose, cy: number, r: number, u: number) {
+  const A = 2 * r * u;
+  for (const sg of [-1, 1]) {
+    const e = eyeOnSphere(g, sg);
+    if (!e) continue;
+    ctx.save();
+    ctx.translate(e.x * A, cy * u + e.y * A);
+    ctx.transform(e.m[0], e.m[1], e.m[2], e.m[3], 0, 0);
+    capsulePath(ctx, g.ew * A, g.eh * A);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 export interface DrawOpts {
   theme?: Theme;
   surface?: string;
@@ -151,6 +184,8 @@ export interface DrawOpts {
   dot?: DotSpec | null;
   /** null / a placement from badgeFor */
   badge?: BadgePlace | null;
+  /** The working row's entrance (entranceFrame): the whole avatar scaled and faded about its centre. */
+  enter?: { scale: number; alpha: number } | null;
 }
 
 // size in CSS px; ctx already scaled for devicePixelRatio. Flat style: solid fills only, no gradients,
@@ -164,21 +199,51 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   const u = size * LAYOUT.u;
   const cx = size / 2, cy = size * LAYOUT.cy;
   ctx.clearRect(0, 0, size, size);
+  ctx.save();
+  if (opts.enter) {
+    ctx.globalAlpha = opts.enter.alpha;
+    ctx.translate(cx, cy); ctx.scale(opts.enter.scale, opts.enter.scale); ctx.translate(-cx, -cy);
+  }
+
+  // thinking / typing: the body itself becomes the middle dot, the side dots slide out from under it, then the
+  // dots' brightness wave (meltFrame: one melt, shared with Swift)
+  const mf = (pose.meltT || 0) > 0 ? meltFrame(pose.meltT, pose.reducedMotion) : null;
+  const R0 = mf ? outlineMeanRadius(pose.shape) : 1;
+  const sc = mf ? 1 + (MELT.dotR / R0 - 1) * mf.shrink : 1;
+  const calmK = mf ? 1 - mf.round : 1;           // breathing and tilt settle as it rounds
+  // working: the head's pose (eyes on a sphere) and the body's own scale and shift from the gesture
+  const g = !mf && pose.gesture ? pose.gesture : null;
+  const sph = faceSphere(s), gA = 2 * sph.r * u;
+  const gs = g ? g.s : 1, gdx = g ? g.dx * gA : 0, gdy = g ? g.dy * gA : 0;
+  if (mf && mf.side > 0.001) {
+    // the side dots first, so while they are small steps out they sit under the body
+    ctx.save();
+    ctx.fillStyle = ink.body;
+    const base = ctx.globalAlpha;
+    for (const [i, sg] of [[0, -1], [2, 1]] as const) {
+      ctx.globalAlpha = base * mf.lit[i];
+      ctx.beginPath(); ctx.arc(cx + (pose.dx + sg * mf.side) * u, cy + (pose.dy + mf.drop) * u, MELT.dotR * u, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
 
   ctx.save();
+  ctx.globalAlpha *= mf ? mf.lit[1] : 1;
   // rotate about the body centre (so a spin stays in the box);
   // squash/stretch anchored at the feet so breathing doesn't float
-  ctx.translate(cx + pose.dx * u, cy + pose.dy * u);
-  ctx.rotate(pose.rot);
+  ctx.translate(cx + pose.dx * u, cy + (pose.dy + (mf ? mf.drop : 0)) * u);
+  if (mf) ctx.scale(sc, sc);
+  if (g) { ctx.translate(gdx, gdy); ctx.scale(gs, gs); }
+  ctx.rotate(pose.rot * calmK);
   ctx.translate(0, s.h * u);
-  ctx.scale(pose.sx, pose.sy);
+  ctx.scale(1 + (pose.sx - 1) * calmK, 1 + (pose.sy - 1) * calmK);
   ctx.translate(0, -s.h * u);
 
   ctx.fillStyle = ink.body;
   ctx.strokeStyle = ink.body;
 
-  // antenna, same flat colour as the body
-  if (s.antenna) {
+  // antenna, same flat colour as the body (it goes as the body rounds)
+  if (s.antenna && (!mf || mf.round < 1)) {
     const top = -s.h * u * 0.98, sway = Math.sin(pose.dx * 20 + pose.lookX) * 0.12 * u;
     ctx.lineWidth = Math.max(1.2, u * 0.08);
     ctx.lineCap = 'round';
@@ -186,9 +251,17 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
     ctx.beginPath(); ctx.arc(sway + u * 0.08, top - u * 0.36, u * 0.1, 0, Math.PI * 2); ctx.fill();
   }
 
-  // flat body
-  bodyPath(ctx, shapeOutline(pose.shape), u);
+  // flat body (rounding into a circle while it melts)
+  bodyPath(ctx, mf ? meltOutline(pose.shape, mf.round) : shapeOutline(pose.shape), u);
   ctx.fill();
+
+  if (g) {
+    ctx.save();
+    ctx.clip();                                   // the body path just filled
+    ctx.fillStyle = ink.eye || EYE;
+    drawSphereEyes(ctx, g, sph.cy, sph.r, u);
+    ctx.restore();
+  }
 
   // face: two solid eyes, nothing else (placement from faceLayout, shared with Swift)
   const f = faceLayout(pose.shape, m, pose.lookX, pose.lookY);
@@ -205,7 +278,21 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   // a wink closes the second eye only, on top of any blink
   const kw = Math.max(k, Math.max(0, Math.min(1, pose.wink || 0)));
   const wT = m.lidT + (0.5 - m.lidT) * kw, wB = m.lidB + (0.5 - m.lidB) * kw;
-  f.eyes.forEach(([x, y, r], i) => drawEye(ctx, x * u, y * u, r * u, i ? wT : lidT, i ? wB : lidB, m.tilt, i ? 1 : -1, lineW));
+  if (g) { /* drawn above, on the sphere */ }
+  else if (!mf) f.eyes.forEach(([x, y, r], i) => drawEye(ctx, x * u, y * u, r * u, i ? wT : lidT, i ? wB : lidB, m.tilt, i ? 1 : -1, lineW));
+  else if (mf.eyes > 0.01) {
+    // the eyes slide together into one narrow slit, then go
+    const [l, r] = f.eyes, mx = (l[0] + r[0]) / 2, my = (l[1] + r[1]) / 2;
+    ctx.globalAlpha *= mf.eyes;
+    if (mf.slit < 1) {
+      // the lids open as they go (the reference's eyes are open pills), so the merged eye reads as one upright slit
+      const open = 1 - Math.min(1, mf.slit * 2);
+      f.eyes.forEach(([x, y, er], i) => drawEye(ctx, (x + (mx - x) * mf.slit) * u, (y + (my - y) * mf.slit) * u, er * u * (1 - 0.35 * mf.slit), lidT * open, lidB * open, m.tilt * (1 - mf.slit), i ? 1 : -1, lineW));
+    } else {
+      const er = l[2] * u;
+      ctx.beginPath(); ctx.ellipse(mx * u, my * u, er * 0.32, er * 0.95, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
   ctx.restore();
 
   ctx.restore();
@@ -215,12 +302,12 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
   const dot = opts.dot === undefined ? (pose.dot ? { color: pose.dot, glyph: size >= 40 ? pose.glyph : null } : null) : opts.dot;
   if (opts.badge) {
     const b = opts.badge;
-    drawBadge(ctx, b.provider, cx + pose.dx * u + b.x, cy + pose.dy * u + b.y, b.r, b.cut, th, surface);
+    drawBadge(ctx, b.provider, cx + pose.dx * u + gdx + b.x * gs, cy + pose.dy * u + gdy + b.y * gs, b.r, b.cut, th, surface);
   }
   if (dot) {
     const d = statusDot(pose.shape, size);
     const kk = pose.pulse != null ? 1 + 0.12 * Math.sin(Math.PI * pose.pulse) : 1;
-    drawStatusDot(ctx, dot.glyph, dot.color, cx + pose.dx * u + d.x, cy + pose.dy * u + d.y, d.r * kk, d.cut * kk, !!dot.glyph, pose.phase, surface);
+    drawStatusDot(ctx, dot.glyph, dot.color, cx + pose.dx * u + gdx + d.x * gs, cy + pose.dy * u + gdy + d.y * gs, d.r * kk, d.cut * kk, !!dot.glyph, pose.phase, surface);
   }
 
   // zzz: same ink as the eyes. White z's sit on the page, so they get a body-coloured edge to stay visible
@@ -242,6 +329,7 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, size: number, pose: Po
     }
     ctx.globalAlpha = 1;
   }
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------- ticker
@@ -258,6 +346,8 @@ interface Entry {
   canvas: HTMLCanvasElement; model: AvatarModel; size: number; dpr: number; ctx: CanvasRenderingContext2D;
   visible: boolean; drawnKey: string | null; opts: AttachOpts & { role: Role }; look: { x: number; y: number };
   hover: boolean; surface?: string; surfaceTheme: number; following?: boolean; shown?: Shown;
+  /** When this instance was attached (ms, the rAF clock): the working row's entrance runs from it. */
+  born: number;
 }
 type LaCanvas = HTMLCanvasElement & { __la?: Entry };
 
@@ -317,6 +407,11 @@ function frame(now: number) {
     if (still && e.drawnKey === key) continue;
 
     const pose = still ? model.stillPose(dozing) : sharedPose(model, dt);
+    // the thinking gestures play where the role allows them; elsewhere the working face holds the neutral capsules
+    if (pose.gesture && !still && !gesturesAllowed({ role: o.role, selected: o.selected })) pose.gesture = NEUTRAL;
+    // the working row pops in each time it mounts (not under reduced motion)
+    const age = (now - e.born) / 1000;
+    const enter = o.role === 'activity' && !model.reducedMotion && age < ENTRANCE.full ? entranceFrame(age) : null;
     // eye-follow: proximity, selected sidebar / drawer only, never while working
     if (!still) {
       const r = e.canvas.getBoundingClientRect();
@@ -347,7 +442,7 @@ function frame(now: number) {
     const shownDot = dot === undefined ? (pose.dot ? { color: pose.dot } : null) : dot;
     const badge = badgeFor({ role: o.role, shape: pose.shape, size: e.size, provider: o.provider, hover: e.hover, dot: shownDot });
     e.ctx.setTransform(e.dpr, 0, 0, e.dpr, 0, 0);
-    drawAvatar(e.ctx, e.size, pose, { theme, surface: surfaceOf(e), dot, badge });
+    drawAvatar(e.ctx, e.size, pose, { theme, surface: surfaceOf(e), dot, badge, enter });
     e.shown = { dot: shownDot, badge, following: !!e.following, look: { x: pose.lookX, y: pose.lookY }, t: model.t, blinkAt: model.blinkAt };
     if (still) e.drawnKey = key;
     drawn++;
@@ -357,11 +452,12 @@ function frame(now: number) {
 
 /** Draw `model` on `canvas` every frame (or once, when still). Returns detach(), with detach.update(opts). */
 export function attach(canvas: HTMLCanvasElement, model: AvatarModel, size: number, opts: AttachOpts = {}): (() => void) & { update: (patch: AttachOpts) => void } {
-  const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+  // at the screen's own pixel density (to 3x), so a small or large avatar stays crisp
+  const dpr = Math.min(3, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
   canvas.width = Math.round(size * dpr);
   canvas.height = Math.round(size * dpr);
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-  const e: Entry = { canvas, model, size, dpr, ctx, visible: !io, drawnKey: null, opts: { ...opts, role: opts.role ?? 'sidebar' }, look: { x: 0, y: 0 }, hover: false, surfaceTheme: -1 };
+  const e: Entry = { canvas, model, size, dpr, ctx, visible: !io, drawnKey: null, opts: { ...opts, role: opts.role ?? 'sidebar' }, look: { x: 0, y: 0 }, hover: false, surfaceTheme: -1, born: performance.now() };
   const enter = () => { e.hover = true; }, leave = () => { e.hover = false; };
   canvas.addEventListener('pointerenter', enter);
   canvas.addEventListener('pointerleave', leave);

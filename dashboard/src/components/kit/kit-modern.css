@@ -1,0 +1,24 @@
+/* The Modern style on an agent's page (components/kit/ThreadView.tsx): Arturo's look for its messages (the grey bubble
+   on the right, the flat reply at 16px, Copy under it). Its rules (.turn-user, .bubble-user, .turn-assistant .txt,
+   .reply-actions, .thinking, .turn-state) are the page's own, in arturo.css; what they read is a set of colour
+   variables scoped to Arturo's shell. The agent page's thread column carries `kit-modern`, which sets the same
+   variables, value for value, for light and for dark. */
+.kit-modern {
+  --accent:#d97757;
+  --canvas:#fff; --panel:#f7f7f7; --card:#f2f2f2; --card2:#e9e9e9; --bubble:#efefef;
+  --text:#111; --text2:#1c1b1a; --ink:0,0,0;
+  --hair:rgba(0,0,0,0.08); --grey:rgba(0,0,0,0.6); --grey2:rgba(0,0,0,0.55);
+  --t35:.55; --t40:.55; --t45:.55; --t50:.58; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
+  --shadow:rgba(0,0,0,0.08); --err:#b91c1c; --err-soft:#b91c1c;
+  --call-surface:var(--panel); --call-bubble:#fff; --call-bubble-line:var(--hair);
+}
+.dark .kit-modern {
+  --canvas:#000; --panel:#141414; --card:#1c1c1c; --card2:#232323; --bubble:#262626;
+  --text:#fff; --text2:#f1efec; --ink:255,255,255;
+  --hair:rgba(255,255,255,0.08); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38);
+  --t35:.35; --t40:.40; --t45:.45; --t50:.5; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
+  --shadow:rgba(0,0,0,0.4); --err:#ff8a8a; --err-soft:#fca5a5;
+  --call-bubble:#1c1c1c; --call-bubble-line:transparent;
+}
+/* The agent chat's column spaces its rows itself; a reply's own gap stays as on Arturo's page. */
+.kit-modern .turn-user + .turn-assistant { margin-top: 0; }

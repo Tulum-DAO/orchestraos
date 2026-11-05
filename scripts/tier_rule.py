@@ -24,6 +24,9 @@ rewritten to get there.
   no parent (blank, or the agent itself) -> T1, no reports_to
   requested T2 where the rule says T1 -> refused: a T2 needs a parent that is not T0
   requested T0 / T1 / T3              -> as requested (an explicit choice), reports_to parent if any
+  a TEST seat (`--test`)              -> T2, reports_to INTEGRATOR (the operator's main session, not a
+                                         registered seat); a parent other than the integrator, or a
+                                         tier other than T2, is refused
 
 CLI (spawn-agent.sh): tier_rule.py role --role R --tier T  -> pm | worker (role_of)
                       tier_rule.py decide <agent_id> [--parent P --parent-known 0|1
@@ -36,6 +39,8 @@ import sys
 
 TIERS = ("T0", "T1", "T2", "T3")
 ROLES = ("pm", "worker")
+#: Who a test seat reports to: the session that spawned it, never a registered seat.
+INTEGRATOR = "integrator"
 
 
 class TierRefused(ValueError):
@@ -50,6 +55,11 @@ def _tier(v) -> str:
 # A stored role that is ABSENT reads by the old tier meaning; these spellings are how "absent"
 # arrives from the readers (get_agent_field prints a JSON null as None).
 _ABSENT = ("", "none", "null")
+
+
+def is_test(row) -> bool:
+    """A test seat (spawned with --test): a short-lived throwaway, quiet to the router's pages."""
+    return isinstance(row, dict) and row.get("test") is True
 
 
 def role_of(row) -> str:
@@ -68,10 +78,17 @@ def role_of(row) -> str:
 
 
 def tier_for(agent_id: str, parent: str | None, parent_known: bool, parent_tier,
-             requested=None) -> tuple[str, str | None, str | None]:
+             requested=None, test: bool = False) -> tuple[str, str | None, str | None]:
     parent = (parent or "").strip()
     if parent == agent_id:
         parent = ""
+    if test:
+        if parent and parent != INTEGRATOR:
+            raise TierRefused(f"{agent_id}: a test seat reports to the {INTEGRATOR}, not to '{parent}'")
+        req = _tier(requested)
+        if str(requested or "").strip() and req != "T2":
+            raise TierRefused(f"{agent_id}: a test seat is a T2 worker (asked for '{requested}')")
+        return "T2", INTEGRATOR, None
     warning = None
     if parent and not parent_known:
         raise TierRefused(
@@ -109,6 +126,7 @@ def main(argv=None) -> int:
     d.add_argument("--parent-tier", default="")
     d.add_argument("--requested", default="")
     d.add_argument("--role", default="")
+    d.add_argument("--test", action="store_true", help="a test seat: T2, reports to the integrator")
     d.add_argument("--fields", action="store_true",
                    help="tier, reports_to, role, warning separated by the ASCII unit separator (0x1f)")
     r = sub.add_parser("role", help="print role_of(row) for a row's stored role and tier")
@@ -122,9 +140,12 @@ def main(argv=None) -> int:
     if role not in ROLES:
         print(f"{a.agent_id}: unknown role '{a.role}' (one of {', '.join(ROLES)})", file=sys.stderr)
         return 3
+    if a.test and role != "worker":
+        print(f"{a.agent_id}: a test seat is a worker, not a {role}", file=sys.stderr)
+        return 3
     try:
         tier, reports_to, warning = tier_for(a.agent_id, a.parent, a.parent_known == "1",
-                                             a.parent_tier, a.requested)
+                                             a.parent_tier, a.requested, test=a.test)
     except TierRefused as e:
         print(str(e), file=sys.stderr)
         return 3

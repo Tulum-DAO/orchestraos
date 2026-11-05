@@ -91,7 +91,9 @@ export function openerKind(it: any): OpenerKind {
   return 'person';
 }
 
-const isOpener = (it: any) => it?.kind === 'text' && it.role === 'user';
+// A background job's notice that arrived mid-turn (chat-transcript.ts queuedCommandItems) sits inside
+// the turn it landed in; it does not open one.
+const isOpener = (it: any) => it?.kind === 'text' && it.role === 'user' && !it.mid_turn;
 
 /**
  * Stamp `audience` (and `exchange` when known) on every item, in place, and return the list.

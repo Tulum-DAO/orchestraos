@@ -1,9 +1,9 @@
 /**
  * arturoBrain.ts: which brain Arturo's NEXT turn should use (DEC-1790669162399904 spec v4 §1.5).
  *
- * Deliberately separate from stores/modelSelection.ts, which the Agent page shares. That older
- * picker persisted choices that never reached a brain. Honouring them now would silently
- * reroute existing users, so this reads ONLY its own versioned key, and `null` means the
+ * Deliberately separate from the older shared model choice (the `orchestra.modelSelection` key, which the
+ * retired model sheet wrote). That older picker persisted choices that never reached a brain. Honouring them now
+ * would silently reroute existing users, so this reads ONLY its own versioned key, and `null` means the
  * install's default brain (nothing is sent).
  */
 import type { ArturoReply } from './arturo';

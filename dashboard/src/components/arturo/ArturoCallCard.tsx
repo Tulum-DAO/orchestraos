@@ -4,8 +4,9 @@
  * header line stays, with no box; tapping it opens the card again. Live, the header counts up and the
  * caption being spoken shows faded at the end.
  *
- * Arturo's page only. Its colours are Arturo's own variables (arturo.css), so light and dark come from the same
- * rules and the bubbles match Arturo's typed ones; agent chats keep their VoiceCallCard as it is.
+ * Arturo's page and the Arturo pane (ArturoPill), so a call reads the same in both. Its colours are Arturo's own
+ * variables (arturo.css; the pane sets its own dark set), so light and dark come from the same rules and the
+ * bubbles match Arturo's typed ones; agent chats keep their VoiceCallCard as it is.
  *
  * The turns come from the thread itself (a call's turns are stored there, mode "voice"), so nothing is fetched
  * to draw them. The saved call record is read only for the exact call length, and for the turns when the
@@ -13,7 +14,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, MoreHorizontal, ThumbsDown, ThumbsUp, X } from 'lucide-react';
-import ToolRun from './ToolRun';
+import ToolCalls from '../chat/ToolCalls';
+import { fromPart } from '../../lib/toolCalls';
 import { groupParts, hasToolParts, type TurnPart } from '../../lib/turnParts';
 import { fetchVoiceCall, type VoiceCall } from '../../lib/api';
 import { fmtClock, transcriptText } from '../../lib/arturoCallGroups';
@@ -157,7 +159,7 @@ export function ArturoCallCard({ callId, turns, live, startTs, endTs, liveSince,
           ? <div key={i} className="call-bubble user">{t.text}</div>
           : hasToolParts(t.parts)
             ? groupParts(t.parts!).map((g, gi) => g.kind === 'tools'
-                ? <div key={`${i}-${gi}`} className="call-tools"><ToolRun tools={g.tools} /></div>
+                ? <div key={`${i}-${gi}`} className="call-tools"><ToolCalls calls={g.tools.map(fromPart)} /></div>
                 : g.text.trim() ? <div key={`${i}-${gi}`} className="call-bubble arturo">{g.text}</div> : null)
             : t.text.trim() ? <div key={i} className="call-bubble arturo">{t.text}</div> : null)}
         {liveUser && <div className="call-bubble user is-partial">{liveUser}…</div>}

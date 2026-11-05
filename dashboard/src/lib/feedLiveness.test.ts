@@ -74,7 +74,7 @@ test('a NOT-LIVE surface never keeps the cached colour or the pulse', () => {
   for (const ageMs of [STALE_AFTER_MS, 60_000, DISCONNECTED_AFTER_MS, 3_600_000]) {
     const style = staleStyleFor(at(ageMs));
     assert.ok(style, `age ${ageMs} produced no stale style`);
-    assert.equal(style!.dot, 'bg-neutral-600');
+    assert.equal(style!.dot, 'bg-tone-600');
     assert.ok(!/animate-pulse|amber|orange|blue|green/.test(style!.dot), `stale dot kept a live colour: ${style!.dot}`);
     assert.match(style!.label, /last seen \d\d:\d\d/);
   }
@@ -154,7 +154,7 @@ test('UPDATING paints the last-known colour DIMMED, without the pulse, and says 
   assert.match(s.dot, /opacity-40/);
   assert.doesNotMatch(s.dot, /animate-pulse/);
   assert.match(s.label, /status updating…$/);
-  assert.notEqual(s.dot, 'bg-neutral-600');
+  assert.notEqual(s.dot, 'bg-tone-600');
   // control: live is untouched, and updatingStyleFor says nothing about other states
   assert.deepEqual(styleForAgentState(feedHealthOf({ dataUpdatedAt: NOW, hasData: true, now: NOW }), WORKING), WORKING);
   assert.equal(updatingStyleFor({ health: 'live' }, WORKING), undefined);
@@ -164,7 +164,7 @@ test('a FAILING fetch still greys, hidden tab or not', () => {
   // errored after coming back
   const err = feedHealthOf({ dataUpdatedAt: NOW - TEN_MIN, hasData: true, isError: true, visibleSince: NOW - 2_000, now: NOW });
   assert.ok(isDegraded(err));
-  assert.equal(staleStyleFor(err)?.dot, 'bg-neutral-600');
+  assert.equal(staleStyleFor(err)?.dot, 'bg-tone-600');
   // errored on fresh data: stale, not disconnected
   assert.equal(feedHealthOf({ dataUpdatedAt: NOW - 5_000, hasData: true, isError: true, now: NOW }).health, 'stale');
 });

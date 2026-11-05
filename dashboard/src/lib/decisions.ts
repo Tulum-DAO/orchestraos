@@ -9,7 +9,7 @@
  */
 import type { GroupedNode } from './toolGroups';
 import type { MenuOption } from './menuAnswer';
-import { operatorUserId } from './runtimeConfig';
+import { operatorUserId } from './runtimeConfig.ts';
 
 export type DecisionState = 'pending' | 'answered' | 'expired' | 'withdrawn' | 'dismissed' | 'superseded' | string;
 
@@ -72,9 +72,10 @@ export function chosenText(d: Decision): string {
   const opt = d.option_n ? (d.menu?.options || []).find((o) => o.n === d.option_n) : undefined;
   const label = opt && !/write-in|other/i.test(opt.label) ? opt.label : '';
   const text = (d.answer_text || '').trim();
-  if (label && text) return `${label} — “${text}”`;
+  // Typed words are shown as plain text, never in quotes.
+  if (label && text) return `${label} — ${text}`;
   if (label) return label;
-  if (text) return `“${text}”`;
+  if (text) return text;
   if (d.answer === 'approve') return 'Approved';
   if (d.answer === 'deny') return 'Denied';
   return d.answer || 'Answered';
@@ -89,7 +90,7 @@ export function menuAnswerLine(d: Decision): string {
   const opt = d.option_n ? (d.menu?.options || []).find((o) => o.n === d.option_n) : undefined;
   const text = (d.answer_text || '').trim();
   const label = opt?.label && !(text && /write-in|other|type something/i.test(opt.label)) ? ` · ${opt.label}` : '';
-  return `${who}Chose: ${d.option_n ?? '?'}${label}${text ? ` — “${text}”` : ''}`;
+  return `${who}Chose: ${d.option_n ?? '?'}${label}${text ? ` — ${text}` : ''}`;
 }
 
 /** How fast an answer reached its agent: "delivered in 2s", "delivery held" while it waits, '' when
@@ -121,14 +122,20 @@ export function decisionTone(d: Decision): DecisionTone {
 
 /** The line an answered (or closed) bubble shows instead of its buttons: one compact row, the
  *  choice · who answered · where · when · how fast it reached the agent. */
+/** Who answered, where, when and how fast it reached the agent: "Answered by you · the dashboard · 10:42". */
+export function answeredByLine(d: Decision): string {
+  // answered_by is the answering principal: this install's operator (you), or an agent answering its own gate
+  const who = !d.answered_by || d.answered_by === operatorUserId() ? 'you' : d.answered_by;
+  const where = d.answer_surface && SURFACE[d.answer_surface] ? ` · ${SURFACE[d.answer_surface]}` : '';
+  const when = clock(d.answered_at);
+  const speed = deliveryText(d);
+  return `Answered by ${who}${where}${when ? ` · ${when}` : ''}${speed ? ` · ${speed}` : ''}`;
+}
+
 export function outcomeLine(d: Decision): string {
   if (d.state === 'answered') {
-    // answered_by is the answering principal: this install's operator (you), or an agent answering its own gate
-    const who = !d.answered_by || d.answered_by === operatorUserId() ? 'you' : d.answered_by;
-    const where = d.answer_surface && SURFACE[d.answer_surface] ? ` · ${SURFACE[d.answer_surface]}` : '';
-    const when = clock(d.answered_at);
-    const speed = deliveryText(d);
-    return `${chosenText(d)} · answered by ${who}${where}${when ? ` · ${when}` : ''}${speed ? ` · ${speed}` : ''}`;
+    const by = answeredByLine(d);
+    return `${chosenText(d)} · a${by.slice(1)}`;
   }
   if (d.state === 'expired') return `Expired unanswered${d.expires_at ? ` · ${clock(d.expires_at)}` : ''}`;
   if (d.state === 'withdrawn') return 'Withdrawn by the agent';
@@ -162,12 +169,17 @@ export function anchorIndex(nodes: GroupedNode[], d: Decision): number {
   return i;
 }
 
-/** The conversation with each decision placed at its anchor (anchorIndex), in filing order. */
-export function interleave(nodes: GroupedNode[], decisions: Decision[]): FeedEntry[] {
+/** The conversation with each decision placed at its anchor (anchorIndex), in filing order.
+ *  `cutAbove`: the nodes start partway through the thread (older pages not read yet). A card filed before the first
+ *  of them that none of them names belongs up there, so it waits above everything (not at the end of the first turn shown, from where it
+ *  would jump up past what the reader is looking at when its page lands). */
+export function interleave(nodes: GroupedNode[], decisions: Decision[], { cutAbove = false } = {}): FeedEntry[] {
   const after = new Map<number, Decision[]>();
   const ds = [...decisions].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const firstTs = cutAbove ? nodes.map(nodeTs).find((t) => t > -Infinity) : undefined;
   for (const d of ds) {
-    const k = anchorIndex(nodes, d);
+    const named = nodes.findIndex((n) => n.kind === 'assistant' && (n as { text?: string }).text?.includes(d.id));
+    const k = named < 0 && firstTs !== undefined && Date.parse(d.created_at) < firstTs ? -1 : anchorIndex(nodes, d);
     after.set(k, [...(after.get(k) ?? []), d]);
   }
   const out: FeedEntry[] = [];
@@ -188,6 +200,8 @@ export function previewText(text: string, max = 280): string {
   if (cut < max / 3) cut = t.lastIndexOf(' ', max);
   if (cut < max / 3) cut = max;
   let out = t.slice(0, cut).trimEnd();
+  const fences = [...out.matchAll(/^[ \t]*(```|~~~)/gm)];
+  if (fences.length % 2 === 1) out = out.slice(0, fences[fences.length - 1].index).trimEnd();   // cut inside a code block: end before it
   for (const mark of ['**', '`']) {
     const parts = out.split(mark);
     if (parts.length % 2 === 0) out = parts.slice(0, -1).join(mark).trimEnd();   // an unclosed one: drop it

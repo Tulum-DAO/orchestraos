@@ -1,0 +1,106 @@
+/* The panel kit: the bar, rows, fields and notes that Settings (components/settings) and the agent panel
+   (components/arturo/ArturoPanel and its pages) are both drawn with, and the colour variables they read.
+   Neutral names (panel-*), so nothing Arturo-named appears in Settings. Arturo's own drawer pieces (its scrim, drawer
+   and sheet, facts, jobs, threads, pills, history) stay in arturo.css.
+
+   Colours are variables, set twice: light here, dark under .dark (the app's Appearance choice). The dark set
+   is the original palette, value for value. Scoped to the shell, not :root, because --card and --accent are
+   also app-wide theme tokens that Arturo shadows inside its own page.
+   --ink is the colour translucent fills, lines and greys are made of (white on dark, black on light), so
+   rgba(var(--ink), a) keeps each dark alpha exactly; --tNN are text alphas, the same numbers in dark and
+   raised in light where black at that alpha would fall below WCAG AA (4.5:1) on Arturo's light surfaces. */
+/* The variables also go on .agent-panel-host: the agent panel (ArturoPanel) opens on every agent page, outside
+   Arturo's shell, and needs the same colours there. */
+.arturo-shell, .agent-panel-host{
+  --accent:#d97757;
+  --canvas:#fff; --panel:#f7f7f7; --card:#f2f2f2; --card2:#e9e9e9; --bubble:#efefef;
+  --text:#111; --text2:#1c1b1a; --greet:#2a2724; --ink:0,0,0;
+  --hair:rgba(0,0,0,0.08); --hair-top:var(--border); --grey:rgba(0,0,0,0.6); --grey2:rgba(0,0,0,0.55);
+  --t35:.55; --t40:.55; --t45:.55; --t50:.58; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
+  --shadow:rgba(0,0,0,0.08); --send-bg:#111; --send-fg:#fff; --err:#b91c1c; --err-soft:#b91c1c;
+  --arturo-line:#e2e2e2; --arturo-raise:#f7f7f7; --arturo-line-hi:#cfcfcf;
+  --call-surface:var(--panel); --call-bubble:#fff; --call-bubble-line:var(--hair);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable","Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.dark .arturo-shell, .dark .agent-panel-host, .arturo-onboard-shell{
+  --canvas:#000; --panel:#141414; --card:#1c1c1c; --card2:#232323; --bubble:#262626;
+  --text:#fff; --text2:#f1efec; --greet:#ece7e2; --ink:255,255,255;
+  --hair:rgba(255,255,255,0.08); --hair-top:rgba(255,255,255,0.1); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38);
+  --t35:.35; --t40:.40; --t45:.45; --t50:.5; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
+  --shadow:rgba(0,0,0,0.4); --send-bg:#fff; --send-fg:#111; --err:#ff8a8a; --err-soft:#fca5a5;
+  --arturo-line:#2a2a2a; --arturo-raise:#171717; --arturo-line-hi:#3a3a3a;
+  --call-bubble:#1c1c1c; --call-bubble-line:transparent;
+}
+
+.panel-icon{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; color:var(--foreground); background:none; border:0; border-radius:10px; }
+@media (hover:hover){ button.panel-icon:hover{ background:var(--muted); } }
+.panel-body{ flex:1 1 auto; min-height:0; overflow-y:auto; padding:14px 16px 24px; }
+.panel-empty{ font-size: calc(13px * var(--ui-text-scale, 1)); color:var(--grey2); margin:6px 0; }
+.panel-section{ font-size: calc(12px * var(--ui-text-scale, 1)); font-weight:600; color:var(--grey); text-transform:uppercase; letter-spacing:.06em; margin:4px 0 8px; }
+.panel-section:not(:first-child){ margin-top:20px; }
+.panel-done{ background:none; border:0; color:var(--text); font-size: calc(15px * var(--ui-text-scale, 1)); font-weight:600; font-family:inherit; padding:0 12px; height:44px; border-radius:10px; }
+.panel-list{ margin-top:12px; border-top:1px solid var(--hair); }
+.panel-row{ width:100%; height:52px; min-height:52px; display:flex; align-items:center; justify-content:space-between; background:none; border:0; border-bottom:1px solid var(--hair); color:var(--text); font-size: calc(15.5px * var(--ui-text-scale, 1)); font-family:inherit; padding:0 2px; text-align:left; }
+.panel-row svg{ color:var(--grey2); }
+/* One bar for every page: back (or nothing) at the left, the page's name centred, close at the right. */
+.panel-bar{ height:53px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px; border-bottom:1px solid var(--hair); }
+.panel-title{ font-size: calc(16px * var(--ui-text-scale, 1)); font-weight:600; margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.panel-bar > :last-child{ min-width:36px; }
+.panel-input{ flex:1 1 auto; min-width:0; background:var(--card); border:1px solid var(--hair); border-radius:10px; color:var(--text); font:inherit; font-size: max(var(--field-min, 0px), calc(14px * var(--ui-text-scale, 1))); padding:8px 10px; outline:0; }
+.panel-input:focus{ border-color:rgba(var(--ink),0.3); }
+.panel-textarea{ display:block; width:100%; box-sizing:border-box; min-height:64px; resize:vertical; line-height:1.4; }
+.panel-primary{ flex:0 0 auto; background:#2563eb; color:#fff; border:0; border-radius:10px; padding:0 14px; min-height:36px; font:inherit; font-size: calc(14px * var(--ui-text-scale, 1)); font-weight:600; cursor:pointer; }
+.panel-primary:hover{ background:#3b82f6; }
+.panel-primary:disabled{ opacity:0.4; cursor:default; background:#2563eb; }
+.panel-link{ background:none; border:0; color:var(--grey); font:inherit; font-size: calc(12.5px * var(--ui-text-scale, 1)); padding:4px 8px; border-radius:8px; cursor:pointer; }
+.panel-link:hover{ color:var(--text); background:var(--card); }
+.panel-link:disabled{ opacity:0.4; }
+.panel-error{ font-size: calc(13px * var(--ui-text-scale, 1)); color:var(--err-soft); margin:6px 0; }
+/* Settings: a label at the left, its value at the right, one 52px row each. */
+.panel-field{ min-height:52px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--hair); font-size: calc(15px * var(--ui-text-scale, 1)); padding:0 2px; }
+.panel-value{ min-width:0; max-width:60%; background:none; border:0; color:var(--grey); font:inherit; font-size: calc(15px * var(--ui-text-scale, 1)); text-align:right; outline:0; padding:6px 0; }
+.panel-value:focus{ color:var(--text); }
+select.panel-value{ cursor:pointer; text-align-last:right; font-size: max(var(--field-min, 0px), calc(15px * var(--ui-text-scale, 1))); }
+select.panel-value option{ background:var(--panel); color:var(--text); }
+.panel-swatch{ width:32px; height:32px; padding:0; border:1px solid var(--hair); border-radius:8px; background:none; cursor:pointer; }
+/* Each row's current value, grey at the right before the chevron; it gives way (ellipsis) before the label does. */
+.panel-row{ gap:12px; }
+.panel-row > span:first-child{ flex:0 0 auto; }
+.panel-rowend{ display:flex; align-items:center; gap:6px; min-width:0; }
+.panel-rowvalue{ min-width:0; color:var(--grey); font-size: calc(15px * var(--ui-text-scale, 1)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.panel-row:disabled{ color:var(--grey2); cursor:default; }
+.panel-row:disabled .panel-rowvalue{ color:var(--grey2); }
+.panel-note{ font-size: calc(13px * var(--ui-text-scale, 1)); line-height:1.45; color:var(--grey); margin:12px 2px 0; }
+/* Voice: the check marks the provider and the voice in use, in the primary-action blue. */
+.panel-list-tight{ margin-top:0; }
+.panel-check, .panel-row .panel-check{ flex:0 0 auto; color:#3b82f6; }
+.panel-field.is-disabled{ color:var(--grey2); }
+.panel-section + .panel-list, .panel-section + .panel-error{ margin-top:0; }
+/* A voice row someone without admin rights sees: readable at full strength, just not tappable. */
+.panel-row.panel-choice:disabled{ color:var(--text); }
+
+/* A slider of named stops (components/kit/StopSlider.tsx: the model picker's Effort), drawn like Settings › General ›
+   Text size (settings.css .settings-textsize): a 4px line, a dot per stop, a round white thumb. In the app-wide tone
+   tokens, not the shell's, because the picker opens in a portal outside any panel shell. `.is-unset`: no stop chosen
+   (the CLI's default), the thumb hollow. */
+.panel-stops{ --thumb:20px; --track-h:32px; position:relative; display:block; flex:1 1 auto; min-width:96px; height:var(--track-h); }
+.panel-stops-line{ position:absolute; left:calc(var(--thumb) / 2); right:calc(var(--thumb) / 2); top:50%; height:4px; margin-top:-2px;
+  border-radius:2px; background:var(--tone-800); pointer-events:none; }
+.panel-stops-tick{ position:absolute; top:50%; left:calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--tick)); width:6px; height:6px;
+  margin:-3px 0 0 -3px; border-radius:50%; background:var(--tone-600); pointer-events:none; }
+.panel-stops-input{ position:relative; z-index:1; display:block; width:100%; height:100%; margin:0; padding:0; background:transparent;
+  -webkit-appearance:none; appearance:none; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+.panel-stops-input:focus{ outline:none; }
+.panel-stops-input::-webkit-slider-runnable-track{ height:var(--track-h); background:transparent; border:0; }
+.panel-stops-input::-moz-range-track{ height:var(--track-h); background:transparent; border:0; }
+.panel-stops-input::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:var(--thumb); height:var(--thumb);
+  margin-top:calc((var(--track-h) - var(--thumb)) / 2); border-radius:50%; background:#fff; border:0.5px solid rgba(0,0,0,0.12);
+  box-shadow:0 1px 4px rgba(0,0,0,0.3); }
+.panel-stops-input::-moz-range-thumb{ width:var(--thumb); height:var(--thumb); border-radius:50%; background:#fff;
+  border:0.5px solid rgba(0,0,0,0.12); box-shadow:0 1px 4px rgba(0,0,0,0.3); }
+.panel-stops-input:focus-visible::-webkit-slider-thumb{ box-shadow:0 1px 4px rgba(0,0,0,0.3), 0 0 0 3px var(--popover), 0 0 0 5px var(--tone-300); }
+.panel-stops-input:focus-visible::-moz-range-thumb{ box-shadow:0 1px 4px rgba(0,0,0,0.3), 0 0 0 3px var(--popover), 0 0 0 5px var(--tone-300); }
+.panel-stops.is-unset .panel-stops-input::-webkit-slider-thumb{ background:var(--popover); border:2px solid var(--tone-600); box-shadow:none; }
+.panel-stops.is-unset .panel-stops-input::-moz-range-thumb{ background:var(--popover); border:2px solid var(--tone-600); box-shadow:none; }
+@media (pointer:coarse){ .panel-stops{ --thumb:24px; --track-h:44px; } }

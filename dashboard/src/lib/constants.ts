@@ -29,18 +29,18 @@ export const VOICE_AGENT_PENDING_ID = 'PENDING_ELEVENLABS_AGENT_ID';
 
 export const DEPLOYMENT_STATES = ['dev', 'testing', 'vetted', 'staged', 'production'] as const;
 export const DEPLOYMENT_COLORS: Record<string, string> = {
-  dev: 'bg-neutral-700 text-neutral-400',
-  testing: 'bg-blue-500/15 text-blue-400',
-  vetted: 'bg-amber-500/15 text-amber-400',
-  staged: 'bg-purple-500/15 text-purple-400',
-  production: 'bg-green-500/15 text-green-400',
+  dev: 'bg-tone-700 text-tone-400',
+  testing: 'bg-blue-500/15 text-tone-blue-400',
+  vetted: 'bg-amber-500/15 text-tone-amber-400',
+  staged: 'bg-purple-500/15 text-tone-purple-400',
+  production: 'bg-green-500/15 text-tone-green-400',
 };
 
 export const APPROVAL_CATEGORY_COLORS: Record<string, string> = {
-  external_comms: 'bg-purple-500/20 text-purple-300',
-  deployment: 'bg-blue-500/20 text-blue-300',
-  financial: 'bg-red-500/20 text-red-300',
-  destructive: 'bg-red-600/20 text-red-200',
-  git_push: 'bg-neutral-700 text-neutral-300',
-  client_contact: 'bg-amber-500/20 text-amber-300',
+  external_comms: 'bg-purple-500/20 text-tone-purple-300',
+  deployment: 'bg-blue-500/20 text-tone-blue-300',
+  financial: 'bg-red-500/20 text-tone-red-300',
+  destructive: 'bg-red-600/20 text-tone-red-200',
+  git_push: 'bg-tone-700 text-tone-300',
+  client_contact: 'bg-amber-500/20 text-tone-amber-300',
 };

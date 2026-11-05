@@ -319,3 +319,26 @@ def test_armed_retire_ignores_a_stale_flat_row_for_the_tmux_target(tmp_path, mon
     (data / "registry.json").write_text(json.dumps(stale))      # the projection lags with a wrong row
     SE.retire_seat(st, "grok-gm", reason="again")
     assert _kills(tlog)[-1:] == ["kill-session -t =grok-gm-real"]
+
+
+def test_retire_forgets_the_seats_effort_so_a_reused_name_starts_on_the_default(box, tmp_path, monkeypatch):
+    _fake_tmux(tmp_path, monkeypatch)
+    _seed(box.data)
+    f = box.data / "state" / "agent-efforts.json"
+    monkeypatch.setenv("AGENT_EFFORT_FILE", str(f))
+    f.write_text(json.dumps({"efforts": {"grok-gm": "max", "other": "low"}}))
+    assert M.main(["retire", "grok-gm", "--yes"]) == 0
+    assert json.loads(f.read_text()) == {"efforts": {"other": "low"}}
+
+
+
+def test_retire_forgets_the_level_by_the_seats_lineage_root(box, tmp_path, monkeypatch):
+    _fake_tmux(tmp_path, monkeypatch)
+    row = _seed(box.data, seat="w-g3")
+    row["lineage_root"] = "w"
+    (box.data / "registry.json").write_text(json.dumps({"agents": {"w-g3": row}}))
+    f = box.data / "state" / "agent-efforts.json"
+    monkeypatch.setenv("AGENT_EFFORT_FILE", str(f))
+    f.write_text(json.dumps({"efforts": {"w": "max", "w-g3": "low"}}))
+    assert M.main(["retire", "w-g3", "--yes"]) == 0
+    assert "w" not in json.loads(f.read_text())["efforts"]

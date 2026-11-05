@@ -1,0 +1,172 @@
+/**
+ * toolCalls.ts — one tool call as the shared tool card (components/kit/ToolCard.tsx) draws it, whoever ran it.
+ *
+ * Arturo's stream sends ToolParts (name, a one-line argument summary, ok or failed, a short result); an agent's
+ * transcript sends ToolBlocks (the full input and result, start and end times). Both become a ToolCallView, so
+ * Arturo's page and every agent chat draw the same card: the agent chat's detail (how long the turn worked, the
+ * todo list, file chips, the whole input and output) with Arturo's per-tool icons and running rows.
+ */
+import type { ToolBlock } from './transcript';
+import { shortPath, toolSummary, toolFilePath } from './transcript';
+import type { ToolPart, ToolStatus } from './turnParts';
+import { toolChip, toolLabel, toolResultLines } from './toolDisplay';
+import { todoItems, isCommandTool, type TodoItem } from './toolCardDetail';
+import { summarizeTurn, formatDuration, type WorkItem } from './toolGroups';
+
+export interface ToolCallView {
+  id: string;
+  /** The tool call's own id (tool_use id), when the source has it: a background job it launched is matched by it. */
+  toolUseId?: string;
+  name: string;
+  status: ToolStatus;
+  /** The arguments as one line of words. */
+  chip: string;
+  /** The file the call read or wrote, when there is one: shown as a chip that copies the path. */
+  filePath?: string;
+  /** The whole input, when the source has it (an agent's transcript). */
+  input?: Record<string, unknown>;
+  result: string;
+  ts?: string;
+  endTs?: string;
+  todos: TodoItem[];
+  /** One of Arturo's own tools: its result is shown without the sentences written to the model. */
+  arturo: boolean;
+}
+
+/** A todo list's one line ("3 todos · 1 done"): the list itself opens below the row. */
+function todoChip(todos: TodoItem[]): string {
+  const done = todos.filter((t) => t.status === 'completed').length;
+  return `${todos.length} todo${todos.length === 1 ? '' : 's'}${done ? ` · ${done} done` : ''}`;
+}
+
+export function fromBlock(b: ToolBlock): ToolCallView {
+  const todos = todoItems(b);
+  return {
+    id: b.key,
+    ...(b.id ? { toolUseId: b.id } : {}),
+    name: b.tool,
+    status: b.isError ? 'failed' : b.result === undefined ? 'running' : 'ok',
+    chip: todos.length ? todoChip(todos) : toolSummary(b.tool, b.input),
+    ...(toolFilePath(b.tool, b.input) ? { filePath: toolFilePath(b.tool, b.input)! } : {}),
+    input: b.input,
+    result: b.result ?? '',
+    ...(b.ts ? { ts: b.ts } : {}),
+    ...(b.resultTs ? { endTs: b.resultTs } : {}),
+    todos,
+    arturo: false,
+  };
+}
+
+export function fromPart(p: ToolPart): ToolCallView {
+  return { id: p.callId, name: p.name, status: p.status, chip: toolChip(p.argsSummary), result: p.summary ?? '', todos: [], arturo: true };
+}
+
+export function workItem(c: ToolCallView): WorkItem {
+  return { tool: c.name, status: c.status, ...(c.filePath ? { path: c.filePath } : {}),
+           ...(c.ts ? { ts: c.ts } : {}), ...(c.endTs ? { endTs: c.endTs } : {}) };
+}
+
+/** The tool's name as the card says it: Arturo's tools in plain words, an agent CLI's tools as the CLI names them
+ *  ("Bash", "TodoWrite"), anything else as a sentence. */
+export function callLabel(name: string): string {
+  const plain = toolLabel(name);
+  return plain !== name && /[a-z]_/.test(name) ? plain : /[A-Z]/.test(name) ? name : plain;
+}
+
+export type IconKey = 'terminal' | 'read' | 'edit' | 'search' | 'web' | 'agent' | 'message' | 'list' | 'todo' | 'note'
+  | 'map' | 'image' | 'tool';
+
+const ICON_BY_NAME: Record<string, IconKey> = {
+  // Arturo
+  list_agents: 'list', query_roadmap: 'map', spawn_agent: 'agent', kill_agent: 'agent', send_telegram: 'message',
+  inject_message: 'message', agent_message: 'message', gm_command: 'message', ask_gm: 'message', async_task: 'agent',
+  read_file: 'read', read_agent_conversation: 'read', get_agent_output: 'read', run_command: 'terminal', research: 'web',
+  knowledge: 'search', remember_note: 'note', look_at_image: 'image',
+  // agent CLIs (lower-cased)
+  bash: 'terminal', exec: 'terminal', exec_command: 'terminal', shell: 'terminal', run_shell_command: 'terminal',
+  read: 'read', view_file: 'read', read_many_files: 'read', notebookread: 'read',
+  edit: 'edit', write: 'edit', multiedit: 'edit', notebookedit: 'edit', apply_patch: 'edit', write_file: 'edit',
+  replace: 'edit', replace_file_content: 'edit', write_to_file: 'edit',
+  grep: 'search', glob: 'search', search_file_content: 'search', find_by_name: 'search', grep_search: 'search', toolsearch: 'search',
+  webfetch: 'web', websearch: 'web', web_fetch: 'web', google_web_search: 'web', read_url_content: 'web', search_web: 'web',
+  task: 'agent', agent: 'agent', todowrite: 'todo', todoread: 'todo', askuserquestion: 'message', skill: 'note',
+};
+
+export function iconKey(name: string): IconKey {
+  return ICON_BY_NAME[name] ?? ICON_BY_NAME[name.toLowerCase()] ?? 'tool';
+}
+
+/** What the card shows when a row opens: the todo list, the input when the one-line chip cannot hold it, and the
+ *  result (Arturo's without sentences meant for the model). Nothing to show = the row does not open. */
+export function callDetail(c: ToolCallView): { todos: TodoItem[]; input: string | null; resultLines: string[] | null; resultText: string } {
+  const inputStr = c.input && Object.keys(c.input).length ? JSON.stringify(c.input, null, 2) : '';
+  // The chip already says a short input in full; a command's chip is its command, so its input adds nothing.
+  const input = inputStr && inputStr.length > 200 && !isCommandTool(c.name) && !c.todos.length ? inputStr : null;
+  return {
+    todos: c.todos,
+    input,
+    resultLines: c.arturo ? toolResultLines(c.result) : null,
+    resultText: c.arturo ? '' : c.result,
+  };
+}
+
+export function hasDetail(c: ToolCallView): boolean {
+  if (c.status === 'running') return false;
+  const d = callDetail(c);
+  return d.todos.length > 0 || !!d.input || (d.resultLines ? d.resultLines.length > 0 : d.resultText.length > 0);
+}
+
+/** The run's one-line header: "Worked for 1m 8s", "Working", "Stopped after 9s", and what it did. */
+export function runSummary(calls: ToolCallView[], interrupted = false): {
+  lead: string; headline: string; tone: 'running' | 'stopped' | 'failed' | 'done';
+} {
+  const s = summarizeTurn(calls.map(workItem), { interrupted });
+  const dur = s.durationMs !== undefined ? formatDuration(s.durationMs) : '';
+  const lead = s.running > 0 ? 'Working'
+    : s.interrupted > 0 ? (dur ? `Stopped after ${dur}` : 'Stopped')
+    : (dur ? `Worked for ${dur}` : 'Worked');
+  const tone = s.running > 0 ? 'running' : s.interrupted > 0 ? 'stopped'
+    : s.failed > 0 && s.failed === calls.length ? 'failed' : 'done';
+  return { lead, headline: s.headline, tone };
+}
+
+/** Bubbles' thin line for one call (components/kit/ToolCard.tsx ToolLines): the tool's name and a short summary of
+ *  what it was given (a file as its short path). */
+export function callLine(c: ToolCallView): { label: string; detail: string } {
+  return { label: callLabel(c.name), detail: c.filePath ? shortPath(c.filePath) : c.chip };
+}
+
+/** What a call's code block shows, and what its Copy takes: the input as written (a command as `$ command`, a todo
+ *  list as its marks, anything else as its JSON, Arturo's as its argument words) and what came back (Arturo's
+ *  without the sentences meant for the model). */
+export function callCode(c: ToolCallView): { input: string; output: string; copy: string } {
+  const inp = c.input ?? {};
+  const input = c.todos.length
+    ? c.todos.map((t) => `${t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : '○'} ${t.content}`).join('\n')
+    : isCommandTool(c.name) && typeof inp.command === 'string' ? `$ ${inp.command}`
+    : Object.keys(inp).length ? JSON.stringify(inp, null, 2)
+    : c.chip;
+  const output = c.arturo ? toolResultLines(c.result).join('\n') : c.result;
+  return { input, output, copy: [input, output].filter(Boolean).join('\n\n') };
+}
+
+/** The call a run is on right now (its live step: the last one still going), or none; an interrupted run has none. */
+export function liveCall(calls: ToolCallView[], interrupted = false): ToolCallView | undefined {
+  if (interrupted) return undefined;
+  for (let i = calls.length - 1; i >= 0; i--) if (calls[i].status === 'running') return calls[i];
+  return undefined;
+}
+
+/** When a run happened, for its thin line (kit/ToolCard.tsx): when its first call started and, once it is over and
+ *  took more than a minute, when its last one ended. Calls with no time (a runtime that does not say) are left out;
+ *  none with a time: null, never a guess. */
+export function runTimes(calls: ToolCallView[]): { start: string; end?: string } | null {
+  const ms = (t?: string) => (t ? Date.parse(t) : NaN);
+  const starts = calls.filter((c) => Number.isFinite(ms(c.ts)));
+  if (!starts.length) return null;
+  const first = starts.reduce((a, c) => (ms(c.ts) < ms(a.ts) ? c : a));
+  if (calls.some((c) => c.status === 'running')) return { start: first.ts! };
+  let end: string | undefined;
+  for (const c of calls) for (const t of [c.ts, c.endTs]) if (Number.isFinite(ms(t)) && (!end || ms(t) > ms(end))) end = t;
+  return end && ms(end) - ms(first.ts) > 60_000 ? { start: first.ts!, end } : { start: first.ts! };
+}

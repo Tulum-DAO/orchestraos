@@ -239,9 +239,22 @@ def _gm_state():
     return wt.build_gm_state(st, last_event_type=last)
 
 
+def _gm_headless():
+    """gm's seat id when it runs headless (its pane holds the supervisor), else None."""
+    from scripts import gateway_deliver
+    return gateway_deliver.headless_seat("gm")
+
+
+#: A headless seat has no composer to protect: the supervisor queues the words for its CLI. The wake reads this
+#: empty prompt line instead of a pane capture that would only show the supervisor (an 'unreadable' composer).
+HEADLESS_COMPOSER = ["\u276f "]
+
+
 def _gm_composer():
     import subprocess
     from scripts.lineage_daemon import wake_transport as wt
+    if _gm_headless():
+        return list(HEADLESS_COMPOSER)
     r = subprocess.run(["tmux", "capture-pane", "-e", "-p", "-t", "gm"],
                        capture_output=True, text=True, timeout=10)
     if r.returncode != 0:
@@ -257,15 +270,14 @@ def _wake_inject(text, submit):
     NO Enter is ever sent on the dry path (binding Q4)."""
     import subprocess
     if submit:
-        import urllib.request
-        gateway = os.environ.get("WATCH_GATEWAY_URL", "http://127.0.0.1:9091")
-        req = urllib.request.Request(
-            f"{gateway}/agent-message",
-            data=json.dumps({"session": "gm", "text": text}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            r = json.loads(resp.read().decode())
-        return bool(r.get("ok")), r
+        # With the gateway's bearer (scripts/gateway_deliver.py): without it every armed wake was a 401.
+        from scripts import gateway_deliver
+        d = gateway_deliver.deliver("gm", text, source="mail", actor="automation:wake-transport")
+        return d["delivered"], (d["body"] or {"reason": d["reason"]})
+    if _gm_headless():
+        # DRY on a headless gm: there is no composer to type into (its pane holds the supervisor), so nothing is
+        # typed; the armed wake would hand the words to the supervisor through the gateway.
+        return True, {"reason": "dry_headless", "would_submit": True}
     # DRY: literal paste, ingest wait, verify-visible, NO Enter.
     r = subprocess.run(["tmux", "send-keys", "-t", "gm", "-l", text],
                        capture_output=True, timeout=10)

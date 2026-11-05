@@ -47,7 +47,7 @@
  * never guesses at composer state itself.
  */
 import { Router, type Request, type Response } from 'express';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync, existsSync, appendFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
@@ -97,6 +97,58 @@ export interface SendBody {
   /** The human override for a composer-hold 409 ("Overwrite draft & send"). Passed to the gateway,
    *  whose force skips ONLY the composer gates, never the active-turn gate. */
   force?: boolean;
+  /** The page the person is on as they send (pageContextLine). It reaches the agent with this turn, never as
+   *  their words: the transcript reader strips it from the user's bubble. */
+  page_context?: { path?: unknown; title?: unknown };
+}
+
+// The quiet page line: one tag at the end of the text the agent receives. One line, so a pane delivery is not turned
+// into a multi-line paste by it; the transcript reader (chat-transcript.ts stripPageContext) removes the whole tag.
+/** The tag for a page, or '' when there is none. Path and title are the browser's: kept short, on one line, and
+ *  without angle brackets, so they can neither close the tag nor read as markup. */
+export function pageContextLine(ctx: SendBody['page_context']): string {
+  if (!ctx || typeof ctx !== 'object') return '';
+  const clean = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/[<>\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  const path = clean(ctx.path, 200);
+  const title = clean(ctx.title, 120);
+  if (!path && !title) return '';
+  const where = title && path ? `${title} (${path})` : title || path;
+  return `<page-context>The person is looking at this page in the dashboard as they send this: ${where}. `
+    + `Use it only if they ask about the page; do not mention it otherwise.</page-context>`;
+}
+
+// A message typed in an agent's chat while the operator is on a "voice"-mode call with it (services/arturo/agent_call.py):
+// the agent is told the call is live and that the voice is itself (one tag, one line, hidden from the chat like the
+// page line), and the call's relay is handed the words AT ONCE (typed.jsonl beside the seat's call marker) so the voice
+// knows the moment they land, not when the agent gets round to them.
+export const VOICE_CALL_LIVE_TAG = '<voice-call-live>The operator is on a live voice call with you right now. The voice '
+  + 'on the call is you: it speaks for you, and it says your chat replies aloud in its own words. This message was typed '
+  + 'in the chat during the call. Reply in text only with what is worth reading on screen; if it needs no written '
+  + 'answer (a test, small talk, something the call already covered), react with `orchestra react 👍` instead of '
+  + 'replying. Never say you cannot hear or speak: the call does.</voice-call-live>';
+const CALL_MARK_FRESH_MS = 90_000;     // the relay touches the marker every 10 s; the supervisor's own staleness rule
+
+/** A "voice"-mode call with this seat is live: its call marker is fresh and its switch is not "forced". */
+export function voiceCallLive(seat: string, dataDir: string = ORCHESTRA_DIR, now = Date.now()): boolean {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(seat)) return false;
+  try {
+    const mark = join(dataDir, 'state', 'headless', seat, 'call');
+    if (now - statSync(mark).mtimeMs > CALL_MARK_FRESH_MS) return false;
+    const sw = JSON.parse(readFileSync(join(dataDir, 'state', 'agent-calls.json'), 'utf-8'));
+    const row = sw?.seats?.[seat];
+    return !!row && row.on === true && row.mode !== 'forced';
+  } catch {
+    return false;
+  }
+}
+
+/** Hand the typed words to the live call's relay (it tails this file). Best effort: never the send. */
+export function noteTypedOnCall(seat: string, text: string, dataDir: string = ORCHESTRA_DIR): void {
+  try {
+    const dir = join(dataDir, 'state', 'headless', seat);
+    if (!existsSync(dir)) return;
+    appendFileSync(join(dir, 'typed.jsonl'), JSON.stringify({ at: Date.now() / 1000, text }) + '\n');
+  } catch { /* the call simply hears it later, from the agent's own log */ }
 }
 
 export interface GatewayInjectResult {
@@ -119,6 +171,8 @@ export interface GatewayInjectResult {
   timedOut?: boolean;
   error?: string;
   attempts?: number;
+  /** The gateway's plain words for a refusal (shown to the person as written), e.g. a /compact refused. */
+  detail?: string;
 }
 
 export interface MsgStoreSendResult {
@@ -137,6 +191,10 @@ export interface AgentSendDeps {
   gatewayInject(session: string, text: string, force?: boolean): Promise<GatewayInjectResult>;
   /** Durable-first fallback: python3 msg_store.py send --body-file <tmp>. */
   msgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult>;
+  /** A "voice"-mode call with this seat is live (voiceCallLive). Optional: absent = never. */
+  voiceCallLive?(seat: string): boolean;
+  /** The typed words, to the live call's relay at once (noteTypedOnCall). */
+  noteTypedOnCall?(seat: string, text: string): void;
 }
 
 // ── real deps ────────────────────────────────────────────────────────────
@@ -153,7 +211,13 @@ function realResolveSession(agentId: string): string {
   return agentId;
 }
 
-async function realGatewayInject(session: string, text: string, force = false): Promise<GatewayInjectResult> {
+/** POST /agent-message on the watch gateway. Never throws: network/auth failures come back as {unreachable:true}.
+ *  `hold` (default true, the web send) sends accepts:['held'], so the gateway may keep what it cannot type now for the
+ *  next boundary (a held_message row). The reaction wake passes hold:false: a busy pane answers 409 and NOTHING is
+ *  stored (spec "Agent wake": no force, no store). `actor` is the X-Actor header. */
+export async function postAgentMessage(session: string, text: string,
+  opts: { force?: boolean; hold?: boolean; actor?: string } = {}): Promise<GatewayInjectResult> {
+  const { force = false, hold = true, actor = 'operator:web' } = opts;
   let token = '';
   try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token provisioned */ }
   if (!token) return { httpStatus: 0, ok: false, unreachable: true, error: 'gateway token unavailable' };
@@ -161,13 +225,12 @@ async function realGatewayInject(session: string, text: string, force = false): 
     const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
-        // A person typed this (the web chat): the gateway counts it as the operator's own message.
-        'X-Actor': 'operator:web' },
+        // operator:web = a person typed this (the web chat): the gateway counts it as the operator's own message.
+        'X-Actor': actor },
       // accepts:['held'] lets the gateway durable-hold the cases it must — a menu or
       // permission prompt on screen, or a pane that is not running — rather than 409-ing
       // them back to us. It no longer holds a plain mid-turn 'working' seat: that injects.
-      body: JSON.stringify(force ? { session, text, accepts: ['held'], force: true }
-                                 : { session, text, accepts: ['held'] }),
+      body: JSON.stringify({ session, text, ...(hold ? { accepts: ['held'] } : {}), ...(force ? { force: true } : {}) }),
       signal: AbortSignal.timeout(25000),
     });
     const body: any = await resp.json().catch(() => ({}));
@@ -186,11 +249,18 @@ async function realGatewayInject(session: string, text: string, force = false): 
       hold_failed: body.hold_failed,
       error: body.error,
       attempts: body.attempts,
+      detail: typeof body.detail === 'string' ? body.detail : undefined,
     };
   } catch (err: any) {
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
     return { httpStatus: 0, ok: false, unreachable: !timedOut, timedOut, error: err?.message || 'gateway unreachable' };
   }
+}
+
+/** The web send's gateway call: held accepted, force only when the person asked for it. Body unchanged from before
+ *  postAgentMessage existed ({session, text, accepts} or {session, text, accepts, force:true}). */
+function realGatewayInject(session: string, text: string, force = false): Promise<GatewayInjectResult> {
+  return postAgentMessage(session, text, { force });
 }
 
 async function realMsgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult> {
@@ -228,6 +298,8 @@ export const defaultAgentSendDeps: AgentSendDeps = {
   resolveSession: realResolveSession,
   gatewayInject: realGatewayInject,
   msgStoreSend: realMsgStoreSend,
+  voiceCallLive: (seat) => voiceCallLive(seat),
+  noteTypedOnCall: (seat, text) => noteTypedOnCall(seat, text),
 };
 
 // ── capability gate (D5) ─────────────────────────────────────────────────
@@ -308,11 +380,25 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   }
   const session = deps.resolveSession(agentId);
   const messageText = buildMessageText(text, body.attachments);
+  // What the agent receives: the person's words, then the quiet page line. Everything shown or stored for later
+  // (sent_text, the durable fallback) is the words alone: a page that was open then is not the page later.
+  // Never on a slash command: the CLI and the gateway read a command as the whole message (a person's /compact is
+  // matched exactly), so a trailing tag would turn it into words.
+  const context = messageText.startsWith('/') ? '' : pageContextLine(body.page_context);
+  const onCall = !messageText.startsWith('/') && !!deps.voiceCallLive?.(agentId);
+  if (onCall) {
+    // the voice hears of it now, before delivery: the typed words, and what came with them (never a file's path)
+    const n = body.attachments?.length ?? 0;
+    const withFiles = n ? ` (with ${n} attachment${n > 1 ? 's' : ''})` : '';
+    deps.noteTypedOnCall?.(agentId, `${text}${withFiles}`.trim());
+  }
+  const tags = [context, onCall ? VOICE_CALL_LIVE_TAG : ''].filter(Boolean).join(' ');
+  const deliveredText = tags ? `${messageText} ${tags}` : messageText;
 
   // force: the route's own contract (header: "a client can re-POST with force:true") was never
   // honoured. It was dropped here, so "Overwrite draft & send" got the same 409 forever (review of #198).
   // Only an explicit boolean true counts.
-  const gw = await deps.gatewayInject(session, messageText, body.force === true);
+  const gw = await deps.gatewayInject(session, deliveredText, body.force === true);
 
   const shape = (state: SendState, extra: Record<string, unknown> = {}) =>
     capable ? { state, ...extra } : { ok: state === 'delivered' || state === 'queued' || state === 'held', ...extra };
@@ -362,8 +448,17 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     };
     res.status(409).json({
       ...legacy,
-      payload: { text, attachments: body.attachments, client_caps: body.client_caps },
+      payload: { text, attachments: body.attachments, client_caps: body.client_caps,
+                 ...(body.page_context ? { page_context: body.page_context } : {}) },
     });
+    return;
+  }
+
+  // A person's /compact the gateway refused (compacting isn't turned on for this agent, or its runtime can't): the
+  // answer, not mail. It is never stored for later delivery: as mail the seat would receive "/compact" as text and
+  // answer it. The gateway's own words go back to be shown as written.
+  if (gw.reason === 'compact_refused') {
+    res.status(409).json({ ok: false, reason: 'compact_refused', detail: gw.detail || "This agent can't compact right now." });
     return;
   }
 

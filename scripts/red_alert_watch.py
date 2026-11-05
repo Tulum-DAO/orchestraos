@@ -64,7 +64,8 @@ WAL_DIR = os.path.join(ORCH, "state", "wal")
 _GREEN_RE = re.compile(r"^(?P<root>.+)-g(?P<gen>\d+)$")
 # bg states in which a green is legitimately expected to exist
 _BG_ACTIVE = {"PREWARMING", "HYDRATING", "VERIFY", "VERIFYING", "READY", "SWAPPING", "PREWARMED", "ARMED"}
-MODEL_LADDER = ["claude-opus-5[1m]", "claude-sonnet-5[1m]", "gemini", "codex"]
+# Seats run claude-opus-5-5[1m] (the default for new Claude seats), so the chain starts there.
+MODEL_LADDER = ["claude-opus-5-5[1m]", "claude-opus-5[1m]", "claude-sonnet-5[1m]", "gemini", "codex"]
 
 def log(msg: str) -> None:
     line = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {msg}"
@@ -362,6 +363,17 @@ def _healthy(seat: str) -> tuple[bool, dict]:
     return RA.classify(ev, seat) is None and not ev["pane_dead"][seat], ev
 
 
+def headless_launch_line(seat: str) -> str | None:
+    """The supervisor line for a seat switched headless, else None (any read failure: None, the usual resume)."""
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import seat_supervisor
+        return seat_supervisor.launch_line(seat)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     """HARD RULE (the operator, 2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
@@ -371,7 +383,9 @@ def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     procs = ev["process_state"].get(seat) or []
     if procs:
         return False, f"process still present ({len(procs)} pids, e.g. {procs[0].get('stat')}) — refusing to respawn (no kills rule); card only"
-    cmd = resume_cmd([], ev["registry_rows"].get(seat))
+    # A seat switched headless comes back as its supervisor (spawn's environment around seat_supervisor.py run),
+    # never as a TUI the router and gateway would not deliver to.
+    cmd = headless_launch_line(seat) or resume_cmd([], ev["registry_rows"].get(seat))
     if not cmd:
         return False, "no resume command derivable (no registry resume_command, no sid)"
     cwd = (ev["registry_rows"].get(seat) or {}).get("cwd") or ORCH
@@ -387,7 +401,7 @@ def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
 
 def repair_switch_provider(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     row = ev["registry_rows"].get(seat) or {}
-    current = row.get("model") or "claude-opus-5[1m]"
+    current = row.get("model") or MODEL_LADDER[0]
     nxt = next_model(current, enabled=list(CLI_RUNTIMES))
     if not nxt:
         return False, f"no next model after {current}"
@@ -428,6 +442,17 @@ def repair_wait_then_retry(seat: str, session: str, ev: dict) -> tuple[bool, str
     return repair_bare_enter(seat, session, ev)
 
 
+def _headless(session: str) -> bool:
+    try:
+        import gateway_deliver
+        return bool(gateway_deliver.headless_seat(session))
+    except Exception:  # noqa: BLE001 — unreadable switch: a tmux seat, as every other reader treats it
+        return False
+
+
+#: The repairs that type keys into the pane (respawn starts a dead pane's process and is headless-aware).
+KEY_REPAIRS = frozenset({"switch_provider", "accept_dialog", "bare_enter", "wait_then_retry"})
+
 REPAIRS = {
     "respawn_resume": repair_respawn,
     "switch_provider": repair_switch_provider,
@@ -455,7 +480,7 @@ def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
             f"`python3 scripts/red_alert.py update {rid} --diagnosis ... --permanent-fix JSON --by {name}`, then open a "
             f"dialogue with the operator through the assistant: msg_store send --from {name} --to gm --type red_alert "
             f"--subject 'RED ALERT {rid}: <one-line cause>' with the fix you propose and the question you need answered.")
-    env = dict(os.environ, AGENT_RUNTIME="claude", AGENT_MODEL="claude-opus-5[1m]")
+    env = dict(os.environ, AGENT_RUNTIME="claude", AGENT_MODEL=MODEL_LADDER[0])
     out = subprocess.run([os.path.join(CODE_ROOT, "spawn-agent.sh"), name, "--task", task], capture_output=True, text=True,
                          timeout=180, env=env, cwd=ORCH)
     ok = tmux("has-session", "-t", name).returncode == 0
@@ -528,6 +553,11 @@ def handle(seat: str, session: str, r: dict, ev: dict, *, dry: bool) -> None:
         fn = REPAIRS.get(d["fix"])
         if not fn:
             RA.record_attempt(rid, action=d["fix"] or "none", ok=False, detail="no executor for this fix")
+            return
+        if d["fix"] in KEY_REPAIRS and _headless(session):
+            # A headless seat's pane holds its supervisor, not a TUI: keys typed there reach the wrong process.
+            # Not a failed repair (it would count toward escalation): the card stays with the operator.
+            log(f"{rid} {seat}: runs headless, no TUI to key into; {d['fix']} not run")
             return
         # Under the ONE cross-process pane lock every typer shares (pane_lock.py, gm msg_ede7b24a): a
         # repair's keys must not glue into a gateway/router burst. A busy pane is NOT a failed repair

@@ -3,6 +3,8 @@
  * Pure, so the rules are tested without a browser: unknown context shows nothing rather than 0% or
  * 100%, and "waiting on a card" counts as needing you.
  */
+import { modelIdTitle } from './modelTitle.ts';
+
 export interface AgentChip {
   name?: string;
   kind?: 'agent' | 'service' | 'external' | string;
@@ -24,10 +26,11 @@ export function chipNeedsYou(c: AgentChip | undefined): boolean {
   return c?.status === 'needs_you';
 }
 
-/** "92% left", or null when there is no reading. */
+/** "92% left", or null when there is no reading. 100% left is none: Claude Code's status line says 0% used until its
+ *  first reply after a resume (lib/arturoPanel.ts contextUsedLabel). */
 export function contextLeftLabel(c: AgentChip | undefined): string | null {
   const v = c?.context_left_pct;
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) return null;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v >= 100) return null;
   return `${Math.round(v)}% left`;
 }
 
@@ -36,9 +39,11 @@ export function contextLeftLow(c: AgentChip | undefined): boolean {
   return typeof v === 'number' && Number.isFinite(v) && v <= LOW_CONTEXT_LEFT;
 }
 
-/** The logo's tooltip: "Runs on Claude · Opus 5.5". */
-export function providerTitle(providerLabel: string, c: AgentChip | undefined): string {
-  return c?.model_label ? `Runs on ${providerLabel} · ${c.model_label}` : `Runs on ${providerLabel}`;
+/** The logo's tooltip: "Runs on Claude · Opus 5.5 · 1M". With the agent's model id, named by the model picker's rules
+ *  (lib/modelTitle.ts), so a model the picker hides is never shown under another model's plain name. */
+export function providerTitle(providerLabel: string, c: AgentChip | undefined, modelId?: string | null): string {
+  const label = modelId && c?.provider ? modelIdTitle(c.provider, modelId, c.model_label) : c?.model_label;
+  return label ? `Runs on ${providerLabel} · ${label}` : `Runs on ${providerLabel}`;
 }
 
 /**

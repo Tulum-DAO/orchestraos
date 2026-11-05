@@ -57,6 +57,7 @@ os.environ["WATCH_GATEWAY_INJECT_JOURNAL_DIR"] = os.path.join(_FENCE_ROOT, "inje
 # Deferred model switches (scripts/agent_model_pending.py): a real gateway applies every pending
 # row by typing into that pane, so a test run never writes where a real gateway reads.
 os.environ["AGENT_MODEL_PENDING_FILE"] = os.path.join(_FENCE_ROOT, "agent-model-pending.json")
+os.environ["AGENT_EFFORT_FILE"] = os.path.join(_FENCE_ROOT, "agent-efforts.json")
 
 _WORKTREE_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 sys.path.insert(0, _WORKTREE_SCRIPTS)
@@ -202,3 +203,11 @@ def pytest_sessionfinish(session, exitstatus):
         else:
             print(msg)
         session.exitstatus = _pytest.ExitCode.TESTS_FAILED
+
+
+# --- no real seat from a test (a stray test once left a real `claude` running in a tmux session) ----------------
+# Every process a test starts goes through subprocess.Popen (asyncio's too): scripts/seat_launch_guard.py refuses the
+# real `claude` and a `tmux new-session` on the real tmux server, for the whole run.
+import seat_launch_guard as _seat_launch_guard  # noqa: E402
+
+_seat_launch_guard.install()

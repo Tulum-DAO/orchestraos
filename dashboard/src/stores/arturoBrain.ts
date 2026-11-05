@@ -1,7 +1,7 @@
 /**
  * arturoBrain store: Arturo's chosen brain for the next turn (null = the install's default).
- * A thin zustand wrapper over lib/arturoBrain.ts (where the tested logic lives). Separate from
- * modelSelection.ts on purpose; see that module's header.
+ * A thin zustand wrapper over lib/arturoBrain.ts (where the tested logic lives). Separate from the older shared
+ * model choice on purpose; see that module's header.
  */
 import { create } from 'zustand';
 import { loadArturoBrain, saveArturoBrain, type ArturoBrainChoice } from '../lib/arturoBrain';

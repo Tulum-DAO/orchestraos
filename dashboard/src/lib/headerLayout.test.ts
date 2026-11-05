@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { bellHost } from './bellPlacement.ts';
-import { isNearBottom } from './liveFeedScroll.ts';
+import { isFollowing } from './threadKit/anchor.ts';
 
 const src = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
@@ -64,11 +64,12 @@ test('the layout portals its ONE bell into the header slot instead of guessing t
   assert.doesNotMatch(layout, /ml-auto mr-12/);
 });
 
-test('the agent top bar ends with the slot, inside the icon row, and reserves no padding for a fixed bell', () => {
+test('the agent top bar ends with the slot then the gear, inside the icon row, and reserves no padding for a fixed bell', () => {
   const topbar = src('components/agent/TopBar.tsx');
   assert.match(topbar, /useContext\(HeaderEndSlotContext\)/);
-  assert.match(topbar, /<div ref=\{registerEndSlot \?\? undefined\} data-header-end-slot className="flex items-center" \/>\s*<\/div>\s*<\/div>\s*\);/,
-    'the slot is the last child of the controls row');
+  // The bell's slot, then only the gear (the agent's panel, beside the bell as on Arturo's page), then the row ends.
+  assert.match(topbar, /<div ref=\{registerEndSlot \?\? undefined\} data-header-end-slot className="flex items-center" \/>\s*\{\/\*[^*]*\*\/\}\s*\{onSettings && seat && \([\s\S]*?<Settings size=\{20\} \/>\s*<\/button>\s*\)\}\s*<\/div>\s*<\/div>\s*\);/,
+    'the slot is followed only by the gear, the last child of the controls row');
   assert.doesNotMatch(topbar, /md:pr-12/);
 });
 
@@ -106,24 +107,28 @@ test('the transcript scroller does not bottom-anchor with justify-end (overflow 
   assert.match(scroller[1], /overflow-y-auto/);
   assert.match(scroller[1], /min-h-0/);
   // ...the column bottom-anchors itself with an auto margin instead.
-  assert.match(view, /"mt-auto w-full max-w-\[860px\] mx-auto px-4 pt-4 space-y-2\.5"/);
+  assert.match(view, /"mt-auto w-full max-w-\[calc\(860px\+var\(--ui-col-extra,0px\)\)\] mx-auto px-4 pt-4 ui-feed-gap"/);
 });
 
-test('the transcript follows the tail only while the reader is at the bottom', () => {
+test('the transcript follows the tail only while the reader is at the bottom, and otherwise holds them still', () => {
   const view = src('components/chat/TranscriptChatView.tsx');
-  assert.match(view, /atBottom\.current = isNearBottom\(el\.scrollTop, el\.scrollHeight, el\.clientHeight, 120\)/);
-  assert.match(view, /if \(el && atBottom\.current\) el\.scrollTop = el\.scrollHeight;/);
-  // the rule itself: 120px from the bottom still follows, a reader 121px up is left alone
-  assert.equal(isNearBottom(880, 2000, 1000, 120), true);
-  assert.equal(isNearBottom(879, 2000, 1000, 120), false);
-  assert.equal(isNearBottom(0, 2000, 1000, 120), false);
+  // the shared thread scroller (lib/useStickToBottom.ts), its rows the column's children
+  assert.match(view, /useStickToBottom\(scrollRef, \{ rows: columnRef \}\)/);
+  assert.match(view, /onScroll=\{stick\.onScroll\}/);
+  assert.match(view, /<div ref=\{columnRef\}/);
+  // the rule itself: only the bottom (rounding aside) follows; a reader up a line or more is left alone
+  assert.equal(isFollowing({ scrollTop: 1000, scrollHeight: 2000, clientHeight: 1000 }), true);
+  assert.equal(isFollowing({ scrollTop: 981, scrollHeight: 2000, clientHeight: 1000 }), false);
+  assert.equal(isFollowing({ scrollTop: 0, scrollHeight: 2000, clientHeight: 1000 }), false);
 });
 
 test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack would eat the scroll', () => {
   // WebTerminal captures wheel and touchmove on the DOCUMENT (tmux copy-mode scroll) and only
   // ignores events outside its container; it must not exist at all while Chat mode is showing.
   const cases: [string, RegExp, string][] = [
-    ['pages/AgentPage.tsx', /mode === 'dev' \? \(/, '<Feed agentId'],
+    // The page's body is the terminal only for the seat itself in Dev (lib/subagentView.ts pageBody): a subagent's
+    // read-only transcript never mounts it either.
+    ['pages/AgentPage.tsx', /body === 'terminal' \? \(/, '<Feed agentId'],
     ['components/AgentCard.tsx', /devMode \? \(/, '<TranscriptChatView'],
   ];
   for (const [file, devBranch, chatView] of cases) {
@@ -138,8 +143,11 @@ test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack w
   assert.match(src('components/WebTerminal.tsx'), /if \(!container\.contains\(e\.target as Node\)\) return;\s*e\.preventDefault\(\);/);
 });
 
-test('provider login terminal stays pinned to the visible bottom of its scrollable sheet', () => {
+test('the Connect sheet is content height: capped, never a fixed tall box or a pinned terminal', () => {
+  // "a bit too tall". It was h-[94vh] whatever it held, plus a 62vh terminal block.
   const modal = src('components/agent/ProviderConnectModal.tsx');
-  assert.match(modal, /h-\[94vh\] min-h-0 flex flex-col overflow-hidden/);
-  assert.match(modal, /sticky bottom-0 shrink-0 h-\[min\(62vh,calc\(94vh-12rem\)\)\] min-h-\[220px\]/);
+  assert.match(modal, /max-h-\[min\(85dvh,560px\)\] flex flex-col overflow-hidden/);
+  assert.match(modal, /min-h-0 overflow-y-auto/);
+  assert.doesNotMatch(modal, /h-\[94vh\]|h-\[min\(62vh/);
+  assert.doesNotMatch(modal, /sticky bottom-0/);
 });

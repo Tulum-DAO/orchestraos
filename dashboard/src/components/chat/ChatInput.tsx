@@ -4,21 +4,25 @@
  */
 import { useState, useRef, useLayoutEffect, useEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { ArrowUp, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal } from 'lucide-react';
+import { Plus, Paperclip, X, ClipboardList, MoreHorizontal, AudioLines } from 'lucide-react';
+import RoundAction from '../kit/RoundAction';
+import { roundView } from '../../lib/roundAction';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
-import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction, composerKeys, keyArgs } from '../../lib/composerGate';
+import { useDeviceSetting } from '../../lib/deviceSettings';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 import { COMPOSER_ACCEPT, newFiles, pasteAttachesFiles, attachmentMarkers } from '../../lib/composerFiles';
 import type { PendingKind } from '../../lib/pendingSends';
 import { usePendingSends, rowIdsAtSend, newPendingId } from '../../stores/pendingSends';
+import { useComposerDraft, nextDraftId, type DraftFile, type DraftPaste } from '../../stores/composerDrafts';
 import { unconfirmed } from '../../lib/heldEchoReconcile';
 
 // A held large paste: kept out of the textarea (which shows a compact token at
 // the paste's position) and serialized into the fenced grammar on submit.
-interface HeldPaste { id: number; content: string; lines: number; chars: number }
+type HeldPaste = DraftPaste;
 // An attached file waiting to be sent. `preview` is an object URL for an image's thumbnail.
-interface PendingFile { id: number; file: File; preview: string | null }
+type PendingFile = DraftFile;
 // Token the composer shows in-place for a held paste. Parseable back to the id;
 // user can delete it to drop the paste, and it marks WHERE the paste sits.
 const pasteToken = (p: HeldPaste) => `〖paste ${p.id} · ${p.lines} lines〗`;
@@ -75,6 +79,9 @@ interface Props {
   menuItems?: (close: () => void) => ReactNode;
   /** Interrupt the agent's turn (the same Esc key the Dev-mode ActionBar sends). Absent = no Stop. */
   onStop?: () => Promise<unknown> | void;
+  /** This composer's call, for the round button (lib/roundAction.ts): empty box → Call, End during a call; no call
+   *  possible → a disabled Send with the reason. Absent = no call here (the empty button is a disabled Send). */
+  call?: { inCall: boolean; available: boolean; reason?: string; agentName: string; onToggle: () => void };
 }
 
 async function uploadImage(file: File): Promise<string> {
@@ -86,8 +93,12 @@ async function uploadImage(file: File): Promise<string> {
   return data.path;
 }
 
-export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop, menuItems }: Props) {
-  const [internalText, setInternalText] = useState('');
+export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop, menuItems, call }: Props) {
+  // Text, held pastes and attached files live in the agent's draft (stores/composerDrafts.ts), so they survive
+  // this box being unmounted: switching the page to Dev, or to another agent and back.
+  const { draft: stored, setText: setInternalText, setFiles: setPendingFiles, setPastes } = useComposerDraft(agentId);
+  const [sendShortcut] = useDeviceSetting('sendShortcut');   // Settings › General › Send shortcut
+  const internalText = stored.text;
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
   // mode. `controlled` only turns true when BOTH props are supplied by the
@@ -124,19 +135,16 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   // A LIST, not one file: the web chat box used to hold a single attachment, so a second pick,
   // drop or paste replaced the first, while every other surface (iOS, iPad, macOS, Quest)
   // attaches several at once. The send path already carried `attachments: File[]`.
-  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
-  const fileIdRef = useRef(1);
-  // Mirror for the unmount cleanup below, so thumbnails' object URLs are always released.
-  // addFiles/removeFiles also update it at once, so two adds in one frame still dedupe.
-  const pendingFilesRef = useRef<PendingFile[]>([]);
+  const pendingFiles = stored.files;
+  // addFiles/removeFiles update this at once, so two adds in one frame still dedupe. A thumbnail's object URL is
+  // released when its file is removed or sent, not on unmount: the file stays in the draft.
+  const pendingFilesRef = useRef<PendingFile[]>(pendingFiles);
   useEffect(() => { pendingFilesRef.current = pendingFiles; }, [pendingFiles]);
-  useEffect(() => () => { pendingFilesRef.current.forEach((p) => p.preview && URL.revokeObjectURL(p.preview)); }, []);
   const hasFiles = pendingFiles.length > 0;
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const [pastes, setPastes] = useState<HeldPaste[]>([]);
-  const pasteIdRef = useRef(1);
+  const pastes = stored.pastes;
 
   // Intercept a LARGE paste: keep the content as an object, drop a compact token
   // at the caret so its position in the message is preserved, and show a chip.
@@ -152,7 +160,8 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     }
     if (!clip || !isLargePaste(clip)) return; // small paste → default inline
     e.preventDefault();
-    const id = pasteIdRef.current++;
+    // From this agent's own draft: the box can stay mounted while the page switches agents.
+    const id = nextDraftId(pastes);
     const held: HeldPaste = { id, content: clip, lines: clip.split('\n').length, chars: clip.length };
     const el = textAreaRef.current;
     const start = el ? el.selectionStart : text.length;
@@ -205,7 +214,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     const fresh = newFiles(pendingFilesRef.current.map((p) => p.file), incoming);
     if (!fresh.length) return;
     const entries = fresh.map((file) => ({
-      id: fileIdRef.current++,
+      id: nextDraftId(pendingFilesRef.current) + fresh.indexOf(file),
       file,
       preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
     }));
@@ -282,7 +291,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           if (landedEarly || !rows || !messageText.trim()) return;
           if (unconfirmed([{ text: messageText, priorRowIds }], rows).length === 0) {
             landedEarly = true;
-            if (getTextRef.current() === boxAtSend) { setText(''); setPastes([]); pasteIdRef.current = 1; }
+            if (getTextRef.current() === boxAtSend) { setText(''); setPastes([]) }
             clearSent();
           }
         };
@@ -312,7 +321,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           setBusy(null);
           setText('');
           setPastes([]);
-          pasteIdRef.current = 1;
           showPending();
           // The bubble says it was sent; a note only when there is more to say (mid-turn: queued).
           setResultOk(true);
@@ -348,8 +356,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           if (clearsComposer(res)) {
             setText('');
             setPastes([]);
-            pasteIdRef.current = 1;
-            showPending();
+              showPending();
           }
           setBusy(null);
           setResultOk(true);
@@ -380,7 +387,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         setResult('Sent');
         setText('');
         setPastes([]);
-        pasteIdRef.current = 1;
       } else if (res.status === 409) {
         // Refused — surface why + retain the text for a possible force retry.
         setBusy({
@@ -414,11 +420,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     }
   };
 
-  const canSend = (text.trim() || hasFiles) && !sending && !disabled;
   // The round button is STOP only while the seat is mid-turn with no menu open (the caller's
   // canStop, see composerGate.canStopTurn) AND there is nothing to send: text typed mid-turn is
-  // still a send, because the CLI queues it.
-  const showStop = !!onStop && !!canStop && !text.trim() && !hasFiles && !sending;
+  // still a send, because the CLI queues it (lib/roundAction.ts).
 
   // Stop presses Esc in the seat's pane. A ref, not state, guards it: two clicks in one frame
   // both read the same `stopping` state, and Esc pressed twice can land on whatever the first
@@ -507,17 +511,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           under the operator's thumb when one appears. */}
       {busy && (
         <div className="mb-1.5 mx-2 rounded-xl border border-amber-700/50 bg-card px-2.5 py-1.5 shadow-sm">
-          <div className="text-[11px] text-amber-300">
+          <div className="text-px11 text-tone-amber-300">
             {sendPanelHeadline(busy)}
-            {busy.state ? <span className="text-neutral-500"> ({busy.state})</span> : null}
+            {busy.state ? <span className="text-tone-500"> ({busy.state})</span> : null}
           </div>
           {busy.composer_text && (
-            <div className="text-[10px] text-neutral-500 mt-0.5 truncate">
+            <div className="text-px10 text-tone-500 mt-0.5 truncate">
               the agent's box already holds: "{busy.composer_text}" — sending now submits it together with yours
             </div>
           )}
           {busy.stranded?.text && (
-            <div className="text-[10px] text-neutral-500 mt-0.5 truncate">
+            <div className="text-px10 text-tone-500 mt-0.5 truncate">
               agent has an unsent draft: "{busy.stranded.text}"
             </div>
           )}
@@ -528,17 +532,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               <button
                 onClick={() => handleSend(true)}
                 disabled={sending}
-                className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
+                className="text-px10 px-2 py-0.5 rounded bg-amber-500/20 text-tone-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
               >
                 {/* the gateway's force APPENDS to the box and submits; it never clears it (review of #198) */}
                 {busy.composer_text ? 'Send together with the draft' : 'Send anyway'}
               </button>
             ) : (
-              <span className="text-[10px] text-neutral-600">retry when the agent finishes its turn</span>
+              <span className="text-px10 text-tone-600">retry when the agent finishes its turn</span>
             )}
             <button
               onClick={() => { setBusy(null); setResult(null); }}
-              className="text-[10px] px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-300"
+              className="text-px10 px-2 py-0.5 rounded text-tone-500 hover:text-tone-300"
             >
               Dismiss
             </button>
@@ -546,7 +550,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         </div>
       )}
       {result && (
-        <span className={clsx('text-[10px] mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-red-400')}>
+        <span className={clsx('text-px10 mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-tone-red-400')}>
           {result}
         </span>
       )}
@@ -572,7 +576,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
                   : <Paperclip size={16} className="text-muted-foreground shrink-0 mx-1" />
                 }
                 <span className="text-xs text-muted-foreground truncate max-w-[180px]">{p.file.name}</span>
-                <button type="button" onClick={() => removeFiles([p.id])} aria-label={`Remove ${p.file.name}`} className="text-muted-foreground hover:text-red-400 transition-colors">
+                <button type="button" onClick={() => removeFiles([p.id])} aria-label={`Remove ${p.file.name}`} className="text-muted-foreground hover:text-tone-red-400 transition-colors">
                   <X size={14} />
                 </button>
               </span>
@@ -583,7 +587,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               <span key={p.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-muted rounded-xl border border-border text-xs text-foreground/80">
                 <ClipboardList size={13} className="text-muted-foreground shrink-0" />
                 Pasted text · {p.lines} lines
-                <button onClick={() => removePaste(p.id)} aria-label="Remove pasted text" className="text-muted-foreground hover:text-red-400 transition-colors">
+                <button onClick={() => removePaste(p.id)} aria-label="Remove pasted text" className="text-muted-foreground hover:text-tone-red-400 transition-colors">
                   <X size={12} />
                 </button>
               </span>
@@ -629,15 +633,15 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             rows={1}
             disabled={disabled}
             aria-label="Message"
-            className="flex-1 min-w-0 self-center bg-transparent pl-0.5 pr-1.5 py-2 text-sm leading-5 text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
+            className="flex-1 min-w-0 self-center bg-transparent pl-0.5 pr-1.5 py-2 text-sm leading-[calc(1.25rem*var(--ui-text-scale,1))] text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
             onKeyDown={(e) => {
               // BEHAVIOUR CHANGE (2026-10-09): Enter sends, Shift+Enter is a newline. It used to be
               // Cmd/Ctrl+Enter only, which still sends. Touch keyboards keep Enter as a newline.
+              // Settings › General › Send shortcut can make Enter a newline too (Cmd/Ctrl+Enter sends).
               const action = composerKeyAction({
-                key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey,
-                isComposing: e.nativeEvent.isComposing,
-                coarse: typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches,
+                ...keyArgs(e),
                 canStop: !!onStop && !!canStop,
+                ...composerKeys('agentChat', sendShortcut),
               });
               if (action === 'send') { e.preventDefault(); handleSend(); }
               else if (action === 'stop') { e.preventDefault(); void handleStop(); }
@@ -669,36 +673,23 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             )}
           </div>}
           {trailing}
-          {showStop ? (
-            <button
-              type="button"
-              onClick={() => void handleStop()}
-              disabled={stopping}
-              aria-label={stopping ? 'Stopping' : 'Stop the agent'}
-              title={stopping ? 'Stopping…' : 'Stop — interrupt the agent’s turn (Esc)'}
-              className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-60')}
-            >
-              {/* a plain box, not the outlined Square glyph: dead centre by construction */}
-              {stopping ? <Loader2 size={16} className="animate-spin" /> : <span aria-hidden className="block h-3.5 w-3.5 rounded-[3px] bg-current" />}
-            </button>
-          ) : (
-            /* "Send" is what a person does. "Inject" is plumbing. */
-            <button
-              type="button"
-              onClick={() => handleSend()}
-              disabled={!canSend}
-              aria-label="Send"
-              title="Send (Enter)"
-              className={clsx(
-                roundBtn,
-                !canSend
-                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                  : 'bg-foreground text-background hover:opacity-90'
-              )}
-            >
-              {sending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={18} strokeWidth={2.5} />}
-            </button>
-          )}
+          {/* THE ROUND BUTTON (lib/roundAction.ts): Send with something to send, Stop mid-turn, Call when empty (End during
+              a call), a disabled Send with the reason when no call is possible. One button; its icons crossfade. */}
+          <RoundAction
+            view={roundView({ hasContent: !!(text.trim() || hasFiles), sending, blocked: !!disabled, canStop: !!onStop && !!canStop,
+                              call: call ? { inCall: call.inCall, available: call.available, reason: call.reason } : undefined },
+                            { agent: call?.agentName ?? 'the agent' })}
+            busy={sending || stopping}
+            onAction={(mode) => {
+              if (mode === 'send') handleSend();
+              else if (mode === 'stop') void handleStop();
+              else if (mode === 'call' || mode === 'end') call?.onToggle();
+            }}
+            // Arturo's button: the same round button as his composer, so the call is his waveform, not a
+            // phone. Send, Stop, End and who the call reaches are unchanged.
+            callIcon={<AudioLines size={16} />}
+            className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:opacity-40')}
+          />
         </div>
       </div>
     </div>

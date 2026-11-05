@@ -15,12 +15,18 @@ import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
+import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
+import { refable, partAt } from '../lib/messageRef.js';
+import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
+import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff } from '../lib/agentCalls.js';
+import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
-import { sessionOwners, predecessorOf } from '../services/identity-store-reader.js';
+import { sessionOwners, predecessorOf, lineageChainOf } from '../services/identity-store-reader.js';
+import { cachedLog } from '../services/transcript-log-cache.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
 import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdown.js';
@@ -447,6 +453,14 @@ export function sessionIsThisSeats(agentId: string, sid: string | null | undefin
 // Resolve an agent id to its transcript JSONL path (re-read fresh per request).
 // Exported for the F1 streaming lane (transcript-stream.ts) — same resolution,
 // same file, so poll and stream can never disagree on WHICH transcript.
+/** The tmux session a seat's pane lives in (its sessions record, else its id): what the live stream asks paneProbe
+ *  about to tell a gone window from one that has not written its transcript yet. Null for an unsafe id. */
+export function seatTmuxSession(agentId: string): string | null {
+  if (!isSafeAgentId(agentId)) return null;
+  const e = loadAgentSessions()[agentId] || {};
+  return String(e.tmux_session || agentId);
+}
+
 export function resolveTranscriptPath(agentId: string): { path: string | null; sid: string | null } {
   // The id becomes state/agents/<id>.json and a tmux target. A raw one read any .json for its
   // session_id. Safe ids only; no registry check, so a scratch tmux seat still resolves.
@@ -594,7 +608,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   return { path: null, sid };
 }
 
-/** The stitched chat (ios-watch-dev msg_41c00a45, Shaw-approved): what the poll route puts above a
+/** The stitched chat: what the poll route puts above a
  *  seat's current conversation, so a rotation keeps the thread. Only when `sid` is the current head
  *  of `agentId`'s lineage and the generation it took over from has a file this box can read:
  *  Claude by the lineage's project dir (else the row's conversation_path), Codex by its thread's
@@ -673,7 +687,11 @@ function predecessorFor(agentId: string, sid: string | null): Predecessor | null
 
 /** The predecessor's own log file, or null. */
 function previousFilePath({ p }: Predecessor): string | null {
-  const from = p.from_session;
+  return sessionFilePath(p.from_session, p.cwd, p.conversation_path);
+}
+
+/** A past generation's own log file, or null. */
+function sessionFilePath(from: string, cwd: string | null, conversationPath: string | null): string | null {
   const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
   const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
   // Tried in order, each only when the ones before found nothing (the directory scan is the last
@@ -681,8 +699,8 @@ function previousFilePath({ p }: Predecessor): string | null {
   // generation may have run in another directory than the lineage's, and its row may name no
   // path), then Codex's rollout and Gemini's brain log.
   const candidates: (() => string | null)[] = [
-    () => p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
-    () => ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    () => cwd ? ownFile(join(CLAUDE_PROJECTS, String(cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    () => ownFile(conversationPath, CLAUDE_PROJECTS, claudeOwn),
     () => claudeFileAnywhere(from, claudeOwn),
     () => ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
     () => ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
@@ -697,23 +715,333 @@ export function resolvePreviousTranscript(agentId: string, sid: string | null): 
   return pred && path ? { path, antigravity: path.includes('antigravity-cli'), divider: pred.divider } : null;
 }
 
-/** The route's form: the divider now, the file only when normalizeTranscript actually reads the
- *  previous log (the current one alone does not fill the window). A poll whose current log fills
- *  the window never looks for the previous file at all (codex R1 on #473). */
-export function lazyPreviousTranscript(agentId: string, sid: string | null, currentPath: string):
-    { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null {
-  const pred = predecessorFor(agentId, sid);
-  if (!pred) return null;
-  let found: string | null | undefined;
-  const file = () => {
-    if (found === undefined) found = previousFilePath(pred);
-    if (!found || found === currentPath) throw new Error('no previous log');   // caller: this log alone
-    return found;
+// ---- The whole lineage in one chat --------------------------------------------------------------
+// A seat's chat is every generation of its lineage whose log this box can read, oldest first,
+// with ONE quiet marker item (kind 'rotation') where one generation took over from the one before.
+// The newest page is the poll route's window; older pages are read with `before=<cursor>`. Files
+// are found and parsed only as far back as a page reaches, and each parse is kept per file
+// (services/transcript-log-cache.ts) until the file changes.
+
+/** One generation of the chat. `file` is looked for on first use only. */
+interface Segment {
+  session: string;                      // '' for a current log with no known session
+  generation: number | null;
+  promotedAt: string | null;
+  file: () => string | null;
+}
+
+// Where each past generation's file is, so a page further back does not search the disk again
+// for every generation it passes (a file not found is not looked for again for a while either).
+const PAST_FILE_TTL_MS = 5 * 60_000;
+const pastFiles = new Map<string, { path: string | null; at: number }>();
+
+function pastFile(sid: string, cwd: string | null, conversationPath: string | null): string | null {
+  const hit = pastFiles.get(sid);
+  if (hit && Date.now() - hit.at < PAST_FILE_TTL_MS) {
+    // A found file is used only while it still passes the same check (moved or replaced: look again).
+    if (hit.path === null) return null;
+    try { if (realpathSync(hit.path) === hit.path) return hit.path; } catch { /* gone: look again */ }
+  }
+  const path = sessionFilePath(sid, cwd, conversationPath);
+  pastFiles.set(sid, { path, at: Date.now() });
+  return path;
+}
+
+/** Tests: forget where past generations' files were. */
+export function forgetPastFiles(): void { pastFiles.clear(); }
+
+/** The chat's generations, oldest first, the current log last. Past generations come only from
+ *  this seat's own lineage, by session ids that are plain ids, each through ownFile. */
+export function chatSegments(agentId: string, sid: string | null, currentPath: string): Segment[] {
+  let chain: ReturnType<typeof lineageChainOf> = null;
+  if (sid) { try { chain = lineageChainOf(sid); } catch { chain = null; } }
+  const head = chain && lineageOf(chain.root) === lineageOf(agentId) ? chain : null;
+  const last = head?.links[head.links.length - 1];
+  const current: Segment = {
+    session: sid ?? '', generation: last?.generation ?? null, promotedAt: last?.promoted_at ?? null,
+    file: () => currentPath,
   };
+  if (!head) return [current];
+  const past: Segment[] = [];
+  for (const l of head.links.slice(0, -1)) {
+    const from = l.session_id;
+    if (!from || !SESSION_ID.test(from) || from === sid) continue;
+    let found: string | null | undefined;
+    past.push({
+      session: from, generation: l.generation, promotedAt: l.promoted_at,
+      file: () => {
+        if (found === undefined) {
+          found = pastFile(from, head.cwd, l.conversation_path);
+          if (found === currentPath) found = null;
+        }
+        return found;
+      },
+    });
+  }
+  return [...past, current];
+}
+
+// The warm-up a rotation runs in the incoming generation before it takes over (the handoff and the
+// model's first answer) is not part of the conversation. The supervisor marks it in
+// <data dir>/state/headless/<seat>/warmup.json:
+//   { "sessions": { "<session id>": { "uuids": ["<log uuid>", ...], "through": "<log uuid>" } } }
+// `uuids`: every item with one of these uuids, or belonging to the exchange one of them opened, is
+// left out. `through`: everything in that session's log up to and including the last item with
+// this uuid is left out. Either may be given alone. Written before the generation takes over, so
+// nothing has been shown yet. Fail-open: no file, a bad file, nothing left out.
+export interface WarmupMark { uuids: Set<string>; through: string | null }
+
+export function warmupMarkPath(agentId: string, root?: string): string | null {
+  if (!isSafeAgentId(agentId)) return null;
+  try {
+    return join(root ?? dataDir(), 'state', 'headless', agentId, 'warmup.json');
+  } catch {
+    return null;
+  }
+}
+
+const warmupCache = new Map<string, { sig: string; doc: any }>();
+
+function warmupDoc(agentId: string): { sig: string; doc: any } {
+  const p = warmupMarkPath(agentId);
+  if (!p) return { sig: '', doc: null };
+  let sig = '';
+  try { const st = statSync(p); sig = `${st.size}:${st.mtimeMs}`; } catch { return { sig: '', doc: null }; }
+  const hit = warmupCache.get(p);
+  if (hit && hit.sig === sig) return hit;
+  let doc: any = null;
+  try { doc = JSON.parse(readFileSync(p, 'utf-8')); } catch { doc = null; }
+  const got = { sig, doc };
+  warmupCache.set(p, got);
+  return got;
+}
+
+/** The mark for one session of `agentId`, with a signature that changes when the file does. */
+export function warmupMarkFor(agentId: string, session: string | null): { sig: string; mark: WarmupMark | null } {
+  if (!session) return { sig: '', mark: null };
+  const { sig, doc } = warmupDoc(agentId);
+  const s = doc && typeof doc === 'object' && doc.sessions && typeof doc.sessions === 'object' ? doc.sessions[session] : null;
+  if (!s || typeof s !== 'object') return { sig: '', mark: null };
+  const uuids = new Set<string>(Array.isArray(s.uuids) ? s.uuids.filter((u: unknown) => typeof u === 'string' && u) : []);
+  const through = typeof s.through === 'string' && s.through ? s.through : null;
+  if (!uuids.size && !through) return { sig: '', mark: null };
+  return { sig, mark: { uuids, through } };
+}
+
+export function dropWarmup(items: readonly any[], mark: WarmupMark | null): any[] {
+  if (!mark) return items as any[];
+  let start = 0;
+  if (mark.through) {
+    for (let i = items.length - 1; i >= 0; i--) if (items[i]?.uuid === mark.through) { start = i + 1; break; }
+  }
+  const out: any[] = [];
+  for (let i = start; i < items.length; i++) {
+    const it = items[i];
+    if (mark.uuids.size && ((it?.uuid && mark.uuids.has(String(it.uuid))) || (it?.exchange && mark.uuids.has(String(it.exchange))))) continue;
+    out.push(it);
+  }
+  return out;
+}
+
+/** A generation's items as the chat shows them, plus the first position of each uuid in them, and the text of each
+ *  user message by uuid (what carriedOver compares). */
+interface SegmentView { items: readonly any[]; firstAt: Map<string, number>; userTexts: Map<string, string> }
+
+const isUserText = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !!it.uuid;
+
+function segmentView(agentId: string, seg: Segment): SegmentView | null {
+  const path = seg.file();
+  if (!path) return null;
+  let log;
+  try { log = cachedLog(path, (lines) => logItems(lines, path.includes('antigravity-cli'))); } catch { return null; }
+  const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
+  // What a session only saw (the earlier-conversation block, seed rows) is never shown (services/conversation-store.ts).
+  const rules = storeRules(seg.session || null);
+  const key = `view:${seg.session}:${sig}:${rules.sig}`;
+  const memo = log.memo.get(key) as SegmentView | undefined;
+  if (memo) return memo;
+  const items = applyStoreRules(dropWarmup(log.items, mark), rules);
+  const firstAt = new Map<string, number>();
+  const userTexts = new Map<string, string>();
+  items.forEach((it, i) => {
+    if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i);
+    if (isUserText(it) && !userTexts.has(String(it.uuid))) userTexts.set(String(it.uuid), String(it.text ?? ''));
+  });
+  const view = { items, firstAt, userTexts };
+  // One view per file: an older warm-up signature is never asked for again.
+  for (const k of [...log.memo.keys()]) if (k.startsWith('view:')) log.memo.delete(k);
+  log.memo.set(key, view);
+  return view;
+}
+
+function rotationMarker(older: Segment, newer: Segment): Record<string, unknown> {
+  const m: Record<string, unknown> = {
+    kind: 'rotation', role: 'system', uuid: `rot:${newer.session}`,
+    from_generation: older.generation, to_generation: newer.generation,
+    from_session: older.session, to_session: newer.session, audience: 'user',
+  };
+  if (newer.promotedAt) m.ts = newer.promotedAt;
+  return m;
+}
+
+/** One chat position, newest to oldest: an item of a generation, or the marker above one. */
+interface Unit { item: any; seg: number; at: number }   // at = -1: the marker above segment `seg`
+
+/** The positions in generation `s` that a newer generation carried over: a user message that was being answered when
+ *  the CLI went down is written again, with the same uuid and text, into the rebuilt conversation, and answered there.
+ *  The chat shows it once, at the newer copy. Only user messages, and only on the same text too, because some logs
+ *  number their ids per file (a codex ordinal, an antigravity step) and those repeat between generations by chance.
+ *  Positions keep their index, so a cursor naming a hidden entry still resolves. */
+function carriedOver(s: number, count: number, view: (i: number) => SegmentView | null | undefined): Set<number> {
+  const out = new Set<number>();
+  const v = view(s);
+  if (!v || !v.userTexts.size || s >= count - 1) return out;
+  const newer: SegmentView[] = [];
+  for (let j = s + 1; j < count; j++) { const w = view(j); if (w?.userTexts.size) newer.push(w); }
+  if (!newer.length) return out;
+  v.items.forEach((it, k) => {
+    if (!isUserText(it)) return;
+    const id = String(it.uuid);
+    const text = String(it.text ?? '');
+    if (newer.some((w) => w.userTexts.get(id) === text)) out.add(k);
+  });
+  return out;
+}
+
+/** Everything older than position (seg, at), newest first; markers only between two generations
+ *  that both show something. Views are made only as the walk reaches them, and the newer ones a
+ *  carried-over check needs. */
+function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[],
+                    seg: number, at: number): Generator<Unit> {
+  const view = (i: number) => {
+    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
+    return views[i];
+  };
+  const hiddenMemo = new Map<number, Set<number>>();
+  const hidden = (i: number) => {
+    let h = hiddenMemo.get(i);
+    if (!h) { h = carriedOver(i, segs.length, view); hiddenMemo.set(i, h); }
+    return h;
+  };
+  const shows = (i: number) => {
+    const v = view(i);
+    return !!v && v.items.length > hidden(i).size;
+  };
+  let s = seg;
+  let i = at;
+  for (;;) {
+    const v = view(s);
+    if (i > 0 && v) {
+      const h = hidden(s);
+      for (let k = Math.min(i, v.items.length) - 1; k >= 0; k--) if (!h.has(k)) yield { item: v.items[k], seg: s, at: k };
+    }
+    // Above the start of segment s: the next older generation that shows anything, if any.
+    let t = s - 1;
+    while (t >= 0 && !shows(t)) t--;
+    if (t < 0) return;
+    if (i >= 0 && shows(s)) yield { item: rotationMarker(segs[t], segs[s]), seg: s, at: -1 };
+    s = t;
+    i = Number.POSITIVE_INFINITY;
+  }
+}
+
+/** The cursor for a unit: the marker's own uuid, `<session>~<uuid>`, or `<session>~#<index>` for
+ *  an item with no uuid. Sessions are plain ids, so '~' never appears in one. */
+function cursorOf(u: Unit, segs: Segment[]): string {
+  if (u.at < 0) return String(u.item.uuid);
+  const s = segs[u.seg].session;
+  return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${u.at}`;
+}
+
+/** A unit's item as a shallow copy (the cache keeps the originals), with the server's message ref
+ *  `cursorOf(u) + '#' + part` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a
+ *  generation with a known session. part is counted from the uuid's first position in that generation's view, NOT
+ *  in the window, so a block has the same ref in the newest window, an older page and every re-read. */
+function withRef(u: Unit, segs: Segment[], views: (SegmentView | null | undefined)[]): any {
+  const copy = { ...u.item };
+  const v = u.at >= 0 ? views[u.seg] : null;
+  if (v && segs[u.seg]?.session && refable(u.item)) {
+    const from = v.firstAt.get(String(u.item.uuid)) ?? 0;
+    copy.ref = `${cursorOf(u, segs)}#${partAt(v.items, u.at, from)}`;
+  }
+  return copy;
+}
+
+/** Where a cursor points: (segment, index), or null for one this chat does not have. A bare uuid
+ *  is looked for from the newest generation back. */
+function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[], cursor: string):
+    { seg: number; at: number } | null {
+  const view = (i: number) => {
+    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
+    return views[i];
+  };
+  if (cursor.startsWith('rot:')) {
+    const s = segs.findIndex((g) => g.session && `rot:${g.session}` === cursor);
+    return s > 0 ? { seg: s, at: -1 } : null;
+  }
+  const tilde = cursor.indexOf('~');
+  if (tilde >= 0) {
+    const s = segs.findIndex((g) => g.session === cursor.slice(0, tilde));
+    const rest = cursor.slice(tilde + 1);
+    const v = s >= 0 ? view(s) : null;
+    if (!v) return null;
+    if (/^#\d+$/.test(rest)) {
+      const n = Number(rest.slice(1));
+      return n < v.items.length ? { seg: s, at: n } : null;
+    }
+    const at = v.firstAt.get(rest);
+    return at === undefined ? null : { seg: s, at };
+  }
+  for (let s = segs.length - 1; s >= 0; s--) {
+    const at = view(s)?.firstAt.get(cursor);
+    if (at !== undefined) return { seg: s, at };
+  }
+  return null;
+}
+
+/** A window of the stitched chat: the newest `limit` positions (no cursor), or the `limit`
+ *  positions just older than `before`. A page never starts inside one log line's items, so the
+ *  next page, read from its `oldest_id`, neither repeats nor skips any. */
+export function chatWindow(agentId: string, segs: Segment[], limit: number, before: string | null):
+    { items: any[]; has_older: boolean; oldest_id: string | null; cursor_ts: string | null } | null {
+  const views: (SegmentView | null | undefined)[] = segs.map(() => undefined);
+  const last = segs.length - 1;
+  let from = { seg: last, at: Number.POSITIVE_INFINITY };
+  let cursorTs: string | null = null;
+  if (before !== null) {
+    const at = cursorAt(agentId, segs, views, before);
+    if (!at) return null;
+    from = at;
+    const v = views[at.seg];
+    cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
+  }
+  const walk = olderThan(agentId, segs, views, from.seg, from.at);
+  const units: Unit[] = [];
+  // Never one step past `limit` without a cursor: a window the current log fills must not look
+  // for, or read, an older generation's file.
+  while (units.length < limit) {
+    const got = walk.next();
+    if (got.done) break;
+    units.push(got.value);
+  }
+  let hasOlder = false;
+  if (before !== null) {
+    let next = walk.next();
+    // Keep one line's items together: take the rest of the oldest item's line too.
+    const edge = units[units.length - 1];
+    while (edge && edge.at >= 0 && edge.item?.uuid && !next.done
+           && next.value.seg === edge.seg && next.value.item?.uuid === edge.item.uuid) {
+      units.push(next.value);
+      next = walk.next();
+    }
+    hasOlder = !next.done;
+  }
+  units.reverse();
   return {
-    divider: pred.divider,
-    lines: () => readFileSync(file(), 'utf-8').split('\n'),
-    get antigravity() { return file().includes('antigravity-cli'); },
+    items: units.map((u) => withRef(u, segs, views)),  // shallow copies (the cache keeps the originals), with refs
+    has_older: hasOlder,
+    oldest_id: units.length ? cursorOf(units[0], segs) : null,
+    cursor_ts: cursorTs,
   };
 }
 
@@ -748,6 +1076,22 @@ function cleanArgs(args: any): Record<string, unknown> {
  * COMPLETE open+close pair is treated as plumbing. Returning '' drops the node: buildRenderItems
  * already skips empty text.
  */
+// The quiet page line the send route adds to what the agent receives (agent-send.ts pageContextLine): the agent reads
+// it, the person never sees it as part of their message.
+const PAGE_CONTEXT_TAG = /\s*<page-context>[\s\S]*?<\/page-context>/g;
+// The same for the live-call line (agent-send.ts VOICE_CALL_LIVE_TAG): typed during a voice call.
+const VOICE_CALL_LIVE_TAG_RE = /\s*<voice-call-(live|said)>[\s\S]*?<\/voice-call-\1>/g;
+// A request the operator SAID on a voice call, handed to the agent's session (services/arturo/agent_call.py
+// VOICE_SAID_TAG): the call's card holds it, so the chat does not show it as a typed message; the reply stays.
+const VOICE_CALL_SAID = '<voice-call-said>';
+
+export function stripPageContext(text: string): string {
+  // The reaction wake (lib/reaction-wake-text.ts, services/reaction-wake.ts): the agent reads it, nobody said it.
+  if (hasReactionWake(text)) text = stripReactionWake(text);
+  if (text.includes('<voice-call-')) text = text.replace(VOICE_CALL_LIVE_TAG_RE, '').trim();
+  return text.includes('<page-context>') ? text.replace(PAGE_CONTEXT_TAG, '').trim() : text;
+}
+
 export function sanitizeClaudeUserText(text: string): string {
   // A long message reached the pane as a one-line chip-dodge banner; show what was typed.
   let t = expandChipDodge(String(text ?? ''));
@@ -756,6 +1100,18 @@ export function sanitizeClaudeUserText(text: string): string {
   t = t.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
   t = t.replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '');
   const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(t);
+  // A model switch (`/model <id>`, typed by the dashboard's model picker or by hand) is not part of the conversation:
+  // the thread already marks where the model changed ("Model changed", from the assistant entries' model).
+  if (name && name[1].trim() === '/model') return '';
+  // Leaving the TUI (`/exit`, or its alias `/quit`) is not conversation either: a headless seat's supervisor types it
+  // on every Back to chat, a switch-on leaves one behind, and on a headless seat typed by hand it IS Back to chat.
+  // Its reply ("Goodbye!") is local-command output, already dropped above.
+  if (name && /^\/(exit|quit)$/.test(name[1].trim())) return '';
+  // A person's /compact is not conversation either: our rotation runs it (the supervisor never passes it to the CLI)
+  // and the chat shows the compaction notice instead. Only the command itself, as the whole message: a sentence that
+  // mentions /compact is what someone said and stays.
+  if (name && name[1].trim() === '/compact') return '';
+  if (/^\/compact(?:[ \t][^\n]*)?$/.test(t.trim())) return '';
   if (name) {
     const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(t);
     const typed = [name[1].trim(), (args?.[1] || '').trim()].filter(Boolean).join(' ');
@@ -787,6 +1143,15 @@ export function queuedCommandItems(o: any): any[] {
   const a = o?.attachment;
   if (!a || a.type !== 'queued_command') return [];
   const originKind = a.origin?.kind;
+  // A background job that finished while the agent was mid-turn: kept as the harness's own line
+  // (machine `task`, never operator speech), so clients draw it as a finished-work card instead of
+  // losing it. `mid_turn` keeps it from opening a turn of its own (audience.ts), so the fold of the
+  // turn it landed in is unchanged.
+  if (originKind === 'task-notification') {
+    const text = String(a.prompt || '').trim();
+    if (!/^<task-notification>/.test(text)) return [];
+    return [{ kind: 'text', role: 'user', text, ts: o.timestamp, uuid: o.uuid, machine: 'task', mid_turn: true }];
+  }
   // The legacy clause: builds predating `origin` label a human prompt only by commandMode.
   const isHuman = originKind === 'human' || (originKind == null && a.commandMode === 'prompt');
   if (!isHuman) return [];
@@ -930,21 +1295,23 @@ export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
 export function dedupeQueuedCommands(items: any[]): any[] {
   const realUserText = new Set<string>();
   for (const it of items) {
-    if (it.kind === 'text' && it.role === 'user' && !it.queued) {
+    if (it.kind === 'text' && it.role === 'user' && !it.queued && !it.mid_turn) {
       const t = (it.text || '').trim();
       if (t) realUserText.add(t);
     }
   }
   if (!realUserText.size) return items;
-  return items.filter((it) => !(it.queued && it.kind === 'text' && realUserText.has((it.text || '').trim())));
+  return items.filter((it) => !((it.queued || it.mid_turn) && it.kind === 'text' && realUserText.has((it.text || '').trim())));
 }
 
-function normalizeClaudeEntry(o: any): any[] {
+// keepSidechain: a subagent's own log (<sid>/subagents/agent-<id>.jsonl) is sidechain on every row; its
+// view keeps them. The seat's chat never does.
+function normalizeClaudeEntry(o: any, keepSidechain = false): any[] {
   const t = o?.type;
   // A mid-turn message is an `attachment`, not a user turn — see queuedCommandItems.
   if (t === 'attachment') return queuedCommandItems(o);
   if (t !== 'user' && t !== 'assistant') return [];
-  if (o.isSidechain === true || o.isCompactSummary === true) return [];
+  if ((o.isSidechain === true && !keepSidechain) || o.isCompactSummary === true) return [];
   // The harness writes its own notes as type:'user' with isMeta:true -- the image-size
   // note after a photo is read, stop-hook feedback, a loaded skill's body, local-command
   // caveats. The operator, 2026-10-08: rendered as user rows, they "look like messages that come
@@ -1264,6 +1631,7 @@ export function buildRenderItems(items: any[]): any[] {
       const text = (it.text || '').trim();
       if (!text) continue;
       if (it.role === 'user') {
+        if (it.voice_said) continue;      // said on a voice call: the call's card holds it
         const node: any = { kind: 'user', text };
         if (it.is_system) node.is_system = true;
         if (it.queued) node.queued = true;
@@ -1296,6 +1664,17 @@ export function buildRenderItems(items: any[]): any[] {
       };
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = it.uuid || key;
+      nodes.push(withAudience(node, it));
+      continue;
+    }
+    if (it.kind === 'compaction') {
+      // The compaction notice: one node per notice, keyed by its id so it updates in place.
+      const node: any = {
+        kind: 'compaction', id: it.id, state: it.state, trigger: it.trigger ?? 'auto', finished_at: it.finished_at ?? null,
+        before_tokens: it.before_tokens ?? null, after_tokens: it.after_tokens ?? null,
+      };
+      if (it.ts !== undefined) node.ts = it.ts;
+      node.key = it.id || key;
       nodes.push(withAudience(node, it));
       continue;
     }
@@ -1473,7 +1852,7 @@ export function parseGrokUpdates(lines: string[]): any[] {
 
 // One log's items: parsed by the grammar its lines show, whole-file passes applied, then tagged
 // (audience/exchange) on the WHOLE log.
-function logItems(lines: string[], antigravityHint: boolean): any[] {
+function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
   const isAntigravity = antigravityHint ||
     lines.some((l) => {
       try {
@@ -1503,7 +1882,7 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line);
-        const got = normalizeClaudeEntry(o);
+        const got = normalizeClaudeEntry(o, keepSidechain);
         const msg = o?.message;
         const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
         const first = got.find((it) => it.role === 'assistant');
@@ -1522,9 +1901,134 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
     // show ONCE, and the real turn is the one that wins.
     items = dedupeQueuedCommands(items);
   }
+  // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
+  // Kept as the turn's opener (audience/exchange tagging and the interrupted-turn merge need it), flagged, words only;
+  // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && it.text.includes(VOICE_CALL_SAID) ? { ...it, text: stripPageContext(it.text), voice_said: true } : it));
+  // A reaction wake turn: kept (it opens the agent's turn), emptied (never drawn: both renderers skip empty user
+  // text) and flagged, so the dashboard does not fold the agent's emoji answer to it into the operator's message
+  // before (dashboard lib/transcript.ts afterReaction, view.ts withReactions).
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && hasReactionWake(it.text) ? { ...it, text: stripPageContext(it.text), reaction_wake: true } : it));
+  // The agent's answer to that wake when it is not a message (NO_REPLY, "(no reply needed)", one emoji): marked here,
+  // dropped from what the chat is sent (finishWindow, the tailer after its refs). chatItemsFor keeps them marked: the
+  // wake watcher (services/reaction-wake.ts) turns an emoji answer into a real reaction.
+  items = markWakeReplies(items);
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
+    ? { ...it, text: stripPageContext(it.text) } : it));
+  // A call handed to the agent (lib/agentCalls.ts handoffMessage): the agent read the transcript, the chat shows the
+  // call's card on this line, where the call ended.
+  items = items.map((it) => {
+    if (it?.kind !== 'text' || it.role !== 'user' || typeof it.text !== 'string' || !it.text.includes('<voice-call-transcript')) return it;
+    let shown: ReturnType<typeof showHandoff> = null;
+    try { shown = showHandoff(it.text, dataDir()); } catch { shown = null; }
+    return shown ? { ...it, text: shown.text, call_id: shown.call_id } : it;
+  });
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
   return tagAudience(enrichItems(items));
+}
+
+/** The assistant text answering a reaction wake (after a reaction_wake turn, before the next user text) that is not a
+ *  message: copies marked wake_reply 'silent' (NO_REPLY, a "no reply" phrase) or 'emoji' (a reaction written as text).
+ *  Real words, and the same words answering a real message, are left alone. Read-only: nothing is recorded. */
+export function markWakeReplies(items: any[]): any[] {
+  let inWake = false;
+  return items.map((it) => {
+    if (it?.kind === 'text' && it.role === 'user') { inWake = it.reaction_wake === true; return it; }
+    if (!inWake || it?.kind !== 'text' || it.role !== 'assistant') return it;
+    const quiet = silentReply(it.text);
+    return quiet ? { ...it, wake_reply: quiet } : it;
+  });
+}
+
+/** What the chat is sent: the marked wake answers left out (markWakeReplies). */
+export function dropWakeReplies(items: any[]): any[] {
+  return items.some((it) => it?.wake_reply) ? items.filter((it) => !it?.wake_reply) : items;
+}
+
+// A headless seat's cut turns (scripts/seat_supervisor.py): a message whose turn did not finish
+// (the process ended mid-turn, or an interrupt cut it) is never resent, so the chat says so. The
+// supervisor lists them in <data dir>/state/headless/<seat>/interrupted.json; each one becomes a
+// machine line placed after the turn its message opened. Only for a message that is in the window,
+// and once per message. Fail-open: no file, nothing added.
+export const INTERRUPTED_PREFIX = '[TURN INTERRUPTED]';
+
+export interface InterruptedTurn { id: string; text: string; at?: string; reason?: string }
+
+/** Where the supervisor lists a seat's cut turns; null for an id that is not a safe path segment. */
+export function interruptedTurnsPath(agentId: string, root?: string): string | null {
+  if (!isSafeAgentId(agentId)) return null;
+  try {
+    return join(root ?? dataDir(), 'state', 'headless', agentId, 'interrupted.json');
+  } catch {
+    return null;                                  // no data dir configured: no file to read
+  }
+}
+
+/** A cheap change signature for that file (size and mtime), '' when it is missing. The live stream
+ *  re-reads the transcript when it changes, as a cut turn is listed without the log growing. */
+export function interruptedTurnsSig(agentId: string, root?: string): string {
+  const p = interruptedTurnsPath(agentId, root);
+  if (!p) return '';
+  try {
+    const st = statSync(p);
+    return `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return '';
+  }
+}
+
+export function readInterruptedTurns(agentId: string, root?: string): InterruptedTurn[] {
+  const p = interruptedTurnsPath(agentId, root);
+  if (!p) return [];
+  try {
+    const doc = JSON.parse(readFileSync(p, 'utf-8'));
+    const items = doc && Array.isArray(doc.items) ? doc.items : [];
+    // The supervisor keeps the text as delivered: without the quiet page line, as the chat shows the message.
+    // Filtered after stripping too: a cut reaction wake strips to '' and is no message (an empty text would also
+    // match every user turn in mergeInterruptedTurns' startsWith).
+    return items.filter((x: any) => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim())
+      .map((x: any) => ({ ...x, text: stripPageContext(x.text) }))
+      .filter((x: any) => x.text);
+  } catch {
+    return [];
+  }
+}
+
+const isOpenerItem = (it: any) => it?.kind === 'text' && it.role === 'user' && !it.mid_turn && !it.is_system;
+
+export function interruptedLine(t: InterruptedTurn): string {
+  const words = t.text.replace(/\s+/g, ' ').trim();
+  const head = words.length > 160 ? `${words.slice(0, 159)}…` : words;
+  return `${INTERRUPTED_PREFIX} The agent's process stopped before it finished answering this message, `
+    + `and the message was not sent again. Message: "${head}"`;
+}
+
+export function mergeInterruptedTurns(items: any[], turns: InterruptedTurn[]): any[] {
+  if (!turns.length) return items;
+  const out = [...items];
+  for (const t of turns) {
+    const uuid = `interrupted:${t.id}`;
+    if (out.some((it) => it?.uuid === uuid)) continue;
+    const want = t.text.trim();
+    let at = -1;
+    for (let i = out.length - 1; i >= 0; i--) {
+      const it = out[i];
+      if (it?.kind === 'text' && it.role === 'user' && !it.is_system && typeof it.text === 'string'
+          && (it.text.trim() === want || it.text.trim().startsWith(want.slice(0, 200)))) { at = i; break; }
+    }
+    if (at < 0) continue;                           // its message is not in this window
+    let end = at + 1;
+    while (end < out.length && !isOpenerItem(out[end])) end++;
+    out.splice(end, 0, {
+      kind: 'text', role: 'user', text: interruptedLine(t), ...(t.at ? { ts: t.at } : {}), uuid,
+      machine: 'system', mid_turn: true, audience: 'user', interrupted_turn: true,
+    });
+  }
+  return out;
 }
 
 // Pure v2 envelope builder — the seam the conformance fixtures exercise.
@@ -1537,46 +2041,135 @@ export function normalizeTranscript(
   antigravityHint = false,
   includeQueued = false,
   previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
+  keepWakeReplies = false,
+  keepSidechain = false,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
-  let all = logItems(lines, antigravityHint);
+  // A subagent's own log (keepSidechain) shares the seat's session id but none of the seat's window rules:
+  // the store's seen-only/seed rows and the warmup mark name the seat's entries, so they never apply to it.
+  const ruleSession = keepSidechain ? null : sessionId;
+  let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint, keepSidechain), warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
   // strip. The previous log is read only when this one alone does not fill the window.
   if (previous && all.length < limit) {
     let before: any[] | null = null;
-    try { before = logItems(previous.lines(), previous.antigravity); } catch { before = null; }  // unreadable: this log alone
+    try {
+      before = applyStoreRules(logItems(previous.lines(), previous.antigravity), storeRules(String(previous.divider.from_session ?? '') || null));
+    } catch { before = null; }  // unreadable: this log alone
     if (before) all = [...before, { ...previous.divider, audience: 'user' }, ...all];
   }
-  let windowed = all.slice(-limit);
+  return {
+    agent_id: agentId,
+    session_id: sessionId,
+    grammar_version: GRAMMAR_VERSION,
+    // keepWakeReplies: the tailer stamps refs first (parts numbered as the poll route numbers them), then drops them.
+    ...finishWindow(all.slice(-limit), agentId, includeQueued, null, keepWakeReplies),
+  };
+}
+
+/** The merges and tags every window gets once its log items are chosen. `olderPage` is set for a
+ *  page read with a cursor: msg_store's synthetics then stay only where they belong to that page
+ *  (no still-pending turn, and nothing after its last log item that a newer page draws). */
+function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
+                      olderPage: { cursorMs: number | null } | null = null,
+                      keepWakeReplies = false): { items: any[]; render_items: any[] } {
+  // A wake's silent or emoji answer is never sent (markWakeReplies); refs were stamped with it in place (chatWindow).
+  if (!keepWakeReplies) windowed = dropWakeReplies(windowed);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
   // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
   // the log's own order is the delivery order). POLL-ONLY —
   // the SSE tailer never sets includeQueued, so its monotonic-append delta stays
   // free of the ephemeral B1 synthetics (§3e/A1). Fail-open inside mergeQueuedItems.
   if (includeQueued) {
+    const logged = new Set(windowed);
     windowed = mergeQueuedItems(windowed, agentId);
+    if (olderPage) windowed = keepOlderPageSynthetics(windowed, logged, olderPage.cursorMs);
     // An agent message delivered mid-turn exists as BOTH a batch row and a queued_command.
     // The batch wins: it knows who sent it.
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
     // ...and a machine message the pane recorded as a real turn shows as that turn, not ALSO as a batch.
     windowed = dropBatchEntriesCoveredByMachineTurns(windowed);
+    // A headless seat's cut turns, shown where they happened (poll only, like the merges above).
+    windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
   windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
-  return {
-    agent_id: agentId,
-    session_id: sessionId,
-    grammar_version: GRAMMAR_VERSION,
-    items: windowed,
-    render_items: buildRenderItems(windowed),
-  };
+  return { items: windowed, render_items: buildRenderItems(windowed) };
+}
+
+/** On an older page: a still-pending turn is the live end's, and a batch placed after the page's
+ *  last log item is drawn by the newer page unless it is older than that page's first item. */
+function keepOlderPageSynthetics(items: any[], logged: Set<any>, cursorMs: number | null): any[] {
+  let lastLogged = -1;
+  items.forEach((it, i) => { if (logged.has(it)) lastLogged = i; });
+  return items.filter((it, i) => {
+    if (logged.has(it)) return true;
+    if (it?.queued && typeof it.uuid === 'string' && it.uuid.startsWith('queued:')) return false;
+    if (i < lastLogged) return true;
+    const t = Date.parse(String(it?.ts ?? ''));
+    return it?.kind === 'queued_batch' && cursorMs !== null && !Number.isNaN(t) && t < cursorMs;
+  });
+}
+
+/** The seat's compaction notices placed in a window by time (services/conversation-store.ts), unless the seat's
+ *  `show_compaction` is off. The newest window holds the notices from its first item on (all of them when it is the
+ *  whole chat); an older page holds those from its first item (or from the start, when nothing is older) up to its
+ *  cursor, so pages chained by oldest_id carry each notice once. Fail-open: the window as it was. */
+function withNotices(agentId: string, win: { items: any[]; has_older: boolean; cursor_ts: string | null }, limit: number,
+                     before: string | null): any[] {
+  try {
+    if (!readSeatSettings(dataDir(), agentId).show_compaction) return win.items;
+    const notices = compactionNotices(agentId);
+    if (!notices.length) return win.items;
+    const firstTs = win.items.find((it) => it?.ts)?.ts ?? null;
+    const whole = before === null ? win.items.length < limit : !win.has_older;
+    return mergeNotices(win.items, notices, { from: whole ? null : firstTs, to: before === null ? null : win.cursor_ts });
+  } catch {
+    return win.items;
+  }
+}
+
+/** The calls made on this agent's page, each where it started, as the chat's call card (lib/agentCalls.ts). The
+ *  same window bounds as the compaction notices. Fail-open: no journals, or a bad one, and the chat is unchanged. */
+function withCalls(agentId: string, win: { items: any[]; has_older: boolean; cursor_ts: string | null }, limit: number,
+                   before: string | null, body: { items: any[]; render_items: any[] }): { items: any[]; render_items: any[] } {
+  try {
+    // A handed-off call's card is its hand-off line (logItems): never also where it started.
+    const handed = readHandoffs(dataDir());
+    const calls = listAgentCalls(dataDir(), agentId).filter((c) => !handed[c.call_id]);
+    if (!calls.length) return body;
+    const firstTs = win.items.find((it) => it?.ts)?.ts ?? null;
+    const whole = before === null ? win.items.length < limit : !win.has_older;
+    return mergeCallMarkers(body, calls, dataDir(), { from: whole ? null : firstTs, to: before === null ? null : win.cursor_ts });
+  } catch {
+    return body;
+  }
+}
+
+/** This agent's chat items as the chat shows them (every generation this box can read, the newest `limit`), for the
+ *  readers that need them outside a page: a call's work anchors. Empty when nothing resolves. */
+export function chatItemsFor(agentId: string, limit = 2000): any[] {
+  try {
+    const { path, sid } = resolveTranscriptPath(agentId);
+    if (!path) return [];
+    const current = path;
+    let segs: Segment[];
+    try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
+    return chatWindow(agentId, segs, limit, null)?.items ?? [];
+  } catch { return []; }
 }
 
 // GET /api/agents/:id/transcript?limit= -> v2 envelope
 // { agent_id, session_id, grammar_version, items, render_items }
+// GET /api/agents/:id/transcript?before=<cursor>&limit= -> the page just older than the cursor (a
+// page's own `oldest_id`, or an item's uuid), the same envelope plus { has_older, oldest_id }.
+const PAGE_LIMIT = 100;
+
 router.get('/:id/transcript', (req: Request, res: Response) => {
   const agentId = String(req.params.id);
-  const limit = Math.min(parseInt(String(req.query.limit)) || 150, 500);
+  const before = typeof req.query.before === 'string' && req.query.before ? req.query.before.slice(0, 300) : null;
+  const limit = Math.min(parseInt(String(req.query.limit)) || (before === null ? 150 : PAGE_LIMIT), 500);
+  const paged = (body: Record<string, unknown>) => before === null ? body : { has_older: false, oldest_id: null, ...body };
   // Resolution is INSIDE the try (gm ruling on DEC-1790239929422621): it touches the filesystem,
   // tmux and now a sqlite index, and this route is reachable on a PUBLIC ingress — an
   // unhandled throw here is a 500, not an empty pane.
@@ -1585,29 +2178,40 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
   try {
     ({ path, sid } = resolveTranscriptPath(agentId));
   } catch (err) {
-    res.json({ agent_id: agentId, session_id: null, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+    res.json(paged({ agent_id: agentId, session_id: null, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) }));
     return;
   }
   if (!path) {
-    res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'no transcript resolved' });
+    res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'no transcript resolved' }));
     return;
   }
   try {
-    const raw = readFileSync(path, 'utf-8');
-    const lines = raw.split('\n');
     // NOTE: match the Gemini/Antigravity brain-log path via 'antigravity-cli'
     // ONLY. A bare 'brain' substring also matches Claude agents whose project
     // dir contains "brain" (e.g. second-brain-dev, cwd ~/repos/second-brain),
     // misclassifying their Claude JSONL as Antigravity and yielding 0 items.
     // Real Gemini brain logs always live under .gemini/antigravity-cli/brain/,
-    // so 'antigravity-cli' + the content sniff in normalizeTranscript cover them.
-    // The stitched chat: the generation this one took over from, above it. Fail-open: anything
-    // wrong with the previous file and the chat is this file alone, as before.
-    let previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null;
-    try { previous = lazyPreviousTranscript(agentId, sid, path); } catch { previous = null; }
-    res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true, previous));
+    // so 'antigravity-cli' + the content sniff in logItems cover them (segmentView).
+    // The stitched chat: every earlier generation of the lineage this box can read, above this
+    // one. Fail-open: anything wrong with the chain and the chat is this file alone, as before.
+    // This generation's own log first, outside the fail-open views: unreadable is an error here.
+    const current = path;
+    cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+    let segs: Segment[];
+    try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
+    const win = chatWindow(agentId, segs, limit, before);
+    if (!win) {
+      res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'unknown cursor' }));
+      return;
+    }
+    const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
+    const body = withCalls(agentId, win, limit, before,
+      finishWindow(withNotices(agentId, win, limit, before), agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs }));
+    const env: Record<string, unknown> = { agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, ...body };
+    if (before !== null) { env.has_older = win.has_older; env.oldest_id = win.oldest_id; }
+    res.json(env);
   } catch (err) {
-    res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+    res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) }));
   }
 });
 
@@ -1648,5 +2252,47 @@ router.get('/:id/transcript.md', (req: Request, res: Response) => {
     res.status(500).type('text/plain').send(`Could not export: ${String(err).slice(0, 200)}`);
   }
 });
+
+// A subagent id as Claude writes it in agent-<id>.jsonl (every depth sits flat in <sid>/subagents/).
+export const SAFE_SUBAGENT_ID = /^[a-f0-9]{6,40}$/;
+
+/** One subagent's own log under the seat's current Claude session; path null when the seat has no
+ *  Claude session here or no such subagent. Both ids are checked before any path is built. */
+export function resolveSubagentTranscriptPath(agentId: string, subagentId: string,
+  resolveSeat: (id: string) => { path: string | null; sid: string | null } = resolveTranscriptPath,
+): { path: string | null; sid: string | null } {
+  if (!isSafeAgentId(agentId) || !SAFE_SUBAGENT_ID.test(subagentId)) return { path: null, sid: null };
+  const { path, sid } = resolveSeat(agentId);
+  if (!path || !path.endsWith('.jsonl')) return { path: null, sid };
+  const sub = join(path.slice(0, -'.jsonl'.length), 'subagents', `agent-${subagentId}.jsonl`);
+  return { path: existsSync(sub) ? sub : null, sid };
+}
+
+// GET /api/agents/:id/subagents/:aid/transcript?limit= -> v2 envelope (+ subagent_id) of one subagent's own
+// log, any depth (the agent-tree drill-in, read-only). 404 when the seat has no such subagent on this box.
+// Scoped exactly like /:id/transcript: router.param('id') above runs first.
+export function handleSubagentTranscript(req: Request, res: Response,
+  resolve: (agentId: string, subagentId: string) => { path: string | null; sid: string | null } = resolveSubagentTranscriptPath): void {
+  const agentId = String(req.params.id);
+  const subagentId = String(req.params.aid);
+  if (!isSafeAgentId(agentId) || !SAFE_SUBAGENT_ID.test(subagentId)) {
+    res.status(400).json({ error: 'bad agent or subagent id' });
+    return;
+  }
+  const limit = Math.min(parseInt(String(req.query.limit)) || 150, 500);
+  let found: { path: string | null; sid: string | null };
+  try { found = resolve(agentId, subagentId); } catch { found = { path: null, sid: null }; }
+  const { path, sid } = found;
+  if (!path) { res.status(404).json({ error: 'no such subagent for this seat on this box' }); return; }
+  try {
+    const lines = readFileSync(path, 'utf-8').split('\n');
+    res.json({ ...normalizeTranscript(lines, agentId, sid, limit, false, false, null, false, true), subagent_id: subagentId });
+  } catch (err) {
+    // Never the exception text to the client: a read error names the absolute log path.
+    console.error(`[subagent-transcript] ${agentId}/${subagentId}:`, err);
+    res.status(500).json({ agent_id: agentId, session_id: sid, subagent_id: subagentId, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'transcript unreadable' });
+  }
+}
+router.get('/:id/subagents/:aid/transcript', (req: Request, res: Response) => handleSubagentTranscript(req, res));
 
 export default router;

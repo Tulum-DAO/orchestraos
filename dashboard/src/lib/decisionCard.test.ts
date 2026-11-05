@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  approvalAction, canSendWords, withInputKinds, isBuiltInExtra, isLongOption, keyAction, linkedMenuCard, riskText, visibleOptions,
+  approvalAction, canSendWords, withInputKinds, isBuiltInExtra, linkedMenuCard, riskText, visibleOptions,
 } from './decisionCard';
 
 const OPTIONS = [
@@ -20,23 +20,6 @@ test("Claude Code's built-in extra rows are not drawn; other write-ins are", () 
 test('words alone need a write-in option to ride, even a hidden one', () => {
   assert.equal(canSendWords(OPTIONS), true);
   assert.equal(canSendWords(OPTIONS.slice(0, 2)), false);
-});
-
-test('keys: 1–9 pick an existing option, Return sends, e goes to the field; typing stays in the field', () => {
-  const options = OPTIONS.slice(0, 2);
-  assert.deepEqual(keyAction('2', { inField: false, options }), { kind: 'pick', n: '2' });
-  assert.equal(keyAction('7', { inField: false, options }), null);
-  assert.deepEqual(keyAction('Enter', { inField: false, options }), { kind: 'send' });
-  assert.deepEqual(keyAction('Enter', { inField: true, options }), { kind: 'send' });
-  assert.deepEqual(keyAction('e', { inField: false, options }), { kind: 'focus-text' });
-  assert.equal(keyAction('e', { inField: true, options }), null);
-  assert.equal(keyAction('1', { inField: true, options }), null);
-});
-
-test('a long option is cut short until it is opened', () => {
-  assert.equal(isLongOption({ label: 'Short' }), false);
-  assert.equal(isLongOption({ label: 'x'.repeat(91) }), true);
-  assert.equal(isLongOption({ label: 'one\ntwo' }), true);
 });
 
 test('risk reads "· N risk" material; none when absent', () => {

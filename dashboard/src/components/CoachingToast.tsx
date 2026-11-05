@@ -73,16 +73,16 @@ export default function CoachingToast() {
         visible ? 'max-h-32 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-2'
       }`}
     >
-      <div className="bg-neutral-800 border border-neutral-700 rounded-lg p-4 flex items-start gap-3">
-        <Lightbulb className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
-        <p className="flex-1 text-sm text-neutral-200 leading-relaxed">
+      <div className="bg-tone-800 border border-tone-700 rounded-lg p-4 flex items-start gap-3">
+        <Lightbulb className="w-5 h-5 text-tone-amber-400 mt-0.5 shrink-0" />
+        <p className="flex-1 text-sm text-tone-200 leading-relaxed">
           {insight.description || insight.text || 'New coaching insight available'}
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => handleAction('accept')}
             disabled={respond.isPending}
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md bg-green-600/20 text-tone-green-400 hover:bg-green-600/30 transition-colors disabled:opacity-50"
           >
             <Check className="w-3.5 h-3.5" />
             Accept
@@ -90,7 +90,7 @@ export default function CoachingToast() {
           <button
             onClick={() => handleAction('dismiss')}
             disabled={respond.isPending}
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md bg-neutral-700 text-neutral-400 hover:bg-neutral-600 hover:text-neutral-300 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md bg-tone-700 text-tone-400 hover:bg-tone-600 hover:text-tone-300 transition-colors disabled:opacity-50"
           >
             <X className="w-3.5 h-3.5" />
             Dismiss

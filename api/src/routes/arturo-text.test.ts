@@ -139,3 +139,49 @@ test('the client turn id rides along (DEC-1791518421640932); a non-string one do
   await post(deps, { text: 'hi', conversation_id: 'c1', turn_id: { evil: true } });
   assert.equal('turn_id' in sent[1].body, false);
 });
+
+// The cards on screen (contract/notes/arturo-screen-context.md): known fields only, clipped, the same rules as the
+// proxy's _pick_cards; the fixture is shared with services/arturo/test_screen_cards.py.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { pickCards } from './arturo.js';
+
+const CARD_CASES = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)),
+  '../../../services/arturo/fixtures/screen_cards_cases.json'), 'utf-8')) as { name: string; in: unknown; out: unknown }[];
+
+for (const c of CARD_CASES) {
+  test(`screen cards: ${c.name}`, () => {
+    assert.deepEqual(pickCards(c.in), c.out);
+  });
+}
+
+test('screen cards ride with the context to the gateway, rebuilt; a cards value that is no list is a 400', async () => {
+  const { deps, sent } = makeDeps();
+  const cards = { v: 1, focus: 'c1', cards: [{ ref: 'c1', kind: 'decision', question: 'Which size?', secret: 'x' }] };
+  const r = await post(deps, { text: 'what is this?', conversation_id: 'c', context: { route: '/approvals', cards } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(sent[0].body.context, { route: '/approvals',
+    cards: { v: 1, focus: 'c1', cards: [{ ref: 'c1', kind: 'decision', question: 'Which size?' }] } });
+  const { deps: d2, sent: s2 } = makeDeps();
+  const bad = await post(d2, { text: 'hi', context: { route: '/', cards: { cards: 'nope' } } });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.json.field, 'context.cards');
+  assert.equal(s2.length, 0);
+});
+
+test('a choice card answer rides with the turn, rebuilt from known fields; a malformed one is a 400 before the gateway', async () => {
+  const { deps, sent } = makeDeps();
+  const r = await post(deps, { text: 'Circle', conversation_id: 'c',
+    card_answer: { card_id: '0a1b2c3d4e5f6a7b', picks: ['Circle'], words: '', extra: 'dropped' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(sent[0].body.card_answer, { card_id: '0a1b2c3d4e5f6a7b', picks: ['Circle'], words: '' });
+  for (const card_answer of ['x', { card_id: 'NOT-HEX' }, { card_id: '0a1b2c3d', picks: 'Circle' },
+    { card_id: '0a1b2c3d', picks: Array(9).fill('a') }, { card_id: '0a1b2c3d', words: 'x'.repeat(1001) }]) {
+    const { deps: d2, sent: s2 } = makeDeps();
+    const bad = await post(d2, { text: 'hi', card_answer });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json.error, 'bad_card_answer');
+    assert.equal(s2.length, 0);
+  }
+});

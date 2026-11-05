@@ -126,7 +126,10 @@ def kick_router_after_send(db_path) -> None:
             cmd = ["flock", "-n", lock] + cmd
         env = {k: v for k, v in os.environ.items() if k not in ("ORCH_DIR", "MSG_DB_PATH")}
         env["ORCHESTRA_DIR"] = str(data)        # the router reads exactly the bus we wrote
-        logf = code_root / "logs" / "message-router.log"
+        # The beat's own log (`orchestra up` writes <data dir>/logs/<beat>.log): a pass this kick starts is a router
+        # pass like any other, and what it says (a hold, a page, a test seat it kept quiet about) belongs beside
+        # the beat's. The checkout's logs/ dir is not where anyone reads the router.
+        logf = data / "logs" / "router.log"
         sink = open(logf, "ab") if logf.parent.is_dir() else open(os.devnull, "wb")
         with sink:
             subprocess.Popen(cmd, cwd=str(code_root), env=env,

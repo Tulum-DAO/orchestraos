@@ -43,6 +43,46 @@ RESPONSE_CACHE = "runtimes-available-cache.json"
 LIVE_RUNTIMES = {"claude", "codex"}
 # grok seats do not rotate yet (rotate_agent refuses them), so a stored model would never apply.
 NO_SWITCH = {"grok": "this runtime cannot switch models yet"}
+# Models a seat is never switched to. Seats run the 1M-context Opus 5.5 (claude-opus-5-5[1m], the default for new
+# Claude seats); the 200k one is left out under its full id and under the two names Claude's own model list gives
+# it ("opus", and "default", which it describes as Opus 5.5). Other aliases name other models and stay.
+NOT_FOR_SEATS = {"claude": frozenset({"claude-opus-5-5", "opus", "default"})}
+# 1M-context models a seat may switch to, per runtime: contract/seat-models.json (one list, which the API's
+# /api/runtimes/available reads too, so the two cannot drift). Not in providers.json: that list is also Arturo's
+# brain catalog, whose model ids cannot carry the "[1m]" suffix (services/arturo/brain.py).
+SEAT_MODELS_FILE = Path(__file__).resolve().parent.parent / "contract" / "seat-models.json"
+_seat_models_cache: dict = {"key": None, "value": {}, "logged": set()}
+
+
+def seat_models(path=None) -> dict:
+    """{runtime: [(id, label), ...]} from the seat-models file, re-read only when it changes. A missing or bad file
+    is an empty table (no 1M choices offered), said once on stderr."""
+    p = Path(path) if path else SEAT_MODELS_FILE
+    try:
+        key = (str(p), p.stat().st_mtime)
+    except OSError as e:
+        return _seat_models_off(p, f"missing ({e.strerror or e})")
+    if _seat_models_cache["key"] == key:
+        return _seat_models_cache["value"]
+    try:
+        models = json.loads(p.read_text())["models"]
+        value = {str(rt): [(str(m["id"]), str(m["label"])) for m in rows] for rt, rows in models.items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        return _seat_models_off(p, f"unreadable ({type(e).__name__}: {e})")
+    _seat_models_cache.update(key=key, value=value)
+    return value
+
+
+def _seat_models_off(p: Path, why: str) -> dict:
+    _seat_models_cache.update(key=None, value={})
+    if (str(p), why) not in _seat_models_cache["logged"]:
+        _seat_models_cache["logged"].add((str(p), why))
+        import sys
+        print(f"[agent_model] {p} {why}: no 1M models offered to seats", file=sys.stderr, flush=True)
+    return {}
+
+
+SEAT_MODELS = seat_models()
 
 _SET_MODEL = re.compile(r"<local-command-stdout>\s*Set model to\s+`?([^`<\n]+?)`?(?:\s+and saved[^<]*|\s+for this session[^<]*)?\s*</local-command-stdout>")
 _STDOUT = re.compile(r"<local-command-stdout>(.*?)</local-command-stdout>", re.S)
@@ -88,7 +128,7 @@ def load_catalog(runtime: str, providers_path: Path, state_dir: Path) -> list[di
     live-only ids the static list has not heard of. Unreadable files mean "fewer rows", never
     an error: this is a cache."""
     rows: list[dict] = []
-    seen: set[str] = set()
+    seen: set[str] = set(NOT_FOR_SEATS.get(runtime, ()))
 
     def add(mid, label=None, caps=None):
         if valid_model_id(mid) and mid not in seen:
@@ -115,6 +155,8 @@ def load_catalog(runtime: str, providers_path: Path, state_dir: Path) -> list[di
                     add(m.get("id"), m.get("label"), m.get("capabilities"))
     except Exception:  # noqa: BLE001
         pass
+    for mid, label in seat_models().get(runtime, ()):
+        add(mid, label)
     try:
         live = json.loads((state_dir / LIVE_CATALOG).read_text())
         for mid in ((live.get("providers") or {}).get(runtime) or []):
@@ -324,13 +366,15 @@ def display_matches(display: str, model_id: str, title: str | None = None) -> bo
     d = re.sub(r"\s+", " ", (display or "").strip().lower())
     if title and re.sub(r"\s+", " ", title.strip().lower()) in d:
         return True
-    m = re.fullmatch(r"(?:claude-)?([a-z]+)-(\d+)-(\d+)(?:-\d{8})?(\[1m\])?", model_id.lower())
+    # A minor version is optional: claude-opus-5[1m] is Opus 5 (shown "Opus 5 (1M context)").
+    m = re.fullmatch(r"(?:claude-)?([a-z]+)-(\d+)(?:-(\d+))?(?:-\d{8})?(\[1m\])?", model_id.lower())
     if not m:
         return model_id.lower() in d
     # Family and version only: how the CLI words the 1M-context variant is not pinned down, and
     # a wrong guess would call a good switch failed. The id itself (with [1m]) is what is stored.
-    fam, ver = m.group(1), f"{m.group(2)}.{m.group(3)}"
-    return fam in d and ver in d
+    # The version must stand alone, so "5" never matches "5.5".
+    fam, ver = m.group(1), m.group(2) + (f".{m.group(3)}" if m.group(3) else "")
+    return fam in d and re.search(rf"(?<![\d.]){re.escape(ver)}(?![\d]|\.\d)", d) is not None
 
 
 def wait_for_switch(find_jsonl, since_iso: str, start_offset=None, timeout_s: float = 10.0,
@@ -435,7 +479,9 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
     if not valid_model_id(model):
         return 400, {"ok": False, "error": "bad model id"}
     with host_model_lock(settings_path):
-        if not recover_pending(settings_path):
+        from scripts import agent_effort as AE     # here: agent_effort imports this module
+        # An effort switch that died mid-way is put back too, whichever switch runs next.
+        if not recover_pending(settings_path) or not AE.recover_pending(settings_path):
             return 500, {"ok": False, "error": "a previous switch left the host default model unrestored"}
         try:
             before = read_model_key(settings_path)

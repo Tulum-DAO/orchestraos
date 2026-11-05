@@ -15,8 +15,11 @@ import agentsRouter from './agents.js';
 import chatTranscriptRouter from './chat-transcript.js';
 import transcriptStreamRouter from './transcript-stream.js';
 import agentSendRouter from './agent-send.js';
+import agentCallsRouter from './agent-calls.js';
+import agentJobsRouter from './agent-jobs.js';
+import agentTreeRouter from './agent-tree.js';
 
-const ROUTERS = { agentsRouter, chatTranscriptRouter, transcriptStreamRouter, agentSendRouter };
+const ROUTERS = { agentsRouter, chatTranscriptRouter, transcriptStreamRouter, agentSendRouter, agentCallsRouter, agentJobsRouter, agentTreeRouter };
 
 test('every router mounted on /api/agents registers the scope param handler', () => {
   // Express keeps param handlers on router.params. A router missing from this list is a router
@@ -32,6 +35,8 @@ async function withApp(fn: (base: string) => Promise<void>) {
   app.use(express.json());
   app.use('/api/agents', agentsRouter);
   app.use('/api/agents', chatTranscriptRouter);
+  app.use('/api/agents', agentTreeRouter);
+  app.use('/api/agents', transcriptStreamRouter);
   const server = app.listen(0);
   const { port } = server.address() as AddressInfo;
   try { await fn(`http://127.0.0.1:${port}`); } finally { server.close(); }
@@ -76,6 +81,21 @@ test('end to end: an out-of-scope id and an unknown id return the same response'
       const ja = JSON.stringify(await a.json()).replace('gm', 'X');
       const jb = JSON.stringify(await b.json()).replace('no-such-agent-xyz', 'X');
       assert.equal(ja, jb);
+    });
+  } finally { restore(); }
+});
+
+test('end to end: the subagent tree and a subagent transcript are scoped like the seat chat', async () => {
+  // Who cannot read a seat's chat cannot read its tree or any of its subagents' transcripts.
+  const restore = trusted();
+  try {
+    await withApp(async (base) => {
+      for (const path of ['/api/agents/gm/tree', '/api/agents/gm/tree/stream', '/api/agents/gm/subagents/abcdef123456/transcript',
+        '/api/agents/gm/subagents/abcdef123456/transcript/stream']) {
+        const r = await fetch(base + path, { headers: SCOPED });
+        assert.equal(r.status, 404, path);
+        assert.deepEqual(await r.json(), { error: "Agent 'gm' not found" }, path);
+      }
     });
   } finally { restore(); }
 });

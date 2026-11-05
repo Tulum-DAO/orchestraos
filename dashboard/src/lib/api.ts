@@ -1,4 +1,5 @@
 import { operatorUserId } from './runtimeConfig';
+import { setInstallRole } from './myRole';
 const BASE = '/api';
 
 function handleAuthError(res: Response, path: string) {
@@ -120,13 +121,16 @@ export const fetchProjectFile = (slug: string, path: string) =>
 export const projectFileRawUrl = (slug: string, path: string) =>
   `${BASE}/projects/${encodeURIComponent(slug)}/files/content?raw=1&path=${encodeURIComponent(path)}`;
 
-export const fetchMe = () => get<{ username: string; role: string; allowed_agents: string | string[] }>('/me');
+export const fetchMe = () => get<{ username: string; role: string; install_role?: string; allowed_agents: string | string[] }>('/me')
+  .then((me) => { setInstallRole(me.install_role); return me; });
 export const fetchAgents = () => get('/agents');
 
 /** One message another agent (or a service) sent this agent, in full: the body behind a "Message from" line. */
 export interface AgentMessageBody {
   id: string; from_agent: string; to_agent: string; priority: string | null;
   subject: string | null; body: string | null; created_at: string | null;
+  /** msg_store's type; phase_report and handoff are drawn as a result card. Absent on an older server. */
+  type?: string | null;
 }
 export const fetchAgentMessage = (agentId: string, msgId: string) =>
   get<AgentMessageBody>(`/agents/${encodeURIComponent(agentId)}/messages/${encodeURIComponent(msgId)}`);

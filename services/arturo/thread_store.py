@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS summaries (
 );
 """
 
+# A page of a thread read a page at a time (get_thread_page): its default and its most.
+DEFAULT_PAGE_TURNS = 100
+MAX_PAGE_TURNS = 500
+
 # A turn mark outlives any client still waiting on its turn by far; older ones are pruned.
 TURN_MARK_TTL_S = 7 * 24 * 3600
 
@@ -232,7 +236,7 @@ class ThreadStore:
     # --- write ---------------------------------------------------------------------
 
     def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None,
-                    effective=None, turn_id=None, principal=None):
+                    effective=None, turn_id=None, principal=None, assistant_meta=None, card_answer=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
         the brain answers, so a failed turn leaves no half-thread. Never raises.
         `brain` = {provider, model} when the operator chose one for this turn, None = default —
@@ -240,10 +244,14 @@ class ThreadStore:
         that actually WROTE the reply (a default turn names its model): that is what the turn
         row keeps, so a later turn on another model can be told which replies were not its own.
         Omitted, the turn row keeps `brain`, as before. `principal` = who sent the turn; the first
-        turn's is kept as the thread's `started_by` (see started_by())."""
+        turn's is kept as the thread's `started_by` (see started_by()). `assistant_meta` = what the reply
+        carried besides its words (a choice card), kept on its row so the thread shows it again. `card_answer` =
+        {card_id, answer}: this turn's message answers that choice card, and the answer is kept on the card's row in
+        the same transaction, so the thread never holds the message without the card's answer, or the reverse."""
         if not self.usable or not conversation_id:
             return False
         now = float(ts if ts is not None else time.time())
+        ameta = json.dumps(assistant_meta) if assistant_meta else ""
         bp, bm = ((brain or {}).get("provider") or "", (brain or {}).get("model") or "")
         wrote = effective if effective is not None else brain
         tp, tm = ((wrote or {}).get("provider") or "", (wrote or {}).get("model") or "")
@@ -268,14 +276,16 @@ class ThreadStore:
                         conn.execute("UPDATE threads SET title = ? WHERE id = ?",
                                      (derive_title(user_text), conversation_id))
                 conn.executemany(
-                    "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [(conversation_id, seq, "user", user_text or "", now, "", ""),
-                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, tp, tm)])
+                    "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model, meta)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(conversation_id, seq, "user", user_text or "", now, "", "", ""),
+                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, tp, tm, ameta)])
                 conn.execute(
                     "UPDATE threads SET updated = ?, turns = ?, snippet = ?,"
                     " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
                     (now, seq + 2, (assistant_text or "")[:SNIPPET_MAX], bp, bm, conversation_id))
+                if card_answer:
+                    self._answer_card(conn, conversation_id, card_answer["card_id"], card_answer["answer"], before=seq)
                 if turn_id:
                     # In the same transaction as the turn: a crash between the two can never show a
                     # recorded reply as a turn that started and was lost (DEC-1791518421640932 v5).
@@ -285,6 +295,72 @@ class ThreadStore:
         except Exception as e:  # noqa: BLE001 — the archive is never worth failing a turn over,
             # but a lost turn is never silent either
             log.warning(f"thread store: could not record a turn for {conversation_id}: {e}")
+            return False
+        finally:
+            if conn is not None:
+                conn.close()
+
+    @staticmethod
+    def _card_rows(conn, conversation_id, card_id, before=None):
+        sql = "SELECT seq, meta FROM turns WHERE thread_id = ? AND meta != ''"
+        args = [conversation_id]
+        if before is not None:
+            sql += " AND seq < ?"
+            args.append(before)
+        for seq, meta in conn.execute(sql, args).fetchall():
+            m = _meta(meta)
+            if m and m.get("card_id") == card_id:
+                yield seq, m
+
+    def _answer_card(self, conn, conversation_id, card_id, answer, before=None):
+        """Keep a card's answer on its row, inside the caller's transaction; a card already answered or dismissed
+        keeps what it has (the turn's checks refuse those first; this is the last word, never a second answer)."""
+        for seq, m in self._card_rows(conn, conversation_id, card_id, before):
+            if m.get("dismissed") or isinstance(m.get("answer"), dict):
+                return False
+            m["answer"] = answer
+            conn.execute("UPDATE turns SET meta = ? WHERE thread_id = ? AND seq = ?", (json.dumps(m), conversation_id, seq))
+            return True
+        return False
+
+    def card(self, conversation_id, card_id):
+        """A choice card's stored meta in this thread (its choices, and whether it is answered or dismissed), or
+        None."""
+        if not self.usable or not conversation_id or not card_id:
+            return None
+        try:
+            with self._connect() as conn:
+                for _seq, m in self._card_rows(conn, conversation_id, card_id):
+                    return m
+        except Exception as e:  # noqa: BLE001 — an unreadable archive answers "no such card", never raises
+            log.warning(f"thread store: could not read card {card_id} in {conversation_id}: {e}")
+        return None
+
+    def dismiss_card(self, conversation_id, card_id):
+        """Mark a choice card in this thread dismissed (it stays in the thread, closed). True when one was found."""
+        if not self.usable or not conversation_id or not card_id:
+            return False
+        conn = None
+        try:
+            conn = self._connect()
+            conn.execute("BEGIN IMMEDIATE")
+            with conn:
+                for seq, meta in conn.execute("SELECT seq, meta FROM turns WHERE thread_id = ? AND meta != ''",
+                                              (conversation_id,)).fetchall():
+                    try:
+                        m = json.loads(meta)
+                    except ValueError:
+                        continue
+                    if isinstance(m, dict) and m.get("card_id") == card_id:
+                        if isinstance(m.get("answer"), dict):
+                            return False                # answered: there is nothing left to close
+                        m["dismissed"] = True
+                        conn.execute("UPDATE turns SET meta = ? WHERE thread_id = ? AND seq = ?",
+                                     (json.dumps(m), conversation_id, seq))
+                        return True
+            return False
+        except Exception as e:  # noqa: BLE001 — a dismiss that cannot be saved says so, never raises
+            log.warning(f"thread store: could not dismiss card {card_id} in {conversation_id}: {e}")
             return False
         finally:
             if conn is not None:
@@ -592,6 +668,44 @@ class ThreadStore:
                 out = self._clean_title(conn, _thread_row(head))
             # What a client reads: the page-context line is the model's, not the operator's words.
             out["turns"] = [_client_turn(r) for r in rows]
+            return out
+        except Exception:  # noqa: BLE001
+            return None
+
+    def get_thread_page(self, conversation_id, before=None, limit=DEFAULT_PAGE_TURNS):
+        """One page of a thread, newest turns last, for a client that reads a long thread a page at a time
+        (scrolling up): `before` None = the newest `limit` turns, else the `limit` turns just older than the turn
+        whose seq it is. Each turn carries its `seq` (the client's cursor and its identity, so a page that meets
+        what the client already holds is joined without duplicates); `has_older` says whether anything older
+        remains and `oldest_seq` is the cursor for the next page (None on an empty page). A `before` that is not a
+        turn of this thread is an empty page with has_older False and error "unknown cursor". None when the
+        thread does not exist (as get_thread)."""
+        if not self.usable or not conversation_id:
+            return None
+        limit = max(1, min(int(limit), MAX_PAGE_TURNS))
+        try:
+            with self._connect() as conn:
+                head = conn.execute(
+                    f"SELECT {_THREAD_COLS} FROM threads WHERE id = ?", (conversation_id,)).fetchone()
+                if head is None:
+                    return None
+                out = self._clean_title(conn, _thread_row(head))
+                cols = "seq, role, content, ts, brain_provider, brain_model, mode, meta"
+                if before is not None and conn.execute(
+                        "SELECT 1 FROM turns WHERE thread_id = ? AND seq = ?", (conversation_id, before)).fetchone() is None:
+                    out.update(turns=[], has_older=False, oldest_seq=None, error="unknown cursor")
+                    return out
+                if before is None:
+                    rows = conn.execute(f"SELECT {cols} FROM turns WHERE thread_id = ? ORDER BY seq DESC LIMIT ?",
+                                        (conversation_id, limit + 1)).fetchall()
+                else:
+                    rows = conn.execute(f"SELECT {cols} FROM turns WHERE thread_id = ? AND seq < ?"
+                                        " ORDER BY seq DESC LIMIT ?", (conversation_id, before, limit + 1)).fetchall()
+            has_older = len(rows) > limit
+            rows = list(reversed(rows[:limit]))
+            out["turns"] = [{"seq": r["seq"], **_client_turn(r)} for r in rows]
+            out["has_older"] = has_older
+            out["oldest_seq"] = rows[0]["seq"] if rows else None
             return out
         except Exception:  # noqa: BLE001
             return None
