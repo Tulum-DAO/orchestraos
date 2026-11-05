@@ -30,7 +30,7 @@ def _menu(lines):
 
 def test_a_2_1_295_bash_prompt_keeps_its_command_in_the_context():
     m = _menu(_lines("claude-2.1.295/perm_bash_dashed.pane.txt"))
-    assert m["kind"] == "permission" and m["question"] == "Do you want to proceed?"
+    assert m["kind"] == "permission" and m["question"] == "Do you want to proceed? [Bash]"
     ctx = m.get("context") or ""
     assert "touch /tmp/probe-2-1-295.txt" in ctx, ctx
     assert "Bash command" in ctx and "Create empty probe file in /tmp" in ctx
