@@ -260,6 +260,53 @@ test('stream pipes text/event-stream from GET /events, re-emits only changed/att
   }
 });
 
+test('stream: a member hears "changed" only when their own list changed, never the global rev', async () => {
+  const enc = new TextEncoder();
+  let ctl!: ReadableStreamDefaultController<Uint8Array>;
+  const upstream = new ReadableStream<Uint8Array>({ start(c) { ctl = c; } });
+  let gmItems: any[] = [{ id: 'apr_gm', agent: 'gm', tab: 'waiting' }];
+  const lists: string[] = [];
+  const deps = makeDeps({
+    principal: () => MEMBER_GM as any,
+    pipeStream: async () => ({ status: 200, contentType: 'text/event-stream', body: upstream, json: async () => ({}) }),
+  }, (url) => {
+    lists.push(new URL(url).searchParams.get('agents') || '');
+    return { status: 200, body: { ok: true, items: gmItems, counts: {} } };
+  });
+  const server = app(deps).listen(0);
+  const port = (server.address() as any).port;
+  try {
+    const text = await new Promise<string>((resolve, reject) => {
+      const r = http.request({ host: '127.0.0.1', port, path: '/api/attention/stream', method: 'GET' }, (res) => {
+        let out = '';
+        res.on('data', (c) => {
+          out += c;
+          if ((out.match(/^data: /gm) || []).length >= 1 && /: done/.test(out)) { resolve(out); r.destroy(); }
+        });
+      });
+      r.on('error', (e: any) => { if (e.code !== 'ECONNRESET') reject(e); });
+      r.setTimeout(5000, () => r.destroy(new Error('stream sent nothing in 5s')));
+      r.end();
+      setTimeout(async () => {
+        // a change elsewhere in the install: the member's list is the same, so nothing is said
+        ctl.enqueue(enc.encode('data: {"changed": true, "attention_rev": 41, "ts": 1700000000}\n\n'));
+        await new Promise((x) => setTimeout(x, 50));
+        gmItems = [...gmItems, { id: 'evt_gm', agent: 'gm', tab: 'update' }];
+        ctl.enqueue(enc.encode('data: {"changed": true, "attention_rev": 42, "ts": 1700000002}\n\n'));
+        await new Promise((x) => setTimeout(x, 50));
+        ctl.enqueue(enc.encode(': done\n\n'));
+      }, 100);
+    });
+    const datas = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)));
+    assert.equal(datas.length, 1, text);
+    assert.equal(datas[0].changed, true);
+    assert.equal(datas[0].attention_rev, null, 'the install-wide rev is never sent to a member');
+    assert.ok(lists.every((a) => a === 'gm'), 'the member list is always fetched with their own agents');
+  } finally {
+    server.close();
+  }
+});
+
 test('stream: a gateway refusal is plain JSON, and a gateway down is 502', async () => {
   const refused = makeDeps({ pipeStream: async () => ({ status: 403, contentType: 'application/json', body: null,
     json: async () => ({ ok: false, error: 'forbidden' }) }) });

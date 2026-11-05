@@ -123,6 +123,19 @@ def test_seen_validates_every_id_and_bad_surface_is_null(box):
     assert box.astore.seen_map("alex", [rid])[rid][1] is None
 
 
+def test_a_paired_device_cannot_claim_web_or_chat(box):
+    card = box.ledger.create(from_agent="gm", question="Done Y", worker_kind="pane",
+                             options=["accept", "respond"], kind="completion", evidence={})
+    ev = S.mirror_completions(box.astore, box.ledger)[0]["id"]
+    st, d = box.call("POST", "/attention/seen", who="approve", body={"ids": [ev], "surface": "web"})
+    assert st == 200 and d["accepted_cards"] == [card]
+    assert box.ledger.get(card)["answer_surface"] == "unknown"           # not recorded as the web
+    assert box.astore.seen_map("alex", [ev])[ev][1] is None
+    rid = box.ledger.create(from_agent="gm", question="Ship?", worker_kind="pane")
+    box.call("POST", "/attention/seen", body={"ids": [rid], "surface": "chat"})   # the fleet bearer may
+    assert box.astore.seen_map("alex", [rid])[rid][1] == "chat"
+
+
 def test_seen_on_a_live_permission_prompt(box):
     box.perm_rows = [{"id": "perm:gm:abc:1", "kind": "permission", "from_agent": "gm", "session": "gm",
                       "question": "Allow?", "created_at": "2026-11-04T10:00:00+00:00", "menu": {"options": []}}]

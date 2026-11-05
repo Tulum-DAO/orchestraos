@@ -1676,7 +1676,9 @@ def _attention_seen(request, ids, surface, may_approve):
             if ev and ev["kind"] == "done" and ev.get("source_id") and card is None:
                 card = store.get(ev["source_id"])
             if card is not None and card.get("status") == "pending" and may_approve:
-                res = apply_answer(store, card["id"], "accept", fire=False, surface=surface or "web",
+                # No surface given: the fleet bearer is the web; a paired device's surface stays unrecorded.
+                dflt = None if _answer_device(request) else "web"
+                res = apply_answer(store, card["id"], "accept", fire=False, surface=surface or dflt,
                                    answered_by="operator", device=_answer_device(request))
                 after = store.get(card["id"]) or {}
                 if res.get("ok") and (res.get("applied") or after.get("status") != "pending"):
@@ -1726,6 +1728,10 @@ async def handle_attention_seen(request):
     if not resolved:
         principal = resolve_principal(request)
     may_approve = bool(principal) and scopes_allow(principal.get("scopes") or [], "approve")
+    # A paired device is a phone or a watch: it cannot record a mark (or a card it accepts) as web or chat.
+    # The fleet bearer (the API, legacy apps) is trusted to say which surface it is.
+    if surface in ("web", "chat") and principal and principal.get("id") not in (None, "legacy"):
+        surface = None
     body = await asyncio.get_event_loop().run_in_executor(
         None, _attention_seen, request, list(dict.fromkeys(ids)), surface, may_approve)
     return _json(body)

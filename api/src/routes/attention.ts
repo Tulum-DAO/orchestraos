@@ -213,13 +213,25 @@ export function createAttentionRouter(deps: AttentionDeps = defaultAttentionDeps
   });
 
   // GET /api/attention/stream — the gateway's /events SSE, re-emitted as "changed" + attention_rev
-  // only. Keepalive comments pass through so proxies keep the connection open. The client going
+  // only (an unscoped admin); a member gets "changed" (no rev) only when their own scoped list changed. Keepalive comments pass through so proxies keep the connection open. The client going
   // away aborts the upstream read, so an open tab never leaks a gateway stream.
   router.get('/stream', async (req: Request, res: Response) => {
     const p = who(req, res);
     if (!p) return;
     const token = deps.token();
     if (!token) { res.status(502).json({ ok: false, error: 'gateway token unavailable' }); return; }
+    // A member hears a change only when THEIR list changed: the gateway's events are install-wide, so
+    // relaying each one (or its global rev) would tell a member when hidden agents' items move.
+    const scoped = visibleAgents(p);
+    let lastView: string | null = null;
+    const memberView = async (): Promise<string | null> => {
+      if (!scoped || scoped.length === 0) return '';
+      const q = new URLSearchParams({ tab: 'waiting,update,answered', agents: scoped.join(',') });
+      const g = await gateway(`/attention?${q}`, { method: 'GET' });
+      if (g.status < 200 || g.status >= 300 || !Array.isArray(g.body?.items)) return null;
+      return JSON.stringify(g.body.items.filter((i: any) => sees(p, i?.agent)));
+    };
+    if (scoped) lastView = await memberView();
     const ctl = new AbortController();
     let closed = false;
     res.on('close', () => { closed = true; ctl.abort(); });
@@ -254,7 +266,16 @@ export function createAttentionRouter(deps: AttentionDeps = defaultAttentionDeps
           const block = buf.slice(0, at.index);
           buf = buf.slice(at.index + at[0].length);
           const out = relayBlock(block);
-          if (out) res.write(out);
+          if (!out) continue;
+          if (scoped && !out.startsWith(':')) {
+            const view = await memberView();
+            if (closed) break;
+            if (view === null || view === lastView) continue;   // unreadable or unchanged: say nothing
+            lastView = view;
+            res.write(`data: ${JSON.stringify({ changed: true, attention_rev: null, ts: Math.floor(Date.now() / 1000) })}\n\n`);
+            continue;
+          }
+          res.write(out);
         }
       }
       res.end();
