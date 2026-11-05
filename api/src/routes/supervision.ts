@@ -42,6 +42,13 @@ export interface SupervisionDeps {
   role: (req: Request) => InstallRole;
 }
 
+/** A wide grant as a member sees it: what it allows, not who made it or why. */
+export function redactWideGrant(g: any): any {
+  if (!g || typeof g !== 'object') return g;
+  const { said: _s, source_card: _c, proposed_by: _p, created_by: _b, ...rest } = g;
+  return rest;
+}
+
 export function defaultSupervisionDeps(): SupervisionDeps {
   return {
     token: readGatewayToken,
@@ -234,7 +241,11 @@ export function createSupervisionRouter(deps: SupervisionDeps = defaultSupervisi
     const q = qs.toString();
     const g = await gateway(`/grants${q ? `?${q}` : ''}`, { method: 'GET' });
     if (!member || !ok(g.status) || !Array.isArray(g.body?.grants)) { send(res, g); return; }
-    const grants = g.body.grants.filter((x: any) => !MEMBER_GRANT_SCOPES.has(x?.scope) || mayWriteGrant(req, p, x));
+    // Wide grants (fleet, role, project) are listed so Settings can say what applies, but without their
+    // provenance: who made or proposed them, the card they came from and the words quoted on it.
+    const grants = g.body.grants
+      .filter((x: any) => !MEMBER_GRANT_SCOPES.has(x?.scope) || mayWriteGrant(req, p, x))
+      .map((x: any) => (MEMBER_GRANT_SCOPES.has(x?.scope) ? x : redactWideGrant(x)));
     res.status(g.status).json({ ...g.body, grants });
   });
 

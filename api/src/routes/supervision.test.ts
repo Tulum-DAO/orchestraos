@@ -42,7 +42,8 @@ const GRANTS = [
   { id: 'grt_pm', scope: 'agent', scope_ref: 'pm', category: 'outside_world', effect: 'allow', state: 'active' },
   { id: 'grt_ses_gm', scope: 'session', scope_ref: '11111111-1111-1111-1111-111111111111', agent: 'gm', category: 'install', effect: 'allow', state: 'active' },
   { id: 'grt_ses_x', scope: 'session', scope_ref: '22222222-2222-2222-2222-222222222222', category: 'install', effect: 'allow', state: 'active' },
-  { id: 'grt_fleet', scope: 'fleet', scope_ref: null, category: 'install', effect: 'allow', state: 'active' },
+  { id: 'grt_fleet', scope: 'fleet', scope_ref: null, category: 'install', effect: 'allow', state: 'active',
+    said: 'yes for everyone', source_card: 'apr_1', proposed_by: 'gm', created_by: 'alex' },
   { id: 'grt_role', scope: 'role', scope_ref: 'rol_a', category: 'install', effect: 'allow', state: 'active' },
 ];
 
@@ -275,10 +276,14 @@ test('member GET grants: own agents and sessions, plus fleet/role/project read-o
   assert.equal(u.searchParams.get('state'), 'all');
   assert.equal(u.searchParams.get('scope'), 'agent');
   assert.equal(u.searchParams.get('evil'), null);
+  const fleet = r.json.grants.find((g: any) => g.id === 'grt_fleet');
+  for (const k of ['said', 'source_card', 'proposed_by', 'created_by']) assert.ok(!(k in fleet), `member sees ${k}`);
+  assert.equal(fleet.category, 'install');
   const other = await req(deps, 'GET', '/api/supervision/grants?agent=pm');
   assert.equal(other.status, 403);
   const admin = await req(makeDeps(), 'GET', '/api/supervision/grants');
   assert.equal(admin.json.grants.length, GRANTS.length);
+  assert.equal(admin.json.grants.find((g: any) => g.id === 'grt_fleet').said, 'yes for everyone', 'an admin sees it all');
 });
 
 test('PATCH/DELETE check the grant scope fetched from the gateway first', async () => {

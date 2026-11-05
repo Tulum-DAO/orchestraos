@@ -214,8 +214,11 @@ def grants_for(hold: dict, decision: str, card_id: str) -> list:
         if key in seen:
             continue
         seen.add(key)
-        out.append({"scope": scope, "scope_ref": ref, "category": h.category, "narrow": narrow,
-                    "source": "card", "source_card": card_id})
+        g = {"scope": scope, "scope_ref": ref, "category": h.category, "narrow": narrow,
+             "source": "card", "source_card": card_id}
+        if scope == "session" and hold.get("agent"):
+            g["agent"] = GP.base_agent(hold["agent"])         # who the session is (scoped members see and revoke it)
+        out.append(g)
     return out
 
 
@@ -344,8 +347,6 @@ def deliver(row, store, ss=None, msg_send=None, *, decision=None, person=None, n
         _ack(store, row)
         return {"id": rid, "delivered": False, "reason": "no_hold", "decision": decision}
     ts = _iso(_now(now))
-    for kw in grants_for(hold, decision, rid):
-        ss.create_grant(person, by=person, now=ts, **kw)
     allow = decision.startswith("allow")
     to = "allowed" if allow else "denied"
     won_from = None
@@ -363,6 +364,12 @@ def deliver(row, store, ss=None, msg_send=None, *, decision=None, person=None, n
             won_from = st
             break
     hold = ss.hold(hold["id"]) or hold
+    # Standing grants only for an answer that actually decided this hold: the CAS above won, or a replay of the
+    # answer that won (same final state and decision; grant_key makes the second write a no-op). An answer that
+    # raced a withdrawn, released or otherwise final hold mints nothing.
+    if won_from is not None or (hold.get("state") == to and hold.get("decision") == decision):
+        for kw in grants_for(hold, decision, rid):
+            ss.create_grant(person, by=person, now=ts, **kw)
     reason = f"{won_from}->{to}" if won_from else "stale_hold"
     if won_from is None:
         print(f"[gate_cards] stale_hold {hold['id']} (state {hold.get('state')}) for card {rid}", file=sys.stderr)

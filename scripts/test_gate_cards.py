@@ -242,6 +242,20 @@ def test_answer_on_a_final_hold_is_stale(ledger, ss, msgs):
     assert ss.hold(hold)["state"] == "withdrawn" and msgs == [] and ledger.get(rid)["status"] == "resumed"
 
 
+@pytest.mark.parametrize("n", ["2", "3", "4"])
+def test_an_answer_racing_a_final_hold_mints_no_grant(ledger, ss, msgs, n):
+    hold, rid = make_open_hold(ss, ledger)
+    assert ss.transition_hold(hold, "withdrawn", ("open",))
+    apply(ledger, rid, option_n=n)
+    assert ss.hold(hold)["state"] == "withdrawn" and ss.grants("p") == []
+
+
+def test_a_session_grant_from_a_card_names_its_agent(ledger, ss, msgs):
+    hold, rid = make_waiting_hold(ss, ledger, session="s1")
+    apply(ledger, rid, option_n="2")
+    assert [(g["scope"], g["scope_ref"], g["agent"]) for g in ss.grants("p")] == [("session", "s1", "dev")]
+
+
 def test_dismissed_gate_card_is_a_deny(ledger, ss, msgs):
     hold, rid = make_open_hold(ss, ledger)
     assert ledger.discard(rid)
