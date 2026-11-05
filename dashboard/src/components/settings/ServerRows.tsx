@@ -63,13 +63,20 @@ export function ServerNumberRow({ k, label, keywords, description, below, min, m
   return <SettingRow id={k} label={label} description={description} keywords={keywords} status={status} locked={locked} below={below} {...common(row, loadError)}
     control={row ? (
       <span className="settings-control">
-        {stepper && <button type="button" className="rotation-step" aria-label="Lower" aria-describedby={descOf(k, description)} disabled={!row.editable || n === null || n <= min} onClick={() => { if (n !== null) void save(n - 1); }}><Minus size={14} /></button>}
-        <input value={draft ?? numText(row.value)} inputMode="numeric" className="panel-input settings-number"
-               aria-labelledby={`setting-${k}`} aria-describedby={descOf(k, description)} disabled={!row.editable} data-setting-input={k}
-               onFocus={(e) => setDraft((d) => d ?? e.target.value)} onChange={(e) => setDraft(e.target.value)}
-               onBlur={(e) => commit(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-        <span aria-hidden>{suffix}</span>
-        {stepper && <button type="button" className="rotation-step" aria-label="Raise" aria-describedby={descOf(k, description)} disabled={!row.editable || n === null || n >= max} onClick={() => { if (n !== null) void save(n + 1); }}><Plus size={14} /></button>}
+        {/* With the stepper: one box, a filled − on the left, the number and its suffix in the middle, a filled + on the
+            right (the same control as an agent's own "Compact at", RotationSettings.tsx). Without it the wrappers are
+            display:contents, so the plain field lays out as before. */}
+        <span className={stepper ? 'rotation-stepper' : 'settings-field'}>
+          {stepper && <button type="button" className="rotation-step" aria-label="Lower" aria-describedby={descOf(k, description)} disabled={!row.editable || n === null || n <= min} onClick={() => { if (n !== null) void save(n - 1); }}><Minus size={16} strokeWidth={2.5} /></button>}
+          <span className={stepper ? 'rotation-number' : 'settings-field'}>
+            <input value={draft ?? numText(row.value)} inputMode="numeric" className={stepper ? undefined : 'panel-input settings-number'}
+                   aria-labelledby={`setting-${k}`} aria-describedby={descOf(k, description)} disabled={!row.editable} data-setting-input={k}
+                   onFocus={(e) => setDraft((d) => d ?? e.target.value)} onChange={(e) => setDraft(e.target.value)}
+                   onBlur={(e) => commit(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+            <span aria-hidden>{suffix}</span>
+          </span>
+          {stepper && <button type="button" className="rotation-step" aria-label="Raise" aria-describedby={descOf(k, description)} disabled={!row.editable || n === null || n >= max} onClick={() => { if (n !== null) void save(n + 1); }}><Plus size={16} strokeWidth={2.5} /></button>}
+        </span>
       </span>
     ) : loading} />;
 }

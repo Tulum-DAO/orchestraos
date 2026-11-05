@@ -34,6 +34,8 @@
 .settings-choice-opt.is-on { background: var(--send-bg); color: var(--send-fg); border-color: transparent; }
 .settings-choice-opt:disabled { opacity: 0.5; }
 .settings-number { width: 5.5em; text-align: right; }
+/* ServerNumberRow without a stepper: its wrappers drop out of the layout, so the field and suffix sit in .settings-control. */
+.settings-field { display: contents; }
 /* A select in a row takes the width of its value (the panel caps it at 60% of a shrinking box, which cut "Marin" to "Ma"). */
 .settings-control > select.panel-value { max-width: none; }
 .settings-search-section:not(:has([data-setting])) { display: none; }
