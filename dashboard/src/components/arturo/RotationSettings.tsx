@@ -121,7 +121,7 @@ export function RotationSettings({ agentId, isArturo }: { agentId: string; isArt
         <label htmlFor={`compact-at-${agentId}`}>Compact at</label>
         <span className="rotation-stepper">
           <button type="button" className="rotation-step" aria-label="Lower"
-                  disabled={!settings || !auto || (shown.ok && shown.value <= COMPACT_MIN)} onClick={() => step(-1)}><Minus size={14} /></button>
+                  disabled={!settings || !auto || (shown.ok && shown.value <= COMPACT_MIN)} onClick={() => step(-1)}><Minus size={16} strokeWidth={2.5} /></button>
           <span className="rotation-number">
             <input id={`compact-at-${agentId}`} inputMode="numeric" value={draft} disabled={!settings || !auto} data-rotation-compact-at
                    aria-describedby={`compact-note-${agentId}`} aria-invalid={draft !== '' && !shown.ok}
@@ -130,7 +130,7 @@ export function RotationSettings({ agentId, isArturo }: { agentId: string; isArt
             <span aria-hidden>%</span>
           </span>
           <button type="button" className="rotation-step" aria-label="Raise"
-                  disabled={!settings || !auto || (shown.ok && shown.value >= COMPACT_MAX)} onClick={() => step(1)}><Plus size={14} /></button>
+                  disabled={!settings || !auto || (shown.ok && shown.value >= COMPACT_MAX)} onClick={() => step(1)}><Plus size={16} strokeWidth={2.5} /></button>
         </span>
       </div>
       <p className={`panel-note rotation-note${auto ? '' : ' is-disabled'}`} id={`compact-note-${agentId}`}>

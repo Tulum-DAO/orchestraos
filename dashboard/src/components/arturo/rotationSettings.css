@@ -8,15 +8,26 @@
 .rotation-switch-knob{ position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff;
   box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .15s; }
 .rotation-switch.is-on .rotation-switch-knob{ transform:translateX(18px); }
-.rotation-switch:focus-visible, .rotation-step:focus-visible, .rotation-number input:focus-visible{ outline:2px solid #3b82f6; outline-offset:2px; }
-.rotation-stepper{ display:flex; align-items:center; gap:6px; flex:0 0 auto; }
-.rotation-step{ width:32px; height:32px; border-radius:8px; border:1px solid var(--hair); background:none; color:var(--text);
-  display:flex; align-items:center; justify-content:center; cursor:pointer; }
-.rotation-step:disabled{ color:var(--grey2); cursor:default; }
-.rotation-number{ display:flex; align-items:center; gap:2px; color:var(--grey); font-size: calc(15px * var(--ui-text-scale, 1)); }
-.rotation-number input{ width:3.2em; height:32px; text-align:right; border:1px solid var(--hair); border-radius:8px; background:none;
-  color:var(--text); font:inherit; font-size: max(var(--field-min, 0px), calc(15px * var(--ui-text-scale, 1))); padding:0 6px; }
-.rotation-number input[aria-invalid="true"]{ border-color:var(--err-soft); }
+.rotation-switch:focus-visible{ outline:2px solid #3b82f6; outline-offset:2px; }
+/* The "Compact at" stepper (an agent's Setup here, and Settings › Agents, ServerRows.tsx): one rounded box with a hairline,
+   a filled − on the left, the number and its % in the middle, a filled + on the right. The fill is the theme's own
+   filled-button pair (--send-bg/--send-fg, as a chosen Settings option): dark with a light sign in light, light with a
+   dark sign in dark. Typing in the number still works; the box shows its focus ring and a bad value's red edge. */
+.rotation-stepper{ display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; padding:4px; border:1px solid var(--hair);
+  border-radius:12px; background:var(--panel); }
+.rotation-stepper:has(input:focus-visible){ outline:2px solid #3b82f6; outline-offset:2px; }
+.rotation-stepper:has(input[aria-invalid="true"]){ border-color:var(--err-soft); }
+.rotation-step{ width:32px; height:32px; border-radius:8px; border:0; padding:0; background:var(--send-bg); color:var(--send-fg);
+  display:flex; align-items:center; justify-content:center; flex:0 0 auto; cursor:pointer; transition:opacity .15s; }
+.rotation-step:hover:not(:disabled){ opacity:.85; }
+.rotation-step:disabled{ background:var(--card2); color:var(--grey2); cursor:default; }
+.rotation-step:focus-visible{ outline:2px solid #3b82f6; outline-offset:2px; }
+@media (forced-colors: active){ .rotation-step{ border:1px solid ButtonText; } }
+.rotation-number{ display:flex; align-items:center; justify-content:center; min-width:52px; padding:0 2px; color:var(--grey);
+  font-size: calc(15px * var(--ui-text-scale, 1)); font-variant-numeric:tabular-nums; }
+.rotation-number input{ width:3ch; height:32px; text-align:right; border:0; border-radius:0; background:none; padding:0;
+  color:var(--text); font:inherit; font-weight:500; font-size: max(var(--field-min, 0px), calc(15px * var(--ui-text-scale, 1))); outline:none; }
+.rotation-number input:disabled{ color:var(--grey2); }
 .rotation-status{ font-size: calc(13px * var(--ui-text-scale, 1)); color:var(--grey); margin:6px 2px 0; }
 .rotation-note{ margin:4px 2px 10px; }
 .rotation-note.is-disabled, .panel-field.is-disabled label{ color:var(--grey2); }
