@@ -484,6 +484,16 @@ def test_option_4_needs_admin_scope(box, monkeypatch):
     assert st != 403
 
 
+def test_an_unreadable_card_is_a_wide_pick_for_a_non_admin(box, monkeypatch):
+    box.start()
+    monkeypatch.setattr(G.approval_resume, "fire_resume", lambda *a, **k: None)
+    _, rid = box.gate_card("dev-acme", [NPM])
+    monkeypatch.setattr(gate_cards, "bridge_of", lambda row: (_ for _ in ()).throw(RuntimeError("unreadable")))
+    st, b = box.call("POST", "/approval-answers", who="approve", body={"id": rid, "answer": "option", "option_n": "4"})
+    assert st == 403 and b["error"] == "all_agents_needs_admin"          # fail closed, not "not a gate card"
+    assert box.ledger.get(rid)["status"] == "pending"
+
+
 def test_confirm_on_a_wide_grant_proposal_needs_admin_scope(box, monkeypatch):
     box.start()
     monkeypatch.setattr(G.approval_resume, "fire_resume", lambda *a, **k: None)

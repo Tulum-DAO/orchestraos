@@ -1440,7 +1440,12 @@ def _gate_wide_pick(store, rid, option_n) -> bool:
     n = str(option_n or "").strip()
     if n not in ("1", "4"):
         return False
-    b = _gate_bridge(store, rid)
+    try:                                       # fail closed: a card that cannot be read counts as wide
+        import gate_cards
+        row = store.get(rid) if isinstance(rid, str) and rid else None
+        b = gate_cards.bridge_of(row) if row else None
+    except Exception:  # noqa: BLE001
+        return True
     if not b:
         return False
     if b.get("kind") == "gate":
