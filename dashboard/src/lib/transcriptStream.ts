@@ -20,6 +20,7 @@
 import type { ChatItem, LiveTextEvent } from './transcript.gen';
 import type { LiveText } from './threadKit/view';
 import { answeringWake, couldBeQuiet } from './wakeQuiet';
+import { transcriptUrl } from './transcriptUrl';
 
 export interface TranscriptStreamEvent {
   type: 'snapshot' | 'delta';
@@ -88,13 +89,14 @@ export function subscribeTranscriptStream(
   agentId: string,
   limit: number,
   handlers: TranscriptStreamHandlers,
+  opts: { subagentId?: string } = {},
 ): () => void {
   if (typeof EventSource === 'undefined') {
     handlers.onFallback();
     return () => {};
   }
 
-  const url = `/api/agents/${encodeURIComponent(agentId)}/transcript/stream?limit=${limit}`;
+  const url = transcriptUrl(agentId, { limit, stream: true, subagentId: opts.subagentId });
   const es = new EventSource(url);
   let items: ChatItem[] = [];
   let consecutiveErrors = 0;

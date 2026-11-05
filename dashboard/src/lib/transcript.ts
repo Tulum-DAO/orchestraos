@@ -16,6 +16,7 @@
 // synced transcript.gen.ts). Do not hand-declare wire shapes here — that is
 // the exact web-vs-iOS drift the contract exists to kill.
 import type { ChatItem as GenChatItem, TranscriptEnvelope } from './transcript.gen';
+import { transcriptUrl } from './transcriptUrl';
 import type { ResultNode } from './threadKit/results';
 import { compactionText, isCompaction, type CompactionItem } from './compaction';
 import { isTranscriptLine } from './threadKit/paging';
@@ -256,8 +257,9 @@ export function shortPath(p: string): string {
 }
 
 const API_BASE = '/api';
-export async function fetchTranscript(agentId: string, limit = 120): Promise<TranscriptResponse> {
-  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/transcript?limit=${limit}`);
+/** The seat's transcript, or with `subagentId` one subagent's own (agent-tree drill-in, read-only). */
+export async function fetchTranscript(agentId: string, limit = 120, opts: { subagentId?: string } = {}): Promise<TranscriptResponse> {
+  const res = await fetch(transcriptUrl(agentId, { limit, subagentId: opts.subagentId }));
   if (!res.ok) throw new Error(`transcript ${agentId}: ${res.status}`);
   return res.json();
 }

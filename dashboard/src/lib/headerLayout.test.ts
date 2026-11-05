@@ -126,7 +126,9 @@ test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack w
   // WebTerminal captures wheel and touchmove on the DOCUMENT (tmux copy-mode scroll) and only
   // ignores events outside its container; it must not exist at all while Chat mode is showing.
   const cases: [string, RegExp, string][] = [
-    ['pages/AgentPage.tsx', /mode === 'dev' \? \(/, '<Feed agentId'],
+    // The page's body is the terminal only for the seat itself in Dev (lib/subagentView.ts pageBody): a subagent's
+    // read-only transcript never mounts it either.
+    ['pages/AgentPage.tsx', /body === 'terminal' \? \(/, '<Feed agentId'],
     ['components/AgentCard.tsx', /devMode \? \(/, '<TranscriptChatView'],
   ];
   for (const [file, devBranch, chatView] of cases) {
