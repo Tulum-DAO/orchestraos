@@ -138,6 +138,18 @@ def test_an_expire_rule_reaches_the_agent_through_the_resume_path(box, monkeypat
     c.execute("UPDATE attention_rules SET updated_at=?", [past])
     c.execute("UPDATE attention_meta SET value=? WHERE key='rules_epoch'", [past])
     c.commit(); c.close()
+    # Part 2b (plan 8.2): a rule acts for the person only on a card from an agent the safety gate covers, or on
+    # one explicitly low risk and easy to undo. Uncovered first: refused, nothing answered.
+    G._attention_tick()
+    assert box.ledger.get(rid)["status"] == "pending" and resumed == []
+    assert any(json.loads(f["result"] or "{}").get("detail") == "safety:ungated_agent" for f in rs.fires())
+    import gate_config as GC
+    GC.write_gate(str(G.ORCH_DIR), mode="enforce")
+    GC.heartbeat(str(G.ORCH_DIR), "gm", None, "enforce")
+    rs.create("alex", trigger="unanswered", after_s=60, actions=[{"type": "expire"}], scope_agent="gm")
+    c = sqlite3.connect(box.db)
+    c.execute("UPDATE attention_rules SET updated_at=?", [past])
+    c.commit(); c.close()
     G._attention_tick()
     row = box.ledger.get(rid)
     assert (row["answer"], row["answer_surface"]) == ("approve", "rule") and resumed == [rid]

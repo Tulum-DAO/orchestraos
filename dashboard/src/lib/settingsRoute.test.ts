@@ -5,8 +5,8 @@ import {
   closeSettingsTarget, backgroundPath, isSettingsShortcut, isMacPlatform, settingsShortcutLabel, matchesQuery, SCOPE_LABEL,
 } from './settingsRoute.ts';
 
-test('shows General, Display, Voice, Agents, Notifications, then Permissions, then the install\'s Voice & calls, Safety gate and Time zone last; the later categories are listed but hidden', () => {
-  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Permissions', 'Voice & calls', 'Safety gate', 'Time zone']);
+test('shows General, Display, Voice, Agents, Notifications, then Permissions and Timeout rules, then the install\'s Voice & calls, Safety gate and Time zone last; the later categories are listed but hidden', () => {
+  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Permissions', 'Timeout rules', 'Voice & calls', 'Safety gate', 'Time zone']);
   assert.deepEqual(SETTINGS_SECTIONS.filter((s) => !s.visible).map((s) => s.id), ['models', 'keys', 'people', 'system']);
 });
 
@@ -66,4 +66,10 @@ test('permissions follows notifications; safety gate is a server page', () => {
   assert.equal(SETTINGS_SECTIONS.find((s) => s.id === 'server-gate')?.group, 'server');
   assert.equal(settingsSectionOf('/settings/permissions'), 'permissions');
   assert.equal(settingsSectionOf('/settings/server-gate'), 'server-gate');
+});
+
+test('rules follows permissions', () => {
+  const ids = visibleSections().map((s) => s.id);
+  assert.equal(ids[ids.indexOf('permissions') + 1], 'rules');
+  assert.equal(settingsSectionOf('/settings/rules'), 'rules');
 });

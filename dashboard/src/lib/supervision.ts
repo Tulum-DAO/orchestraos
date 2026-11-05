@@ -5,6 +5,8 @@
  * through a JSON shape guard in the style of lib/settingsApi.ts, and every label comes from the server's `levels`,
  * `categories` and `roles`; the words here are the fallbacks and the sentence glue.
  */
+import type { AvailableAction, TimeoutRule } from './rulesPage';
+
 export type LevelId = 'watch_closely' | 'check_in' | 'let_them_run';
 export type GateMode = 'off' | 'observe' | 'enforce';
 export type GrantScope = 'session' | 'agent' | 'role' | 'project' | 'fleet';
@@ -213,3 +215,63 @@ export const putGateMode = (mode: GateMode, f: typeof fetch = fetch) =>
 /** A pending chat grant's confirm card: 1 Confirm, 2 Don't (the card's own options; CLI `orchestra grant propose`). */
 export const answerGrantCard = (cardId: string, confirm: boolean, f: typeof fetch = fetch) =>
   call(`/api/approvals/unified/${enc(cardId)}/answer`, json('POST', { option_n: confirm ? '1' : '2' }), okOnly, f);
+
+// ---- timeout rules (part 2b; part 1's /api/attention/rules, Settings › Timeout rules, lib/rulesPage.ts) ----
+
+export interface StoredRule extends TimeoutRule { id: string }
+export interface RulesState {
+  person: string; armed: boolean; rules: StoredRule[]; available_actions: AvailableAction[];
+  min_after_s: { no_progress: number; unanswered: number };
+}
+
+function ruleOf(v: unknown): StoredRule | null {
+  if (!isObj(v) || typeof v.id !== 'string' || (v.trigger !== 'unanswered' && v.trigger !== 'no_progress')
+      || typeof v.after_s !== 'number' || !Array.isArray(v.actions)) return null;
+  const str = (x: unknown) => (typeof x === 'string' && x ? x : null);
+  return {
+    id: v.id, name: str(v.name), trigger: v.trigger, after_s: v.after_s,
+    scope_agent: str(v.scope_agent), scope_kind: str(v.scope_kind) as StoredRule['scope_kind'],
+    scope_risk: str(v.scope_risk) as StoredRule['scope_risk'],
+    actions: arr<unknown>(v.actions).filter((a) => isObj(a) && typeof a.type === 'string') as StoredRule['actions'],
+    enabled: v.enabled ? 1 : 0, is_default: v.is_default ? 1 : 0,
+  };
+}
+
+/** GET /api/attention/rules → the person's rules, the actions the server offers and each trigger's minimum. */
+export function parseRules(json: unknown): Result<RulesState> {
+  if (!isObj(json) || json.ok === false || !Array.isArray(json.rules)) return { ok: false, error: errOf(json, 'Could not read the rules') };
+  const min = isObj(json.min_after_s) ? json.min_after_s : {};
+  return {
+    ok: true,
+    value: {
+      person: typeof json.person === 'string' ? json.person : '', armed: json.armed !== false,
+      rules: json.rules.map(ruleOf).filter((r): r is StoredRule => !!r),
+      available_actions: arr<AvailableAction>(json.available_actions).filter((a) => isObj(a) && typeof a.type === 'string')
+        .map((a) => ({ type: a.type, available: a.available === true, why: typeof a.why === 'string' ? a.why : null })),
+      min_after_s: { no_progress: Number(min.no_progress) || 600, unanswered: Number(min.unanswered) || 60 },
+    },
+  };
+}
+
+const RULES = '/api/attention/rules';
+const ruleIn = (d: unknown): Result<StoredRule> => {
+  const r = isObj(d) ? ruleOf(d.rule) : null;
+  return r ? { ok: true, value: r } : { ok: false, error: 'Could not read the rule' };
+};
+const RULE_ERRORS: Record<string, string> = {
+  unknown_agent: 'That agent is not registered', unknown_person: 'Handing a card to a person comes with multi-user',
+  bad_by: 'Choose who decides: the agent itself or its supervisor', unsafe_scope: 'Never used on permission cards or high-risk questions',
+  action_not_available: 'That action is not available yet', not_armed: 'Timeout rules are not switched on for this server yet',
+};
+async function ruleCall<T>(path: string, init: RequestInit | undefined, parse: (d: unknown) => Result<T>, f: typeof fetch): Promise<Result<T>> {
+  const r = await call(path, init, parse, f);
+  if (r.ok) return r;
+  return { ...r, error: RULE_ERRORS[r.error] ?? r.error };
+}
+export const fetchRules = (f: typeof fetch = fetch) => ruleCall(RULES, undefined, parseRules, f);
+/** Create (no id) or update a rule; `body` is lib/rulesPage.ts ruleBody(). */
+export const saveRule = (id: string | null, body: Record<string, unknown>, f: typeof fetch = fetch) =>
+  ruleCall(id ? `${RULES}/${enc(id)}` : RULES, json(id ? 'PUT' : 'POST', body), ruleIn, f);
+export const setRuleEnabled = (id: string, enabled: boolean, f: typeof fetch = fetch) =>
+  ruleCall(`${RULES}/${enc(id)}`, json('PUT', { enabled }), ruleIn, f);
+export const deleteRule = (id: string, f: typeof fetch = fetch) => ruleCall(`${RULES}/${enc(id)}`, json('DELETE'), okOnly, f);

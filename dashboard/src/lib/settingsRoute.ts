@@ -4,7 +4,7 @@
  * (settingsBg) and every section opened adds one entry (settingsDepth), so browser Back steps back through sections
  * and then closes Settings; Esc / X / Done go back past them all at once.
  */
-export type SectionId = 'general' | 'display' | 'voice' | 'agents' | 'models' | 'keys' | 'notifications' | 'permissions' | 'people' | 'system' | 'server-voice' | 'server-gate' | 'server';
+export type SectionId = 'general' | 'display' | 'voice' | 'agents' | 'models' | 'keys' | 'notifications' | 'permissions' | 'rules' | 'people' | 'system' | 'server-voice' | 'server-gate' | 'server';
 /** `group`: listed under a small label at the bottom of the list (the install's own settings, admin). */
 export interface SettingsSection { id: SectionId; label: string; visible: boolean; group?: 'server' }
 
@@ -17,6 +17,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'notifications', label: 'Notifications', visible: true },
   // How closely agents are supervised, roles, and what they may do without asking (lib/permissionsPage.ts).
   { id: 'permissions', label: 'Permissions', visible: true },
+  // What happens when something waits too long: remind, mark stuck, expire, hand off, choose for me (lib/rulesPage.ts).
+  { id: 'rules', label: 'Timeout rules', visible: true },
   // Phases 2–4 (spec §7): listed so their routes and order are fixed, shown once they are built.
   { id: 'models', label: 'Models & providers', visible: false },
   { id: 'keys', label: 'Keys', visible: false },

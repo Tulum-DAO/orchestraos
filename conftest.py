@@ -149,6 +149,28 @@ def _no_host_tailscale(monkeypatch):
     yield
 
 
+# --- the test runner's own process chain is not the caller (plan Task 7a) ---------------------------
+# Only a person may answer a safety-gate card, and watch_gateway.apply_answer reads its own process chain to
+# tell. A suite run BY an agent (a seat running pytest) would make every in-process gate answer look like that
+# agent's. Default: this process's chain is a person. The tests of the check itself mark `real_caller`.
+@_pytest.fixture(autouse=True)
+def _answer_caller_is_a_person(request, monkeypatch):
+    if request.node.get_closest_marker("real_caller") is None:
+        for name in ("answer_caller", "scripts.answer_caller"):
+            mod = sys.modules.get(name)
+            if mod is None:
+                try:
+                    mod = __import__(name, fromlist=["x"])
+                except Exception:  # noqa: BLE001 — a checkout without it has nothing to isolate
+                    continue
+            monkeypatch.setattr(mod, "self_caller", lambda _m=mod: _m.PERSON)
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_caller: the test reads the real answer caller (plan Task 7a)")
+
+
 # --- the operator's Claude settings are not a test fixture (2026-09-20 / 2026-10-09) ---------
 # An install from a scratch clone left 12 `#orchestraos-hook` rows in an operator's real
 # ~/.claude/settings.json for 19 days: every tool call of every session forked a shell for them.

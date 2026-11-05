@@ -54,8 +54,52 @@ export interface AnswerResult {
   ok: boolean;
   applied?: boolean;
   error?: string;
+  /** Why a safety-gate card refused this caller (error 'agent_cannot_answer_gate_card'; plan Task 7a). */
+  why?: string;
   id: string;
   status?: number;
+}
+
+/** Who is on the other end of an answer request, for approval.py's caller check (plan Task 7a). */
+export interface AnswerPeer {
+  /** '<ip>|<port>|<server port>' of this request's own socket. */
+  peer?: string;
+  /** The dashboard proxy's `x-orchestra-peer` header: the proxy's own client, in the same form. */
+  forwardedPeer?: string;
+  /** The last X-Forwarded-For entry (Tailscale Serve's client address). */
+  forwardedFor?: string;
+}
+
+const PEER_SPEC = /^[0-9A-Fa-f:.]{2,45}\|\d{1,5}\|\d{1,5}$/;
+const ADDR = /^[0-9A-Fa-f:.]{2,45}$/;
+
+function header1(req: { headers?: Record<string, unknown> }, name: string): string {
+  const v = req.headers?.[name];
+  return String(Array.isArray(v) ? v[0] : v ?? '').trim();
+}
+
+/**
+ * The request's peer description. Only well-formed values are passed on; approval.py treats anything it cannot
+ * resolve as unknown (refused on a gate card), so a malformed or missing value never makes an agent a person.
+ */
+export function answerPeer(req: {
+  socket?: { remoteAddress?: string; remotePort?: number; localPort?: number } | null;
+  headers?: Record<string, unknown>;
+}): AnswerPeer {
+  const out: AnswerPeer = {};
+  const s = req.socket;
+  const own = s ? `${s.remoteAddress ?? ''}|${s.remotePort ?? ''}|${s.localPort ?? ''}` : '';
+  if (PEER_SPEC.test(own)) out.peer = own;
+  const fwd = header1(req, 'x-orchestra-peer');
+  if (PEER_SPEC.test(fwd)) out.forwardedPeer = fwd;
+  const xff = header1(req, 'x-forwarded-for').split(',').pop()?.trim() ?? '';
+  if (ADDR.test(xff)) out.forwardedFor = xff;
+  return out;
+}
+
+/** HTTP status for a refused canonical answer: a gate card refusing an agent is 403, anything else 400. */
+export function answerRefusalStatus(result: AnswerResult): number {
+  return result.error === 'agent_cannot_answer_gate_card' ? 403 : 400;
 }
 
 /**
@@ -98,7 +142,7 @@ export function canonicalAnswerArgv(
   answer: string,
   text?: string,
   extra?: { optionN?: string; answerText?: string },
-  opts?: { surface?: unknown },
+  opts?: { surface?: unknown; peer?: AnswerPeer },
 ): string[] {
   // R7d attribution: the web route holds the authenticated web session, so it
   // asserts the provenance tags server-side across the shell boundary —
@@ -109,6 +153,11 @@ export function canonicalAnswerArgv(
   if (text) args.push('--text', text);
   if (extra?.optionN) args.push('--option-n', extra.optionN);
   if (extra?.answerText) args.push('--answer-text', extra.answerText);
+  // Task 7a: who is calling. Always a peer flag (a missing socket reads as unknown, never as a person).
+  const peer = opts?.peer;
+  args.push('--peer', peer?.peer || 'unknown');
+  if (peer?.forwardedPeer) args.push('--forwarded-peer', peer.forwardedPeer);
+  if (peer?.forwardedFor) args.push('--forwarded-for', peer.forwardedFor);
   return args;
 }
 
@@ -131,7 +180,7 @@ export function canonicalAnswer(
   answer: string,
   text?: string,
   extra?: { optionN?: string; answerText?: string },
-  opts?: { surface?: unknown },
+  opts?: { surface?: unknown; peer?: AnswerPeer },
 ): AnswerResult {
   const args = canonicalAnswerArgv(id, answer, text, extra, opts);
   try {

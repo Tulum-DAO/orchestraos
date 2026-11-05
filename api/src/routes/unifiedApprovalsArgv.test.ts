@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { canonicalAnswerArgv, answerSurface } from './_canonical-approvals.js';
+import { canonicalAnswerArgv, answerSurface, answerPeer, answerRefusalStatus } from './_canonical-approvals.js';
 
 const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'unified-approvals.ts'), 'utf-8');
 
@@ -45,7 +45,36 @@ test('surface chat reaches approval.py as --surface chat; any other value is web
 });
 
 test('approve, deny and answer pass the body surface to the canonical answer', () => {
-  assert.match(SRC, /canonicalAnswer\(id, 'approve', undefined, undefined, \{ surface: req\.body\?\.surface \}\)/);
-  assert.match(SRC, /canonicalAnswer\(id, 'deny', reason, undefined, \{ surface: req\.body\?\.surface \}\)/);
-  assert.match(SRC, /canonicalAnswer\(id, 'option', undefined, \{ optionN, answerText \}, \{ surface: req\.body\?\.surface \}\)/);
+  assert.match(SRC, /canonicalAnswer\(id, 'approve', undefined, undefined, \{ surface: req\.body\?\.surface, peer: answerPeer\(req\) \}\)/);
+  assert.match(SRC, /canonicalAnswer\(id, 'deny', reason, undefined, \{ surface: req\.body\?\.surface, peer: answerPeer\(req\) \}\)/);
+  assert.match(SRC, /canonicalAnswer\(id, 'option', undefined, \{ optionN, answerText \}, \{ surface: req\.body\?\.surface, peer: answerPeer\(req\) \}\)/);
+});
+
+// Plan Task 7a: only a person answers a safety-gate card. approval.py works out who is calling from the
+// request's peer, so every answer route passes it, and a missing socket reads as unknown (never as a person).
+const LEGACY = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'approvals.ts'), 'utf-8');
+
+test('every answer route passes its peer, and a gate refusal is a 403', () => {
+  assert.equal((SRC.match(/= canonicalAnswer\(/g) || []).length, (SRC.match(/peer: answerPeer\(req\)/g) || []).length);
+  assert.equal((LEGACY.match(/= canonicalAnswer\(/g) || []).length, (LEGACY.match(/peer: answerPeer\(req\)/g) || []).length);
+  assert.ok(!/res\.status\(400\)\.json\(\{ error: result\.error/.test(SRC + LEGACY), 'a refused answer must map its status');
+  assert.equal(answerRefusalStatus({ ok: false, id: 'x', error: 'agent_cannot_answer_gate_card' }), 403);
+  assert.equal(answerRefusalStatus({ ok: false, id: 'x', error: 'bad option' }), 400);
+});
+
+test('the peer reaches approval.py; a missing or malformed one is unknown, never a person', () => {
+  const flag = (argv: string[], f: string) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : undefined);
+  const req = (socket: unknown, headers: Record<string, unknown> = {}) => ({ socket, headers }) as any;
+  const p = answerPeer(req({ remoteAddress: '127.0.0.1', remotePort: 50123, localPort: 8888 },
+    { 'x-orchestra-peer': '127.0.0.1|40001|8891', 'x-forwarded-for': '10.0.0.9, 100.64.1.2' }));
+  assert.deepEqual(p, { peer: '127.0.0.1|50123|8888', forwardedPeer: '127.0.0.1|40001|8891', forwardedFor: '100.64.1.2' });
+  const argv = canonicalAnswerArgv('apr_1', 'option', undefined, { optionN: '1' }, { peer: p });
+  assert.equal(flag(argv, '--peer'), '127.0.0.1|50123|8888');
+  assert.equal(flag(argv, '--forwarded-peer'), '127.0.0.1|40001|8891');
+  assert.equal(flag(argv, '--forwarded-for'), '100.64.1.2');
+  assert.equal(flag(canonicalAnswerArgv('apr_1', 'approve'), '--peer'), 'unknown');
+  const bad = answerPeer(req(null, { 'x-orchestra-peer': '1.2.3.4|1|2; rm -rf /', 'x-forwarded-for': '$(x)' }));
+  assert.deepEqual(bad, {});
+  assert.equal(flag(canonicalAnswerArgv('apr_1', 'approve', undefined, undefined, { peer: bad }), '--peer'), 'unknown');
+  assert.deepEqual(answerPeer(req({ remoteAddress: '::ffff:127.0.0.1', remotePort: 5, localPort: 6 })), { peer: '::ffff:127.0.0.1|5|6' });
 });

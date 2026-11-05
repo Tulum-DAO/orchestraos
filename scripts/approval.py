@@ -166,6 +166,135 @@ def _expiry_notice(row):
     return True
 
 
+def _parse_categories(values):
+    """['outside_world:deploy', 'install'] -> [['outside_world', 'deploy'], ['install', None]], or None (printed)."""
+    from gate_classify import ACTIONS
+    out = []
+    for v in values:
+        cat, _, act = str(v).strip().partition(":")
+        if cat not in ACTIONS or (act and act not in ACTIONS[cat]):
+            known = ", ".join(f"{c}[:{'|'.join(a)}]" for c, a in ACTIONS.items())
+            print(f"[approval] unknown --category {v!r}; known: {known}", file=sys.stderr)
+            return None
+        if [cat, act or None] not in out:
+            out.append([cat, act or None])
+    return out
+
+
+def _import_gateway():
+    """watch_gateway prints import-time banners to stdout: keep stdout JSON-only for the caller."""
+    saved = sys.stdout
+    try:
+        sys.stdout = sys.stderr
+        import watch_gateway as wg
+    finally:
+        sys.stdout = saved
+    return wg
+
+
+def _refuse(msg, code=4, **extra):
+    print(json.dumps({"ok": False, "error": extra.pop("error", "refused"), "detail": msg, **extra}))
+    print(f"[approval] REFUSED: {msg}", file=sys.stderr)
+    return code
+
+
+def _answer_on_behalf(args, store):
+    """`answer --on-behalf-of <rule>`: a handed-to agent decides a card for its person (plan §8.1, Task 7a).
+    Exit 0 applied; 1 the answer itself failed (the claim is given back); 2 usage; 3 unarmed; 4 refused."""
+    import answer_caller
+    import attention_items
+    import attention_rules as AR
+    from attention_store import AttentionStore
+    if args.surface != "rule":
+        print("[approval] --on-behalf-of needs --surface rule", file=sys.stderr)
+        return 2
+    agent = (args.answered_by or "").strip()
+    reasoning = " ".join((args.reasoning or "").split())[:500]
+    if not reasoning:
+        print("[approval] --on-behalf-of needs --reasoning \"<one line: why>\"", file=sys.stderr)
+        return 2
+    if not agent or agent == "operator" or agent.startswith("rule:") or \
+            AR._reg_row(AR._registry_agents(), agent) is None:
+        return _refuse("--answered-by must be your own agent id (a registered agent)")
+    me = answer_caller.of_process()
+    if not me.agents:
+        return _refuse("on-behalf answers come from the assigned agent's own session, and this is not an "
+                       "agent's session")
+    if me.nearest != answer_caller.base(agent):
+        return _refuse(f"you are {me.nearest}, not {agent}")
+    if me.unknown:
+        return _refuse("OrchestraOS could not see your whole process chain, so it cannot tell who is answering")
+    row = store.get(args.rid)
+    if row is None or row.get("status") != "pending":
+        return _refuse("this card is not waiting any more", error="not_pending")
+    wg = _import_gateway()
+    person, _tz = wg._attention_person()
+    item = attention_items.from_pending_row(row, attention_items.Ctx(person=person)) or {"id": row["id"]}
+    ok, why = AR.may_act_for_person(item, row, wg._session_is_protected, wg._rules_gate_view(person))
+    if not ok:
+        return _refuse(f"this card needs your person: {why}", error="safety", why=why)
+    astore = AttentionStore(db_path=store.db_path)
+    astore.migrate()
+    if not astore.armed:
+        print("[approval] timeout rules are not armed on this install", file=sys.stderr)
+        return 3
+    rs = AR.RuleStore(astore)
+    chosen = args.answer
+    if args.answer == "option":
+        menu = attention_items._menu(row) or {}
+        chosen = next((o.get("label") for o in menu.get("options") or []
+                       if isinstance(o, dict) and str(o.get("n")) == str(args.option_n)), args.option_n)
+    rule_id, _, want = args.on_behalf_of.partition(":")
+    if want and want not in AR.ON_BEHALF_ACTIONS:
+        print(f"[approval] --on-behalf-of {args.on_behalf_of!r}: expected <rule_id>[:hand_off|choose_for_me]",
+              file=sys.stderr)
+        return 2
+    ob = {"by": agent, "rule_id": rule_id, "chosen": chosen, "reasoning": reasoning}
+    try:
+        action, fire_res = rs.consume(rule_id, row["id"], agent, pending_on_behalf=ob, action=want or None)
+    except AR.RuleInvalid as e:
+        msg = {"no_handoff": "no rule handed this card to you",
+               "handed_to_other": f"this card was handed to {e.detail}",
+               "already_answered": "already answered on your person's behalf"}.get(e.code, e.code)
+        return _refuse(msg, error=e.code)
+    try:
+        result = wg.apply_answer(store, row["id"], args.answer, text=args.text, option_n=args.option_n,
+                                 answer_text=args.answer_text, fire=True, surface="rule", answered_by=agent,
+                                 handed_to=fire_res.get("assignee"))
+    except Exception as e:  # noqa: BLE001
+        result = {"ok": False, "error": f"answer failed: {e}", "id": row["id"]}
+    result.pop("resume_row", None)
+    if not result.get("ok") or not result.get("applied"):
+        rs.unconsume(rule_id, row["id"], action, claim=fire_res.get("claim"))
+        print(json.dumps(result, default=str))
+        if result.get("error") == "agent_cannot_answer_gate_card":
+            print(f"[approval] REFUSED: only a person can answer this permission card ({result.get('why')})",
+                  file=sys.stderr)
+            return 4
+        print(f"[approval] the answer did not land: {result.get('error') or 'not applied'}", file=sys.stderr)
+        return 1
+    ob["action"] = action
+    try:
+        if rs.record_on_behalf(rule_id, row["id"], action, ob, claim=fire_res.get("claim")):
+            astore.record_on_behalf(row["id"], row.get("from_agent") or "", AR.on_behalf_title(row, ob),
+                                    body=reasoning, on_behalf=ob, rule_id=rule_id)
+    except Exception as e:  # noqa: BLE001 — the answer is durable; the next tick's reconcile() writes the record
+        print(f"[approval] the on-behalf record failed (the answer stands; the next tick records it): {e}",
+              file=sys.stderr)
+    print(json.dumps({**result, "on_behalf": ob}, default=str))
+    return 0
+
+
+def _peer_caller(args):
+    """The caller the API bridge describes (its HTTP peer), or None when no --peer was given (a direct CLI call:
+    apply_answer still checks this process's own chain)."""
+    if not args.peer:
+        return None
+    import answer_caller
+    return answer_caller.of_peer_spec(args.peer, forwarded_peer=args.forwarded_peer,
+                                      forwarded_for=args.forwarded_for)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -208,6 +337,11 @@ def main(argv=None):
     pr.add_argument("--process-lease-id", dest="process_lease_id", default=None)
     pr.add_argument("--origin", default=None,
                     choices=["canonical", "backfill_fs", "shadow_proposal"])
+    pr.add_argument("--category", action="append", default=[], metavar="CATEGORY[:ACTION]",
+                    help="what answering this card lets you do, in the safety gate's terms (repeatable), e.g. "
+                         "outside_world:deploy or install. A timeout rule never answers, hands off or chooses "
+                         "for a card whose categories your supervision level would hold. Needs a menu card "
+                         "(--options or --menu-json).")
     pr.add_argument("--delegated-by", dest="delegated_by", default=None,
                     help="PROVENANCE only (DEC-1787724456): the agent that "
                          "originally needed this decision, when YOU (the card "
@@ -316,6 +450,15 @@ def main(argv=None):
     pan.add_argument("--answered-by", dest="answered_by", default=None,
                      help="principal: 'operator' (authenticated edges) | '<agent_id>' "
                           "(self-authored gates)")
+    pan.add_argument("--on-behalf-of", dest="on_behalf_of", default=None, metavar="RULE_ID",
+                     help="answer a card a timeout rule handed to you (hand off / choose for me); needs "
+                          "--surface rule, --answered-by <your agent id> and --reasoning")
+    pan.add_argument("--reasoning", default=None, help="one line: why this option (with --on-behalf-of)")
+    # Task 7a: who is on the other end of the API's HTTP request ('<ip>|<port>|<server port>'). Set only by
+    # the API bridge; each can only ADD an agent to the caller (this process's own chain is always checked).
+    pan.add_argument("--peer", default=None, help=argparse.SUPPRESS)
+    pan.add_argument("--forwarded-peer", dest="forwarded_peer", default=None, help=argparse.SUPPRESS)
+    pan.add_argument("--forwarded-for", dest="forwarded_for", default=None, help=argparse.SUPPRESS)
     rt = sub.add_parser("retire")  # card no longer needed: author/current gen/gm (operator ruling 2026-10-10)
     rt.add_argument("--id", required=True)
     rt.add_argument("--from", dest="from_agent", required=True)
@@ -352,6 +495,13 @@ def main(argv=None):
             except ValueError as e:
                 print(f"[approval] bad --menu-json: {e}", file=sys.stderr)
                 return 2
+            b = menu.get("bridge")
+            if isinstance(b, dict) and b.get("kind") in ("gate", "gate_grant"):
+                # Task 7a: only the safety gate files permission cards and grant proposals. A forged one could
+                # dress up an agent's own pending grant as something else and have it confirmed.
+                print("[approval] bad --menu-json: bridge kind 'gate'/'gate_grant' is reserved for the "
+                      "safety gate (use `orchestra grant propose`)", file=sys.stderr)
+                return 2
             kind = "menu"
             if opts is None:   # legacy renderers see the labels
                 opts = [str(o.get("label", "")) for o in menu["options"] if isinstance(o, dict)]
@@ -376,6 +526,15 @@ def main(argv=None):
                 "question": args.question,
                 "options": menu_opts,
             }
+        if args.category:
+            hits = _parse_categories(args.category)
+            if hits is None:
+                return 2
+            if menu is None:
+                print("[approval] --category needs a menu card: pass --options or --menu-json "
+                      "(a plain approve/deny card has nowhere to keep it)", file=sys.stderr)
+                return 2
+            menu["gate_hits"] = hits
         if args.default_option is not None:
             d = str(args.default_option).strip()
             if menu is not None:
@@ -646,6 +805,8 @@ def main(argv=None):
                 "snoozed_until": r.get("snoozed_until")} for r in rows]
         print(json.dumps(out, default=str))
         return 0
+    if args.cmd == "answer" and args.on_behalf_of:
+        return _answer_on_behalf(args, store)
     if args.cmd == "answer":
         # Land a web answer through the ONE shared state machine (§5). The web
         # route provides no validation of its own — everything (menu/option/
@@ -671,9 +832,16 @@ def main(argv=None):
         result = _wg.apply_answer(store, args.rid, args.answer, text=args.text,
                                   option_n=args.option_n, answer_text=args.answer_text,
                                   fire=True, surface=args.surface,
-                                  answered_by=args.answered_by)
+                                  answered_by=args.answered_by,
+                                  caller=lambda: _peer_caller(args))
         result.pop("resume_row", None)   # not JSON-relevant to the caller
         print(json.dumps(result, default=str))
+        if result.get("error") == "agent_cannot_answer_gate_card":
+            import answer_caller
+            print(f"[approval] REFUSED: only a person can answer this permission card "
+                  f"({answer_caller.REFUSAL_TEXT.get(result.get('why'), result.get('why'))}). "
+                  f"It stays waiting for them.", file=sys.stderr)
+            return 4
         return 0 if result.get("ok") else 1
 
 if __name__ == "__main__":
