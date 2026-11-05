@@ -1,0 +1,122 @@
+[
+ {
+  "answer": "accept",
+  "answer_text": null,
+  "answered_at": "<ts>",
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": {},
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<completion_accepted>",
+  "kind": "completion",
+  "options": [
+   "accept",
+   "respond"
+  ],
+  "question": "Old done",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "status": "resumed",
+  "summary": null
+ },
+ {
+  "answer": "approve",
+  "answer_text": null,
+  "answered_at": "<ts>",
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<answered_web>",
+  "kind": null,
+  "options": [
+   "approve",
+   "deny",
+   "hold"
+  ],
+  "question": "Ship the picker?",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "status": "answered",
+  "summary": null
+ },
+ {
+  "answer": null,
+  "answer_text": null,
+  "answered_at": "<ts>",
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "pm",
+  "id": "<discarded>",
+  "kind": null,
+  "options": [
+   "approve",
+   "deny",
+   "hold"
+  ],
+  "question": "Old ask",
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "status": "discarded",
+  "summary": null
+ },
+ {
+  "answer": null,
+  "answer_text": null,
+  "answered_at": "<ts>",
+  "block_task": null,
+  "blocks_what": null,
+  "created_at": "<ts>",
+  "evidence": null,
+  "feature": null,
+  "from_agent": "pm",
+  "id": "<retired>",
+  "kind": null,
+  "options": [
+   "approve",
+   "deny",
+   "hold"
+  ],
+  "question": "Superseded ask",
+  "retired": {
+   "at": "<ts>",
+   "by": "pm",
+   "reason": "done another way",
+   "superseded_by": null
+  },
+  "reversibility": null,
+  "risk_level": null,
+  "snoozed_until": null,
+  "status": "retired",
+  "summary": "Superseded ask\n\n\u2014 RETIRED 2026-01-01T00:00:00Z by pm: done another way"
+ },
+ {
+  "answer": null,
+  "answer_text": null,
+  "answered_at": "<ts>",
+  "created_at": "<ts>",
+  "feature": null,
+  "from_agent": "gm",
+  "id": "<qnr_submitted>",
+  "kind": "questionnaire",
+  "options": [],
+  "question": "Prefs",
+  "questionnaire": {
+   "answered_count": 1,
+   "draft_rev": 0,
+   "question_count": 1
+  },
+  "status": "submitted",
+  "summary": null
+ }
+]

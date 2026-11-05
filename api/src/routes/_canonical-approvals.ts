@@ -78,6 +78,35 @@ export function readCanonicalPending(): CanonicalRow[] {
 }
 
 /**
+ * The surface an answer is recorded under. The web route is the trusted origin, so it picks: a
+ * client may ask for `chat` (answered from a chat thread on the web) and gets it; anything else,
+ * including a claim to be the phone or the watch, is `web`, as before the hint existed.
+ */
+export function answerSurface(raw: unknown): 'web' | 'chat' {
+  return raw === 'chat' ? 'chat' : 'web';
+}
+
+/** The approval.py argv for one answer. Split out so the surface mapping is tested without a shell-out. */
+export function canonicalAnswerArgv(
+  id: string,
+  answer: string,
+  text?: string,
+  extra?: { optionN?: string; answerText?: string },
+  opts?: { surface?: unknown },
+): string[] {
+  // R7d attribution: the web route holds the authenticated web session, so it
+  // asserts the provenance tags server-side across the shell boundary —
+  // surface web (or chat, see answerSurface), answered_by='operator' (a client can
+  // never set these; this bridge is the trusted origin). Provenance only; never gates an authz call.
+  const args = [APPROVAL_CLI, 'answer', '--id', id, '--answer', answer,
+                '--surface', answerSurface(opts?.surface), '--answered-by', 'operator'];
+  if (text) args.push('--text', text);
+  if (extra?.optionN) args.push('--option-n', extra.optionN);
+  if (extra?.answerText) args.push('--answer-text', extra.answerText);
+  return args;
+}
+
+/**
  * Land a the operator answer on a canonical row through the ONE state machine. `answer`
  * is the raw verb (approve/deny/hold/accept/respond/option) — ALL validation
  * (menu/option/free-text/qnr_/perm:) lives in watch_gateway.apply_answer, which
@@ -95,17 +124,10 @@ export function canonicalAnswer(
   id: string,
   answer: string,
   text?: string,
-  extra?: { optionN?: string; answerText?: string }
+  extra?: { optionN?: string; answerText?: string },
+  opts?: { surface?: unknown },
 ): AnswerResult {
-  // R7d attribution: the web route holds the authenticated web session, so it
-  // asserts the provenance tags server-side across the shell boundary —
-  // surface='web', answered_by='operator' (a client can never set these; this
-  // bridge is the trusted origin). Provenance only; never gates an authz call.
-  const args = [APPROVAL_CLI, 'answer', '--id', id, '--answer', answer,
-                '--surface', 'web', '--answered-by', 'operator'];
-  if (text) args.push('--text', text);
-  if (extra?.optionN) args.push('--option-n', extra.optionN);
-  if (extra?.answerText) args.push('--answer-text', extra.answerText);
+  const args = canonicalAnswerArgv(id, answer, text, extra, opts);
   try {
     const out = execFileSync('python3', args, { timeout: 15000, encoding: 'utf-8' });
     return JSON.parse(out.trim());

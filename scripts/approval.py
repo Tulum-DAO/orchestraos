@@ -180,6 +180,11 @@ def main(argv=None):
     pr.add_argument("--risk", dest="risk_level", default=None, choices=["low", "medium", "high"])
     pr.add_argument("--reversibility", default=None, choices=["easy", "hard", "irreversible"])
     pr.add_argument("--feature", default=None, help="product area/feature, e.g. 'Proposals', 'Billing'")
+    pr.add_argument("--urgency", type=int, choices=[0, 1, 2, 3], default=None,
+                    help="0-3 priority input; stored once m20261104_attention is armed")
+    pr.add_argument("--default", dest="default_option", default=None,
+                    help="your suggested default, taken if the operator's timeout rule says so: an option "
+                         "number for a card with options, approve|deny for a plain approval")
     pr.add_argument("--menu-json", default=None,
                     help="JSON pane-menu capture {question, options[{n,label,detail?,input_kind}], "
                          "selected_n, source_session, captured_at} -> kind='menu' row "
@@ -237,6 +242,8 @@ def main(argv=None):
     ph.add_argument("--blocks", default=None,
                     help="what/who it unblocks: a label OR an apr_/qnr_ id (deep-link + dedup)")
     ph.add_argument("--feature", default=None)
+    ph.add_argument("--urgency", type=int, choices=[0, 1, 2, 3], default=None,
+                    help="0-3 priority input; stored once m20261104_attention is armed")
     ph.add_argument("--summary", default=None,
                     help="markdown subtitle/context (e.g. commitment 3-line **Task:**/**You said:**/**From:**)")
     ph.add_argument("--evidence", default=None,
@@ -369,6 +376,18 @@ def main(argv=None):
                 "question": args.question,
                 "options": menu_opts,
             }
+        if args.default_option is not None:
+            d = str(args.default_option).strip()
+            if menu is not None:
+                valid = [str(o.get("n")) for o in menu.get("options") or []
+                         if isinstance(o, dict) and o.get("input_kind") not in ("free_text", "chat")]
+            else:
+                valid = ["approve", "deny"]
+            if d not in valid:
+                print(f"[approval] bad --default {d!r}: pick one of {', '.join(valid) or '(none)'}",
+                      file=sys.stderr)
+                return 2
+            args.default_option = d
         rid = store.create(from_agent=args.from_agent, question=args.question,
                            worker_kind=args.worker_kind, op_key=args.op_key,
                            thread_key=args.thread_key, options=opts,
@@ -382,7 +401,8 @@ def main(argv=None):
                            provider_session_id=args.provider_session_id,
                            process_instance_id=args.process_instance_id,
                            process_lease_id=args.process_lease_id,
-                           origin=args.origin)
+                           origin=args.origin, urgency=args.urgency,
+                           default_option=args.default_option)
         try:
             notify(rid, store=store)            # primary trigger: instant push
         except Exception as e:  # noqa: BLE001 — cron backstop will re-notify
@@ -446,7 +466,8 @@ def main(argv=None):
                            options=["done", "cant", "snooze"], feature=args.feature,
                            kind="human_task", block_task=task_md, blocks_what=blocks,
                            summary=getattr(args, "summary", None),
-                           evidence=getattr(args, "evidence", None))
+                           evidence=getattr(args, "evidence", None),
+                           urgency=args.urgency)
         try:
             notify(rid, store=store)            # primary trigger: instant push
         except Exception as e:  # noqa: BLE001 — cron backstop will re-notify

@@ -133,8 +133,10 @@ def test_every_command_the_foundation_cites_exists():
     store = (ROOT / "msg_store.py").read_text()
     for sub in re.findall(r"msg_store\.py (\w+)", text):
         assert re.search(rf'add_parser\("{sub}"', store), f"msg_store has no '{sub}' command"
-    # `orchestra react` lines cite that verb's flags (checked in the next test), not msg_store's.
-    rest = "\n".join(ln for ln in text.splitlines() if "orchestra react" not in ln)
+    # `orchestra react` / `orchestra update` lines cite those verbs' flags (checked in their own tests),
+    # not msg_store's.
+    rest = "\n".join(ln for ln in text.splitlines()
+                     if "orchestra react" not in ln and "orchestra update" not in ln)
     for flag in set(re.findall(r"(--[a-z][a-z-]+)", rest)) - {"--worker-kind", "--summary"}:
         assert f'"{flag}"' in store, f"msg_store.py has no {flag}"
     approval = (ROOT / "scripts" / "approval.py").read_text()
@@ -154,6 +156,16 @@ def test_the_foundation_teaches_orchestra_react():
         assert f'"{flag}"' in react, f"orchestra react has no {flag}"
     # the wake's own words (api lib/reaction-wake-text.ts REACTION_WAKE_NOTE): NO_REPLY is how an agent says nothing
     assert "Reply, react with `orchestra react <emoji>`, or answer exactly NO_REPLY to stay silent." in text
+
+
+def test_the_foundation_teaches_orchestra_update_done():
+    text = FOUNDATION.read_text()
+    line = next(l for l in text.splitlines() if "orchestra update done" in l)
+    assert "decision" in line and "card" in line          # it says done notes are not questions
+    upd = (ROOT / "orchestra_cli" / "update_cmd.py").read_text()
+    assert '"update"' in upd
+    for flag in set(re.findall(r"(--[a-z][a-z-]+)", line)):
+        assert f'"{flag}"' in upd, f"orchestra update done has no {flag}"
 
 
 def test_the_hackathon_examples_left_prompts():

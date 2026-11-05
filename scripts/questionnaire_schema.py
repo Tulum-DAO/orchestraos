@@ -532,20 +532,26 @@ class QuestionnaireStore:
         finally:
             c.close()
 
-    def history(self, limit=50):
+    def history(self, limit=50, agents=None):
         """R8 everything-to-history: containers that reached a the operator-visible end
-        (submitted/resumed, discarded, and retired by author/gm), newest-ended-first."""
+        (submitted/resumed, discarded, and retired by author/gm), newest-ended-first.
+        `agents` (attention list, a scoped member): only those authors, filtered before the limit."""
         c = self._conn()
         try:
             out = []
             cols = {r[1] for r in c.execute("PRAGMA table_info(questionnaires)").fetchall()}
             ended = ("submitted_at, discarded_at, retired_at" if "retired_at" in cols
                      else "submitted_at, discarded_at")
+            only, args = "", []
+            if agents is not None:
+                agents = list(agents)
+                only = f" AND from_agent IN ({','.join('?' for _ in agents)})" if agents else " AND 0"
+                args = agents
             for q in c.execute(
                     "SELECT * FROM questionnaires "
-                    "WHERE status IN ('submitted','resumed','discarded','retired') "
-                    f"ORDER BY COALESCE({ended}) DESC LIMIT ?",
-                    [int(limit)]).fetchall():
+                    "WHERE status IN ('submitted','resumed','discarded','retired')" + only +
+                    f" ORDER BY COALESCE({ended}) DESC LIMIT ?",
+                    args + [int(limit)]).fetchall():
                 d = dict(q)
                 arows = c.execute(
                     "SELECT option_n, answer_text FROM questionnaire_answers WHERE qnr_id=?",

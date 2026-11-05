@@ -37,6 +37,10 @@ def test_seed_command_from_init_creates_gated_columns(tmp_path, monkeypatch):
     retire = {"retired_at", "retired_by", "retire_reason", "superseded_by"}
     assert retire <= cols
     assert retire <= {r[1] for r in conn.execute("PRAGMA table_info(questionnaires)")}
+    # attention part 1 (m20261104_attention): the Updates tables and the two ledger columns
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"attention_events", "attention_seen", "attention_meta", "attention_rules"} <= tables
+    assert {"urgency", "default_option"} <= cols
     # and a second seed run is silent + idempotent
     r = subprocess.run(list(seed[0][0]), cwd=seed[0][1], env=seed[0][2], capture_output=True, text=True)
     assert r.returncode == 0 and "DDL PENDING" not in r.stderr, r.stderr
