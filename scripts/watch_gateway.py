@@ -1195,6 +1195,12 @@ def _gateway_answer_tags(body):
     return surface, "operator"
 
 
+def _device_label(stored):
+    """The label of a stored "<device_id>:<label>" answer device (attention_items._device_label)."""
+    import attention_items as AI
+    return AI._device_label(stored)
+
+
 def _answer_device(request) -> str | None:
     """"<device_id>:<label>" for a device token, None for the fleet bearer.
 
@@ -1455,7 +1461,9 @@ async def handle_history(request):
             "snoozed_until": r.get("snoozed_until"),
             # Who answered and where (attention part 1). Additive; installed apps ignore unknown keys.
             "answered_by": r.get("answered_by"), "answer_surface": r.get("answer_surface"),
-            "answer_device": r.get("answer_device"), "option_n": r.get("option_n")} for r in rows]
+            # The device's label only, never its paired-device id (attention_items does the same).
+            "answer_device": _device_label(r.get("answer_device")),
+            "option_n": r.get("option_n")} for r in rows]
     for e, r in zip(out, rows):
         _safe_retired(e, r)
     # R8 everything-to-history: submitted/discarded questionnaires appear as

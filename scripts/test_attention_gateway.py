@@ -107,6 +107,9 @@ def test_seen_marks_once_and_accepts_a_linked_card_only_with_approve(box):
     row = box.ledger.get(card)
     assert row["status"] in ("answered", "resumed") and row["answer_surface"] == "phone"
     assert row["answer_device"].endswith(":Phone")
+    st, h = box.call("GET", "/history")
+    assert st == 200
+    assert next(r for r in h["history"] if r["id"] == card)["answer_device"] == "Phone"   # the label, never the id
 
 
 def test_seen_validates_every_id_and_bad_surface_is_null(box):
