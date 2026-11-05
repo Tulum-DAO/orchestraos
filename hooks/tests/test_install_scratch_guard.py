@@ -45,7 +45,7 @@ def _outside_pytest(monkeypatch):
 
 def _scratch_clone(tmp_path):
     clone = tmp_path / "scratchpad" / "red2"
-    for _ev, _m, rel, _r in H.HOOKS:
+    for _ev, _m, rel, _r, *_ in H.HOOKS:
         (clone / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / rel, clone / rel)
     return clone

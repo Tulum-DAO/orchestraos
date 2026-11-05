@@ -41,6 +41,9 @@ def test_seed_command_from_init_creates_gated_columns(tmp_path, monkeypatch):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"attention_events", "attention_seen", "attention_meta", "attention_rules"} <= tables
     assert {"urgency", "default_option"} <= cols
+    # attention part 2a (m20261104_supervision): the six supervision tables, created empty (no seed here)
+    assert {"supervision_settings", "supervision_roles", "role_assignments", "standing_grants",
+            "supervision_meta", "gate_holds"} <= tables
     # and a second seed run is silent + idempotent
     r = subprocess.run(list(seed[0][0]), cwd=seed[0][1], env=seed[0][2], capture_output=True, text=True)
     assert r.returncode == 0 and "DDL PENDING" not in r.stderr, r.stderr

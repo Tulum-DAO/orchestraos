@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, computerValue, openingSection, contextUsedLabel } from './arturoPanel.ts';
+import { panelStatus, pathTo, PAGE_TITLES, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, computerValue, openingSection, contextUsedLabel } from './arturoPanel.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 
 const LIVE = { ok: true, live: true, live_engine: 'relay' as const };
@@ -74,4 +74,9 @@ test('the History row is never blank for an agent: no subagent count reads as no
   assert.equal(subagentsValue(null), 'Nothing running');
   assert.equal(subagentsValue(0), 'Nothing running');
   assert.equal(subagentsValue(2), '2 running');
+});
+
+test('Supervision is a page of its own under the drawer', () => {
+  assert.deepEqual(pathTo('supervision'), ['supervision']);
+  assert.equal(PAGE_TITLES.supervision, 'Supervision');
 });

@@ -547,6 +547,12 @@ def _fire_resume_inner(row, store):
             return refused
     except ImportError:
         pass                              # harness not landed => today-identical
+    if _is_gate_card(row):
+        # A safety-gate card (scripts/gate_cards.py): grants, the hold's compare-and-set and at most one
+        # gate_answer message. Never a keypress, an inject or a menu digest.
+        outcome = _fire_gate(row, store)
+        _log_delivery(row, "gate", outcome.get("delivered"), reason=outcome.get("reason"))
+        return outcome
     if _is_headless_card(row):
         # A headless seat's own question or permission: the answer goes back ONLY as the held
         # request's control response (scripts/headless_cards.py), never an inbox row, an inject or
@@ -590,6 +596,25 @@ def _fire_resume_inner(row, store):
     # until it exists, node rows escalate via the watchdog like pane rows.
     store.mark_resumed_fired(row["id"])
 
+def _is_gate_card(row):
+    try:
+        import gate_cards
+        return gate_cards.is_gate(row)
+    except Exception:  # noqa: BLE001 — unreadable menu: not a gate card
+        return False
+
+
+def _fire_gate(row, store, decision=None):
+    import gate_cards
+    try:
+        return gate_cards.deliver(row, store, decision=decision)
+    except Exception as e:  # noqa: BLE001 — a busy/unarmed supervision store: retry next beat
+        print(f"[approval_resume] gate lane failed for {row.get('id')}: {e}", file=sys.stderr)
+        if row.get("status", "answered") == "answered":
+            store.stamp_retry(row["id"])
+        return {"id": row.get("id"), "delivered": False, "reason": f"gate_error:{type(e).__name__}"}
+
+
 def _is_headless_card(row):
     try:
         import headless_cards
@@ -612,6 +637,12 @@ def deliver_discarded(row, store):
     never waits forever on a dismissed ask (mirrors questionnaire_resume).
     A headless seat's card is answered 'deny, dismissed' over its control
     request instead: one answer, no inbox notice."""
+    if _is_gate_card(row):
+        # A dismissed gate card is a "Don't allow" (a dismissed grant proposal is declined).
+        import gate_cards
+        b = gate_cards.bridge_of(row) or {}
+        return _fire_gate(row, store, decision="decline" if b.get("kind") == gate_cards.GRANT_BRIDGE_KIND
+                          else "deny")
     if _is_headless_card(row):
         import headless_cards
         return headless_cards.deliver_dismissed(row)
@@ -650,8 +681,8 @@ def escalate(row, store, cheap=False):
 def _is_authored_menu(row, live_fn=None):
     """True iff this is an AUTHORED menu decision (kind='menu' with NO live
     source pane) -> the coalescible live-head-inject path, not a keypress."""
-    if row.get("kind") != "menu":
-        return False
+    if row.get("kind") != "menu" or _is_gate_card(row):
+        return False                       # a gate card takes the gate lane (fire_resume), never a coalesced inject
     menu = _menu_dict(row)
     return not _session_is_live(menu.get("source_session"), live_fn=live_fn) \
         or not row.get("option_n")
@@ -672,6 +703,8 @@ def coalesce_menu_injects(rows, store, *, resolve=None, inject=None,
     groups = {}   # session -> list[(row, body)]
     no_head = []
     for row in rows:
+        if _is_gate_card(row):
+            continue                       # never injected: the gate lane (fire_resume) owns it
         body = _menu_digest_body(row)
         if not row.get("resumed_at") and not row.get("last_attempt_at"):
             msg_send(row, body)                      # durable record, FIRST try only

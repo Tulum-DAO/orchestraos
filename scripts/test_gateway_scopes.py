@@ -461,12 +461,12 @@ def test_PIN_the_multi_verb_map_and_the_admin_ptt_voice_rows_exactly():
     def rows(verb):
         return sorted(f"{m} {p}" for (m, p), v in G.ROUTE_SCOPES.items() if v == verb)
     assert rows("admin") == ["DELETE /arturo/assistant/name", "DELETE /arturo/avatar", "DELETE /arturo/ptt/voice",
-                             "GET /agents/new/parents",
+                             "GET /agents/new/parents", "GET /gate/log",
                              "GET /terminal/ws", "POST /agents/new",
                              "POST /device/upgrade",
                              "POST /red-alert/report", "POST /runtimes/available/refresh",
                              "POST /telemetry", "PUT /arturo/assistant/name", "PUT /arturo/avatar",
-                             "PUT /arturo/ptt/vendor", "PUT /arturo/ptt/voice"]
+                             "PUT /arturo/ptt/vendor", "PUT /arturo/ptt/voice", "PUT /gate/mode"]
     assert rows("ptt") == ["GET /arturo/ptt/stream/events", "POST /arturo/ptt",
                            "POST /arturo/ptt/stream/audio", "POST /arturo/ptt/stream/end",
                            "POST /voice-call-ended"]
@@ -588,3 +588,27 @@ def test_the_assistant_name_reads_like_the_voice_and_only_an_admin_renames():
     for route in (("PUT", "/arturo/assistant/name"), ("DELETE", "/arturo/assistant/name")):
         assert G.ROUTE_SCOPES[route] == "admin", route
         assert G.accepted_scopes(*route) == ("admin",), route
+
+
+def test_PIN_the_supervision_rows():
+    """Attention part 2a (plan §7.1): reading levels, roles, grants and one hold is read; every supervision write is
+    approve (the multi-agent ones also need admin inside the handler); the gate's switch and log are admin."""
+    rows = {k: v for k, v in G.ROUTE_SCOPES.items() if k[1].startswith(("/supervision", "/grants", "/gate/"))}
+    assert rows == {
+        ("GET", "/supervision"): "read",
+        ("GET", "/supervision/roles"): "read",
+        ("GET", "/grants"): "read",
+        ("GET", "/gate/holds/{id}"): "read",
+        ("PUT", "/supervision/default"): "approve",
+        ("PUT", "/supervision/agents/{agent}"): "approve",
+        ("PUT", "/supervision/projects/{key}"): "approve",
+        ("POST", "/supervision/roles"): "approve",
+        ("PUT", "/supervision/roles/{id}"): "approve",
+        ("DELETE", "/supervision/roles/{id}"): "approve",
+        ("POST", "/supervision/roles/{id}/duplicate"): "approve",
+        ("POST", "/grants"): "approve",
+        ("PATCH", "/grants/{id}"): "approve",
+        ("DELETE", "/grants/{id}"): "approve",
+        ("PUT", "/gate/mode"): "admin",
+        ("GET", "/gate/log"): "admin",
+    }

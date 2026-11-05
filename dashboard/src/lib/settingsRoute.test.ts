@@ -5,8 +5,8 @@ import {
   closeSettingsTarget, backgroundPath, isSettingsShortcut, isMacPlatform, settingsShortcutLabel, matchesQuery, SCOPE_LABEL,
 } from './settingsRoute.ts';
 
-test('shows General, Display, Voice, Agents, Notifications, then the install\'s Voice & calls and Time zone last; the later categories are listed but hidden', () => {
-  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Voice & calls', 'Time zone']);
+test('shows General, Display, Voice, Agents, Notifications, then Permissions, then the install\'s Voice & calls, Safety gate and Time zone last; the later categories are listed but hidden', () => {
+  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Permissions', 'Voice & calls', 'Safety gate', 'Time zone']);
   assert.deepEqual(SETTINGS_SECTIONS.filter((s) => !s.visible).map((s) => s.id), ['models', 'keys', 'people', 'system']);
 });
 
@@ -58,4 +58,12 @@ test('a deep link with sections clicked closes by going back to the link\'s own 
   assert.equal(clicked.settingsDepth, 1);
   assert.deepEqual(closeSettingsTarget(clicked), { back: 1, then: '/' });
   assert.deepEqual(closeSettingsTarget(nextSettingsState(clicked)), { back: 2, then: '/' });
+});
+
+test('permissions follows notifications; safety gate is a server page', () => {
+  const ids = visibleSections().map((s) => s.id);
+  assert.equal(ids[ids.indexOf('notifications') + 1], 'permissions');
+  assert.equal(SETTINGS_SECTIONS.find((s) => s.id === 'server-gate')?.group, 'server');
+  assert.equal(settingsSectionOf('/settings/permissions'), 'permissions');
+  assert.equal(settingsSectionOf('/settings/server-gate'), 'server-gate');
 });
