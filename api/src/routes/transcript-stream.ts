@@ -37,7 +37,7 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { TranscriptTailer } from '../services/transcript-tail.js';
-import { resolveTranscriptPath, seatTmuxSession } from './chat-transcript.js';
+import { resolveTranscriptPath, resolveSubagentTranscriptPath, SAFE_SUBAGENT_ID, seatTmuxSession } from './chat-transcript.js';
 import { paneGone } from '../lib/paneProbe.js';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { isSafeAgentId } from '../lib/agentPaths.js';
@@ -277,5 +277,65 @@ router.get('/:id/transcript/stream', (req: Request, res: Response) => {
     releaseTailer(agentId);
   });
 });
+
+// ---- One subagent's own log: GET /:id/subagents/:aid/transcript/stream (the agent-tree drill-in) ----
+// The same snapshot/delta protocol as the seat stream, and nothing else: no live text, no step, no compaction
+// notices (those are the seat's; the view is read-only). Its own map, keyed `sub:<id>:<aid>`, so no seat id can
+// ever name a subagent's tailer. Scoped like the seat stream (router.param('id') above). A subagent with no
+// file yet streams an empty snapshot and fills in when its log appears.
+export const subagentTailerKey = (agentId: string, subagentId: string): string => `sub:${agentId}:${subagentId}`;
+const subLive = new Map<string, { tailer: TranscriptTailer; timer: NodeJS.Timeout }>();
+
+export function liveSubagentKeys(): string[] { return [...subLive.keys()]; }
+
+export function handleSubagentStream(req: Request, res: Response): void {
+  const agentId = String(req.params.id);
+  const subagentId = String(req.params.aid);
+  if (!isSafeAgentId(agentId) || !SAFE_SUBAGENT_ID.test(subagentId)) {
+    res.status(400).json({ error: 'bad agent or subagent id' });
+    return;
+  }
+  const key = subagentTailerKey(agentId, subagentId);
+  const limit = Math.min(parseInt(String(req.query.limit)) || DEFAULT_LIMIT, MAX_LIMIT);
+  const lastEventId =
+    (req.headers['last-event-id'] as string | undefined) ||
+    (typeof req.query.after === 'string' ? req.query.after : undefined);
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+
+  let entry = subLive.get(key);
+  if (!entry) {
+    const tailer = new TranscriptTailer({
+      agentId, limit, keepSidechain: true,
+      resolve: () => { try { return resolveSubagentTranscriptPath(agentId, subagentId); } catch { return { path: null, sid: null }; } },
+    });
+    const timer = setInterval(() => { try { tailer.tick(); } catch { /* keep the beat alive */ } }, TICK_MS);
+    timer.unref?.();
+    entry = { tailer, timer };
+    subLive.set(key, entry);
+  }
+  const mine = entry;
+  const unsubscribe = mine.tailer.subscribe((ev) => {
+    res.write(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+  }, lastEventId);
+  const heartbeat = setInterval(() => { res.write(': ping\n\n'); }, HEARTBEAT_MS);
+  heartbeat.unref?.();
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    if (mine.tailer.subscriberCount === 0 && subLive.get(key) === mine) {
+      clearInterval(mine.timer);
+      subLive.delete(key);
+    }
+  });
+}
+
+router.get('/:id/subagents/:aid/transcript/stream', handleSubagentStream);
 
 export default router;

@@ -109,6 +109,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/approvals/{id}"): "read",
     ("GET", "/agents"): "read",
     ("GET", "/agent-model"): "read",
+    # The seat's subagent tree and one subagent's own log: read, like /agents and /transcript.
+    ("GET", "/agent-tree"): "read",
+    ("GET", "/subagent-transcript"): "read",
     # Mail waiting for an agent and why (scripts/deliver_now.py): seeing it is read.
     ("GET", "/held"): "read",
     # Plan usage per provider (scripts/usage_meter.py). Its own verb, reserved in pairing for it:
@@ -1906,48 +1909,12 @@ def _stamp_chips(rows, meta_by_name):
                              pending_cards=cards.get(r.get("id"), 0))
 
 
-SUBAGENT_STALE_S = 15 * 60
-_SUBAGENT_TAIL_BYTES = 8192
-# A final answer can be longer than the first tail (measured on a live fleet: the last complete
-# record started up to ~43 KB from the end), so the tail grows until a whole record parses.
-_SUBAGENT_TAIL_STEPS = (_SUBAGENT_TAIL_BYTES, 64 * 1024, 256 * 1024)
+from subagent_files import (SUBAGENT_STALE_S, TAIL_STEPS as _SUBAGENT_TAIL_STEPS,  # noqa: E402
+                            subagent_finished as _subagent_finished)
 _SUBAGENT_TAIL_CACHE_MAX = 1024
 # path -> (mtime, size, finished). A file is re-read only when it changes; /agents refreshes
 # every few seconds and most subagent files are idle between refreshes.
 _SUBAGENT_TAIL_CACHE: dict = {}
-
-
-def _subagent_finished(path):
-    """True iff the last conversational record is an assistant message that stopped with
-    end_turn/stop_sequence (its final answer). Trailing `attachment`/system records written
-    after that answer are skipped: measured 2026-10-08, 2 of 300 finished files end that way.
-    The tail grows (_SUBAGENT_TAIL_STEPS) until a whole conversational record is in it, because
-    a long final answer can be longer than the first tail.
-    Older Claude CLIs write the final answer with stop_reason null; such a subagent reads as
-    running until its file is SUBAGENT_STALE_S old."""
-    try:
-        with open(path, "rb") as f:
-            size = os.fstat(f.fileno()).st_size
-            for tail in _SUBAGENT_TAIL_STEPS:
-                f.seek(max(0, size - tail))
-                lines = f.read().decode("utf-8", "replace").splitlines()
-                if size > tail and lines:
-                    lines = lines[1:]          # the first line of a mid-file tail is partial
-                for line in reversed(lines):
-                    try:
-                        rec = json.loads(line)
-                    except ValueError:
-                        continue
-                    kind = rec.get("type") if isinstance(rec, dict) else None
-                    if kind not in ("assistant", "user"):
-                        continue
-                    return kind == "assistant" and (rec.get("message") or {}).get("stop_reason") in (
-                        "end_turn", "stop_sequence")
-                if tail >= size:
-                    break
-    except OSError:
-        return False
-    return False
 
 
 def count_running_subagents(transcript_path, now=None):
@@ -5454,6 +5421,75 @@ def _is_person_surface(request):
     if cls == "automation":
         return False
     return is_device or cls in ("operator", "interactive", "app")
+
+
+def _public_tree(node, all_finished):
+    """A tree as clients get it: transcript_path (absolute host paths) dropped at every depth, and
+    all_finished on the root (the same shape as /api/agents/:id/tree, api/src/routes/agent-tree.ts)."""
+    def strip(n):
+        out = {k: v for k, v in n.items() if k not in ("transcript_path", "children")}
+        out["children"] = [strip(c) for c in n.get("children") or []]
+        return out
+    return {**strip(node), "all_finished": all_finished}
+
+
+async def handle_agent_tree(request):
+    """GET /agent-tree?session=<seat>[&all=1] -> {"ok": true, "tree": <node>}: the seat's Claude subagents at
+    every depth, scripts/agent_tree.py's JSON contract (the API serves the same at /api/agents/:id/tree).
+    For the phone, watch and Quest: who is working on what, not just a count. all=1 keeps every finished
+    node, not just the last hour's. 404 when the seat has no Claude session on this box."""
+    import asyncio
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    session = request.query.get("session", "").strip()
+    if not session:
+        return _json({"ok": False, "error": "session required"}, status=400)
+    # A headless seat is known by its switch, not by tmux (the same rule as /agent-message): its Claude session
+    # and subagents are real while it has no pane. Only a known seat name is ever looked up.
+    seat = _headless_seat_for(session)
+    if not seat and session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    target = seat or session
+    all_finished = request.query.get("all") == "1"
+
+    def _snap():
+        from scripts import agent_tree
+        trees = agent_tree.snapshot(target, all_finished=all_finished)
+        return trees[0] if trees else None
+    tree = await asyncio.get_event_loop().run_in_executor(None, _snap)
+    if tree is None:
+        return _json({"ok": False, "error": "no Claude session for this seat"}, status=404)
+    return _json({"ok": True, "tree": _public_tree(tree, all_finished)})
+
+
+_SAFE_AGENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")     # api/src/lib/agentPaths.ts SAFE_AGENT_ID
+_SAFE_SUBAGENT_ID = re.compile(r"^[a-f0-9]{6,40}$")                   # chat-transcript.ts SAFE_SUBAGENT_ID
+
+
+async def handle_subagent_transcript(request):
+    """GET /subagent-transcript?agent=<seat>&id=<subagent>&limit= -> the API's v2 envelope of ONE subagent's
+    own log, any depth: tap a node of /agent-tree and read what it is doing. Thin proxy to
+    /api/agents/:id/subagents/:aid/transcript, exactly like /transcript (same auth, same API scope).
+    Both ids are checked here because they go into the upstream URL path."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    agent = request.query.get("agent", "").strip()
+    sub = request.query.get("id", "").strip()
+    if not _SAFE_AGENT_ID.match(agent) or not _SAFE_SUBAGENT_ID.match(sub):
+        return _json({"ok": False, "error": "agent and id required"}, status=400)
+    try:
+        limit = max(1, min(500, int(request.query.get("limit", 120))))
+    except (TypeError, ValueError):
+        limit = 120
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{API_URL}/api/agents/{agent}/subagents/{sub}/transcript",
+                             params={"limit": str(limit)},
+                             timeout=aiohttp.ClientTimeout(total=15)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001 — surface cleanly to the app
+        return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
 
 
 async def handle_agent_model(request):
@@ -9730,6 +9766,8 @@ def build_app():
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/agent-file", handle_agent_file)          # + HEAD (aiohttp allow_head)
     app.router.add_get("/transcript", handle_transcript)
+    app.router.add_get("/agent-tree", handle_agent_tree)
+    app.router.add_get("/subagent-transcript", handle_subagent_transcript)
     app.router.add_post("/upload", handle_upload)
     app.router.add_get("/upload/{name}", handle_upload_get)   # + HEAD (aiohttp allow_head)
     app.router.add_post("/red-alert/report", handle_red_alert_report)

@@ -1304,12 +1304,14 @@ export function dedupeQueuedCommands(items: any[]): any[] {
   return items.filter((it) => !((it.queued || it.mid_turn) && it.kind === 'text' && realUserText.has((it.text || '').trim())));
 }
 
-function normalizeClaudeEntry(o: any): any[] {
+// keepSidechain: a subagent's own log (<sid>/subagents/agent-<id>.jsonl) is sidechain on every row; its
+// view keeps them. The seat's chat never does.
+function normalizeClaudeEntry(o: any, keepSidechain = false): any[] {
   const t = o?.type;
   // A mid-turn message is an `attachment`, not a user turn — see queuedCommandItems.
   if (t === 'attachment') return queuedCommandItems(o);
   if (t !== 'user' && t !== 'assistant') return [];
-  if (o.isSidechain === true || o.isCompactSummary === true) return [];
+  if ((o.isSidechain === true && !keepSidechain) || o.isCompactSummary === true) return [];
   // The harness writes its own notes as type:'user' with isMeta:true -- the image-size
   // note after a photo is read, stop-hook feedback, a loaded skill's body, local-command
   // caveats. The operator, 2026-10-08: rendered as user rows, they "look like messages that come
@@ -1850,7 +1852,7 @@ export function parseGrokUpdates(lines: string[]): any[] {
 
 // One log's items: parsed by the grammar its lines show, whole-file passes applied, then tagged
 // (audience/exchange) on the WHOLE log.
-function logItems(lines: string[], antigravityHint: boolean): any[] {
+function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
   const isAntigravity = antigravityHint ||
     lines.some((l) => {
       try {
@@ -1880,7 +1882,7 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line);
-        const got = normalizeClaudeEntry(o);
+        const got = normalizeClaudeEntry(o, keepSidechain);
         const msg = o?.message;
         const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
         const first = got.find((it) => it.role === 'assistant');
@@ -2040,8 +2042,12 @@ export function normalizeTranscript(
   includeQueued = false,
   previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
   keepWakeReplies = false,
+  keepSidechain = false,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
-  let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint), warmupMarkFor(agentId, sessionId).mark), storeRules(sessionId));
+  // A subagent's own log (keepSidechain) shares the seat's session id but none of the seat's window rules:
+  // the store's seen-only/seed rows and the warmup mark name the seat's entries, so they never apply to it.
+  const ruleSession = keepSidechain ? null : sessionId;
+  let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint, keepSidechain), warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
@@ -2246,5 +2252,47 @@ router.get('/:id/transcript.md', (req: Request, res: Response) => {
     res.status(500).type('text/plain').send(`Could not export: ${String(err).slice(0, 200)}`);
   }
 });
+
+// A subagent id as Claude writes it in agent-<id>.jsonl (every depth sits flat in <sid>/subagents/).
+export const SAFE_SUBAGENT_ID = /^[a-f0-9]{6,40}$/;
+
+/** One subagent's own log under the seat's current Claude session; path null when the seat has no
+ *  Claude session here or no such subagent. Both ids are checked before any path is built. */
+export function resolveSubagentTranscriptPath(agentId: string, subagentId: string,
+  resolveSeat: (id: string) => { path: string | null; sid: string | null } = resolveTranscriptPath,
+): { path: string | null; sid: string | null } {
+  if (!isSafeAgentId(agentId) || !SAFE_SUBAGENT_ID.test(subagentId)) return { path: null, sid: null };
+  const { path, sid } = resolveSeat(agentId);
+  if (!path || !path.endsWith('.jsonl')) return { path: null, sid };
+  const sub = join(path.slice(0, -'.jsonl'.length), 'subagents', `agent-${subagentId}.jsonl`);
+  return { path: existsSync(sub) ? sub : null, sid };
+}
+
+// GET /api/agents/:id/subagents/:aid/transcript?limit= -> v2 envelope (+ subagent_id) of one subagent's own
+// log, any depth (the agent-tree drill-in, read-only). 404 when the seat has no such subagent on this box.
+// Scoped exactly like /:id/transcript: router.param('id') above runs first.
+export function handleSubagentTranscript(req: Request, res: Response,
+  resolve: (agentId: string, subagentId: string) => { path: string | null; sid: string | null } = resolveSubagentTranscriptPath): void {
+  const agentId = String(req.params.id);
+  const subagentId = String(req.params.aid);
+  if (!isSafeAgentId(agentId) || !SAFE_SUBAGENT_ID.test(subagentId)) {
+    res.status(400).json({ error: 'bad agent or subagent id' });
+    return;
+  }
+  const limit = Math.min(parseInt(String(req.query.limit)) || 150, 500);
+  let found: { path: string | null; sid: string | null };
+  try { found = resolve(agentId, subagentId); } catch { found = { path: null, sid: null }; }
+  const { path, sid } = found;
+  if (!path) { res.status(404).json({ error: 'no such subagent for this seat on this box' }); return; }
+  try {
+    const lines = readFileSync(path, 'utf-8').split('\n');
+    res.json({ ...normalizeTranscript(lines, agentId, sid, limit, false, false, null, false, true), subagent_id: subagentId });
+  } catch (err) {
+    // Never the exception text to the client: a read error names the absolute log path.
+    console.error(`[subagent-transcript] ${agentId}/${subagentId}:`, err);
+    res.status(500).json({ agent_id: agentId, session_id: sid, subagent_id: subagentId, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'transcript unreadable' });
+  }
+}
+router.get('/:id/subagents/:aid/transcript', (req: Request, res: Response) => handleSubagentTranscript(req, res));
 
 export default router;

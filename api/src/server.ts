@@ -12,6 +12,7 @@ import redAlertRouter from './routes/red-alert.js';
 import chatTranscriptRouter, { chatItemsFor } from './routes/chat-transcript.js';
 import agentMessagesRouter from './routes/agent-messages.js';
 import transcriptStreamRouter from './routes/transcript-stream.js';
+import agentTreeRouter from './routes/agent-tree.js';
 import tasksRouter from './routes/tasks.js';
 import activityRouter from './routes/activity.js';
 import systemRouter from './routes/system.js';
@@ -200,6 +201,7 @@ app.use('/api/agents', agentsRouter);
 app.use('/api/agents', chatTranscriptRouter); // /:id/transcript (falls through from agentsRouter)
 app.use('/api/agents', agentMessagesRouter); // /:id/messages/:msgId (the body behind a "Message from" line)
 app.use('/api/agents', transcriptStreamRouter); // /:id/transcript/stream (F1 SSE lane; poll path above is the fallback)
+app.use('/api/agents', agentTreeRouter); // /:id/tree + /:id/tree/stream (the subagent tree; same scope as the chat)
 app.use('/api/agents', agentSendRouter); // /:id/send (B1 send bridge, falls through from agentsRouter)
 app.use('/api/tasks', tasksRouter);
 app.use('/api/red-alert', redAlertRouter); // the report button = ticket gateway (docs/RED_ALERT.md)

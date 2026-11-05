@@ -93,17 +93,21 @@ export class TranscriptTailer {
   private windowGone: () => boolean;
   private goneBeats = 0;
   private stopped = false;
+  /** A subagent's own log (the agent-tree drill-in): every row is sidechain, and the seat's cut turns and
+   *  store rules are the seat's, not its. */
+  private keepSidechain: boolean;
 
   constructor(opts: { agentId: string; resolve: Resolver; limit?: number; interrupted?: Interrupted;
-    windowGone?: () => boolean }) {
+    windowGone?: () => boolean; keepSidechain?: boolean }) {
     this.agentId = opts.agentId;
     this.resolve = opts.resolve;
     this.limit = opts.limit ?? 150;
     this.windowGone = opts.windowGone ?? (() => false);
-    this.interrupted = opts.interrupted ?? {
+    this.keepSidechain = opts.keepSidechain ?? false;
+    this.interrupted = opts.interrupted ?? (this.keepSidechain ? { read: () => [], sig: () => '' } : {
       read: () => readInterruptedTurns(opts.agentId),
       sig: () => interruptedTurnsSig(opts.agentId),
-    };
+    });
   }
 
   get subscriberCount(): number {
@@ -144,7 +148,7 @@ export class TranscriptTailer {
     // The store's rules for this session (seen-only entries, seed rows): marking an entry seen-only changes what is
     // shown without the log growing, so it re-reads and re-sends the window.
     let rsig = '';
-    try { rsig = storeRules(sid).sig; } catch { rsig = ''; }
+    try { rsig = this.keepSidechain ? '' : storeRules(sid).sig; } catch { rsig = ''; }
     if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig && rsig === this.rulesSig) {
       return { rotated: false, grewFrom: null };
     }
@@ -156,7 +160,7 @@ export class TranscriptTailer {
     // DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
     const env = normalizeTranscript(
-      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, null, true);
+      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, null, true, this.keepSidechain);
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }
     env.items = mergeInterruptedTurns(env.items, turns);

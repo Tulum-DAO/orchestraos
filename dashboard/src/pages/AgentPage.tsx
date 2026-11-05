@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { agentRowsFrom } from '../lib/api';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { TopBar } from '../components/agent/TopBar';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
@@ -26,6 +26,10 @@ import { asChip, chipNeedsYou } from '../lib/agentChip';
 import { useHeadlessDev } from '../hooks/useHeadlessDev';
 import HeadlessDevBanner from '../components/agent/HeadlessDevBanner';
 import { wantsAgentPanel } from '../lib/agentsPage';
+import { AgentTree } from '../components/agent/AgentTree';
+import { useAgentTree } from '../hooks/useAgentTree';
+import { viewFor, subParamFor, subToDrop } from '../lib/agentPageView';
+import { pageBody } from '../lib/subagentView';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
@@ -86,6 +90,28 @@ export default function AgentPage() {
   }, [agentId]);
   const dev = useHeadlessDev(agentId, chosenMode, seatStatus, seat?.name || agentId, backToChat);
   const mode = dev.view;
+  // The seat's subagents and their helpers (the strip above the chat), and the read-only drill-in into one of them,
+  // deep-linkable as ?sub=<agent_id> (lib/agentPageView.ts). Back returns to the seat.
+  const [params, setParams] = useSearchParams();
+  // "show finished" is per seat: another seat's page starts with the last hour only.
+  const [finishedFor, setFinishedFor] = useState<string | null>(null);
+  const showFinished = finishedFor === agentId;
+  const agentTree = useAgentTree(agentId, { all: showFinished, enabled: !!id });
+  const sub = params.get('sub');
+  const view = viewFor(seat?.name || agentId, sub, agentTree.tree);
+  const setSub = (next: string | null, replace = false) => {
+    const p = new URLSearchParams(params);
+    if (next) p.set('sub', next); else p.delete('sub');
+    setParams(p, { replace });
+  };
+  // A helper the tree showed and a later snapshot pruned goes back to the seat (a deep link still loading stays).
+  const seenSub = useRef<string | null>(null);
+  useEffect(() => {
+    const r = subToDrop({ sub, tree: agentTree.tree, seen: seenSub.current });
+    seenSub.current = r.seen;
+    if (r.drop) setSub(null, true);
+  });
+  const body = pageBody({ mode, readOnly: view.readOnly });
   const stopTurn = () => {
     logAction('agent.stop', agentId);
     return sendKeyToAgent(agentId, 'escape');
@@ -116,7 +142,7 @@ export default function AgentPage() {
     ro.observe(dock);
     if (rowSlotRef.current) ro.observe(rowSlotRef.current);
     return () => ro.disconnect();
-  }, [mode]);
+  }, [mode, body]);
 
   // Load settings from storage on mount
   useEffect(() => {
@@ -151,7 +177,19 @@ export default function AgentPage() {
       )}
 
 
-      {mode === 'dev' ? (
+      {/* What its subagents and their helpers are doing; hidden when it has none. */}
+      <AgentTree
+        key={agentId}
+        tree={agentTree.tree}
+        now={agentTree.now}
+        selected={view.subagentId ?? agentTree.tree?.agent_id ?? null}
+        onSelect={(sid) => { if (agentTree.tree) setSub(subParamFor(agentTree.tree, sid)); }}
+        supportsAll={agentTree.supportsAll}
+        showFinished={showFinished}
+        onShowFinished={(on) => setFinishedFor(on ? agentId : null)}
+      />
+
+      {body === 'terminal' ? (
         <>
           {/* Dev: the seat's own tmux pane, the same terminal the Agents page's panel opens. Dev mode keeps the
               browser's own keyboard behaviour (data-keyboard-native: DashboardLayout leaves it alone). */}
@@ -188,7 +226,10 @@ export default function AgentPage() {
         {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two.
             The transcript fills the column and scrolls UNDER the floating composer below. */}
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-          <Feed agentId={agentId} />
+          <Feed agentId={agentId}
+            subagent={view.readOnly && view.subagentId && view.banner
+              ? { id: view.subagentId, banner: { text: view.banner, backLabel: `Back to ${seat?.name || agentId}`, onBack: () => setSub(null) } }
+              : undefined} />
         </div>
 
         {/* THE DOCK floats over the bottom of the transcript: the live status line, then the
@@ -199,7 +240,8 @@ export default function AgentPage() {
               scrolls under them is never readable through; only a short fade above its top edge. */}
           <div aria-hidden data-dock-fade className="absolute inset-x-0 -top-3 h-3 bg-gradient-to-b from-transparent to-background" />
           <div aria-hidden data-dock-solid className="absolute inset-0 bg-background" />
-          <div className="relative pointer-events-auto">
+          {/* A subagent's transcript is read-only: no working row, no composer (they are the seat's). */}
+          {body === 'chat' && <div className="relative pointer-events-auto">
             {/* WHO AND WHAT, directly above the composer, in the shape of Arturo's working row: the agent's
                 animated avatar, its name, and what it is doing now (lib/agentWorkingRow.ts). Every truth the old
                 status line had stays (disconnected, updating, the live step, queued, stopped with Resume ...), and
@@ -239,7 +281,7 @@ export default function AgentPage() {
               status={seatStatus}
             />
             </div>
-          </div>
+          </div>}
         </div>
         </div>
       )}
