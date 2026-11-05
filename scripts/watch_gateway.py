@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from approval_schema import ApprovalStore
 from questionnaire_schema import QuestionnaireStore
+from attention_store import AttentionStore
 import approval_resume
 import questionnaire_resume
 import pane_lock
@@ -131,6 +132,12 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/questionnaires"): "read",
     ("GET", "/questionnaires/{id}"): "read",
     ("GET", "/events"): "read",
+    # Attention list (one list every surface reads) and its timeout rules. Marking items seen is a
+    # self-report like /surface: it changes only the caller's own view. The completion-card accept it
+    # can trigger is checked against `approve` inside the handler, never granted by `read`.
+    ("GET", "/attention"): "read",
+    ("POST", "/attention/seen"): "read",
+    ("GET", "/attention/rules"): "read",
     ("GET", "/voice-call"): "read",
     ("GET", "/active-voice-call"): "read",
     ("GET", "/voice-calls"): "read",
@@ -166,6 +173,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/questionnaires/{id}/draft"): "approve",
     ("POST", "/questionnaires/{id}/submit"): "approve",
     ("POST", "/questionnaires/{id}/discard"): "approve",
+    # A timeout rule can answer or close cards for the operator (expire), so writing one is approve.
+    ("POST", "/attention/rules"): "approve",
+    ("PUT", "/attention/rules/{id}"): "approve",
+    ("DELETE", "/attention/rules/{id}"): "approve",
     # `approve`. FINAL per gm 2026-10-05T08:34Z ("record it as the final state"), after three
     # rulings as messages crossed: approve+condition (08:02), inject (08:11), then approve
     # confirmed once the guard was shown to exist and be pinned (08:34).
@@ -1110,6 +1121,13 @@ def _options_n_str(opts):
 async def handle_pending(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
+    return _json({"ok": True, "pending": _pending_rows(request)})
+
+
+def _pending_rows(request):
+    """The /pending-approvals list, as served. Shared with /attention (whose waiting cards carry these rows
+    unchanged) and the attention detector. `request` None (the detector): no client capability gate and no
+    served-instance bookkeeping, since no client is being served."""
     store = ApprovalStore(); store.migrate()
     rows = store.pending_to_notify()
     out = [{"id": r["id"], "from_agent": r["from_agent"], "question": r["question"],
@@ -1148,14 +1166,15 @@ async def handle_pending(request):
     # rewritten to a read-only echo. A capable client gets it raw + hydrates via
     # /agent-menu-capture. This makes store-but-mark safe WITHOUT an atomic
     # server/client deploy. The detail endpoint serves through the SAME seam.
-    out = gate_menu_rows_for_client(out, request)
+    if request is not None:
+        out = gate_menu_rows_for_client(out, request)
     # R8 (§3.1): the queue is PRIORITY-SORTED server-side; the ONE ordering brain, since the
     # watch renders server order as-is. Ties -> NEWEST first (see _sort_queue).
     _sort_queue(out)
     for r in out:      # remember which permission instance this device is being shown
-        if r.get("kind") == "permission" and r.get("instance_id"):
+        if request is not None and r.get("kind") == "permission" and r.get("instance_id"):
             _note_served(request, r.get("session"), r["instance_id"])   # the ledger's digest:n
-    return _json({"ok": True, "pending": out})
+    return out
 
 
 def _gateway_answer_tags(body):
@@ -1433,7 +1452,10 @@ async def handle_history(request):
             "kind": r.get("kind"), "evidence": _evidence(r),
             # §6.1 human_task feed export (additive; None on legacy/unarmed rows).
             "block_task": r.get("block_task"), "blocks_what": r.get("blocks_what"),
-            "snoozed_until": r.get("snoozed_until")} for r in rows]
+            "snoozed_until": r.get("snoozed_until"),
+            # Who answered and where (attention part 1). Additive; installed apps ignore unknown keys.
+            "answered_by": r.get("answered_by"), "answer_surface": r.get("answer_surface"),
+            "answer_device": r.get("answer_device"), "option_n": r.get("option_n")} for r in rows]
     for e, r in zip(out, rows):
         _safe_retired(e, r)
     # R8 everything-to-history: submitted/discarded questionnaires appear as
@@ -1483,6 +1505,281 @@ async def handle_approval_detail(request):
     # already-hydrated rows are no-ops.
     row = gate_menu_rows_for_client([row], request)[0]
     return _json({"ok": True, "approval": row})
+
+
+# ---------------------------------------------------------------------------
+# Attention (part 1): ONE list every surface reads — waiting cards, the Updates record and what was
+# answered — plus the person's seen marks and timeout rules. Pure logic lives in attention_items /
+# attention_push / attention_rules; these handlers only gather the inputs and serve the result.
+# /pending-approvals and /history are untouched for the installed apps (golden-tested).
+# ---------------------------------------------------------------------------
+
+ATTENTION_TABS = ("waiting", "update", "answered")
+ATTENTION_SURFACES = ("web", "phone", "watch", "chat")
+
+
+def _attention_person(request=None):
+    """Whose list this is. Every caller is the install's operator today (device tokens name no owner);
+    this is the one seam multi-user replaces."""
+    try:
+        import notify_policy
+        return notify_policy.install_user_and_zone()
+    except Exception:  # noqa: BLE001 — an unreadable config is the default operator, UTC
+        return "operator", ""
+
+
+def _attention_query(q):
+    """Validated GET /attention query -> dict, or raise ValueError (the handler answers 400)."""
+    from datetime import datetime as _dt
+    tabs = [t.strip() for t in (q.get("tab") or "waiting,update").split(",") if t.strip()]
+    if not tabs or any(t not in ATTENTION_TABS for t in tabs):
+        raise ValueError(f"tab must be a comma list of {', '.join(ATTENTION_TABS)}")
+
+    def lim(name, default, top):
+        raw = q.get(name)
+        if raw is None:
+            return default
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be an integer")
+        if not 1 <= v <= top:
+            raise ValueError(f"{name} must be 1..{top}")
+        return v
+    since = q.get("since")
+    if since:
+        try:
+            _dt.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("since must be an ISO time")
+    agents = None
+    if q.get("agents") is not None:
+        agents = [a.strip() for a in q.get("agents").split(",") if a.strip()]
+        if len(agents) > 500:
+            raise ValueError("agents takes at most 500 ids")
+    return {"tabs": tabs, "limit_updates": lim("limit_updates", 100, 500),
+            "limit_answered": lim("limit_answered", 50, 200), "since": since or None, "agents": agents}
+
+
+def _attention_rule_maps(astore):
+    try:
+        import attention_rules
+        if astore.armed:
+            rs = attention_rules.RuleStore(astore)
+            return rs.reminders(), rs.on_behalf_map()
+    except Exception as e:  # noqa: BLE001 — rules never break the list
+        log.warning(f"attention: rule state unreadable: {e!r}")
+    return {}, {}
+
+
+def _attention_build(request, query):
+    """The GET /attention body. Sync (the permission scan touches tmux): run it in the executor."""
+    import dataclasses
+    from datetime import datetime as _dt, timezone as _tz
+    import attention_items as AI
+    import notify_policy
+    tabs, agents, since = query["tabs"], query["agents"], query["since"]
+    keep = (lambda a: a in agents) if agents is not None else (lambda a: True)
+    person, tz = _attention_person(request)
+    now = _dt.now(_tz.utc)
+    store = ApprovalStore(); store.migrate()
+    astore = AttentionStore(); astore.migrate()
+    reminders, on_behalf = _attention_rule_maps(astore)
+    cached = _agents_cache.get("data")
+    states = {r.get("id"): r.get("state") for r in cached} if isinstance(cached, list) else {}
+    ctx = AI.Ctx(person=person, prefs=notify_policy.load_prefs(_data_dir(), person), tz=tz, now=now,
+                 agent_states=states, reminders=reminders, on_behalf=on_behalf)
+
+    # Waiting is always computed (the counts need it), filtered by agent before anything else.
+    pending = [r for r in _pending_rows(request)
+               if AI.kind_of(r) is not None and keep(r.get("from_agent") or r.get("session"))]
+    try:
+        qstore = QuestionnaireStore(); qstore.migrate()
+        ctx = dataclasses.replace(ctx, urgency={q["id"]: q.get("urgency") for q in qstore.list_pending()})
+    except Exception:  # noqa: BLE001
+        qstore = None
+
+    events = astore.list_events(since=since, limit=query["limit_updates"], agents=agents) \
+        if "update" in tabs else []
+    linked = store.get_many([e["source_id"] for e in events if e["kind"] == "done" and e.get("source_id")])
+    answered_raw = []
+    if "answered" in tabs:
+        lim = query["limit_answered"]
+        answered_raw = list(store.history(lim, agents=agents))       # filtered before the limit
+        try:
+            if qstore is not None:
+                answered_raw += qstore.history(lim, agents=agents)
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"attention: questionnaire history unreadable: {e!r}")
+    ids = [r["id"] for r in pending] + [e["id"] for e in events] + [r["id"] for r in answered_raw]
+    ctx = dataclasses.replace(ctx, seen=astore.seen_map(person, ids), cards=linked)
+    waiting = [AI.from_pending_row(r, ctx) for r in pending]
+    updates = [AI.from_event(e, ctx) for e in events]
+    answered = []
+    for r in answered_raw:
+        it = AI.from_history(r, ctx)
+        if it is None or not keep(it["agent"]):
+            continue
+        if since and (it["answered_at"] or "") < since:
+            continue
+        answered.append(it)
+    answered = AI.order_answered(answered)[:query["limit_answered"]]
+    counts = AI.counts(waiting)
+    counts["updates_unread"] = astore.unread_count(person, agents=agents)
+    items = []
+    if "waiting" in tabs:
+        items += AI.order_waiting(waiting)
+    items += AI.order_updates(updates)
+    items += answered
+    return {"ok": True, "person": person, "rev": astore.rev(), "generated_at": now.isoformat(),
+            "armed": bool(astore.armed), "counts": counts, "items": items}
+
+
+async def handle_attention(request):
+    import asyncio
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        query = _attention_query(request.query)
+    except ValueError as e:
+        return _json({"ok": False, "error": str(e)}, status=400)
+    body = await asyncio.get_event_loop().run_in_executor(None, _attention_build, request, query)
+    return _json(body)
+
+
+def _attention_seen(request, ids, surface, may_approve):
+    """POST /attention/seen, sync. Every id is validated first; a done note whose linked completion card
+    is still pending is marked seen only after that card is accepted (and only for a caller holding
+    approve; others just mark it seen)."""
+    import attention_store as AS
+    person, _ = _attention_person(request)
+    store = ApprovalStore(); store.migrate()
+    astore = AttentionStore(); astore.migrate()
+    skipped, accepted, ok_ids = [], [], []
+    evt = [i for i in ids if i.startswith("evt_")]
+    known_evt = astore.exists(evt) if astore.armed else set()
+    rows = store.get_many([i for i in ids if i.startswith("apr_")])
+    perm_ids = None
+    qstore = None
+    for i in ids:
+        if i.startswith("evt_") and i in known_evt:
+            ev = astore.get(i)
+            card = rows.get(ev.get("source_id")) if ev and ev.get("source_id") else None
+            if ev and ev["kind"] == "done" and ev.get("source_id") and card is None:
+                card = store.get(ev["source_id"])
+            if card is not None and card.get("status") == "pending" and may_approve:
+                res = apply_answer(store, card["id"], "accept", fire=False, surface=surface or "web",
+                                   answered_by="operator", device=_answer_device(request))
+                after = store.get(card["id"]) or {}
+                if res.get("ok") and (res.get("applied") or after.get("status") != "pending"):
+                    accepted.append(card["id"])
+                else:
+                    skipped.append({"id": i, "why": f"accept_failed: {res.get('error') or 'not applied'}"})
+                    continue
+            ok_ids.append(i)
+        elif i.startswith("apr_") and i in rows:
+            ok_ids.append(i)
+        elif i.startswith("qnr_"):
+            if qstore is None:
+                qstore = QuestionnaireStore(); qstore.migrate()
+            if qstore.get(i):
+                ok_ids.append(i)
+            else:
+                skipped.append({"id": i, "why": "unknown_id"})
+        elif i.startswith("perm:"):
+            if perm_ids is None:
+                perm_ids = {r.get("id") for r in _perm_pseudo_rows()}
+            (ok_ids.append(i) if i in perm_ids else skipped.append({"id": i, "why": "unknown_id"}))
+        else:
+            skipped.append({"id": i, "why": "unknown_id"})
+    seen = 0
+    if ok_ids:
+        try:
+            seen = astore.mark_seen(person, ok_ids, surface)
+        except AS.AttentionNotArmed:
+            skipped += [{"id": i, "why": "not_armed"} for i in ok_ids]
+    return {"ok": True, "seen": seen, "accepted_cards": accepted, "skipped": skipped}
+
+
+async def handle_attention_seen(request):
+    import asyncio
+    from scripts.device_tokens import scopes_allow
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    ids = data.get("ids") if isinstance(data, dict) else None
+    if not isinstance(ids, list) or not ids or len(ids) > 200 or not all(isinstance(i, str) for i in ids):
+        return _json({"ok": False, "error": "ids must be a list of 1..200 ids"}, status=400)
+    surface = data.get("surface") if data.get("surface") in ATTENTION_SURFACES else None
+    resolved, principal = _resolved_principal(request)
+    if not resolved:
+        principal = resolve_principal(request)
+    may_approve = bool(principal) and scopes_allow(principal.get("scopes") or [], "approve")
+    body = await asyncio.get_event_loop().run_in_executor(
+        None, _attention_seen, request, list(dict.fromkeys(ids)), surface, may_approve)
+    return _json(body)
+
+
+def _attention_rule_store():
+    """(RuleStore with the person's defaults seeded, person), or (None, person) while unarmed."""
+    import attention_rules as AR
+    person, _ = _attention_person()
+    astore = AttentionStore(); astore.migrate()
+    if not astore.armed:
+        return None, person
+    rs = AR.RuleStore(astore)
+    rs.seed_defaults(person)
+    return rs, person
+
+
+async def handle_attention_rules(request):
+    import asyncio
+    import attention_rules as AR
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    rule_id = request.match_info.get("id")
+    body = None
+    if request.method in ("POST", "PUT"):
+        try:
+            body = await request.json()
+        except Exception:
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(body, dict):
+            return _json({"ok": False, "error": "body must be an object"}, status=400)
+
+    def work():
+        rs, person = _attention_rule_store()
+        meta = {"person": person, "available_actions": AR.available_actions(),
+                "min_after_s": {t: AR.min_after_s(t) for t in AR.TRIGGERS}, "armed": rs is not None}
+        if request.method == "GET":
+            return 200, {"ok": True, **meta, "rules": rs.list(person) if rs else []}
+        if rs is None:
+            return 409, {"ok": False, "error": "not_armed",
+                         "detail": "timeout rules arrive when m20261104_attention is armed"}
+        if body is not None and "enabled" in body and not isinstance(body["enabled"], bool):
+            return 422, {"ok": False, "error": "invalid", "detail": "enabled must be true or false"}
+        try:
+            if request.method == "POST":
+                fields = {k: body.get(k) for k in ("trigger", "after_s", "actions", "scope_agent", "scope_kind",
+                                                   "scope_risk", "name") if k in body}
+                rule = rs.create(person, enabled=body.get("enabled", True), **fields)
+                return 200, {"ok": True, **meta, "rule": rule}
+            if request.method == "PUT":
+                fields = {k: v for k, v in body.items() if k in AR.RuleStore.FIELDS}
+                rule = rs.update(person, rule_id, **fields)
+                return (200, {"ok": True, **meta, "rule": rule}) if rule else (404, {"ok": False, "error": "not found"})
+            if rs.delete(person, rule_id):
+                return 200, {"ok": True, "deleted": rule_id}
+            return 404, {"ok": False, "error": "not found"}
+        except AR.RuleInvalid as e:
+            return 422, {"ok": False, "error": e.code, "detail": e.detail}
+        except TypeError as e:
+            return 422, {"ok": False, "error": "invalid", "detail": str(e)}
+    status, out = await asyncio.get_event_loop().run_in_executor(None, work)
+    return _json(out, status=status)
 
 
 # ---------------------------------------------------------------------------
@@ -6078,6 +6375,208 @@ async def _stop_pending_model_switches(app):
         task.cancel()
 
 
+# ---------------------------------------------------------------------------
+# Attention detector (part 1): once a minute, off the event loop, mirror pending completion cards into
+# Updates, record failed transitions (crashed / out of usage / signed out), and run the person's timeout
+# rules over what is waiting and who has stalled. Fail-open: an exception is logged (once per class per
+# hour) and the tick is skipped. Read-only toward panes: capture-pane only, never a key.
+# ---------------------------------------------------------------------------
+
+_ATTN_ERRORS: dict = {}
+
+
+def _attention_interval_s() -> float:
+    import attention_config
+    return float(attention_config.load().detector_interval_s)
+
+
+def _attention_log_once(e):
+    import time as _time
+    k = type(e).__name__
+    if _time.time() - _ATTN_ERRORS.get(k, 0) >= 3600:
+        _ATTN_ERRORS[k] = _time.time()
+        log.error(f"attention: tick skipped: {e!r}")
+
+
+def _attention_agents(cfg):
+    """(rows, ok): the /agents rows, from the shared cache when it is younger than one tick."""
+    import time as _time
+    try:
+        if _agents_cache.get("data") is None or _time.time() - (_agents_cache.get("at") or 0) > \
+                cfg.detector_interval_s:
+            _refresh_agents_cache()
+        rows = _agents_cache.get("data")
+        return (rows, True) if isinstance(rows, list) else ([], False)
+    except Exception as e:  # noqa: BLE001 — a failed scan clears nothing (attention_detect.apply_tick)
+        _attention_log_once(e)
+        return [], False
+
+
+def _attention_conditions(rows, cfg):
+    """Failed conditions from the agents rows, each pane screen and each headless stream; per-source scans."""
+    import attention_detect as AD
+    conds, scans = list(AD.from_agents(rows, cfg)), {}
+    for r in rows:
+        agent, sess = r.get("id"), r.get("tmux_session") or r.get("id")
+        if not agent or r.get("unregistered") or r.get("state") in ("working", "offline", "crashed"):
+            # Only registered agents, and never a screen mid-turn. An unregistered session is not an
+            # agent (a provider sign-in session shows a login screen by design).
+            continue
+        seat = _headless_seat_for(sess) if r.get("headless") else None
+        try:
+            if seat:
+                home = ORCH_DIR / "state" / "headless" / seat
+                sid = (_load_json(home / "seat.json") or {}).get("session_id")
+                c = AD.from_headless_result(agent, AD.last_headless_result(home / "events.jsonl", sid), cfg)
+                scans[f"headless:{agent}"] = "ok"
+            else:
+                c = AD.from_screen(agent, _strip_ansi(_capture_pane(sess, lines=60)), cfg)
+                scans[f"pane:{agent}"] = "ok"
+            if c:
+                conds.append(c)
+        except Exception as e:  # noqa: BLE001 — this source failed: its rows stay as they are
+            scans[f"{'headless' if seat else 'pane'}:{agent}"] = "failed"
+            _attention_log_once(e)
+    return conds, scans
+
+
+def _attention_tick():
+    """One detector pass. Sync: runs in the executor."""
+    try:
+        _attention_tick_inner()
+    except Exception as e:  # noqa: BLE001 — fail-open: the next tick tries again
+        _attention_log_once(e)
+
+
+def _attention_tick_inner():
+    from datetime import datetime as _dt, timezone as _tz
+    import attention_config, attention_detect as AD, attention_items as AI, attention_rules as AR
+    import attention_store as AS
+    import approval_notify
+    cfg = attention_config.load()
+    if not attention_config.detector_on(cfg, _data_dir()):
+        return
+    astore = AttentionStore(); astore.migrate()
+    if not astore.armed:
+        return
+    now = _dt.now(_tz.utc)
+    ledger = ApprovalStore(); ledger.migrate()
+    qstore = QuestionnaireStore(); qstore.migrate()
+    AS.mirror_completions(astore, ledger)
+    rows, agents_ok = _attention_agents(cfg)
+    # Only registered agents: an unregistered session (a provider sign-in session, a scratch shell) is not
+    # an agent, so it never raises a failed / stuck Update or feeds a no-progress rule.
+    rows = [r for r in rows if not r.get("unregistered")]
+    conds, scans = _attention_conditions(rows, cfg)
+    scans["agents"] = "ok" if agents_ok else "failed"
+    person, tz = _attention_person()
+    try:
+        waiting = [AI.from_pending_row(r, AI.Ctx(person=person, tz=tz, now=now)) for r in _pending_rows(None)]
+        waiting = [w for w in waiting if w is not None]
+        scans["ledger"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        waiting, scans["ledger"] = [], "failed"
+        _attention_log_once(e)
+    reg = (_load_json(ORCH_DIR / "registry.json") or {}).get("agents") or {}
+    live = {r.get("id") for r in rows if r.get("id")} | set(reg if isinstance(reg, dict) else [])
+    AD.apply_tick(astore, conds, now, cfg, live_agents=live, scans=scans, ledger=ledger, qstore=qstore)
+    observations = AD.unanswered(waiting) + AD.no_progress(rows, now, AR.STALL_S)
+    rs = AR.RuleStore(astore)
+    rs.seed_defaults(person)
+
+    def resume(row):
+        try:
+            approval_resume.fire_resume(row, ledger)
+        except Exception as e:  # noqa: BLE001 — the answer is durable; the watchdog retries delivery
+            log.error(f"attention: resume after a rule answer failed for {row.get('id')}: {e!r}")
+    ctx = AR.EngineCtx(
+        person=person, ledger=ledger, qstore=qstore, apply_answer=apply_answer,
+        notify_card=lambda rid: approval_notify.notify(rid, store=ledger),
+        notify_questionnaire=lambda qid: approval_notify.notify_questionnaire(qid, store=qstore),
+        deliver_discarded=approval_resume.deliver_discarded,
+        qnr_deliver_discarded=questionnaire_resume.deliver_discarded,
+        schedule_resume=resume, is_protected=_session_is_protected)
+    AR.Engine(rs, astore, ctx).tick(now, observations, agents_ok=agents_ok)
+
+
+_ATTN_STOP_KEY = None
+_ATTN_TASK_KEY = None
+
+
+def _attn_keys():
+    global _ATTN_STOP_KEY, _ATTN_TASK_KEY
+    if _ATTN_STOP_KEY is None:
+        import asyncio
+        from aiohttp import web
+        _ATTN_STOP_KEY = web.AppKey("attention_stop", asyncio.Event)
+        _ATTN_TASK_KEY = web.AppKey("attention_task", asyncio.Task)
+    return _ATTN_STOP_KEY, _ATTN_TASK_KEY
+
+
+async def _attention_loop(app):
+    import asyncio
+    stop_key, _ = _attn_keys()
+    stop = app[stop_key]
+    loop = asyncio.get_event_loop()
+
+    async def until_stop(aw):
+        """`aw`, unless shutdown starts first (the handle_events shape): a tick still in the executor
+        finishes in the background, which is safe because each of its writes is one transaction."""
+        task = asyncio.ensure_future(aw)
+        waiter = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise _EventsStopped()
+        finally:
+            for f in (task, waiter):
+                if not f.done():
+                    f.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
+    try:
+        while not stop.is_set():
+            # Wait first: a (re)starting gateway is not loaded with a fleet scan in its first minute.
+            await until_stop(asyncio.sleep(_attention_interval_s()))
+            try:
+                await until_stop(loop.run_in_executor(None, _attention_tick))
+            except _EventsStopped:
+                raise
+            except Exception as e:  # noqa: BLE001
+                _attention_log_once(e)
+    except (_EventsStopped, asyncio.CancelledError):
+        pass
+
+
+async def _start_attention_detector(app):
+    import asyncio
+    stop_key, task_key = _attn_keys()
+    app[stop_key] = asyncio.Event()
+    app[task_key] = asyncio.ensure_future(_attention_loop(app))
+
+
+async def _attention_on_shutdown(app):
+    stop_key, _ = _attn_keys()
+    stop = app.get(stop_key)
+    if stop is not None:
+        stop.set()
+
+
+async def _stop_attention_detector(app):
+    import asyncio
+    stop_key, task_key = _attn_keys()
+    if app.get(stop_key) is not None:
+        app[stop_key].set()
+    task = app.get(task_key)
+    if task is None or task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), 5)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def handle_agent_menu_capture(request):
     """POST /agent-menu-capture {session} -> the full multi-part menu payload.
 
@@ -9044,6 +9543,50 @@ class _EventsStopped(Exception):
     pass
 
 
+# Live permission prompts were not in the digest, so a prompt appearing reached other surfaces only on
+# their next poll. One process-wide cache of the scan, shared by every open stream (N phones are not N
+# scans). Measured on the reference box: ~0.2 s per uncached scan of 8 sessions, so a 2 s period.
+_PERM_IDS_CACHE_S = 2.0
+_PERM_IDS_CACHE = {"at": 0.0, "ids": ""}
+_PERM_IDS_LOCK = _threading.Lock()
+
+
+def _perm_ids_cached() -> str:
+    import time as _time
+    with _PERM_IDS_LOCK:
+        if _time.time() - _PERM_IDS_CACHE["at"] < _PERM_IDS_CACHE_S:
+            return _PERM_IDS_CACHE["ids"]
+        try:
+            ids = ",".join(sorted(str(r.get("id")) for r in _perm_pseudo_rows() if r.get("id")))
+        except Exception:  # noqa: BLE001 — fail-open: no permission segment this time
+            ids = ""
+        _PERM_IDS_CACHE.update(at=_time.time(), ids=ids)
+        return ids
+
+
+def _attention_armed() -> bool:
+    try:
+        import approval_schema
+        import attention_store
+        return bool(approval_schema.armed(attention_store.MIGRATION_ID))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _attention_rev() -> int:
+    """The attention store's change counter, 0 when unarmed or unreadable (never breaks the digest)."""
+    try:
+        import approval_schema
+        import attention_store
+        if not approval_schema.armed(attention_store.MIGRATION_ID):
+            return 0
+        st = AttentionStore()
+        st.armed = True                    # read only: no DDL on a 2 s cadence
+        return int(st.rev())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _events_digest(store):
     """Cheap change fingerprint: pending approval ids + live voice-call ids.
     (Agent liveness intentionally excluded — the fleet scan is heavy and the
@@ -9069,7 +9612,12 @@ def _events_digest(store):
                 continue
     except OSError:
         pass
-    return pend + "|" + ",".join(calls) + "|" + qnrs
+    # Attention (part 1): its change counter, then the live permission prompt ids. Appended segments, so
+    # digest.split('|')[0] (the pending count) means what it always did.
+    base = pend + "|" + ",".join(calls) + "|" + qnrs
+    if not _attention_armed():
+        return base                    # unarmed: the digest (and its cost) exactly as before part 1
+    return base + "|" + str(_attention_rev()) + "|" + _perm_ids_cached()
 
 
 async def handle_events(request):
@@ -9117,8 +9665,12 @@ async def handle_events(request):
                 last = digest
                 pending_n = digest.split("|", 1)[0]
                 n = len(pending_n.split(",")) if pending_n else 0
-                await until_stop(resp.write(
-                    f"data: {json.dumps({'changed': True, 'pending': n, 'ts': now})}\n\n".encode()))
+                try:
+                    attention_rev = int(digest.split("|")[3])
+                except (IndexError, ValueError):
+                    attention_rev = 0          # an older digest shape: fail-open
+                payload = {'changed': True, 'pending': n, 'ts': now, 'attention_rev': attention_rev}
+                await until_stop(resp.write(f"data: {json.dumps(payload)}\n\n".encode()))
             elif now - last_beat >= EVENTS_KEEPALIVE_S:
                 await until_stop(resp.write(b": keepalive\n\n"))
                 last_beat = now
@@ -9730,13 +10282,22 @@ def build_app():
                           middlewares=[scope_middleware_factory()])
     app[_events_stop_key()] = asyncio.Event()
     app.on_shutdown.append(_events_on_shutdown)
+    app.on_shutdown.append(_attention_on_shutdown)
     app.on_shutdown.append(_terminal_on_shutdown)
     app.on_startup.append(_start_pending_model_switches)
+    app.on_startup.append(_start_attention_detector)
     app.on_cleanup.append(_stop_pending_model_switches)
+    app.on_cleanup.append(_stop_attention_detector)
     app.router.add_get("/pending-approvals", handle_pending)
     app.router.add_post("/approval-answers", handle_answer)
     app.router.add_get("/history", handle_history)
     app.router.add_get("/approvals/{id}", handle_approval_detail)
+    app.router.add_get("/attention", handle_attention)
+    app.router.add_post("/attention/seen", handle_attention_seen)
+    app.router.add_get("/attention/rules", handle_attention_rules)
+    app.router.add_post("/attention/rules", handle_attention_rules)
+    app.router.add_put("/attention/rules/{id}", handle_attention_rules)
+    app.router.add_delete("/attention/rules/{id}", handle_attention_rules)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
     app.router.add_get("/terminal/ws", handle_terminal_ws)

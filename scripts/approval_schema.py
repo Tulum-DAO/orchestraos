@@ -99,6 +99,15 @@ GATED_MIGRATIONS: list = [
     {"id": "m20261010_card_retire",
      "columns": [("retired_at", "TEXT"), ("retired_by", "TEXT"),
                  ("retire_reason", "TEXT"), ("superseded_by", "TEXT")]},
+    # Attention part 1 (2026-11-04). The SAME arm also creates the attention_* tables
+    # (attention_store.AttentionStore.migrate). Additive, nullable; a legacy row is NULL.
+    #   urgency         0-3, an agent's own priority input (approval.py --urgency); _priority_score
+    #                   already reads it, so a row that sets it sorts higher. No row sets it today.
+    #   default_option  the asking agent's suggested default (approval.py --default): an option n for
+    #                   a menu card, approve|deny for a plain approval. A timeout rule's "take the
+    #                   default" uses it; a card without one expires as "no answer".
+    {"id": "m20261104_attention",
+     "columns": [("urgency", "INTEGER"), ("default_option", "TEXT")]},
 ]
 
 RETIRE_MIGRATION = "m20261010_card_retire"
@@ -292,7 +301,13 @@ class ApprovalStore:
                     continue
                 for name, coltype in cols:
                     if name not in live:
-                        c.execute(f"ALTER TABLE approval_requests ADD COLUMN {name} {coltype}")
+                        # Once armed, every beat runs migrate(): two processes can both read the column
+                        # as absent, and the loser's ALTER then fails. The column is there either way.
+                        try:
+                            c.execute(f"ALTER TABLE approval_requests ADD COLUMN {name} {coltype}")
+                        except sqlite3.OperationalError as e:
+                            if "duplicate column" not in str(e):
+                                raise
                         live.add(name)
             c.commit()
         finally:
@@ -304,7 +319,7 @@ class ApprovalStore:
                seat_id=None, run_id=None, generation=None, seat_epoch=None,
                provider=None, provider_session_id=None, process_instance_id=None,
                process_lease_id=None, origin=None,
-               block_task=None, blocks_what=None):
+               block_task=None, blocks_what=None, urgency=None, default_option=None):
         # §1.1/§4 identity kwargs are ALL optional + provenance-only. `provider`
         # is recorded, NEVER branched on. A value the caller passes (an adapter
         # that captured it from its runtime) always wins. What it leaves empty of
@@ -367,6 +382,16 @@ class ApprovalStore:
                  kind, evidence, menu,
                  seat_id, run_id, generation, seat_epoch, provider,
                  provider_session_id, process_instance_id, process_lease_id, origin])
+            # Gated columns go in with the card (same transaction), only when they exist (armed);
+            # unarmed, the row is exactly as before.
+            gated = {k: v for k, v in (("urgency", urgency), ("default_option", default_option))
+                     if v is not None}
+            if gated:
+                have = {r[1] for r in c.execute("PRAGMA table_info(approval_requests)").fetchall()}
+                sets = {k: v for k, v in gated.items() if k in have}
+                if sets:
+                    c.execute(f"UPDATE approval_requests SET {', '.join(f'{k}=?' for k in sets)} WHERE id=?",
+                              list(sets.values()) + [rid])
             c.commit()
             # §1.1/§6 human_task columns (AGY item 1): the base INSERT above is a
             # STATIC column list, so writing block_task/blocks_what unconditionally
@@ -464,6 +489,23 @@ class ApprovalStore:
         try:
             r = c.execute("SELECT * FROM approval_requests WHERE id=?", [rid]).fetchone()
             return dict(r) if r else None
+        finally:
+            c.close()
+    def get_many(self, ids):
+        """{id: row} for the ids that exist, in one read (the attention list links many done notes to
+        their completion cards at once). Read-only."""
+        ids = [i for i in dict.fromkeys(ids or []) if isinstance(i, str) and i]
+        if not ids:
+            return {}
+        c = self._conn()
+        try:
+            out = {}
+            for k in range(0, len(ids), 500):
+                chunk = ids[k:k + 500]
+                for r in c.execute(f"SELECT * FROM approval_requests WHERE id IN "
+                                   f"({','.join('?' for _ in chunk)})", chunk):
+                    out[r["id"]] = dict(r)
+            return out
         finally:
             c.close()
     def find_by_op_key(self, op_key, origin=None):
@@ -931,7 +973,7 @@ class ApprovalStore:
                 "SELECT * FROM approval_requests WHERE status='pending' ORDER BY created_at ASC").fetchall()]
         finally:
             c.close()
-    def history(self, limit=50):
+    def history(self, limit=50, agents=None):
         """Every decision the user actually acted on, newest-first (DEC-1786664626
         Q3/Q5 + the operator F2 'nothing expires; completed OR discarded'). Widened from
         answered/resumed only — a GM-authored menu answer that ended
@@ -952,12 +994,19 @@ class ApprovalStore:
             ended = ("answered_at, discarded_at, retired_at, created_at"
                      if "retired_at" in _cols(c, "approval_requests")
                      else "answered_at, discarded_at, created_at")
+            # `agents` (attention list, a scoped member): filtered in SQL before the limit, so a page is
+            # never short because other agents' rows came first. None = every agent, as before.
+            only, args = "", []
+            if agents is not None:
+                agents = list(agents)
+                only = f" AND from_agent IN ({','.join('?' for _ in agents)})" if agents else " AND 0"
+                args = agents
             return [dict(r) for r in c.execute(
                 "SELECT * FROM approval_requests WHERE "
-                "status IN ('answered','resumed','resolved_elsewhere','discarded','retired') "
-                "OR (status='resume_failed' AND answer IS NOT NULL) "
-                f"ORDER BY COALESCE({ended}) DESC LIMIT ?",
-                [int(limit)]).fetchall()]
+                "(status IN ('answered','resumed','resolved_elsewhere','discarded','retired') "
+                "OR (status='resume_failed' AND answer IS NOT NULL))" + only +
+                f" ORDER BY COALESCE({ended}) DESC LIMIT ?",
+                args + [int(limit)]).fetchall()]
         finally:
             c.close()
 

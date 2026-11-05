@@ -172,6 +172,7 @@ def test_init_seeds_the_approval_and_questionnaire_schema(tmp_path):
     assert len(seed_calls) == 1
     argv, cwd, env = seed_calls[0]
     assert "QuestionnaireStore" in " ".join(argv) and ".migrate()" in " ".join(argv)
+    assert "AttentionStore().migrate()" in " ".join(argv)
     assert env["ORCHESTRA_DIR"] == str(data)
     assert str(root / "scripts") in env["PYTHONPATH"]
 
@@ -196,8 +197,10 @@ def test_init_schema_seed_arms_the_ruled_gated_migrations(tmp_path):
     # test agree with whatever the code says, which is the opposite of its job.
     # m20261010_card_retire joins on the operator's ruling 2026-10-10 (gm msg_c16b5264 /
     # msg_3f3a4d05: "add the 4 fields"); a fresh install has no live table to protect.
+    # m20261104_attention joins with attention part 1 (the approved 2026-11-04 attention plan, Task 11):
+    # the Updates tables plus the urgency / default_option columns; a fresh install has nothing to protect.
     assert armed == {"m20260825_answer_attribution", "m20260825_human_task",
-                     "m20261005_answer_device", "m20261010_card_retire"}
+                     "m20261005_answer_device", "m20261010_card_retire", "m20261104_attention"}
 
 
 def test_init_demo_seeds_three_fixture_seats_and_runs_the_card_seeder(tmp_path):

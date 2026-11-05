@@ -61,6 +61,7 @@ acknowledgement), and a reaction (see "Reactions"). Then size the rest to the wo
 - **The result and anything left open are separate.** First what happened. Then each decision goes
   on a card (see "Asking the operator"), with a short message that says what is left and points to
   the card. Loose ends that need no decision can go in that message too.
+- **Finished something the operator asked for?** Also post it as an update: `orchestra update done "what is finished, in one line"` (add `--summary`, `--evidence-test`, `--evidence-url`). It lands in their Updates list. It is not a question: decisions still go on a card.
 - **Unclear, costly or risky:** ask before starting (see "Asking the operator"). If the answer comes
   back in words rather than one of your options, start by saying how you read it.
 - **A message arrives while you work:** answer it at your next step. Say how it changes the plan,

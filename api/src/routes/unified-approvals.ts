@@ -598,7 +598,7 @@ router.post('/:id/approve', (req: Request, res: Response) => {
 
   // Agent approval -> CANONICAL answer (record_answer -> fire_resume). No more
   // filesystem move, no more queue/inbox side-channel; watch/iOS resolve too.
-  const result = canonicalAnswer(id, 'approve');
+  const result = canonicalAnswer(id, 'approve', undefined, undefined, { surface: req.body?.surface });
   if (result.ok && result.applied) {
     res.json({ status: 'approved', type: 'agent', id });
     return;
@@ -656,7 +656,7 @@ router.post('/:id/deny', (req: Request, res: Response) => {
   }
 
   // Agent approval -> CANONICAL answer, carrying the reason as the note text.
-  const result = canonicalAnswer(id, 'deny', reason);
+  const result = canonicalAnswer(id, 'deny', reason, undefined, { surface: req.body?.surface });
   if (result.ok && result.applied) {
     res.json({ status: 'rejected', type: 'agent', id, reason });
     return;
@@ -713,7 +713,7 @@ router.post('/:id/answer', (req: Request, res: Response) => {
     return;
   }
 
-  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText });
+  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface });
   if (result.ok && result.applied) {
     res.json({ status: 'answered', type: 'agent', id, option_n: optionN, answer_text: answerText });
     return;
