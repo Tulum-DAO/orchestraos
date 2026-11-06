@@ -50,6 +50,11 @@ class RecentlyDeleted:
             self._at = {k: t for k, t in self._at.items() if now - t < self._ttl}
             self._at[cid] = now
 
+    def unmark(self, cid: str) -> None:
+        """The delete did not happen (it failed, or the chat was already gone): stop holding the id as deleted."""
+        with self._mu:
+            self._at.pop(cid, None)
+
     def has(self, cid: str) -> bool:
         with self._mu:
             t = self._at.get(cid)

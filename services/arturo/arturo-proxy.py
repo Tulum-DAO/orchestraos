@@ -7654,6 +7654,9 @@ def thread_delete_endpoint(conversation_id):
     if token is None:
         return jsonify(_BUSY), 409
     try:
+        # Again under the turn lock: a call that started since the check above would write this chat back.
+        if _CALL_THREADS is not None and _CALL_THREADS.call(conversation_id):
+            return jsonify({"ok": False, "error": "a call is running in this chat: end it first"}), 409
         onboarding = _THREADS.has_opener(conversation_id)
         # Before the rows go: nothing running for this chat may write it back (a job posting its result, a
         # summary being made). Its jobs are cancelled (a cancelled job posts nothing) and the id is held as
@@ -7665,8 +7668,10 @@ def thread_delete_endpoint(conversation_id):
             gone = _THREADS.delete_thread(conversation_id)
         except sqlite3.Error as e:
             log.warning(f"thread delete failed for {conversation_id}: {e}")
+            _RECENTLY_DELETED.unmark(conversation_id)   # the chat is still there: let its summaries be written
             return jsonify({"ok": False, "error": "could not delete the chat"}), 500
         if gone is None:
+            _RECENTLY_DELETED.unmark(conversation_id)
             return jsonify({"ok": False, "error": "no such thread"}), 404
         # What a next turn would read: the in-memory history and any warm CLI holding this conversation.
         _TEXT_HISTORY.forget(conversation_id)

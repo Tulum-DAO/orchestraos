@@ -307,3 +307,24 @@ def test_a_fact_set_in_a_chat_records_the_chat(P, fleet, monkeypatch):
     finally:
         P._CALLER_CONV.reset(token)
     assert operator_store.load(P.ARTURO_STATE)["facts"]["timezone"]["source_thread"] == "c9"
+
+
+def test_a_failed_delete_does_not_hold_the_chat_as_deleted(P, fleet, monkeypatch):
+    P._THREADS.record_turn("c1", "q", "a", principal="fleet")
+
+    def boom(cid):
+        raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(P._THREADS, "delete_thread", boom)
+    assert _delete(P, fleet, "c1").status_code == 500
+    assert not P._RECENTLY_DELETED.has("c1")
+    assert P._THREADS.get_thread("c1") is not None
+
+
+def test_recently_deleted_unmark():
+    from services.arturo.thread_delete import RecentlyDeleted
+    r = RecentlyDeleted()
+    r.mark("c1")
+    assert r.has("c1")
+    r.unmark("c1")
+    r.unmark("never")
+    assert not r.has("c1")
