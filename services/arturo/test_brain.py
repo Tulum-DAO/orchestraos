@@ -612,3 +612,33 @@ def test_a_cut_off_envelope_never_runs_anything(cut):
 def test_a_fenced_broken_envelope_leaves_no_fence_behind():
     msg = B.parse_cli_reply('Sure.\n```json\n{"tool_calls":[{"name":"list_agents","arguments":{"x":"cu').choices[0].message
     assert msg.content == "Sure."
+
+
+def _codex_out_files(d):
+    return sorted(p.name for p in Path(d).glob("arturo-codex-*"))
+
+
+def test_runtime_brain_codex_removes_its_output_file_whatever_runner_ran(tmp_path, monkeypatch):
+    # The codex -o file is made by runtime_command, and only run_command used to remove it, so every
+    # codex turn through an injected runner left an empty arturo-codex-*.txt in /tmp.
+    monkeypatch.setattr(B.tempfile, "tempdir", str(tmp_path))
+    seen = []
+
+    def fake_run(spec, timeout):
+        seen.append(spec.output_file)
+        assert spec.output_file.exists()          # the runner still gets a real file to point codex at
+        return "Hi there!"
+
+    B.RuntimeBrain("codex", "codex", model="", runner=fake_run).complete([{"role": "user", "content": "hello"}])
+    assert seen and seen[0].parent == tmp_path
+    assert _codex_out_files(tmp_path) == []
+
+
+def test_runtime_brain_codex_removes_its_output_file_when_the_runner_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(B.tempfile, "tempdir", str(tmp_path))
+
+    def boom(spec, timeout):
+        raise RuntimeError("codex fell over")
+
+    B.RuntimeBrain("codex", "codex", model="", runner=boom).complete([{"role": "user", "content": "hello"}])
+    assert _codex_out_files(tmp_path) == []

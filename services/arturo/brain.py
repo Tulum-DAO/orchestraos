@@ -493,11 +493,16 @@ def run_command(spec: CommandSpec, timeout: float) -> str:
             raise CliFailed(spec.argv[0], r.returncode, f"{r.stdout or ''}\n{r.stderr or ''}")
         return r.stdout or ""
     finally:
-        if spec.output_file is not None:
-            try:
-                spec.output_file.unlink()
-            except OSError:
-                pass
+        _discard_output_file(spec)
+
+
+def _discard_output_file(spec: CommandSpec) -> None:
+    """runtime_command made spec.output_file with mkstemp; whoever built the spec removes it."""
+    if spec.output_file is not None:
+        try:
+            spec.output_file.unlink()
+        except OSError:
+            pass
 
 
 # --- per-turn routing (DEC-1790669162399904) --------------------------------------------------
@@ -753,7 +758,12 @@ class RuntimeBrain(Brain):
             system = f"{system}\n\n{block}" if system else block
         spec = runtime_command(self.runtime, self.cli, system, prompt, self._model_flag,
                                use_schema=bool(block), require_tool_call=(tool_choice == "required"))
-        return self._run(spec, timeout or self._timeout)
+        try:
+            return self._run(spec, timeout or self._timeout)
+        finally:
+            # run_command removes it too, but an injected runner does not: every codex turn through
+            # one used to leave an empty arturo-codex-*.txt in /tmp (96 on the VPS by 11-06).
+            _discard_output_file(spec)
 
     def complete(self, messages, tools=None, tool_choice=None, max_tokens=1024, temperature=0.7,
                  stream=False, timeout=None, model=None, _asked_again=False):
