@@ -960,3 +960,18 @@ test('re-review: the composer sets effort at once; a refused pick re-reads the r
   assert.match(src, /resync: refreshModel/, 'a failure re-reads');
   assert.doesNotMatch(src, /effortAfter/);
 });
+
+// ── picker height: the popover is no taller than its content ──
+
+test("picker height: the popover hugs its content, capped with the list scrolling inside; no fixed height", () => {
+  const cls = (html: string) => html.match(/data-model-picker="[a-z]+"[^>]*class="([^"]*)"|class="([^"]*)"[^>]*data-model-picker="[a-z]+"/)!.slice(1).find(Boolean)!.split(" ");
+  const pop = cls(render({ layout: "popover" }));
+  assert.ok(pop.includes("max-h-[min(460px,80vh)]"), "capped at the old size");
+  assert.ok(!pop.some((c) => /^h-/.test(c)), "no fixed height (an empty band under a short list)");
+  // The list is the part that scrolls once the cap is reached; the popover keeps its own wheel.
+  const html = render({ layout: "popover" });
+  assert.match(html, /role="tabpanel"[^>]*class="flex-1 min-h-0 overflow-y-auto overscroll-contain"/);
+  // The phone sheet and the inline (Settings) picker are unchanged: the sheet hugs up to 85dvh, inline lets the page scroll.
+  assert.ok(cls(render({ layout: "sheet" })).includes("max-h-[85dvh]"));
+  assert.match(render({ layout: "inline" }), /role="tabpanel"[^>]*class="flex-1 min-h-0 overflow-y-auto"/);
+});

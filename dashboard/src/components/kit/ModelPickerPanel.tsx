@@ -333,7 +333,7 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
          data-model-picker={p.layout} style={p.style}
          className={p.layout === 'inline' ? 'flex min-w-0 min-h-0'
            : sheet ? 'fixed inset-x-0 bottom-0 flex flex-col max-h-[85dvh] rounded-t-2xl border-t border-tone-800 bg-popover text-popover-foreground shadow-2xl pb-[env(safe-area-inset-bottom)]'
-             : 'fixed flex w-[440px] max-w-[calc(100vw-16px)] h-[min(460px,80vh)] rounded-xl border border-tone-800 bg-popover text-popover-foreground shadow-2xl overflow-hidden'}>
+             : 'fixed flex w-[440px] max-w-[calc(100vw-16px)] max-h-[min(460px,80vh)] rounded-xl border border-tone-800 bg-popover text-popover-foreground shadow-2xl overflow-hidden'}>
       {sheet && (
         <div className="flex items-center justify-between px-4 pt-3 pb-1">
           <h2 className="text-sm font-medium text-tone-100">Choose a model</h2>
