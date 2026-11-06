@@ -9,11 +9,10 @@
  *
  * Run: cd api && npx tsx --test tests/db-integrity.test.ts
  */
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 import { classifyIntegrity, IntegrityClass } from '../src/lib/db-integrity.js';
@@ -44,7 +43,7 @@ test('colon form as a standalone line => BENIGN', () => {
 
 test('REAL engine round-trip: a healthy DB integrity_check parses as OK', () => {
   // Proves the parse path against the ACTUAL binding output, not a hand string.
-  const dir = mkdtempSync(join(tmpdir(), 'dbint-'));
+  const dir = testTmpDir('dbint-');
   const d = new Database(join(dir, 't.db'));
   d.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t (v) VALUES (\'x\');');
   const rows = (d.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check: string }>)

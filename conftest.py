@@ -41,7 +41,10 @@ _spec = _ilu.spec_from_file_location(
     "_check_disk_free", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "check_disk_free.py"))
 _check_disk_free = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_check_disk_free)
-_low_disk = _check_disk_free.low_disk_message()
+try:
+    _low_disk = _check_disk_free.low_disk_message()
+except ValueError as _e:
+    _low_disk = f"bad {_check_disk_free.ENV}: {_e}"
 if _low_disk:
     sys.stderr.write(f"check_disk_free: {_low_disk}\n")
     raise SystemExit(4)

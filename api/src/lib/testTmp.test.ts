@@ -13,6 +13,7 @@ import { testTmpDir } from './testTmp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, '..');
+const API = join(SRC, '..');
 
 test('a dir made in a child process is removed when that process exits', () => {
   const helper = join(HERE, 'testTmp.ts');
@@ -37,12 +38,14 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory()) walk(p, out);
-    else if (/\.(test|fixture)\.ts$/.test(e.name)) out.push(p);
+    else if (e.name !== 'node_modules' && /\.(test|fixture)\.ts$/.test(e.name)) out.push(p);
   }
   return out;
 }
 
-test('no test under src/ calls mkdtempSync itself (use testTmpDir, which cleans up)', () => {
-  const offenders = walk(SRC).filter((f) => /\bmkdtemp(Sync)?\s*\(/.test(readFileSync(f, 'utf8')));
-  assert.deepEqual(offenders.map((f) => relative(SRC, f)), []);
+test('no TS test under api/ calls mkdtempSync itself (use testTmpDir, which cleans up)', () => {
+  const files = ['src', 'tests', 'test'].flatMap((d) => (existsSync(join(API, d)) ? walk(join(API, d)) : []));
+  assert.ok(files.length > 50, `only ${files.length} test files found: the walk is broken`);
+  const offenders = files.filter((f) => /\bmkdtemp(Sync)?\s*\(/.test(readFileSync(f, 'utf8')));
+  assert.deepEqual(offenders.map((f) => relative(API, f)), []);
 });

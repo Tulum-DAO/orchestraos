@@ -6,11 +6,11 @@
 //   R13 a readonly reader coexists with a concurrent open write txn (WAL) without blocking
 //
 // Run: npx tsx --test test/identity-store-reader.test.ts   (from api/)
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -50,7 +50,7 @@ function insertCanonical(dbPath: string, root: string, gen: number, sid: string,
 }
 
 before(() => {
-  orch = fs.mkdtempSync(path.join(os.tmpdir(), 'idstore-'));
+  orch = testTmpDir('idstore-');
   fs.mkdirSync(path.join(orch, 'state'), { recursive: true });
   dbp = path.join(orch, 'state', 'orchestra-registry.db');
   seedSchema(dbp);

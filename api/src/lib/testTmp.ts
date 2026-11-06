@@ -6,6 +6,7 @@
  * testTmpDir('x-') instead: same dir, but it is deleted on process exit (node:test runs each
  * file in its own process, so that is the end of the file). Removal is best effort and never
  * throws, so a test that already removed its dir, or still holds a file open, is fine.
+ * A process killed by a signal (runner timeout, Ctrl-C) skips 'exit' and still leaves its dirs.
  * Set ORCHESTRA_KEEP_TEST_TMP=1 to keep the dirs for debugging.
  */
 import { mkdtempSync, rmSync } from 'node:fs';

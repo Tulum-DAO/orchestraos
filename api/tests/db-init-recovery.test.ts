@@ -9,11 +9,11 @@
  *
  * Run: cd api && npx tsx --test tests/db-init-recovery.test.ts
  */
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync, writeFileSync, statSync, readdirSync } from 'fs';
+import { mkdirSync, existsSync, writeFileSync, statSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 import { openClassifyRecover, DbFatalError, DbEnvironmentError, type RecoveryOpts } from '../src/lib/db-recovery.js';
@@ -32,7 +32,7 @@ function mkOpts(orch: string): { opts: RecoveryOpts; alarms: Array<[string, stri
   return { opts, alarms };
 }
 function sandbox(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dbrec-'));
+  const dir = testTmpDir('dbrec-');
   mkdirSync(join(dir, 'state'), { recursive: true });
   return dir;
 }

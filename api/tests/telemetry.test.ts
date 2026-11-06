@@ -13,11 +13,11 @@
  * Run: cd api && npx tsx --test tests/telemetry.test.ts
  * (env ORCHESTRA_DIR is pointed at the worktree root so the bridge resolves.)
  */
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -47,9 +47,9 @@ function writeDeltaLog(session: string, frames: { seq: number; text: string }[])
 }
 
 before(() => {
-  realtimeDir = mkdtempSync(join(tmpdir(), 'rt-'));
+  realtimeDir = testTmpDir('rt-');
   process.env.ORCHESTRA_REALTIME_DIR = realtimeDir;
-  const ftmp = mkdtempSync(join(tmpdir(), 'flags-'));
+  const ftmp = testTmpDir('flags-');
   flagsPath = join(ftmp, 'lineage_flags.json');
   writeFileSync(flagsPath, JSON.stringify({
     schema: 'lineage-flags/v1', flagged: { 'dirty-root': { reason: 'court' } },

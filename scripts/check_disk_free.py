@@ -56,7 +56,8 @@ def low_disk_message(paths=None, need_gb=None):
     return (f"Not enough free disk space to run tests (need {need_gb:g} GB on each): "
             + "; ".join(low)
             + f". Free some space (old test temp dirs in the temp dir are a common cause), "
-            f"or set {ENV} to a lower value (0 turns this check off).")
+            f"or set {ENV} to a lower value (0 turns this check off; a small RAM-backed /tmp "
+            f"may need a lower value).")
 
 
 def main():
