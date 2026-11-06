@@ -222,6 +222,16 @@ class WarmPool:
         if s is not None:
             s.kill()
 
+    def discard_conversation(self, conversation_id):
+        """Kill every warm session of one conversation, whatever its brain (the chat was deleted)."""
+        with self._lock:
+            keys = [k for k in self._sessions
+                    if (k[0] if isinstance(k, tuple) and k else k) == conversation_id]
+            gone = [self._sessions.pop(k) for k in keys]
+        for s in gone:
+            s.kill()
+        return len(gone)
+
     def evict_idle(self):
         with self._lock:
             stale = [k for k, s in self._sessions.items()

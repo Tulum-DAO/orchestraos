@@ -5,6 +5,9 @@
  * GET  /api/arturo/health                               -> gateway /arturo/health
  * GET  /api/arturo/threads     [?limit=&offset=]        -> gateway /arturo/threads      (G20)
  * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20; ?before=&limit= pages it)
+ * PATCH /api/arturo/threads/:id {title}                -> gateway (rename a chat; '' puts the auto-title back)
+ * DELETE /api/arturo/threads/:id [?forget_facts=1]      -> gateway (delete a chat and every copy of it; admin only;
+ *                                                           the admin's login goes with it as ?by= for the log)
  * POST /api/arturo/threads/:id/cards/:cardId/dismiss    -> gateway (close a choice card, unanswered)
  * POST /api/arturo/transcribe  multipart {audio}       -> gateway /arturo/transcribe -> :5071/transcribe (item C)
  * GET  /api/arturo/ptt/vendor                           -> gateway /arturo/ptt/vendor  (which voice providers are set up)
@@ -33,7 +36,7 @@ import { Router } from 'express';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
-import { tenantScope, installRole, type InstallRole } from '../lib/principal.js';
+import { tenantScope, installRole, changedBy, type InstallRole } from '../lib/principal.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
@@ -62,6 +65,8 @@ export interface ArturoDeps {
   /** The caller's role on the install (lib/principal installRole): the install's own voice is admin-only. Injectable for
    *  tests; absent means the real check. */
   installRole?: (req: any) => InstallRole;
+  /** Who is asking, for a log (lib/principal changedBy). Injectable for tests. */
+  actor?: (req: any) => string;
 }
 
 // Per-turn brain + page context (DEC-1790669162399904 §1.1-1.2). Shape checks only, for an early
@@ -202,6 +207,9 @@ export function defaultArturoDeps(): ArturoDeps {
 
 export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Router {
   const router = Router();
+  // The caller's role on the install: what the install-wide changes (its voice, deleting a chat) are gated on.
+  const roleOf = deps.installRole ?? ((req: any) => installRole(req));
+  const actorOf = deps.actor ?? ((req: any) => changedBy(req));
 
   async function forward(res: any, path: string, init: RequestInit, timeoutMs: number) {
     const token = deps.token();
@@ -380,9 +388,42 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
       const v = req.query[key];
       if (typeof v === 'string' && /^\d{1,12}$/.test(v)) page.set(key, v);
     }
+    // ?facts=1: the delete dialog's list of the facts first learned in this chat.
     const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}`
-      : req.query.jobs ? '?jobs=1' : page.toString() ? `?${page}` : '';
+      : req.query.jobs ? '?jobs=1' : req.query.facts ? '?facts=1' : page.toString() ? `?${page}` : '';
     await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000);
+  });
+
+  // Rename a chat. One line, at most THREAD_TITLE_MAX characters once its whitespace is collapsed (Arturo's
+  // thread_store keeps it that way); '' puts the auto-title back. Only the title is passed on.
+  router.patch('/threads/:id', async (req, res) => {
+    const id = encodeURIComponent(String(req.params.id || '').slice(0, 200));
+    if (!id) { res.status(400).json({ ok: false, error: 'thread id required' }); return; }
+    const title = (req.body || {}).title;
+    if (typeof title !== 'string') { res.status(400).json({ ok: false, error: 'title required' }); return; }
+    const clean = normalizeThreadTitle(title);
+    if (Array.from(clean).length > THREAD_TITLE_MAX) {   // characters, as Arturo counts them (not UTF-16 units)
+      res.status(400).json({ ok: false, error: `title longer than ${THREAD_TITLE_MAX} characters` });
+      return;
+    }
+    await forward(res, `/arturo/threads/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: clean }),
+    }, 10000);
+  });
+
+  // Delete a chat and every copy of it (Arturo's threads.db, its unified log lines, recall queries, call journals).
+  // Admin only, like the install's own settings. ?forget_facts=1 (and nothing else) also forgets the facts first
+  // learned in it.
+  router.delete('/threads/:id', async (req, res) => {
+    const id = encodeURIComponent(String(req.params.id || '').slice(0, 200));
+    if (!id) { res.status(400).json({ ok: false, error: 'thread id required' }); return; }
+    if (roleOf(req) !== 'admin') { res.status(403).json({ ok: false, error: 'Only an admin can delete a chat' }); return; }
+    // Who asked goes with it, for Arturo's delete log (id, time, who; never the words).
+    const q = new URLSearchParams();
+    if (req.query.forget_facts === '1') q.set('forget_facts', '1');
+    const by = String(actorOf(req) || '').trim().replace(/\s+/g, '_');   // a display name with spaces still logs
+    if (/^[A-Za-z0-9@._+-]{1,120}$/.test(by)) q.set('by', by);
+    await forward(res, `/arturo/threads/${id}${q.toString() ? `?${q}` : ''}`, { method: 'DELETE' }, 25000);
   });
 
   // Stop a background job from the tray.
@@ -427,7 +468,6 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   // yet. The install's voice (no agent) is every agent's default, so only an admin changes it (Settings phase 1, the same
   // rule as PUT /api/settings/voice.defaultVoice). (The gateway still scopes paired devices; this API holds a bearer with
   // every scope.)
-  const roleOf = deps.installRole ?? ((req: any) => installRole(req));
   router.put('/ptt/voice', async (req, res) => {
     const { vendor, voice_id, agent: rawAgent } = (req.body || {}) as Record<string, unknown>;
     if (typeof vendor !== 'string' || typeof voice_id !== 'string' || !vendor || !voice_id
@@ -502,6 +542,12 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   });
 
   return router;
+}
+
+// A chat's title (services/arturo/thread_store.py TITLE_MAX and normalize_title): one line, at most this long.
+export const THREAD_TITLE_MAX = 80;
+export function normalizeThreadTitle(raw: string): string {
+  return raw.split(/\s+/).filter(Boolean).join(' ');
 }
 
 // The allowed avatar values, as the dashboard's avatarCore.ts and Arturo's avatar_choice.py have them (the

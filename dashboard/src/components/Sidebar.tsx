@@ -29,6 +29,9 @@ import { useUser } from '../hooks/useUser';
 import { ASSISTANT_V2_ENABLED } from '../lib/assistant/config';
 import { AgentRail } from './workbench/AgentRail';
 import { listThreads, type ThreadSummary } from '../lib/arturoThreads';
+import { threadLabel } from '../lib/arturoThreadEdits';
+import { EditableThread } from './arturo/ThreadActions';
+import { useFollowThreadEdits } from '../lib/useFollowThreadEdits';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
 import { startNewArturoChat } from '../lib/arturoNewChat';
 import { operatorUserId } from '../lib/runtimeConfig';
@@ -183,6 +186,8 @@ function ChatList({ onOpen }: { onOpen: (id: string) => void }) {
     const off = subscribeCurrentThread((id) => { setCurrent(id); load(); });
     return () => { live = false; off(); };
   }, []);
+  // A rename or delete made here or in Arturo's pane shows in this list at once.
+  useFollowThreadEdits(setThreads);
   // The list is inset so each title starts in the section labels' column; the 8px inside a row is just
   // enough for the current chat's highlight to read around its title.
   return (
@@ -195,18 +200,21 @@ function ChatList({ onOpen }: { onOpen: (id: string) => void }) {
         // Rows are a fixed 24px, so 240px shows ten and the rest scroll.
         <div className="max-h-60 overflow-y-auto">
           {threads.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => { setCurrent(t.id); onOpen(t.id); }}
-              title={t.title || 'Untitled'}
-              className={clsx(
-                'w-full h-6 flex items-center px-2 rounded text-xs text-left truncate transition-colors',
-                t.id === current ? 'text-neutral-900 dark:text-neutral-100 bg-neutral-100 dark:bg-neutral-900' : 'text-muted-foreground hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-800 dark:hover:text-neutral-200',
-              )}
-            >
-              <span className="truncate">{t.title || 'Untitled'}</span>
-            </button>
+            // Each row has a ⋯ (Rename, and Delete for an admin): components/arturo/ThreadActions.tsx.
+            <EditableThread key={t.id} thread={t} fieldClassName="h-6 text-xs" moreClassName="text-neutral-500 dark:text-neutral-400">
+              <button
+                type="button"
+                onClick={() => { setCurrent(t.id); onOpen(t.id); }}
+                title={threadLabel(t)}
+                aria-current={t.id === current ? 'true' : undefined}
+                className={clsx(
+                  'w-full h-6 max-md:h-9 flex items-center pl-2 pr-8 rounded text-xs text-left truncate transition-colors',
+                  t.id === current ? 'text-neutral-900 dark:text-neutral-100 bg-neutral-100 dark:bg-neutral-900' : 'text-muted-foreground hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-800 dark:hover:text-neutral-200',
+                )}
+              >
+                <span className="truncate">{threadLabel(t)}</span>
+              </button>
+            </EditableThread>
           ))}
         </div>
       )}

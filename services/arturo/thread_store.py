@@ -29,6 +29,8 @@ from pathlib import Path
 log = logging.getLogger("arturo.thread_store")
 
 TITLE_MAX = 80
+# What an onboarding chat (the page's hidden opener started it) is called until the operator names it.
+ONBOARDING_TITLE = "Getting started"
 SNIPPET_MAX = 160
 DEFAULT_HISTORY_TURNS = 12
 PINNED_RESULTS = 2                 # background results kept in full past the window
@@ -96,7 +98,10 @@ _MIGRATIONS = {
                 # The conversation's own summary (the whole of it, kept current as it grows or a call ends) and
                 # how many messages it covers. Shown in thread lists, read by read_thread.
                 ("gist", "TEXT NOT NULL DEFAULT ''"),
-                ("gist_upto", "INTEGER NOT NULL DEFAULT 0")],
+                ("gist_upto", "INTEGER NOT NULL DEFAULT 0"),
+                # 1 = the operator named this chat (rename): auto-titling never writes over it, and it is shown as
+                # typed. 0 = the title is derived from the first user message.
+                ("title_custom", "INTEGER NOT NULL DEFAULT 0")],
     "turns": [("brain_provider", "TEXT NOT NULL DEFAULT ''"),
               ("brain_model", "TEXT NOT NULL DEFAULT ''"),
               # How the message was made: '' = typed (a text turn), 'voice' = said on a call in this thread.
@@ -107,7 +112,8 @@ _MIGRATIONS = {
     # carries no outside content; one that reaches past it may.
     "untrusted": [("first_seq", "INTEGER NOT NULL DEFAULT -1")],
 }
-_THREAD_COLS = "id, title, created, updated, turns, snippet, last_brain_provider, last_brain_model, gist, gist_upto"
+_THREAD_COLS = ("id, title, created, updated, turns, snippet, last_brain_provider, last_brain_model, gist, gist_upto,"
+                " title_custom")
 
 # A turn with no stamped principal still starts a thread someone may continue; never "" (that is "fleet").
 ANONYMOUS = "anonymous"
@@ -174,7 +180,13 @@ def _client_turn(r):
 def _thread_row(r):
     out = dict(r)
     out["last_brain"] = _brain(out.pop("last_brain_provider"), out.pop("last_brain_model"))
+    out["title_custom"] = bool(out.get("title_custom"))
     return out
+
+
+def normalize_title(text):
+    """A chosen title as it is kept: one line, inner whitespace collapsed, trimmed."""
+    return " ".join(str(text or "").split())
 
 
 # The proxy's page-context line (arturo-proxy.py _context_line), first line of a stored user turn.
@@ -362,6 +374,66 @@ class ThreadStore:
         except Exception as e:  # noqa: BLE001 — a dismiss that cannot be saved says so, never raises
             log.warning(f"thread store: could not dismiss card {card_id} in {conversation_id}: {e}")
             return False
+        finally:
+            if conn is not None:
+                conn.close()
+
+    # --- the operator's own edits: a chosen title, and deleting a chat -------------------------------------
+    def rename(self, conversation_id, title):
+        """Give a chat the operator's own title. One line, trimmed; longer than TITLE_MAX raises ValueError. An empty
+        title puts the auto-title back (derived again from the first user message). Returns {id, title,
+        title_custom} as a client reads it, or None when there is no such chat."""
+        title = normalize_title(title)
+        if len(title) > TITLE_MAX:
+            raise ValueError(f"title longer than {TITLE_MAX} characters")
+        if not self.usable or not conversation_id:
+            return None
+        conn = None
+        try:
+            conn = self._connect()
+            conn.execute("BEGIN IMMEDIATE")
+            with conn:
+                if conn.execute("SELECT 1 FROM threads WHERE id = ?", (conversation_id,)).fetchone() is None:
+                    return None
+                if title:
+                    conn.execute("UPDATE threads SET title = ?, title_custom = 1 WHERE id = ?", (title, conversation_id))
+                else:
+                    auto = ""
+                    for r in conn.execute("SELECT content FROM turns WHERE thread_id = ? AND role = 'user' ORDER BY seq",
+                                          (conversation_id,)):
+                        auto = derive_title(r["content"])
+                        if auto:
+                            break
+                    conn.execute("UPDATE threads SET title = ?, title_custom = 0 WHERE id = ?", (auto, conversation_id))
+                row = conn.execute(f"SELECT {_THREAD_COLS} FROM threads WHERE id = ?", (conversation_id,)).fetchone()
+                out = self._clean_title(conn, _thread_row(row))
+            return {"id": out["id"], "title": out["title"], "title_custom": out["title_custom"]}
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def delete_thread(self, conversation_id):
+        """Remove a chat from every table (threads, turns, turn_marks, summaries, untrusted) in one transaction, with
+        sqlite's secure_delete on so the freed pages are zeroed rather than left holding its words. Returns what the
+        caller needs to clear the chat's other traces: {id, created, updated, messages: [{role, content, meta}]}; None when
+        there is no such chat. Raises when the archive cannot be written: a delete that did not happen must say so."""
+        if not self.usable or not conversation_id:
+            return None
+        conn = None
+        try:
+            conn = self._connect()
+            conn.execute("PRAGMA secure_delete = ON")
+            conn.execute("BEGIN IMMEDIATE")
+            with conn:
+                head = conn.execute("SELECT id, created, updated FROM threads WHERE id = ?", (conversation_id,)).fetchone()
+                if head is None:
+                    return None
+                messages = [{"role": r["role"], "content": r["content"], "meta": _meta(r["meta"])} for r in conn.execute(
+                    "SELECT role, content, meta FROM turns WHERE thread_id = ? ORDER BY seq", (conversation_id,))]
+                conn.execute("DELETE FROM threads WHERE id = ?", (conversation_id,))
+                for table in ("turns", "turn_marks", "summaries", "untrusted"):
+                    conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (conversation_id,))
+            return {"id": head["id"], "created": head["created"], "updated": head["updated"], "messages": messages}
         finally:
             if conn is not None:
                 conn.close()
@@ -712,8 +784,16 @@ class ThreadStore:
 
     @staticmethod
     def _clean_title(conn, out):
-        """A title as a client reads it. Rows from before the opener/context fix may carry the
-        page's opener or a context line; read them as the first real operator message."""
+        """A title as a client reads it. A title the operator chose is shown as typed. Otherwise: an onboarding chat
+        (its first user message is the page's opener) is ONBOARDING_TITLE; rows from before the opener/context fix
+        may carry the page's opener or a context line, and read as the first real operator message."""
+        if out.get("title_custom") and out.get("title"):
+            return out
+        first = conn.execute("SELECT content FROM turns WHERE thread_id = ? AND role = 'user' ORDER BY seq LIMIT 1",
+                             (out["id"],)).fetchone()
+        if first is not None and _is_opener(first["content"]):
+            out["title"] = ONBOARDING_TITLE
+            return out
         title = out.get("title") or ""
         if title and not _is_opener(title):
             out["title"] = strip_context_line(title)

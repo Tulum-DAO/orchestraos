@@ -97,6 +97,13 @@ class Registry:
             hit = self._finals.get((cid, tid))
             return None if hit is None else hit[1:]
 
+    def forget_conversation(self, cid):
+        """Drop what is held for a conversation's finished turns (their replies): the chat was deleted."""
+        with self._mu:
+            for k in [k for k in self._finals if k[0] == cid]:
+                del self._finals[k]
+            self._recorded = {k for k in self._recorded if k[0] != cid}
+
     def _prune(self):
         now = self._clock()
         for k in [k for k, v in self._finals.items() if now - v[0] > self._ttl]:

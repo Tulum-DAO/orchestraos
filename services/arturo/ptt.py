@@ -92,6 +92,10 @@ class PttHistory:
     def get(self, conversation_id):
         return list(self._by_conv.get(conversation_id, []))
 
+    def forget(self, conversation_id):
+        """Drop a conversation's history (the chat was deleted)."""
+        self._by_conv.pop(conversation_id, None)
+
 
 class TurnCache:
     """turn_id -> result, bounded LRU-ish. Idempotency for tunnel retries: a repeated turn_id returns

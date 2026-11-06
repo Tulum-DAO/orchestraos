@@ -461,7 +461,7 @@ def test_PIN_the_multi_verb_map_and_the_admin_ptt_voice_rows_exactly():
     def rows(verb):
         return sorted(f"{m} {p}" for (m, p), v in G.ROUTE_SCOPES.items() if v == verb)
     assert rows("admin") == ["DELETE /arturo/assistant/name", "DELETE /arturo/avatar", "DELETE /arturo/ptt/voice",
-                             "GET /agents/new/parents", "GET /gate/log",
+                             "DELETE /arturo/threads/{conversation_id}", "GET /agents/new/parents", "GET /gate/log",
                              "GET /terminal/ws", "POST /agents/new",
                              "POST /device/upgrade",
                              "POST /red-alert/report", "POST /runtimes/available/refresh",
@@ -612,3 +612,9 @@ def test_PIN_the_supervision_rows():
         ("PUT", "/gate/mode"): "admin",
         ("GET", "/gate/log"): "admin",
     }
+
+
+def test_deleting_an_arturo_chat_is_admin_and_renaming_is_message():
+    """Deleting a chat removes every copy of it: never a device's `message`. Renaming is like dismissing a card."""
+    assert G.ROUTE_SCOPES[("DELETE", "/arturo/threads/{conversation_id}")] == "admin"
+    assert G.ROUTE_SCOPES[("PATCH", "/arturo/threads/{conversation_id}")] == "message"

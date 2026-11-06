@@ -23,7 +23,8 @@ const CARD_ID = /\b(?:apr|qnr)_[0-9a-f]{8}_\d{1,8}\b/;
 const hasRefs = (text: string): boolean => CARD_ID.test(String(text ?? ''));
 
 /** `gist`: the conversation's own summary (services/arturo: kept current as it grows and when a call ends). */
-export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string; gist?: string }
+/** `title_custom`: the operator named this chat (it is never auto-titled over). */
+export interface ThreadSummary { id: string; title: string; title_custom?: boolean; created?: number; updated: number; turns: number; snippet?: string; gist?: string }
 /** `meta.kind === 'job_result'`: posted by a background job (jobs.py), with the steps it ran. */
 export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: string; title?: string; status?: string;
   steps?: import('./arturoJobs').JobStep[]; call_id?: string;
@@ -34,7 +35,7 @@ export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: str
 /** `seq`: the turn's number in its thread, present when the thread was read a page at a time (loadThreadPage). */
 export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta; seq?: number }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
-export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
+export interface LoadedThread { id: string; title: string; title_custom?: boolean; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 export interface ContextCard { kind: 'page-context'; label: string; context: ArturoContext }
 
 /** The thread list, newest first. A dead hop shows NO threads rather than throwing into a
@@ -102,11 +103,11 @@ export async function loadTurn(conversationId: string, turnId: string): Promise<
 
 /** The server's thread JSON as the client uses it. last_brain rides along (null = default brain)
  *  so reopening a thread restores the brain it last answered on (DEC-1790669162399904 §1.5). */
-interface ThreadJson { id: string; title?: string; turns?: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
+interface ThreadJson { id: string; title?: string; title_custom?: boolean; turns?: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 
 export function threadFromJson(t: ThreadJson | null | undefined): LoadedThread | null {
   if (!t) return null;
-  return { id: t.id, title: t.title || '', turns: t.turns || [], last_brain: t.last_brain ?? null };
+  return { id: t.id, title: t.title || '', ...(t.title_custom ? { title_custom: true } : {}), turns: t.turns || [], last_brain: t.last_brain ?? null };
 }
 
 const PRETTY: Record<string, string> = {

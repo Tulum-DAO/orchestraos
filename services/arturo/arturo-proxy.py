@@ -21,6 +21,7 @@ import os
 import re
 import hashlib
 import hmac
+import sqlite3
 import subprocess
 import logging
 import time
@@ -331,6 +332,7 @@ def _record_spawned_this_turn(session_name):
 # in-flight TEXT response, but ONLY before the partial has committed a side-effecting tool
 # dispatch (cancel cannot un-run execute_tool). Lock is held only for tiny flag ops.
 from services.arturo import thread_store as _thread_store   # G20 durable thread archive
+from services.arturo import thread_delete as _thread_delete   # a deleted chat's other traces, and its facts
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
 from services.arturo import live_steps as _live_steps     # the dashboard's "what Arturo is doing now" line
@@ -2539,7 +2541,8 @@ def _begin_team_turn(conversation_id, step, principal=None, text=None):
         # the next step, not devices again, whether or not the brain wrote the fact.
         try:
             from services.arturo import operator_store as _ops_pick
-            _ops_pick.set_fact(ARTURO_STATE, "devices", ", ".join(picked) or "none", source="card")
+            _ops_pick.set_fact(ARTURO_STATE, "devices", ", ".join(picked) or "none", source="card",
+                               source_thread=conversation_id)
         except (ValueError, OSError) as e:
             log.warning(f"devices fact not stored: {e}")
     return {"conversation_id": conversation_id, "step": step, "principal": principal,
@@ -4765,7 +4768,8 @@ def _execute_tool_raw(name, args, user_turns=None):
         # in conversation; the brain understood it; this is the only writer of operator.json.
         from services.arturo import operator_store as _ops
         try:
-            entry = _ops.set_fact(ARTURO_STATE, args.get("field", ""), args.get("value", ""), source="brain")
+            entry = _ops.set_fact(ARTURO_STATE, args.get("field", ""), args.get("value", ""), source="brain",
+                                  source_thread=_current_thread())
         except ValueError as e:
             return f"Not recorded: {e}"
         except OSError as e:               # unwritable state dir: the turn must not 500 on a nicety
@@ -4785,6 +4789,9 @@ def _execute_tool_raw(name, args, user_turns=None):
             "category": category,
             "created": datetime.now(timezone.utc).isoformat(),
         }
+        _src = _current_thread()
+        if _src:
+            entry["source_thread"] = _src           # the chat it was learned in (deleting that chat can forget it)
         # VQ-10 (the operator): supersede/conflict resolution — the old dedup only dropped EXACT-text twins,
         # so "the X bug is broken" and "X is fixed now" both lingered and CONTRADICTED. Replace any
         # prior note ABOUT THE SAME SUBJECT with this newer one (recency genuinely wins on a topic),
@@ -5693,6 +5700,9 @@ def capture_mid_call_turns(messages, calling_channel="voice"):
             "turn_count": len(turns),
             "turns": turns[-20:],  # Last 20 turns
         }
+        _live_conv = _current_thread()
+        if _live_conv:
+            live_data["conversation_id"] = _live_conv     # deleting the chat removes this file (thread_delete.py)
         live_file.write_text(json.dumps(live_data, indent=2))
 
         # Log new turns to unified conversation log
@@ -5704,6 +5714,7 @@ def capture_mid_call_turns(messages, calling_channel="voice"):
         current_count = len(turns)
         if current_count > _prev_count:
             new_turns = turns[_prev_count:]
+            _conv = _live_conv
             for turn in new_turns:
                 role = "operator" if turn["role"] == "user" else "system"
                 entry = {
@@ -5713,8 +5724,9 @@ def capture_mid_call_turns(messages, calling_channel="voice"):
                     "content": turn["text"],
                     "content_type": "text",
                 }
-                with open(unified_log_file, "a") as f:
-                    f.write(json.dumps(entry) + "\n")
+                if _conv:
+                    entry["conversation_id"] = _conv      # deleting the chat removes its lines (thread_delete.py)
+                _thread_delete.append_jsonl(unified_log_file, entry)
             capture_mid_call_turns._prev_turn_count = current_count
     except Exception as e:
         log.error(f"Mid-call capture error: {e}")
@@ -7545,6 +7557,14 @@ def thread_detail_endpoint(conversation_id):
     if principal != "fleet" and _THREADS.started_by(conversation_id) not in (None, _thread_key(principal)):
         # Another principal's thread reads exactly as one that does not exist: no turns, and no sign it is there.
         return jsonify({"ok": True, "thread": None, **({"jobs": []} if request.args.get("jobs") else {})})
+    if request.args.get("facts"):
+        # The delete dialog: the facts first learned in this chat, offered (unticked) to forget with it.
+        if _THREADS.started_by(conversation_id) is None:
+            return jsonify({"ok": False, "error": "no such thread"}), 404
+        onboarding = _THREADS.has_opener(conversation_id)
+        return jsonify({"ok": True, "onboarding": onboarding,
+                        "facts": _thread_delete.thread_facts(ARTURO_STATE, VOICE_MEMORY_FILE, conversation_id,
+                                                             onboarding=onboarding)})
     if request.args.get("jobs"):
         # The job tray's poll: this thread's running and just-finished jobs, without loading the transcript.
         return jsonify({"ok": True, "jobs": _JOBS.for_thread(conversation_id) if _JOBS is not None else []})
@@ -7574,6 +7594,127 @@ def thread_detail_endpoint(conversation_id):
         # thread as "nothing to resume".
         return jsonify({"ok": True, "thread": None})
     return jsonify({"ok": True, "thread": thread})
+
+
+def _may_see_thread(conversation_id, principal):
+    """The rule for reading a thread, for the routes that change one: the dashboard sees every thread, anyone else
+    only the threads it started. Another principal's thread reads as one that does not exist (404, never 403)."""
+    return principal == "fleet" or _THREADS.started_by(conversation_id) in (None, _thread_key(principal))
+
+
+@app.route("/threads/<path:conversation_id>", methods=["PATCH"])
+def thread_rename_endpoint(conversation_id):
+    """Rename a chat: {title}. One line, at most TITLE_MAX characters; an empty title puts the auto-title back.
+    A chosen title is never overwritten by auto-titling (thread_store.rename). Same access as reading it."""
+    if not _loopback_only():
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    body = request.get_json(silent=True)
+    title = body.get("title") if isinstance(body, dict) else None
+    if not isinstance(title, str):
+        return jsonify({"ok": False, "error": "title required"}), 400
+    if len(_thread_store.normalize_title(title)) > _thread_store.TITLE_MAX:
+        return jsonify({"ok": False, "error": f"title longer than {_thread_store.TITLE_MAX} characters"}), 400
+    if not _may_see_thread(conversation_id, _stamped_principal(request)):
+        return jsonify({"ok": False, "error": "no such thread"}), 404
+    try:
+        out = _THREADS.rename(conversation_id, title)
+    except sqlite3.Error as e:
+        log.warning(f"thread rename failed for {conversation_id}: {e}")
+        return jsonify({"ok": False, "error": "could not save the title"}), 500
+    if out is None:
+        return jsonify({"ok": False, "error": "no such thread"}), 404
+    return jsonify({"ok": True, "thread": out})
+
+
+_THREAD_DELETE_LOG = "thread-deletes.jsonl"
+_RECENTLY_DELETED = _thread_delete.RecentlyDeleted()
+
+
+@app.route("/threads/<path:conversation_id>", methods=["DELETE"])
+def thread_delete_endpoint(conversation_id):
+    """Delete a chat and every verbatim trace of it: its threads.db rows, its lines in the unified log, its recall
+    queries, its call journals and saved transcripts, its jobs, and the in-memory history and warm session a turn
+    would read. ?forget_facts=1 also removes the facts first learned in it (never the onboarding chat's operator
+    facts; deleting that chat leaves onboarding, the name and the look as they are). Only the dashboard may delete
+    (its API lets only an admin ask; `by` is that admin's login, for the log). A paired device is refused, whatever
+    its scopes. Logged by id, time and who; never the words."""
+    if not _loopback_only():
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    principal = _stamped_principal(request)
+    if principal != "fleet":
+        return jsonify({"ok": False, "error": "only an admin can delete a chat"}), 403
+    actor = request.args.get("by") or ""
+    actor = actor if re.fullmatch(r"[A-Za-z0-9@._+-]{1,120}", actor) else ""
+    if not _may_see_thread(conversation_id, principal) or _THREADS.started_by(conversation_id) is None:
+        return jsonify({"ok": False, "error": "no such thread"}), 404
+    if _CALL_THREADS is not None and _CALL_THREADS.call(conversation_id):
+        return jsonify({"ok": False, "error": "a call is running in this chat: end it first"}), 409
+    forget = request.args.get("forget_facts") == "1"
+    token = _TURN_LOCKS.acquire(conversation_id)
+    if token is None:
+        return jsonify(_BUSY), 409
+    try:
+        # Again under the turn lock: a call that started since the check above would write this chat back.
+        if _CALL_THREADS is not None and _CALL_THREADS.call(conversation_id):
+            return jsonify({"ok": False, "error": "a call is running in this chat: end it first"}), 409
+        onboarding = _THREADS.has_opener(conversation_id)
+        # Before the rows go: nothing running for this chat may write it back (a job posting its result, a
+        # summary being made). Its jobs are cancelled (a cancelled job posts nothing) and the id is held as
+        # deleted for a while, which _post_job_result and the summarizers check.
+        _RECENTLY_DELETED.mark(conversation_id)
+        if _JOBS is not None:
+            _JOBS.forget_thread(conversation_id)
+        try:
+            gone = _THREADS.delete_thread(conversation_id)
+        except sqlite3.Error as e:
+            log.warning(f"thread delete failed for {conversation_id}: {e}")
+            _RECENTLY_DELETED.unmark(conversation_id)   # the chat is still there: let its summaries be written
+            return jsonify({"ok": False, "error": "could not delete the chat"}), 500
+        if gone is None:
+            _RECENTLY_DELETED.unmark(conversation_id)
+            return jsonify({"ok": False, "error": "no such thread"}), 404
+        # What a next turn would read: the in-memory history and any warm CLI holding this conversation.
+        _TEXT_HISTORY.forget(conversation_id)
+        _PTT_HISTORY.forget(conversation_id)
+        _TURN_IDS.forget_conversation(conversation_id)
+        _WARM_POOL.discard_conversation(conversation_id)
+        # The other copies. Each is attempted; one that fails is said, never silently skipped.
+        failed = []
+        for what, clear in (
+                ("unified log", lambda: _thread_delete.purge_unified_log(ARTURO_STATE / "unified-conversation.jsonl", gone)),
+                ("recall queries", lambda: _thread_delete.purge_recall_queries(_semantic_db_path(), gone)),
+                ("call journals", lambda: _thread_delete.purge_call_journals(VOICE_CALLS_DIR, gone)),
+                ("voice memory", lambda: _thread_delete.purge_voice_memory(VOICE_MEMORY_FILE, VOICE_TRANSCRIPTS_DIR,
+                                                                            conversation_id)),
+                ("live call file", lambda: _thread_delete.purge_live_call(ARTURO_STATE / "voice-live-call.json", gone))):
+            try:
+                clear()
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"thread delete {conversation_id}: could not clear the {what}: {e!r}")
+                failed.append(what)
+        forgot = 0
+        if forget:
+            try:
+                forgot = _thread_delete.forget_facts(ARTURO_STATE, VOICE_MEMORY_FILE, conversation_id,
+                                                     onboarding=onboarding)
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"thread delete {conversation_id}: could not forget its facts: {e!r}")
+                failed.append("facts")
+        try:
+            _thread_delete.log_delete(ARTURO_LOGS / _THREAD_DELETE_LOG, conversation_id, actor or principal, forgot)
+        except OSError as e:
+            log.warning(f"thread delete {conversation_id}: could not write the delete log: {e!r}")
+        log.info(f"thread deleted: {conversation_id} by {actor or principal} (facts forgotten: {forgot})")
+        out = {"ok": True, "deleted": conversation_id, "facts_forgotten": forgot}
+        if failed:
+            out["not_cleared"] = failed
+        return jsonify(out)
+    finally:
+        token.release()
+
+
+def _semantic_db_path():
+    return Path(os.environ.get("ORCHESTRA_DIR", str(ORCHESTRA_DIR))) / "state" / "semantic-memory.db"
 
 
 def _spawn_warm(argv, env=None):
@@ -7713,6 +7854,8 @@ def _summarize_now(thread_id, upto, target, old):
         return False
     if not text:
         return False
+    if _RECENTLY_DELETED.has(thread_id):
+        return False                              # its chat was deleted while this was being written
     _THREADS.set_summary(thread_id, target, text)
     log.info(f"thread summary {thread_id[:24]}: messages 1-{target} ({len(text)} chars)")
     return True
@@ -7770,7 +7913,8 @@ def _gist_now(thread_id, upto, count, old):
         log.warning(f"thread gist {thread_id[:24]} failed: {e!r}")
         return False
     if text:
-        _THREADS.set_gist(thread_id, count, text[:1200])
+        if not _RECENTLY_DELETED.has(thread_id):
+            _THREADS.set_gist(thread_id, count, text[:1200])
         log.info(f"thread gist {thread_id[:24]}: {count} messages ({len(text)} chars)")
     return bool(text)
 
@@ -8633,6 +8777,8 @@ def _post_job_result(job):
     in that thread hears it at the next pause."""
     _live_steps.clear("arturo")                      # the job is over: no current step
     thread, title = job["thread"], job["title"]
+    if _RECENTLY_DELETED.has(thread):
+        return                                       # its chat was deleted while it ran: nothing to post into
     deep = job["kind"] == "deep_think"
     if job["status"] == "done":
         text = job["result"] if deep else f"{title}: done.\n\n{_helpers_shown(job['result'])}"

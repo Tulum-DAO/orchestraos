@@ -597,3 +597,88 @@ test('anyone may rename the assistant for now; an empty or oversized name is ref
   }
   assert.deepEqual(other.urls, []);
 });
+
+// --- a chat's rename (PATCH) and delete (DELETE) ---
+
+function recorder(status = 200, body: any = { ok: true }) {
+  const seen: { url: string; method: string; body?: string }[] = [];
+  const deps = makeDeps({ fetchJson: async (url: string, init: RequestInit) => {
+    seen.push({ url, method: String(init.method), body: init.body ? String(init.body) : undefined });
+    return { status, body };
+  } });
+  return { deps, seen };
+}
+
+test('PATCH /threads/:id forwards only the cleaned title, the id escaped', async () => {
+  const { deps, seen } = recorder(200, { ok: true, thread: { id: 'a b', title: 'Two words', title_custom: true } });
+  const r = await send(deps, 'PATCH', '/api/arturo/threads/' + encodeURIComponent('a b'), { title: '  Two \n words ', x: 1 });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.thread.title, 'Two words');
+  assert.deepEqual(seen, [{ url: `${GATEWAY_URL}/arturo/threads/a%20b`, method: 'PATCH', body: '{"title":"Two words"}' }]);
+});
+
+test('PATCH /threads/:id with an empty title is passed on (it puts the auto-title back)', async () => {
+  const { deps, seen } = recorder();
+  assert.equal((await send(deps, 'PATCH', '/api/arturo/threads/c1', { title: '   ' })).status, 200);
+  assert.equal(seen[0].body, '{"title":""}');
+});
+
+test('PATCH /threads/:id refuses a missing or too-long title before the gateway', async () => {
+  const { deps, seen } = recorder();
+  assert.equal((await send(deps, 'PATCH', '/api/arturo/threads/c1', {})).status, 400);
+  assert.equal((await send(deps, 'PATCH', '/api/arturo/threads/c1', { title: 7 })).status, 400);
+  assert.equal((await send(deps, 'PATCH', '/api/arturo/threads/c1', { title: 'x'.repeat(81) })).status, 400);
+  assert.deepEqual(seen, []);
+  // 80 characters is the most; an emoji is one character, as Arturo counts it
+  assert.equal((await send(deps, 'PATCH', '/api/arturo/threads/c1', { title: '😀'.repeat(80) })).status, 200);
+});
+
+test("PATCH /threads/:id passes Arturo's 404 through", async () => {
+  const { deps } = recorder(404, { ok: false, error: 'no such thread' });
+  const r = await send(deps, 'PATCH', '/api/arturo/threads/nope', { title: 'x' });
+  assert.equal(r.status, 404);
+  assert.equal(r.json.error, 'no such thread');
+});
+
+test('DELETE /threads/:id: an admin deletes; forget_facts=1 and nothing else is passed on', async () => {
+  const { deps, seen } = recorder(200, { ok: true, deleted: 'c1', facts_forgotten: 0 });
+  (deps as any).actor = () => '';
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/threads/c1')).status, 200);
+  await send(deps, 'DELETE', '/api/arturo/threads/c1?forget_facts=1');
+  await send(deps, 'DELETE', '/api/arturo/threads/c1?forget_facts=yes&x=1');
+  assert.deepEqual(seen.map((s) => `${s.method} ${s.url}`), [
+    `DELETE ${GATEWAY_URL}/arturo/threads/c1`,
+    `DELETE ${GATEWAY_URL}/arturo/threads/c1?forget_facts=1`,
+    `DELETE ${GATEWAY_URL}/arturo/threads/c1`,
+  ]);
+});
+
+test('DELETE /threads/:id: a member may not delete a chat, and the gateway is not asked', async () => {
+  const { deps, seen } = recorder();
+  (deps as any).installRole = () => 'member';
+  const r = await send(deps, 'DELETE', '/api/arturo/threads/c1');
+  assert.equal(r.status, 403);
+  assert.deepEqual(r.json, { ok: false, error: 'Only an admin can delete a chat' });
+  assert.deepEqual(seen, []);
+});
+
+test('GET /threads/:id?facts=1 asks for the facts learned in that chat', async () => {
+  const deps = makeDeps();
+  await get(deps, '/api/arturo/threads/c1?facts=1');
+  assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/threads/c1?facts=1`]);
+});
+
+test("DELETE /threads/:id passes on who asked (a plain login only), for Arturo's delete log", async () => {
+  const { deps, seen } = recorder();
+  (deps as any).actor = () => 'ops@example.com';
+  await send(deps, 'DELETE', '/api/arturo/threads/c1?forget_facts=1');
+  (deps as any).actor = () => 'Ops Admin';
+  await send(deps, 'DELETE', '/api/arturo/threads/c1');
+  (deps as any).actor = () => 'not/a;login';
+  await send(deps, 'DELETE', '/api/arturo/threads/c1');
+  assert.deepEqual(seen.map((s) => s.url), [
+    `${GATEWAY_URL}/arturo/threads/c1?forget_facts=1&by=ops%40example.com`,
+    `${GATEWAY_URL}/arturo/threads/c1?by=Ops_Admin`,
+    `${GATEWAY_URL}/arturo/threads/c1`,
+  ]);
+});
