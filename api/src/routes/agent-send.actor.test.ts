@@ -2,13 +2,13 @@
  * The web chat says a PERSON typed its message (X-Actor: operator:web), so the gateway counts it
  * toward the agent's last_user_message_at; the bare fleet token alone is automation.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 
-const dir = mkdtempSync(join(tmpdir(), 'actor-'));
+const dir = testTmpDir('actor-');
 const tok = join(dir, 'token');
 writeFileSync(tok, 'tok-value');
 process.env.WATCH_GATEWAY_TOKEN_FILE = tok;

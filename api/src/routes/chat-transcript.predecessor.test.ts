@@ -9,11 +9,11 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.predecessor.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
+import { mkdirSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 const SEAT = 'zz-transcript-seat';            // never a real tmux session on any box
@@ -22,7 +22,7 @@ const CUR = '11111111-2222-4333-8444-000000000002';
 const OTHER = '11111111-2222-4333-8444-000000000003';
 const RETIRED = '11111111-2222-4333-8444-000000000004';
 
-const root = mkdtempSync(join(tmpdir(), 'transcript-pred-'));
+const root = testTmpDir('transcript-pred-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

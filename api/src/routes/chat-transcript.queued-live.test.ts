@@ -12,18 +12,17 @@
  * B3 renders the card from the row as soon as the log proves the injection, and the existing
  * covered-by-batch drop removes the bubble on the same poll.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 const DECISION = "[DECISION ANSWERED apr_df7b8c6a_41375323] 'Which blue replaces the IntentMagic purple?' -> None - show me more";
 const ACKED = "[DECISION ANSWERED apr_00f04365_37087287] 'Sidebar logo morph: approve the staging result to go live?' -> Ship it";
 const LATER = 'Please rebase the release branch onto main before the archive is cut tonight, thanks';
 
-const dir = mkdtempSync(join(tmpdir(), 'qlive-'));
+const dir = testTmpDir('qlive-');
 const DBP = join(dir, 'tasks.db');
 const db = new Database(DBP);
 db.exec(`CREATE TABLE messages (

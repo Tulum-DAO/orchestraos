@@ -5,13 +5,13 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/routes/chat-transcript.reaction.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'ct-reaction-'));
+const dir = testTmpDir('ct-reaction-');
 process.env.ORCHESTRA_DIR = dir;
 if (!process.env.ORCHESTRA_CONFIG) {
   process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');

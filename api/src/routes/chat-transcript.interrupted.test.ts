@@ -4,10 +4,10 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.interrupted.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { mergeInterruptedTurns, readInterruptedTurns, interruptedLine, INTERRUPTED_PREFIX } from './chat-transcript.js';
 
@@ -44,7 +44,7 @@ test('a session prompt is never taken for the message', () => {
 });
 
 test('the supervisor file: read when present, nothing when missing, broken or the id is unsafe', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'interrupted-'));
+  const root = testTmpDir('interrupted-');
   assert.deepEqual(readInterruptedTurns('dev-demo', root), []);
   const dir = path.join(root, 'state', 'headless', 'dev-demo');
   fs.mkdirSync(dir, { recursive: true });

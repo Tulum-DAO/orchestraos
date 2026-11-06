@@ -3,18 +3,18 @@
  * rule (only for entries marked seen-only), seed rows, the compaction notices and their placement. A fixture store
  * in a temp dir with the writer's tables (scripts/episodic_memory.py).
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { mkdtempSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { stripBlock, noticeShown, storeRules, applyStoreRules, applyRulesToLines, compactionNotices, compactionItem, mergeNotices, forgetStoreCache } from './conversation-store.js';
 
 const BLOCK = '<earlier-conversation>\nEarlier: the Sample plan.\n</earlier-conversation>\n';
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'cstore-'));
+  const dir = testTmpDir('cstore-');
   mkdirSync(join(dir, 'state'));
   const p = join(dir, 'state', 'episodic-memory.db');
   const db = new Database(p);

@@ -4,10 +4,10 @@
  * an update landed in a file nothing read. Both now go through roadmapsFile().
  * ORCHESTRA_DIR is read at import by state-reader, so it is set BEFORE the dynamic imports.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 const doc = (state: string) => JSON.stringify({ projects: { p1: { phases: [{ tasks: [{ name: 't', deployment_state: state }] }] } } });
@@ -31,7 +31,7 @@ const patch = (base: string) => fetch(`${base}/api/roadmaps/p1/tasks/0/0`, {
 });
 
 test('both files exist: the update lands in state/roadmaps.json, the file the reader reads', async () => {
-  const data = mkdtempSync(join(tmpdir(), 'roadmaps-'));
+  const data = testTmpDir('roadmaps-');
   mkdirSync(join(data, 'state'));
   mkdirSync(join(data, 'dashboard_v4'));
   writeFileSync(join(data, 'state', 'roadmaps.json'), doc('planned'));
@@ -49,7 +49,7 @@ test('both files exist: the update lands in state/roadmaps.json, the file the re
 });
 
 test('only the legacy file exists: it is still read and updated', async () => {
-  const data = mkdtempSync(join(tmpdir(), 'roadmaps-'));
+  const data = testTmpDir('roadmaps-');
   mkdirSync(join(data, 'dashboard_v4'));
   writeFileSync(join(data, 'dashboard_v4', 'roadmaps.json'), doc('legacy'));
   const { server, base } = await app(data);

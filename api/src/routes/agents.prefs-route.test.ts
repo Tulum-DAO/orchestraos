@@ -4,15 +4,15 @@
  *
  * Run: npx tsx --test src/routes/agents.prefs-route.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'agents-prefs-'));
+const dir = testTmpDir('agents-prefs-');
 mkdirSync(join(dir, 'state'));
 process.env.ORCHESTRA_DIR = dir;
 

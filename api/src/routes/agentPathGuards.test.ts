@@ -4,10 +4,11 @@
  * ORCHESTRA_DIR with a temp registry. Every refused request must leave the tree byte-identical.
  * ORCHESTRA_DIR is read at import time by state-reader, so it is set BEFORE the dynamic imports.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
 import { SAFE_AGENT_ID, containedPath, promptPathFor, inboxDirFor, registeredAgent, UnsafeAgentPath } from '../lib/agentPaths.js';
 
@@ -56,7 +57,7 @@ function tree(dir: string): string[] {
 }
 
 async function app() {
-  const root = mkdtempSync(join(tmpdir(), 'guards-'));
+  const root = testTmpDir('guards-');
   const orch = join(root, 'orch');
   mkdirSync(join(orch, 'prompts'), { recursive: true });
   mkdirSync(join(orch, 'state'), { recursive: true });
@@ -118,7 +119,7 @@ test('ROUTES: traversal and unknown ids are refused and write NOTHING; registere
 
 // ---- the sweep's remaining routes (gm msg_78d009fc: ALL of them, reads too) -------------------
 test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox reads and the transcript id', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'sweep-'));
+  const root = testTmpDir('sweep-');
   const orch = join(root, 'orch');
   for (const d of ['prompts', 'skills', 'state/messages', 'state/clients/acme/signatures', 'state/clients/-acme/signatures',
                    'state/users', 'queue/inbox/pm-x', 'queue/inbox/retired-seat', 'state/machine-heartbeats']) {

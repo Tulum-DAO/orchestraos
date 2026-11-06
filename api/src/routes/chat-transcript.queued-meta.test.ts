@@ -21,14 +21,13 @@
  * and both existing dedupes (which find these items by their queued marker) must still
  * work, since the fix keeps that marker until they have run.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
-const dir = mkdtempSync(join(tmpdir(), 'qingest-'));
+const dir = testTmpDir('qingest-');
 const DBP = join(dir, 'tasks.db');
 {
   const db = new Database(DBP);

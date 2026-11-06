@@ -4,15 +4,15 @@
  * ACP session/update lines (that produced an empty chat for Codex before
  * parseCodexRollout existed).
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 
 const SEAT = 'zz-grok-seat';
 const SID = '0199aaaa-0000-7000-8000-0000000000b1';
-const root = mkdtempSync(join(tmpdir(), 'grok-transcript-'));
+const root = testTmpDir('grok-transcript-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const project = join(home, '.claude', 'projects', '-repo');

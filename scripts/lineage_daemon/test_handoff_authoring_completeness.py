@@ -475,5 +475,9 @@ def _rich(*, sha, fhash):
 def _fresh_provider_tmp():
     # a provider module bound to a scratch ORCHESTRA_DIR (recognition helpers are
     # pure over their text arg; no git needed for the parser-level tests).
+    import atexit
+    import shutil
     import tempfile
-    return _fresh_provider(tempfile.mkdtemp())
+    d = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, d, True)        # removed when the test process exits
+    return _fresh_provider(d)

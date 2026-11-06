@@ -2,15 +2,15 @@
  * PUT /api/agents/:id/takes-calls {on}: an admin's switch for the agent's own calls (state/agent-calls.json), its
  * other options kept; a member is refused. Run: npx tsx --test src/routes/agents.takes-calls.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'agents-takes-calls-'));
+const dir = testTmpDir('agents-takes-calls-');
 mkdirSync(join(dir, 'state'));
 writeFileSync(join(dir, 'registry.json'), JSON.stringify({ agents: { 'dev-demo': { tmux_session: 'dev-demo', runtime: 'claude' } } }));
 process.env.ORCHESTRA_DIR = dir;

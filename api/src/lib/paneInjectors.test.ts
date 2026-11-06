@@ -9,18 +9,18 @@
  *
  * Run: npx tsx --test src/lib/paneInjectors.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 
-const dir = mkdtempSync(join(tmpdir(), 'pane-injectors-'));
+const dir = testTmpDir('pane-injectors-');
 mkdirSync(join(dir, 'state', 'headless', 'dev-demo'), { recursive: true });
 writeFileSync(join(dir, 'registry.json'), JSON.stringify({ agents: { 'pm-demo': { tmux_session: 'pm-demo' }, 'dev-demo': {}, gm: {} } }));
 const headlessFile = join(dir, 'state', 'headless-seats.json');

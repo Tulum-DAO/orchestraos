@@ -1,10 +1,10 @@
+import { testTmpDir } from './testTmp.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-const dir = mkdtempSync(join(tmpdir(), 'orchestra-terminal-relay-'));
+const dir = testTmpDir('orchestra-terminal-relay-');
 const secretFile = join(dir, 'secret');
 writeFileSync(secretFile, 'relay-test-secret\n');
 process.env.TERMINAL_RELAY_SECRET_FILE = secretFile;

@@ -6,10 +6,10 @@
  *
  * Run: npx tsx --test src/routes/runtimes-available.seat-models.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -96,7 +96,7 @@ test('every other field is unchanged: valid ids, other providers, the shape', ()
 
 test('no seat-only rows without a model probe, without the file, or without a catalog', () => {
   assert.ok(probeAll(deps(() => readSeatModels()), { withModels: false }).providers.every((p) => p.models.length === 0));
-  const dir = mkdtempSync(join(tmpdir(), 'seat-models-'));
+  const dir = testTmpDir('seat-models-');
   const bad = join(dir, 'seat-models.json');
   assert.equal(readSeatModels(bad), null, 'missing');
   writeFileSync(bad, 'not json');

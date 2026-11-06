@@ -5,11 +5,11 @@
  *
  * Run: npx tsx --test src/services/live-text.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, appendFileSync } from 'fs';
+import { writeFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import { LiveText, LiveTextState, LogFollower, LAND_GRACE_MS } from './live-text.js';
 
 const MID = 'msg_example_1';
@@ -81,7 +81,7 @@ test('an interrupted turn clears at once: a block cut mid-way never lands', () =
 });
 
 test('the follower reads only new complete lines, starts mid-file at a line, and starts over on a shorter file', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'live-text-'));
+  const dir = testTmpDir('live-text-');
   const p = join(dir, 'events.jsonl');
   const f = new LogFollower(p, 40);
   assert.deepEqual(f.read(), { lines: [], reset: false }, 'no log yet');
@@ -96,7 +96,7 @@ test('the follower reads only new complete lines, starts mid-file at a line, and
 });
 
 test('LiveText reports a change once, and a seat that is not headless (or in Dev) shows nothing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'live-text-'));
+  const dir = testTmpDir('live-text-');
   const p = join(dir, 'events.jsonl');
   const lines = [start(), blockStart(0), delta(0, 'Working on it')].map((r) => JSON.stringify(r));
   writeFileSync(p, lines.join('\n') + '\n');

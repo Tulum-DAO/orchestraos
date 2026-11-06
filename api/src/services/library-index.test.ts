@@ -1,13 +1,13 @@
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { LibraryIndex, openLibraryDb } from './library-index.js';
 
 // A real temp data dir: logs, project files with real mtimes, a real library.db.
 function box() {
-  const data = mkdtempSync(join(tmpdir(), 'library-'));
+  const data = testTmpDir('library-');
   mkdirSync(join(data, 'state'), { recursive: true });
   const proj = join(data, 'projects', 'sample');
   mkdirSync(join(proj, 'notes'), { recursive: true });

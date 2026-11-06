@@ -6,12 +6,12 @@
  *
  * Run: npx tsx --test src/lib/agentJobs.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseJobs, endWithCli, lastCliExit, trayJobs, REASON_ERROR, REASON_STOPPED, REASON_RESTARTED, REASON_SUBAGENT_ERROR } from './agentJobs.js';
 import { createAgentJobsRouter } from '../routes/agent-jobs.js';
@@ -98,7 +98,7 @@ test('a headless CLI that exited ends what was still running in it; later jobs s
 });
 
 test('the supervisor log\'s last CLI exit, from its tail', () => {
-  const d = mkdtempSync(join(tmpdir(), 'agent-jobs-'));
+  const d = testTmpDir('agent-jobs-');
   const f = join(d, 'events.jsonl');
   writeFileSync(f, [
     JSON.stringify({ kind: 'sup', what: 'start', wall: at('00:00') }),
@@ -117,7 +117,7 @@ test('the tray: running first, then the newest finished, capped', () => {
 });
 
 test('GET /api/agents/:id/jobs: headless and tmux seats from the transcript, none for another runtime', async () => {
-  const d = mkdtempSync(join(tmpdir(), 'agent-jobs-route-'));
+  const d = testTmpDir('agent-jobs-route-');
   const log = join(d, 'session.jsonl');
   writeFileSync(log, LOG.join('\n') + '\n');
   const events = join(d, 'events.jsonl');

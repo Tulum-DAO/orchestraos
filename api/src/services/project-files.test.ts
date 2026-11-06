@@ -1,12 +1,12 @@
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync, symlinkSync } from 'fs';
 import path from 'path';
 import { listProjectFiles, resolveInside, readProjectFile, unfiled } from './project-files.js';
 
 function tree() {
-  const root = mkdtempSync(path.join(tmpdir(), 'proj-'));
+  const root = testTmpDir('proj-');
   const folder = path.join(root, 'acme');
   mkdirSync(path.join(folder, 'site', 'img'), { recursive: true });
   mkdirSync(path.join(folder, 'node_modules', 'x'), { recursive: true });

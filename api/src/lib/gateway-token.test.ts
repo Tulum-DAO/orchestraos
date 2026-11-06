@@ -2,15 +2,15 @@
 // (what `orchestra init` writes + exports), falling back to the operator's legacy path only when
 // the env var is unset. voice.ts hard-coded the legacy path, so every public install's voice-call
 // card rendered "transcript unavailable".
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gatewayTokenFile, readGatewayToken } from './gateway-token.js';
 
 test('token file comes from WATCH_GATEWAY_TOKEN_FILE when set', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'gwtok-'));
+  const dir = testTmpDir('gwtok-');
   const file = join(dir, 'watch-gateway-token');
   writeFileSync(file, 'sekrit\n');
   process.env.WATCH_GATEWAY_TOKEN_FILE = file;

@@ -4,15 +4,15 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/lib/reactions-store.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { ReactionStore, reactionStore, reactionsDbPath, type ReactionKey, type Reactor } from './reactions-store.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'reactions-store-'));
+const dir = testTmpDir('reactions-store-');
 const path = join(dir, 'state', 'reactions.db');
 const store = new ReactionStore(path);
 after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });

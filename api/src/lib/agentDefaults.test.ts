@@ -1,12 +1,10 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { readDefaultModels, writeDefaultModel, BUILTIN_MODELS, MODEL_ID_RE } from './agentDefaults.js';
 
 test('a default model per runtime round-trips; unknown runtimes and bad ids are not kept', () => {
-  const d = mkdtempSync(join(tmpdir(), 'agent-defaults-'));
+  const d = testTmpDir('agent-defaults-');
   assert.deepEqual(readDefaultModels(d), {});
   writeDefaultModel(d, 'codex', 'gpt-5.6-mini');
   writeDefaultModel(d, 'claude', 'claude-opus-5-5[1m]');
@@ -19,7 +17,7 @@ test('a default model per runtime round-trips; unknown runtimes and bad ids are 
 
 test('a default effort per runtime round-trips next to the models; only a level that runtime has is kept', async () => {
   const { readDefaultEfforts, writeDefaultEffort, EFFORT_LEVELS } = await import('./agentDefaults.js');
-  const d = mkdtempSync(join(tmpdir(), 'agent-defaults-'));
+  const d = testTmpDir('agent-defaults-');
   writeDefaultModel(d, 'codex', 'gpt-5.6-mini');
   assert.deepEqual(readDefaultEfforts(d), {});
   writeDefaultEffort(d, 'codex', 'xhigh');

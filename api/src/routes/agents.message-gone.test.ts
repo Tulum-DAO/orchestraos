@@ -10,10 +10,10 @@
  * Drives the handler directly with fake req/res, same pattern as agent-send.test.ts.
  * Run: npx tsx --test src/routes/agents.message-gone.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type { Request, Response } from 'express';
 import { handleDeprecatedMessage } from './agents.js';
@@ -43,7 +43,7 @@ test('the dropped send path answers 410 and points at the durable one', () => {
 test('it writes NOTHING to queue/inbox, which is the half a 410 alone would not fix', () => {
   // Point ORCHESTRA_DIR at an empty temp dir: if the handler still wrote, it would land here.
   const prev = process.env.ORCHESTRA_DIR;
-  const tmp = mkdtempSync(join(tmpdir(), 'orch-gone-'));
+  const tmp = testTmpDir('orch-gone-');
   process.env.ORCHESTRA_DIR = tmp;
   try {
     const { res } = fakeRes();

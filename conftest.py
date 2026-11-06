@@ -31,12 +31,29 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from orchestra_cli import settings as _settings  # noqa: E402
 import tempfile as _tempfile  # noqa: E402
+import atexit as _atexit  # noqa: E402
+import shutil as _shutil  # noqa: E402
+import importlib.util as _ilu  # noqa: E402
+
+# --- disk-free guard: a run that starts on a nearly full disk can fill it, and a full root disk
+# takes the whole stack down. Refuse to start below ORCHESTRA_MIN_FREE_GB (default 5, 0 = off).
+_spec = _ilu.spec_from_file_location(
+    "_check_disk_free", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "check_disk_free.py"))
+_check_disk_free = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_check_disk_free)
+_low_disk = _check_disk_free.low_disk_message()
+if _low_disk:
+    sys.stderr.write(f"check_disk_free: {_low_disk}\n")
+    raise SystemExit(4)
 
 if not os.environ.get(_settings.PROTECTED_ENV):
     _real = [str(_settings.data_dir(include_env=True)), str(_settings.data_dir(include_env=False)),
              os.path.expanduser(_settings.DEFAULT_DATA_DIR)]
     os.environ[_settings.PROTECTED_ENV] = os.pathsep.join(sorted({os.path.realpath(d) for d in _real}))
 _FENCE_ROOT = _tempfile.mkdtemp(prefix="orchestra-test-data-")
+# Removed when this pytest process exits. Every run used to leave one behind, and gate runs in
+# many worktrees piled thousands of them into the temp dir.
+_atexit.register(_shutil.rmtree, _FENCE_ROOT, True)
 os.environ["ORCHESTRA_DIR"] = os.environ["ORCH_DIR"] = os.path.join(_FENCE_ROOT, "data")
 os.environ["ORCHESTRA_CONFIG"] = os.path.join(_FENCE_ROOT, "no-orchestra.toml")
 os.makedirs(os.environ["ORCHESTRA_DIR"], exist_ok=True)

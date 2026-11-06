@@ -7,10 +7,10 @@
  *
  * Run: npx tsx --test src/lib/shared-secret.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync, rmSync, chmodSync } from 'fs';
-import { tmpdir } from 'os';
+import { writeFileSync, rmSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { loadSharedSecret } from './shared-secret.js';
 
@@ -32,7 +32,7 @@ test('the env var wins when set', () => {
 });
 
 test('a secret FILE is read when the env var is unset', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sharedsecret-'));
+  const dir = testTmpDir('sharedsecret-');
   try {
     const f = join(dir, 's');
     writeFileSync(f, '  from-the-file\n');     // trimmed, so a trailing newline is not part of the key
@@ -72,7 +72,7 @@ test('two different secrets do NOT collapse to the same ephemeral key', () => {
 });
 
 test('an empty env var does not shadow the file', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sharedsecret-'));
+  const dir = testTmpDir('sharedsecret-');
   try {
     const f = join(dir, 's');
     writeFileSync(f, 'real-key-from-file');
@@ -83,7 +83,7 @@ test('an empty env var does not shadow the file', () => {
 });
 
 test('an empty or whitespace-only secret file falls through rather than signing with ""', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sharedsecret-'));
+  const dir = testTmpDir('sharedsecret-');
   try {
     const f = join(dir, 's');
     writeFileSync(f, '   \n');

@@ -3,17 +3,17 @@
  * Everyone row), validation, the change log, and the push of Everyone changes.
  * Run: npx tsx --test src/routes/settings.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSettingsRouter } from './settings.js';
 import { SETTINGS, type GatewayClient } from '../lib/settingsRegistry.js';
 
-const d = mkdtempSync(join(tmpdir(), 'settings-route-'));
+const d = testTmpDir('settings-route-');
 mkdirSync(join(d, 'state'));
 const cfg = join(d, 'orchestra.toml');
 writeFileSync(cfg, '[operator]\nid = "operator"\ntimezone = "America/New_York"\n');

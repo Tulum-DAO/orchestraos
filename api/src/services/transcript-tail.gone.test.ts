@@ -5,10 +5,10 @@
  *
  * Run: npx tsx --test src/services/transcript-tail.gone.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TranscriptTailer, GONE_TICKS } from './transcript-tail.js';
 
@@ -43,7 +43,7 @@ test('a window that is still there is never gone (a seat that has not written it
 });
 
 test('a seat with a transcript is never gone, even with no window', () => {
-  const f = join(mkdtempSync(join(tmpdir(), 'tail-gone-')), 's.jsonl');
+  const f = join(testTmpDir('tail-gone-'), 's.jsonl');
   writeFileSync(f, JSON.stringify({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'Sample' } }) + '\n');
   const { t } = tailer(f, () => true);
   for (let i = 0; i < GONE_TICKS * 2; i++) assert.equal(t.tick(), undefined);

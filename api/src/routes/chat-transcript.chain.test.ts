@@ -6,11 +6,11 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.chain.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, renameSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, appendFileSync, readFileSync, renameSync, rmSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 const SEAT = 'zz-chain-seat';                  // never a real tmux session on any box
@@ -20,7 +20,7 @@ const G3 = '33333333-2222-4333-8444-000000000003';
 const T12 = '2026-10-21T00:00:00Z';            // G2 took over from G1
 const T23 = '2026-10-22T00:00:00Z';            // G3 took over from G2
 
-const root = mkdtempSync(join(tmpdir(), 'transcript-chain-'));
+const root = testTmpDir('transcript-chain-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

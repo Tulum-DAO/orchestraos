@@ -4,10 +4,10 @@
  *  - GET /api/messages/recent lists the latest rows across every seat (both directions),
  *    with status + acknowledged_at, straight from <data>/state/tasks.db.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { resolveMsgStorePath, recentMessages } from './messages.js';
@@ -21,7 +21,7 @@ test('msg_store.py resolves from the checkout, not the data dir', () => {
 });
 
 test('recentMessages reads both directions with status from tasks.db', () => {
-  const data = mkdtempSync(join(tmpdir(), 'orch-data-'));
+  const data = testTmpDir('orch-data-');
   mkdirSync(join(data, 'state'));
   const db = new Database(join(data, 'state', 'tasks.db'));
   db.exec(`create table messages (id text primary key, conversation_id text, from_agent text, to_agent text,

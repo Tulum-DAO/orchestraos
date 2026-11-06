@@ -6,17 +6,17 @@
  *
  * Run: npx tsx --test src/lib/agentCalls.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SEAT = 'zz-calls-seat';                  // never a real tmux session on any box
 const SID = '55555555-2222-4333-8444-000000000001';
-const root = mkdtempSync(join(tmpdir(), 'agent-calls-'));
+const root = testTmpDir('agent-calls-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

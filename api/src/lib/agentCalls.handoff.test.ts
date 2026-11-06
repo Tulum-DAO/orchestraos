@@ -6,18 +6,18 @@
  *
  * Run: npx tsx --test src/lib/agentCalls.handoff.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SEAT = 'zz-handoff-seat';                // never a real tmux session on any box
 const SID = '66666666-2222-4333-8444-000000000001';
-const root = mkdtempSync(join(tmpdir(), 'call-handoff-'));
+const root = testTmpDir('call-handoff-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

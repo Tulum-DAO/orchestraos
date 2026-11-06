@@ -15,6 +15,7 @@ fenced tmux server.
 import fcntl
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -456,6 +457,7 @@ def test_RACE_shared_lock_two_separate_prompts_composer_empty(tmp_path):
         assert sorted(prompts) == sorted([GW_TEXT, RT_TEXT]), prompts      # separate, nothing glued
     finally:
         tm("kill-server")
+        shutil.rmtree(gw_env["TMUX_TMPDIR"], ignore_errors=True)
 
 
 @pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
@@ -470,3 +472,4 @@ def test_SABOTAGE_no_shared_lock_glues_the_two_messages(tmp_path):
             f"expected the unlocked race to glue/split, got clean prompts {prompts}"
     finally:
         tm("kill-server")
+        shutil.rmtree(gw_env["TMUX_TMPDIR"], ignore_errors=True)

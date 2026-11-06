@@ -4,14 +4,14 @@
  * GET /api/capabilities tells the dashboard to hide it. Presence is checked per request.
  * Drives the REAL routers through Express against temp ORCHESTRA_ROOT / ORCHESTRA_DIR trees.
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 function trees() {
-  const root = mkdtempSync(join(tmpdir(), 'caps-'));
+  const root = testTmpDir('caps-');
   const code = join(root, 'checkout');
   const data = join(root, 'data');
   mkdirSync(join(code, 'scripts'), { recursive: true });

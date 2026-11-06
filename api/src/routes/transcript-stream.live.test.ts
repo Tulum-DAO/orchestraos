@@ -5,11 +5,11 @@
  *
  * Run: npx tsx --test src/routes/transcript-stream.live.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, appendFileSync, rmSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 
 const HEADLESS = 'zz-live-demo';               // never a real tmux session on any box
 const TMUX = 'zz-live-tmux-demo';
@@ -17,7 +17,7 @@ const SID = '44444444-2222-4333-8444-000000000001';
 const SID2 = '44444444-2222-4333-8444-000000000002';
 const MID = 'msg_example_live';
 
-const root = mkdtempSync(join(tmpdir(), 'stream-live-'));
+const root = testTmpDir('stream-live-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

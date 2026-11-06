@@ -4,13 +4,13 @@
  * The banners here are made by the REAL producer, scripts/watch_gateway.py chipsafe_text, so
  * the parser cannot drift from what the gateway writes.
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, writeFileSync, symlinkSync, rmSync } from 'fs';
+import { writeFileSync, symlinkSync, rmSync } from 'fs';
 import { readInjectFile } from './chipDodge.js';
 import { join, resolve } from 'path';
-import { tmpdir } from 'os';
 import { expandChipDodge } from './chipDodge.js';
 import { sanitizeClaudeUserText } from '../routes/chat-transcript.js';
 
@@ -32,7 +32,7 @@ const LONG = '📷 These three photos tell the story of attempting to send a pho
   + '\n[attached: "/srv/uploads/a.jpg"]\n[attached: "/srv/uploads/b.jpg"]\n[attached: "/srv/uploads/c.jpg"]';
 
 function withDir(fn: (dir: string) => void) {
-  const dir = mkdtempSync(join(tmpdir(), 'chipdodge-'));
+  const dir = testTmpDir('chipdodge-');
   const prev = process.env.CHIP_DODGE_TMP_DIR;
   process.env.CHIP_DODGE_TMP_DIR = dir;
   try { fn(dir); } finally {

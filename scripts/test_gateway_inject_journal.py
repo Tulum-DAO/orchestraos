@@ -12,6 +12,7 @@ composer must end submitted (or untouched + reported), never stranded.
 import importlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -263,6 +264,7 @@ def test_RACE_kill_mid_inject_then_restart_reconcile_submits_never_strands(tmp_p
         assert not jfile.exists()
     finally:
         tm("kill-session", "-t", "=emu")
+        shutil.rmtree(tdir, ignore_errors=True)
 
 
 def test_main_reconciles_BEFORE_the_port_binds(monkeypatch):
@@ -448,6 +450,7 @@ def test_clear_own_never_runs_with_a_client_attached_REAL_tmux(tmp_path, viewer)
     finally:
         tm("kill-session", "-t", "=viewer")
         tm("kill-session", "-t", "=stuck")
+        shutil.rmtree(tdir, ignore_errors=True)
 
 
 def test_reconcile_marks_the_row_BEFORE_pressing_enter(jdir, monkeypatch):

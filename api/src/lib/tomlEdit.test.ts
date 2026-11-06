@@ -1,7 +1,7 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, statSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, statSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTomlString, setTomlStringChecked, readTomlString, isTimeZone, writeFileKeepingMode } from './tomlEdit.js';
 
@@ -40,7 +40,7 @@ test('isTimeZone: IANA names and "" (UTC) only', () => {
 });
 
 test('writeFileKeepingMode keeps the file mode', () => {
-  const f = join(mkdtempSync(join(tmpdir(), 'toml-')), 'orchestra.toml');
+  const f = join(testTmpDir('toml-'), 'orchestra.toml');
   writeFileSync(f, 'a'); chmodSync(f, 0o640);
   writeFileKeepingMode(f, 'b');
   assert.equal(readFileSync(f, 'utf-8'), 'b');

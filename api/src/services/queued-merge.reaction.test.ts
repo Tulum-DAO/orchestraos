@@ -4,14 +4,14 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/services/queued-merge.reaction.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 
-const dir = mkdtempSync(join(tmpdir(), 'qmerge-reaction-'));
+const dir = testTmpDir('qmerge-reaction-');
 const DBP = join(dir, 'tasks.db');
 after(() => rmSync(dir, { recursive: true, force: true }));
 if (!process.env.ORCHESTRA_CONFIG) {

@@ -5,13 +5,13 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/routes/reactions.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'reactions-route-'));
+const dir = testTmpDir('reactions-route-');
 process.env.ORCHESTRA_DIR = dir;
 process.env.ORCHESTRA_AGENT_REACT_TOKEN_FILE = join(dir, 'agent-react-token');
 writeFileSync(process.env.ORCHESTRA_AGENT_REACT_TOKEN_FILE, 'tok-route-123\n', { mode: 0o600 });

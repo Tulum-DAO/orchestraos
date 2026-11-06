@@ -1,7 +1,7 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { SETTINGS, settingEntry, type GatewayClient, type SettingsCtx } from './settingsRegistry.js';
 
@@ -33,7 +33,7 @@ function fakeGateway() {
 }
 
 function makeCtx() {
-  const dataDir = mkdtempSync(join(tmpdir(), 'settings-reg-'));
+  const dataDir = testTmpDir('settings-reg-');
   mkdirSync(join(dataDir, 'state'));
   const configPath = join(dataDir, 'orchestra.toml');
   writeFileSync(configPath, TOML);

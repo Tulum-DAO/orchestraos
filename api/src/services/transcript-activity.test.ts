@@ -6,13 +6,13 @@
  * "working". A false "working" on the org chart is exactly the authoritative-looking lie
  * this change exists to avoid.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 
-const dir = mkdtempSync(join(tmpdir(), 'tact-'));
+const dir = testTmpDir('tact-');
 mkdirSync(join(dir, 'state'), { recursive: true });
 
 const fresh = join(dir, 'fresh.jsonl');

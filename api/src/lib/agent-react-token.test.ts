@@ -5,13 +5,13 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/lib/agent-react-token.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, statSync, chmodSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, statSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'agent-react-token-'));
+const dir = testTmpDir('agent-react-token-');
 after(() => rmSync(dir, { recursive: true, force: true }));
 if (!process.env.ORCHESTRA_CONFIG) {
   process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');

@@ -8,16 +8,16 @@
  * and then takes 1 s (the real one takes 3.8-8.4 s), and a pane event written mid-scan.
  * ORCHESTRA_DIR is read at import time, so it is set BEFORE the dynamic import.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test('an event that lands DURING a scan triggers a re-scan, instead of waiting out the TTL', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'lag-'));
+  const root = testTmpDir('lag-');
   mkdirSync(join(root, 'scripts'), { recursive: true });
   const panes = join(root, 'state', 'agent-events', 'panes');
   mkdirSync(panes, { recursive: true });
@@ -66,7 +66,7 @@ test('isStale: TTL, a changed event mtime, and a quiet window', async () => {
 test('a scan SLOWER than the TTL is fresh when it finishes: no back-to-back re-scan', async () => {
   // Review of #199: with `at` stamped at scan START, a scan longer than the TTL was stale the
   // moment it finished, so every poll on a slow host started another full-fleet scan.
-  const root = mkdtempSync(join(tmpdir(), 'lag-ttl-'));
+  const root = testTmpDir('lag-ttl-');
   mkdirSync(join(root, 'scripts'), { recursive: true });
   mkdirSync(join(root, 'state', 'agent-events', 'panes'), { recursive: true });
   const counter = join(root, 'runs');

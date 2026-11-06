@@ -16,15 +16,14 @@
  *
  * Run: cd api && npx tsx --test src/services/cross-machine.thishost.test.ts
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { rmSync } from 'fs';
 
-const sock = mkdtempSync(join(tmpdir(), 'thishost-tmux-'));
-const data = mkdtempSync(join(tmpdir(), 'thishost-data-'));
+const sock = testTmpDir('thishost-tmux-');
+const data = testTmpDir('thishost-data-');
 process.env.TMUX_TMPDIR = sock;      // every tmux the module runs talks to OUR server
 delete process.env.TMUX;             // a test run from inside tmux must not reach that server
 process.env.ORCHESTRA_DIR = data;

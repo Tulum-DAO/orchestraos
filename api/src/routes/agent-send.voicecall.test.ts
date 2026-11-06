@@ -1,10 +1,10 @@
 // A message typed in an agent's chat during a "voice"-mode call: the agent is told the call is live
 // (one hidden tag), the call's relay is handed the words at once, and the chat never shows the tag.
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, utimesSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, utimesSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import type { Request, Response } from 'express';
 import { handleAgentSend, voiceCallLive, noteTypedOnCall, VOICE_CALL_LIVE_TAG, type AgentSendDeps } from './agent-send.js';
 import { stripPageContext, normalizeTranscript } from './chat-transcript.js';
@@ -46,7 +46,7 @@ test('no call, or a slash command: unchanged', async () => {
 });
 
 test('voiceCallLive: a fresh marker and a switch that is on and not forced', () => {
-  const d = mkdtempSync(join(tmpdir(), 'vcl-'));
+  const d = testTmpDir('vcl-');
   mkdirSync(join(d, 'state', 'headless', 'pm-demo'), { recursive: true });
   const sw = (row: any) => writeFileSync(join(d, 'state', 'agent-calls.json'), JSON.stringify({ seats: { 'pm-demo': row } }));
   sw({ on: true });
@@ -64,7 +64,7 @@ test('voiceCallLive: a fresh marker and a switch that is on and not forced', () 
 });
 
 test('noteTypedOnCall appends one line beside the seat, only for a seat that exists', () => {
-  const d = mkdtempSync(join(tmpdir(), 'vcl-'));
+  const d = testTmpDir('vcl-');
   noteTypedOnCall('pm-demo', 'nope', d);                               // no seat dir: nothing, no throw
   mkdirSync(join(d, 'state', 'headless', 'pm-demo'), { recursive: true });
   noteTypedOnCall('pm-demo', 'Test', d);

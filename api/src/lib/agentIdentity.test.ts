@@ -1,7 +1,7 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { decorateIdentity, projectsByPm, projectOf, fullName } from './agentIdentity.js';
 import { cleanPins, readPins, writePins } from './agentPins.js';
@@ -55,7 +55,7 @@ test('a loop in reports_to never hangs', () => {
 });
 
 test('pins are saved per person, cleaned, and a bad file reads as none', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pins-'));
+  const dir = testTmpDir('pins-');
   assert.deepEqual(readPins(dir, 'someone'), []);
   writePins(dir, 'someone', cleanPins(['dev-demo', 'dev-demo', '../x', 'pm-demo', 7])!);
   writePins(dir, 'other-person', ['gm']);

@@ -3,6 +3,7 @@
  * the install's manager (found by tier, whatever it is called), else nobody. Never a built-in seat.
  * Run: npx tsx --test src/lib/taskRouting.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { routeTask, installManager } from './taskRouting.js';
@@ -35,11 +36,10 @@ test('no built-in seat name is ever returned', () => {
 });
 
 test('the registry is read from the install, and an unreadable one routes to nobody', async () => {
-  const { mkdtempSync, writeFileSync } = await import('fs');
+  const { writeFileSync } = await import('fs');
   const { join } = await import('path');
-  const { tmpdir } = await import('os');
   const { registeredAgents } = await import('./taskRouting.js');
-  const d = mkdtempSync(join(tmpdir(), 'routing-'));
+  const d = testTmpDir('routing-');
   assert.deepEqual(registeredAgents(d), {});
   writeFileSync(join(d, 'registry.json'), JSON.stringify({ agents: REG }));
   assert.equal(routeTask({ slug: 'acme' }, registeredAgents(d)), 'pm-acme');

@@ -2,15 +2,15 @@
  * The Telegram chat id file in the data dir: the plugin's own record first, the old operator-named
  * file still read (gm). Run: npx tsx --test src/lib/telegramChatId.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { chatIdFromFiles } from './telegramChatId.js';
 
 function dataDir(files: Record<string, string>): string {
-  const d = mkdtempSync(join(tmpdir(), 'tgchat-'));
+  const d = testTmpDir('tgchat-');
   for (const [rel, text] of Object.entries(files)) {
     mkdirSync(join(d, rel, '..'), { recursive: true });
     writeFileSync(join(d, rel), text);
