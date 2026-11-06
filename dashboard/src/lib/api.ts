@@ -325,11 +325,6 @@ export const sendJarvisMessage = (message: string) =>
 export const getJarvisHistory = (n: number = 50) =>
   get<any[]>(`/system/jarvis/history?n=${n}`);
 
-export const getPendingInsights = async (userId: string = operatorUserId()) => {
-  const data = await get<any>(`/adaptive/${userId}/insights?status=pending`);
-  return Array.isArray(data) ? data : data?.insights ?? [];
-};
-
 export const getAllInsights = async (userId: string = operatorUserId()) => {
   const data = await get<any>(`/adaptive/${userId}/insights`);
   return Array.isArray(data) ? data : data?.insights ?? [];

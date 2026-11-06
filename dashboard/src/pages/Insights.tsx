@@ -34,7 +34,6 @@ export default function Insights() {
       respondToInsight(operatorUserId(), id, action),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-insights'] });
-      queryClient.invalidateQueries({ queryKey: ['pending-insights'] });
       queryClient.invalidateQueries({ queryKey: ['user-profile'] });
     },
   });
