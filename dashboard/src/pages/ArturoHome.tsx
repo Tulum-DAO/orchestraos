@@ -43,6 +43,7 @@ import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoiceDecisionCard from '../components/chat/ChoiceCard';
 import ThreadView from '../components/kit/ThreadView';
+import { ThreadHeaderMenu } from '../components/arturo/ThreadActions';
 import { loadPrefs, useChatStyle } from '../lib/agentPrefs';
 import { arturoRows, lastUserKey } from '../lib/threadKit/view';
 import type { FinishedResult } from '../lib/threadKit/results';
@@ -571,6 +572,8 @@ export default function ArturoHome() {
           <button className="arturo-glyph" aria-label="New chat" title="New chat" onClick={startNewThread}>
             <Plus size={22} strokeWidth={2.2} absoluteStrokeWidth />
           </button>
+          {/* This chat's ⋯: rename it, or (an admin) delete it (components/arturo/ThreadActions.tsx). */}
+          {convId.current && <ThreadHeaderMenu id={convId.current} buttonClassName="arturo-glyph" />}
         </div>
         {/* Arturo's avatar and name, centred: tapping it opens the slide-out, as the gear does. A still
             picture (no wander or other motion up here); on a phone it shows a dot while Arturo works. Bigger on

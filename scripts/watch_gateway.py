@@ -276,6 +276,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/arturo/threads/{conversation_id}/jobs/{job_id}/cancel"): "message",
     # Close one of Arturo's choice cards without answering it (it stays in the thread): like cancelling a job.
     ("POST", "/arturo/threads/{conversation_id}/cards/{card_id}/dismiss"): "message",
+    # Rename a chat: a device may rename the chats it started (Arturo checks whose it is), like dismissing a card.
+    ("PATCH", "/arturo/threads/{conversation_id}"): "message",
+    # Delete a chat and every copy of it: admin only (and Arturo itself takes it only from the dashboard).
+    ("DELETE", "/arturo/threads/{conversation_id}"): "admin",
     ("POST", "/arturo/transcribe"): "voice",
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
@@ -8901,7 +8905,7 @@ async def handle_arturo_threads(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     cid = request.match_info.get("conversation_id") or ""
     path = f"/threads/{quote(cid, safe='')}" if cid else "/threads"
-    params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn", "jobs")}
+    params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn", "jobs", "facts")}
     # Older pages of a thread: `before` is a turn position, a whole number; anything else is not passed on.
     before = request.query.get("before")
     if isinstance(before, str) and re.fullmatch(r"[0-9]+", before):
@@ -8916,6 +8920,53 @@ async def handle_arturo_threads(request):
                 return _json(out, status=r.status)
     except Exception as e:  # noqa: BLE001
         log.error(f"arturo/threads forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
+async def handle_arturo_thread_rename(request):
+    """PATCH /arturo/threads/{id} {title} — rename a chat (:5071 validates the title and whose chat it is)."""
+    import aiohttp
+    from urllib.parse import quote
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    cid = request.match_info.get("conversation_id") or ""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = None
+    title = body.get("title") if isinstance(body, dict) else None
+    if not isinstance(title, str) or len(title) > 400:
+        return _json({"ok": False, "error": "title required"}, status=400)
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.patch(f"{ARTURO_TEXT_BASE}/threads/{quote(cid, safe='')}", json={"title": title},
+                               headers=_arturo_principal_headers(request, voice=False),
+                               timeout=aiohttp.ClientTimeout(total=10)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo thread rename forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
+async def handle_arturo_thread_delete(request):
+    """DELETE /arturo/threads/{id}[?forget_facts=1] — delete a chat and every copy of it (:5071)."""
+    import aiohttp
+    from urllib.parse import quote
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    cid = request.match_info.get("conversation_id") or ""
+    params = {"forget_facts": "1"} if request.query.get("forget_facts") == "1" else {}
+    by = request.query.get("by") or ""
+    if re.fullmatch(r"[A-Za-z0-9@._+-]{1,120}", by):
+        params["by"] = by                 # who asked (the dashboard's admin login), for Arturo's delete log
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.delete(f"{ARTURO_TEXT_BASE}/threads/{quote(cid, safe='')}", params=params,
+                                headers=_arturo_principal_headers(request, voice=False),
+                                timeout=aiohttp.ClientTimeout(total=20)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo thread delete forward: upstream unreachable: {e}")
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
@@ -11632,6 +11683,8 @@ def build_app():
     app.router.add_get("/arturo/health", handle_arturo_health)
     app.router.add_get("/arturo/threads", handle_arturo_threads)
     app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
+    app.router.add_patch("/arturo/threads/{conversation_id}", handle_arturo_thread_rename)
+    app.router.add_delete("/arturo/threads/{conversation_id}", handle_arturo_thread_delete)
     app.router.add_post("/arturo/threads/{conversation_id}/jobs/{job_id}/cancel", handle_arturo_job_cancel)
     app.router.add_post("/arturo/threads/{conversation_id}/cards/{card_id}/dismiss", handle_arturo_card_dismiss)
     app.router.add_post("/arturo/ptt/stream/audio", handle_arturo_ptt_stream_audio)

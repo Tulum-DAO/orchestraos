@@ -34,9 +34,11 @@ def test_the_model_still_gets_the_context_line(tmp_path):
 def test_the_page_opener_never_titles_a_thread(tmp_path):
     s = ThreadStore(tmp_path / "t.db")
     s.record_turn("c1", OPENER, "Hi, I'm Arturo. What should I call you?")
-    assert s.list_threads()[0]["title"] == ""                 # nothing the operator said yet
+    # An onboarding chat is named for what it is (thread_store ONBOARDING_TITLE), never the opener and never
+    # the operator's first answer (their name, usually).
+    assert s.list_threads()[0]["title"] == "Getting started"
     s.record_turn("c1", "Ada", "Good to meet you, Ada.")
-    assert s.list_threads()[0]["title"] == "Ada"             # their first real message
+    assert s.list_threads()[0]["title"] == "Getting started"
 
 
 def test_titles_stored_before_this_fix_read_clean(tmp_path):
@@ -50,8 +52,8 @@ def test_titles_stored_before_this_fix_read_clean(tmp_path):
         conn.execute("UPDATE turns SET content = ? WHERE thread_id = 'c1' AND seq = 0", (OPENER,))
         conn.execute("UPDATE threads SET title = ? WHERE id = 'c2'", (f"{CTX} Wheres gm",))
     titles = {t["id"]: t["title"] for t in s.list_threads()}
-    assert titles == {"c1": "Ada", "c2": "Wheres gm"}
-    assert s.get_thread("c1")["title"] == "Ada"
+    assert titles == {"c1": "Getting started", "c2": "Wheres gm"}     # c1 opened with the page's opener
+    assert s.get_thread("c1")["title"] == "Getting started"
 
 
 def test_strip_matches_only_the_proxys_context_line():

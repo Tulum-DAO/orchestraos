@@ -23,6 +23,7 @@ import { fetchBatchRecords } from '../../lib/batchRecords';
 import { cancelJob, elapsed, fetchJobs, type ArturoJob } from '../../lib/arturoJobs';
 import { currentThread } from '../../lib/arturoCurrent';
 import { listThreads, loadThread } from '../../lib/arturoThreads';
+import { subscribeThreadEdits } from '../../lib/arturoThreadEdits';
 import { choiceAnswerFromText } from '../../lib/multiPart';
 import { choiceParts } from '../../lib/choiceCard';
 import {
@@ -351,7 +352,10 @@ function ArturoConversations() {
     let alive = true;
     listThreads(8).then((ts) => ts.map((t) => ({ key: t.id, label: t.title || 'Conversation', value: dayLabel(t.updated * 1000) })))
       .then((r) => { if (alive) setRows(r); }).catch(() => { if (alive) setRows([]); });
-    return () => { alive = false; };
+    // A chat renamed or deleted elsewhere (the sidebar, the pane) follows here at once.
+    const off = subscribeThreadEdits((e) => setRows((rs) => rs && (e.kind === 'delete' ? rs.filter((r) => r.key !== e.id)
+      : rs.map((r) => (r.key === e.id ? { ...r, label: e.title || 'Conversation' } : r)))));
+    return () => { alive = false; off(); };
   }, []);
   return (
     <>

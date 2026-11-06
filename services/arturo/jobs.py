@@ -142,6 +142,28 @@ class JobBoard:
         self._save()
         return True
 
+    def forget_thread(self, thread_id):
+        """A deleted chat: stop its running jobs (a cancelled job posts nothing back) and drop every job it had, so
+        neither the tray nor jobs.json keeps its results. Returns how many were dropped."""
+        stops = []
+        with self._lock:
+            mine = [j for j in self._jobs.values() if j["thread"] == thread_id]
+            for j in mine:
+                if j["status"] == "running":
+                    j.update(status="cancelled", ended=self.clock(), error="cancelled")
+                    stop = self._cancel.pop(j["id"], None)
+                    if stop is not None:
+                        stops.append((j["id"], stop))
+                self._jobs.pop(j["id"], None)
+        for jid, stop in stops:
+            try:
+                stop()
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"job {jid}: cancel failed: {e!r}")
+        if mine:
+            self._save()
+        return len(mine)
+
     def for_thread(self, thread_id, recent_s=600):
         """What the tray shows: running jobs, and ones that ended in the last `recent_s` (oldest first)."""
         now = self.clock()

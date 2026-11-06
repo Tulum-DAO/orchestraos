@@ -21,6 +21,9 @@ import { arturoTurn } from '../../lib/arturoStream';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { applyScreenAnswer, focusOf, getScreen, screenLabel, screenPayload, subscribeScreen } from '../../lib/screenCards';
 import JobTray from './JobTray';
+import { EditableThread, ThreadHeaderMenu } from './ThreadActions';
+import { useFollowThreadEdits } from '../../lib/useFollowThreadEdits';
+import { threadLabel } from '../../lib/arturoThreadEdits';
 import { composerKeyAction, composerKeys, keyArgs } from '../../lib/composerGate';
 import { useDeviceSetting } from '../../lib/deviceSettings';
 import { useStickToBottom } from '../../lib/useStickToBottom';
@@ -116,6 +119,7 @@ export function ArturoPill() {
   const [busy, setBusy] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  useFollowThreadEdits(setThreads);          // a rename or delete made anywhere shows here at once
   const [convId, setConvId] = useState<string>(loadConv);
   const [jobKick, setJobKick] = useState(0);
   // The home (or another tab) switched threads: this pane follows, and reloads it when open (the effect on
@@ -427,21 +431,25 @@ export function ArturoPill() {
           <button className="linkish" onClick={() => setShowThreads((s) => !s)} aria-label="Previous conversations"
                   aria-expanded={showThreads}><History size={14} /> Threads</button>
           <button className="linkish" onClick={startNewThread} aria-label="Start a new thread">New</button>
+          <ThreadHeaderMenu id={convId} buttonClassName="linkish" size={14} />
           <Link to="/" className="linkish accent">Open</Link>
           <button onClick={() => setOpen(false)} aria-label="Close" className="linkish"><X size={14} /></button>
         </div>
 
         {showThreads && (
-          <div className="arturo-thread-list" role="listbox" aria-label="Previous conversations">
+          <div className="arturo-thread-list" role="list" aria-label="Previous conversations">
             {threads.length === 0 && <p className="empty">No earlier conversations yet.</p>}
             {threads.map((t) => (
-              <button key={t.id} role="option" aria-selected={t.id === convId}
-                      className={t.id === convId ? 'thread-row current' : 'thread-row'}
-                      onClick={() => void switchTo(t.id)}>
-                <span className="t-title">{t.title || 'Untitled'}</span>
-                <span className="t-meta">{Math.ceil((t.turns || 0) / 2)} · {new Date((t.updated || 0) * 1000).toLocaleDateString()}</span>
-                {t.gist && <span className="t-gist">{t.gist}</span>}
-              </button>
+              // Each row has a ⋯ (Rename, and Delete for an admin): ThreadActions.tsx.
+              <EditableThread key={t.id} thread={t} role="listitem" rowClassName="shrink-0" fieldClassName="my-1" moreClassName="text-white/60">
+                <button aria-current={t.id === convId ? 'true' : undefined}
+                        className={t.id === convId ? 'thread-row current pr-9' : 'thread-row pr-9'}
+                        onClick={() => void switchTo(t.id)}>
+                  <span className="t-title">{threadLabel(t)}</span>
+                  <span className="t-meta">{Math.ceil((t.turns || 0) / 2)} · {new Date((t.updated || 0) * 1000).toLocaleDateString()}</span>
+                  {t.gist && <span className="t-gist">{t.gist}</span>}
+                </button>
+              </EditableThread>
             ))}
           </div>
         )}
