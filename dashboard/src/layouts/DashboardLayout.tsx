@@ -13,7 +13,6 @@ import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
 import { ArturoPill } from '../components/arturo/ArturoPill';
 import { FloatingArturo } from '../components/arturo/FloatingArturo';
-import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
 import { loadServerSettings } from '../stores/serverSettings';
@@ -221,7 +220,6 @@ export function DashboardLayout() {
             <div ref={setPhoneBellSlot} data-phone-bell-slot className="flex items-center" />
           </div>
         </div>
-        <CoachingToast />
         {/* A live call follows you: its chip on every page but the called agent's own (that page has the call bar). */}
         <CallChip onAgentPage={onAgentWithId?.params.id ?? null} />
         <SwitchCallDialog />
