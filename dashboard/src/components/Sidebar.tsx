@@ -320,7 +320,7 @@ export function Sidebar({ onNavigate, variant = 'desktop' }: SidebarProps = {}) 
           on the agent page, which read as two menus; it now lives here and the page has none. */}
       <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
         <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800">
-          <div className="px-3 pt-3">
+          <div className="px-3">
             {/* A nav item, not a toggle: it opens the Agents page and brings the agents list back (closing
                 Chats), never hides it. Its icon sits in the section chevrons' column, its label with
                 theirs. The tap navigates, so on a phone it closes the drawer like any nav item. Where the
