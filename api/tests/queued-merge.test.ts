@@ -12,14 +12,14 @@
  * Hermetic: seeds its own tasks.db and points MSG_DB_PATH at it BEFORE importing the
  * module under test.
  */
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'fs';
+import { rmSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
-const dir = mkdtempSync(join(tmpdir(), 'qmerge-'));
+const dir = testTmpDir('qmerge-');
 const DBP = join(dir, 'tasks.db');
 
 const MESSAGES_SCHEMA = `

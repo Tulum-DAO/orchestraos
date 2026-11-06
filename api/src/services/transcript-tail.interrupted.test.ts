@@ -2,10 +2,10 @@
 // the turn its message opened, once, only for a message in view. The supervisor's file changes while the log does
 // not, so the tailer watches it too. Temp files; the cut-turn list is injected.
 // Run: npx tsx --test src/services/transcript-tail.interrupted.test.ts   (from api/)
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TranscriptTailer, type TailEvent } from './transcript-tail.js';
 import { INTERRUPTED_PREFIX, type InterruptedTurn } from '../routes/chat-transcript.js';
@@ -18,7 +18,7 @@ const said = (uuid: string, id: string, text: string) =>
     message: { id, role: 'assistant', content: [{ type: 'text', text }] } }) + '\n';
 
 function rig(initial: string) {
-  const f = join(mkdtempSync(join(tmpdir(), 'tail-int-')), 'session.jsonl');
+  const f = join(testTmpDir('tail-int-'), 'session.jsonl');
   writeFileSync(f, initial);
   const box = { turns: [] as InterruptedTurn[], sig: '' };
   const t = new TranscriptTailer({

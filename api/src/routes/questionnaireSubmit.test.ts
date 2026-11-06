@@ -3,17 +3,17 @@
  * real temp directory; only msg_store is captured. Express decodes %2F in route params, so the ids
  * below are what the handler actually receives for /api/questionnaires/..%2F..%2Fx/submit.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { submitQuestionnaire } from './questionnaireSubmit.js';
 
 const SENDER = 'operator-under-test';
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'qsub-'));
+  const root = testTmpDir('qsub-');
   const qdir = join(root, 'orch', 'state', 'questionnaires');
   mkdirSync(qdir, { recursive: true });
   writeFileSync(join(qdir, 'index.json'), JSON.stringify([
@@ -125,7 +125,7 @@ test('the completion message is sent with the CHECKOUT msg_store, not one in the
   // Review of #195: the refactor looked in ORCHESTRA_DIR, which differs from the checkout under Docker /
   // --demo, so the send failed silently and the creator was never told. The route test above cannot see
   // that (its temp data dir has no msg_store.py, and a failed send is only logged).
-  process.env.ORCHESTRA_DIR = mkdtempSync(join(tmpdir(), 'qsub-data-'));
+  process.env.ORCHESTRA_DIR = testTmpDir('qsub-data-');
   if (!process.env.ORCHESTRA_CONFIG) {
     process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
   }

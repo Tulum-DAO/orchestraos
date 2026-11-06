@@ -5,19 +5,19 @@
  *
  * Run: npx tsx --test src/routes/voice-live.agent.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'http';
 import { createHmac } from 'crypto';
-import { writeFileSync, mkdtempSync, mkdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const SESSION_SECRET = 'test-only-session-secret-not-a-real-key';  // pragma: allowlist secret
 const BEARER = 'sample-gateway-bearer-5555';
 process.env.SESSION_SECRET = SESSION_SECRET;
-const dir = mkdtempSync(join(tmpdir(), 'voice-live-agent-'));
+const dir = testTmpDir('voice-live-agent-');
 mkdirSync(join(dir, 'state'));
 writeFileSync(join(dir, 'registry.json'), JSON.stringify({ agents: { 'dev-demo': {}, 'pm-demo': {} } }));
 writeFileSync(join(dir, 'state', 'watch-gateway-token'), `${BEARER}\n`);

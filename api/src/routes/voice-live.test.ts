@@ -3,12 +3,12 @@
  * watch_gateway.py:9091. No real mic/gateway/network touched.
  * Run: npx tsx --test src/routes/voice-live.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'http';
 import { createHmac } from 'crypto';
-import { writeFileSync, mkdtempSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { setupVoiceLiveWebSocket, VOICE_LIVE_PATH, isAllowedOrigin } from './voice-live.js';
@@ -42,7 +42,7 @@ async function withFakeGateway<T>(
 }
 
 async function withTokenFile<T>(fn: (path: string) => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), 'voice-live-test-'));
+  const dir = testTmpDir('voice-live-test-');
   const path = join(dir, 'watch-gateway-token');
   writeFileSync(path, 'test-bearer-token-123\n');
   try {

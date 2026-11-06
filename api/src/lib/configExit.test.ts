@@ -4,15 +4,14 @@
  * at import, so the throw happens while ES modules are still evaluating; lib/configExit.ts (server.ts's
  * first import) is what turns it into one line. Starts the REAL entry point in a child process.
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 test('no orchestra.toml: the API exits 1 with one plain line, no stack trace', () => {
-  const missing = join(mkdtempSync(join(tmpdir(), 'noconf-')), 'orchestra.toml');
+  const missing = join(testTmpDir('noconf-'), 'orchestra.toml');
   const env: NodeJS.ProcessEnv = { ...process.env, ORCHESTRA_CONFIG: missing };
   delete env.ORCHESTRA_DIR;
   delete env.ORCH_DIR;
@@ -30,7 +29,7 @@ test('dataDir(): $ORCHESTRA_DIR first, else orchestra.toml [data] dir with ~ exp
   const { readFileSync, writeFileSync } = await import('node:fs');
   const { homedir } = await import('node:os');
   const example = new URL('../../../orchestra.example.toml', import.meta.url).pathname;
-  const cfg = join(mkdtempSync(join(tmpdir(), 'cfg-')), 'orchestra.toml');
+  const cfg = join(testTmpDir('cfg-'), 'orchestra.toml');
   writeFileSync(cfg, readFileSync(example, 'utf-8').replace(/^dir = .*$/m, 'dir = "~/od-test"'));
   const saved = { c: process.env.ORCHESTRA_CONFIG, d: process.env.ORCHESTRA_DIR };
   try {

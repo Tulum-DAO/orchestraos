@@ -2,14 +2,13 @@
  * An Everyone setting change reaches every open dashboard on GET /api/status/stream as `event: setting`.
  * Run: npx tsx --test src/services/status-stream.setting.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Response } from 'express';
 
-const dir = mkdtempSync(join(tmpdir(), 'status-setting-'));
+const dir = testTmpDir('status-setting-');
 process.env.REALTIME_STATUS_FILE = join(dir, 'status.json');
 const { addStatusSSEClient, broadcastSetting, getStatusSSEClientCount } = await import('./status-stream.js');
 

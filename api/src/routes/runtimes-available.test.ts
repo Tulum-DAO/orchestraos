@@ -5,12 +5,12 @@
  *
  * Run: npx tsx --test src/routes/runtimes-available.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   createRuntimesAvailableRouter,
@@ -244,7 +244,7 @@ test('salvageCliJsonAnswer returns null when there is nothing usable (fallback s
 // logged-out `claude auth status` does) must be believed, with a fallback file present that
 // would otherwise say "authed". Red before the catch-path fix — the helper alone was not.
 test('defaultProbeAuth believes a logged-out CLI that exits non-zero, over the fallback file', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'probe-cli-'));
+  const dir = testTmpDir('probe-cli-');
   const bin = join(dir, 'fakecli');
   writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn": false}\'\nexit 1\n', { mode: 0o755 });
   const fallbackFile = join(dir, 'auth.json');
@@ -296,7 +296,7 @@ test('probeAll publishes ONLY live-probed ids, and skips a static fallback', () 
 });
 
 test('publishing the live catalog writes atomically and survives an unwritable path', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'orch-live-'));
+  const dir = testTmpDir('orch-live-');
   const target = join(dir, 'nested', 'model-catalog-live.json');
   const row = {
     id: 'claude', label: 'Claude', logo_svg: '', installed: true, authed: true as const,
@@ -359,7 +359,7 @@ test('withModels:false never asks a CLI for its catalog, and never publishes one
 });
 
 test('the live catalog publishes each login\'s default model, and only a probed one', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'orch-live-'));
+  const dir = testTmpDir('orch-live-');
   const target = join(dir, 'model-catalog-live.json');
   const cap = { text: true, image: false, audio: false, video: false, context_window: null };
   const base = { label: '', logo_svg: '', installed: true, authed: true as const };

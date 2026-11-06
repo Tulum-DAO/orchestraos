@@ -4,10 +4,10 @@
  *
  * Run: npx tsx --test src/services/status-stream.steps.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { stepDeltas, freshSteps, readSteps, STEP_FRESH_S } from './status-stream.js';
 
@@ -28,7 +28,7 @@ test('a new page is handed only current lines with words', () => {
 test('a long line is cut, and a missing or half-written file is nothing', () => {
   const last = new Map<string, string>();
   assert.equal(stepDeltas({ a: { text: 'x'.repeat(500), ts: 1 } }, last)[0].text.length, 160);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'steps-'));
+  const dir = testTmpDir('steps-');
   assert.deepEqual(readSteps(path.join(dir, 'none.json')), {});
   fs.writeFileSync(path.join(dir, 'half.json'), '{"seats": {"a": ');
   assert.deepEqual(readSteps(path.join(dir, 'half.json')), {});

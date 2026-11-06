@@ -6,16 +6,16 @@
  *
  * Run: npx tsx --test src/routes/agents.generations-route.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 
-const orch = mkdtempSync(join(tmpdir(), 'agents-generations-'));
+const orch = testTmpDir('agents-generations-');
 mkdirSync(join(orch, 'state'));
 writeFileSync(join(orch, 'registry.json'), JSON.stringify({
   agents: {

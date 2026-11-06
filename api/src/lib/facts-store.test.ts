@@ -9,11 +9,10 @@
  *
  * Run: npx tsx --test src/lib/facts-store.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { readFileSync, existsSync } from 'fs';
 import { createFactRow, loadFactsDb, writeFactsDb, factsDbPath, type FactsDb } from './facts-store.js';
 
 test('createFactRow rejects empty / non-string text', () => {
@@ -41,7 +40,7 @@ test('createFactRow starts ids at 1 on an empty store and trims text', () => {
 });
 
 test('round trip: write then load from an isolated ORCHESTRA_DIR', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'facts-store-'));
+  const dir = testTmpDir('facts-store-');
   const path = factsDbPath(dir);
   assert.equal(existsSync(path), false);
   const db: FactsDb = loadFactsDb(path);

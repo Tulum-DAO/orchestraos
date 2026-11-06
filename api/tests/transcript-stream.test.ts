@@ -9,11 +9,11 @@
  *
  * Run: cd api && npm run stream-test
  */
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, appendFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { TranscriptTailer, type TailEvent } from '../src/services/transcript-tail.js';
@@ -52,7 +52,7 @@ function fullItems(): any[] {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'f1-stream-'));
+  dir = testTmpDir('f1-stream-');
   path = join(dir, 'session-a.jsonl');
   sid = 'session-a';
   writeFileSync(path, readFileSync(FIXTURE, 'utf-8'));

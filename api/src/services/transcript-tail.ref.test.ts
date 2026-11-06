@@ -5,10 +5,10 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/services/transcript-tail.ref.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TranscriptTailer, type TailEvent } from './transcript-tail.js';
 
@@ -21,7 +21,7 @@ const twoBlocks = (uuid: string) => JSON.stringify({
   ] },
 }) + '\n';
 const log = (body: string) => {
-  const f = join(mkdtempSync(join(tmpdir(), 'tail-ref-')), 'log.jsonl');
+  const f = join(testTmpDir('tail-ref-'), 'log.jsonl');
   writeFileSync(f, body);
   return f;
 };

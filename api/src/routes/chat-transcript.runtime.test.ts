@@ -4,13 +4,13 @@
  * Claude project dir it happens to share.
  * Run: npx tsx --test src/routes/chat-transcript.runtime.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 
-const root = mkdtempSync(join(tmpdir(), 'transcript-runtime-'));
+const root = testTmpDir('transcript-runtime-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const brain = join(home, '.gemini', 'antigravity-cli', 'brain', 'cid-helper', '.system_generated', 'logs');

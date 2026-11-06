@@ -13,11 +13,11 @@
  *   - codex has a SECOND tool shape (function_call) besides custom_tool_call
  *   - custom_tool_call args arrive as STRINGS where toolSummary() expects an object
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 import { parseCodexRollout, findCodexByDeclaration, looksLikeCodex, normalizeTranscript } from './chat-transcript.js';
 
@@ -184,7 +184,7 @@ test('normalizeTranscript routes codex lines through the codex parser', () => {
 // ---------------------------------------------------------------- resolution
 
 function fixtureDb(rows: any[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'codexdb-'));
+  const dir = testTmpDir('codexdb-');
   const db = new Database(join(dir, 'state_5.sqlite'));
   db.exec('CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, thread_source TEXT, first_user_message TEXT, updated_at_ms INTEGER)');
   const ins = db.prepare('INSERT INTO threads VALUES (?,?,?,?,?,?)');
@@ -267,7 +267,7 @@ test('a missing database degrades to no match instead of throwing', () => {
 });
 
 test('a database with no threads table degrades to no match instead of throwing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'codexdb-'));
+  const dir = testTmpDir('codexdb-');
   const p = join(dir, 'state_5.sqlite');
   const db = new Database(p);
   db.exec('CREATE TABLE unrelated (x TEXT)');
@@ -276,7 +276,7 @@ test('a database with no threads table degrades to no match instead of throwing'
 });
 
 test('a corrupt database file degrades to no match instead of throwing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'codexdb-'));
+  const dir = testTmpDir('codexdb-');
   mkdirSync(dir, { recursive: true });
   const p = join(dir, 'state_5.sqlite');
   writeFileSync(p, 'this is not a sqlite file');

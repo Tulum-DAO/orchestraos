@@ -3,14 +3,14 @@
  * The REAL router runs with a FAKE `bash` first on PATH that only records its argv, so neither this
  * test nor a sabotaged run can ever press a key into a real tmux pane.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { writeFileSync, chmodSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 test('select-option: an injected key is refused 400 and nothing is executed; a menu key is accepted', async () => {
-  const bin = mkdtempSync(join(tmpdir(), 'fakebin-'));
+  const bin = testTmpDir('fakebin-');
   const log = join(bin, 'calls.log');
   for (const name of ['bash', 'ssh', 'tmux']) {
     writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> ${log}\n`);

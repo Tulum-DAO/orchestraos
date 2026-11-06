@@ -12,10 +12,10 @@
  *    capped by the window;
  *  - has_more is observed (limit + 1), not inferred from a full page.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { pairCounts, pairMessages, parseAsof } from './messages.js';
@@ -27,7 +27,7 @@ function hoursAgo(h: number): string {
 /** Fixture: gm<->build 3 rows in-window + 1 row 40 days old, gm<->plan 1, one self-send,
  *  one archived row, and one row written in the column's DEFAULT format (no 'T', no offset). */
 function makeDb(): string {
-  const data = mkdtempSync(join(tmpdir(), 'orch-pairs-'));
+  const data = testTmpDir('orch-pairs-');
   mkdirSync(join(data, 'state'));
   const db = new Database(join(data, 'state', 'tasks.db'));
   db.exec(`create table messages (id text primary key, conversation_id text, from_agent text,
@@ -168,7 +168,7 @@ test('julianday, not string compare: a DEFAULT-format row lands in a SAME-DAY wi
   // and the moment is pinned with asof, so this does not quietly become cross-day again
   // depending on what time of day the suite happens to run — which is how the first version
   // of this test went wrong.
-  const data = mkdtempSync(join(tmpdir(), 'orch-fmt-'));
+  const data = testTmpDir('orch-fmt-');
   mkdirSync(join(data, 'state'));
   const db = new Database(join(data, 'state', 'tasks.db'));
   db.exec(`create table messages (id text primary key, conversation_id text, from_agent text,

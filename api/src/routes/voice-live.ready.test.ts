@@ -5,19 +5,19 @@
  *
  * Run: npx tsx --test src/routes/voice-live.ready.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SAMPLE_KEY = 'sample-voice-key-0123456789';
 const SAMPLE_BEARER = 'sample-gateway-bearer-9876';
 
-const dir = mkdtempSync(join(tmpdir(), 'voice-ready-'));
+const dir = testTmpDir('voice-ready-');
 mkdirSync(join(dir, 'state'));
 const tokenFile = join(dir, 'state', 'watch-gateway-token');
 const secrets = join(dir, '.env.secrets');

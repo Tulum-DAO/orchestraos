@@ -2,11 +2,11 @@
  * Library attribution honours the conversation store (provider-agnostic rotation): an earlier-conversation block in
  * an entry marked seen-only, and seed rows, are never anyone's work. Temp data dir, real files.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { LibraryIndex } from './library-index.js';
 import { forgetStoreCache } from './conversation-store.js';
@@ -18,7 +18,7 @@ const L = (o: any) => JSON.stringify({ cwd: '/repo', ...o }) + '\n';
 
 test('a seen-only block and seed rows give no library items; the same words typed by a person do', () => {
   forgetStoreCache();
-  const data = mkdtempSync(join(tmpdir(), 'lib-store-'));
+  const data = testTmpDir('lib-store-');
   mkdirSync(join(data, 'state', 'uploads'), { recursive: true });
   const up1 = join(data, 'state', 'uploads', 'sample-a.png');
   const up2 = join(data, 'state', 'uploads', 'sample-b.png');

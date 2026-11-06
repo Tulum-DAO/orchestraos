@@ -11,14 +11,15 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.cpu.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
-const root = mkdtempSync(join(tmpdir(), 'transcript-cpu-'));
+const root = testTmpDir('transcript-cpu-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 process.env.HOME = home;

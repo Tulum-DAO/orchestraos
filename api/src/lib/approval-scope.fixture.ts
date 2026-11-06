@@ -7,11 +7,11 @@
  * One fixture card: a pending card asked by gm (the operator's), in the frozen filesystem store
  * the list still reads.
  */
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { testTmpDir } from './testTmp.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const DATA_DIR = mkdtempSync(join(tmpdir(), 'apr-scope-'));
+export const DATA_DIR = testTmpDir('apr-scope-');
 mkdirSync(join(DATA_DIR, 'state', 'approvals', 'pending'), { recursive: true });
 writeFileSync(join(DATA_DIR, 'state', 'approvals', 'pending', 'apr_gm_fs.json'),
   JSON.stringify({ id: 'apr_gm_fs', agent_id: 'gm', title: 'Operator card', status: 'pending' }));

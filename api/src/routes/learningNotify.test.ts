@@ -3,14 +3,14 @@
  * stored file (review of #195: the note used the raw request value, the junk cleanSubmittedBy bounds).
  * The real router, mounted in Express, against a temp ORCHESTRA_DIR.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 test('ROUTE: the inbox note and the stored file carry the same CLEANED submitted_by', async () => {
-  const orch = mkdtempSync(join(tmpdir(), 'lnotify-'));
+  const orch = testTmpDir('lnotify-');
   mkdirSync(join(orch, 'state', 'questionnaires'), { recursive: true });
   writeFileSync(join(orch, 'state', 'questionnaires', 'index.json'), JSON.stringify([
     { id: 'qnr_ok_1', title: 'Real one', created_by: 'gm', status: 'pending' },

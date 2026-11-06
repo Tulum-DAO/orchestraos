@@ -5,14 +5,14 @@
  *
  * Run: ORCHESTRA_CONFIG=../orchestra.example.toml npx tsx --test src/routes/agent-send.wake.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type IncomingHttpHeaders } from 'node:http';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'agent-send-wake-'));
+const dir = testTmpDir('agent-send-wake-');
 const seen: { headers: IncomingHttpHeaders; body: any }[] = [];
 let reply: { status: number; body: any } = { status: 200, body: { ok: true, delivered: true } };
 const gw = createServer((req, res) => {

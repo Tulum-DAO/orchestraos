@@ -5,11 +5,11 @@
  *
  * Run: npx tsx --test src/routes/subagent-transcript.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import type { Request, Response } from 'express';
 import { normalizeTranscript, resolveSubagentTranscriptPath, handleSubagentTranscript, SAFE_SUBAGENT_ID } from './chat-transcript.js';
@@ -24,7 +24,7 @@ function line(uuid: string, text: string, sidechain: boolean, type = 'assistant'
 }
 
 function seatDir() {
-  const dir = mkdtempSync(join(tmpdir(), 'sub-tx-'));
+  const dir = testTmpDir('sub-tx-');
   const seat = join(dir, 'sid-1.jsonl');
   writeFileSync(seat, line('m1', 'seat says hi', false) + '\n');
   mkdirSync(join(dir, 'sid-1', 'subagents'), { recursive: true });
@@ -44,7 +44,7 @@ test('the seat chat still drops sidechain rows; keepSidechain keeps them', () =>
 
 test("a subagent's log ignores the seat session's store rules (a seed boundary would hide it all)", () => {
   const prev = process.env.ORCHESTRA_DIR;
-  const orch = mkdtempSync(join(tmpdir(), 'sub-orch-'));
+  const orch = testTmpDir('sub-orch-');
   mkdirSync(join(orch, 'state'), { recursive: true });
   const db = new Database(join(orch, 'state', 'episodic-memory.db'));
   db.exec('CREATE TABLE seen_only (provider_session_id TEXT, uuid TEXT, marker TEXT, PRIMARY KEY (provider_session_id, uuid));'
@@ -146,7 +146,7 @@ test('the poll route: the envelope with subagent_id; a miss is 404; a bad id is 
 });
 
 test('the poll route never sends the read error (it names the absolute log path)', () => {
-  const dir = join(mkdtempSync(join(tmpdir(), 'sub-unreadable-')), `agent-${SUB}.jsonl`);
+  const dir = join(testTmpDir('sub-unreadable-'), `agent-${SUB}.jsonl`);
   writeFileSync(dir, line('s1', 'x', true) + '\n');
   chmodSync(dir, 0o000);                                        // EACCES: the error text names the path
   const r = fakeRes();

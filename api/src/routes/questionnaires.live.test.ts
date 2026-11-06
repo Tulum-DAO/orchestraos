@@ -7,12 +7,12 @@
  * answers -> the gateway submit (one validator, one resume path). Legacy items are unchanged.
  * Pure over an injected fetch and a temp data dir. Run: npx tsx --test src/routes/questionnaires.live.test.ts
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createQuestionnairesRouter, type QuestionnairesDeps } from './questionnaires.js';
 
@@ -30,7 +30,7 @@ const LIVE_DETAIL = {
 };
 
 function dataDir(legacy: any[] = []) {
-  const d = mkdtempSync(join(tmpdir(), 'qnr-'));
+  const d = testTmpDir('qnr-');
   mkdirSync(join(d, 'state', 'questionnaires'), { recursive: true });
   writeFileSync(join(d, 'state', 'questionnaires', 'index.json'), JSON.stringify(legacy));
   return d;

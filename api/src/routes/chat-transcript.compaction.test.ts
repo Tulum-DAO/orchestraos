@@ -6,16 +6,16 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.compaction.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 const SEAT = 'zz-compaction-seat';            // never a real tmux session on any box
 const SID = '33333333-3333-4333-8444-000000000001';
-const root = mkdtempSync(join(tmpdir(), 'transcript-cmp-'));
+const root = testTmpDir('transcript-cmp-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

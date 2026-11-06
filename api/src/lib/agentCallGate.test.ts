@@ -6,13 +6,13 @@
  *
  * Run: npx tsx --test src/lib/agentCallGate.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentCallsDefault, agentCallsDefaultOn, writeAgentCallsDefault, writeAgentCallSwitch, agentCallSwitch } from './agentCallGate.js';
@@ -21,7 +21,7 @@ const CASES = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url
   name: string; seat: string; switch_on: unknown; headless: boolean; registry_runtime: string | null; dev: boolean; engine: string | null; expected: boolean;
 }[];
 
-const dir = mkdtempSync(join(tmpdir(), 'agent-call-gate-'));
+const dir = testTmpDir('agent-call-gate-');
 mkdirSync(join(dir, 'state'), { recursive: true });
 writeFileSync(join(dir, 'state', 'watch-gateway-token'), 'sample-bearer\n');
 let engine: unknown = 'relay';
@@ -95,7 +95,7 @@ test('a slow engine read does not hold the settings up', async () => {
   forgetLiveEngine();
 });
 
-const callsDir = () => { const d = mkdtempSync(join(tmpdir(), 'agent-calls-')); mkdirSync(join(d, 'state')); return d; };
+const callsDir = () => { const d = testTmpDir('agent-calls-'); mkdirSync(join(d, 'state')); return d; };
 const callsDoc = (d: string) => JSON.parse(readFileSync(join(d, 'state', 'agent-calls.json'), 'utf-8'));
 
 test('new agents take calls unless the install default says off; the seats are kept', () => {

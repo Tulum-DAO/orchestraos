@@ -2,13 +2,13 @@
  * GET /api/memory/search's `episodic` source over a fixture conversation index (the schema of
  * scripts/episodic_memory.py, built here in a temp data dir; no real transcript is read).
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import Database from 'better-sqlite3';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { searchEpisodic, ftsQuery } from '../services/episodic-memory.js';
 
@@ -21,7 +21,7 @@ CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN INSERT INTO entries_fts(
 CREATE TABLE embeddings (entry_id INTEGER PRIMARY KEY, model TEXT NOT NULL, dim INTEGER NOT NULL, vector BLOB NOT NULL, created TEXT);`;
 
 function box() {
-  const data = mkdtempSync(join(tmpdir(), 'episodic-'));
+  const data = testTmpDir('episodic-');
   mkdirSync(join(data, 'state'), { recursive: true });
   const path = join(data, 'state', 'episodic-memory.db');
   const db = new Database(path);

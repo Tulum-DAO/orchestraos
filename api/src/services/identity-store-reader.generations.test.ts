@@ -11,17 +11,17 @@
  * that never existed — which reads exactly like the lineage had reset to 3. The operator saw
  * that and reported it as missing generations.
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { getGenerationCounts, getGenerations } from './identity-store-reader.js';
 
 /** A tiny identity store shaped like the real one. */
 function makeStore(): string {
-  const orch = mkdtempSync(join(tmpdir(), 'identity-store-'));
+  const orch = testTmpDir('identity-store-');
   mkdirSync(join(orch, 'state'));
   const db = new Database(join(orch, 'state', 'orchestra-registry.db'));
   db.exec(`

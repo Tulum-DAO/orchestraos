@@ -12,7 +12,10 @@ import tempfile
 _LIVE = os.path.expanduser("~/scripts/agent-orchestra/state/voice-calls")
 _current = os.environ.get("ARTURO_VOICE_CALLS_DIR", "")
 if not _current or os.path.realpath(_current) == os.path.realpath(_LIVE):
+    import atexit
+    import shutil
     os.environ["ARTURO_VOICE_CALLS_DIR"] = tempfile.mkdtemp(prefix="voice-calls-pytest-")
+    atexit.register(shutil.rmtree, os.environ["ARTURO_VOICE_CALLS_DIR"], True)   # no leak per run
 
 # Fleet-safety belt (gm msg_bfb82953, 2026-09-16): no arturo test may open a socket to
 # the LIVE proxy :5071 either -- shared autouse fixture from scripts/hermetic_5071.py.

@@ -1,12 +1,12 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readVoiceLimit, writeVoiceLimit, validDailyLimit, DEFAULT_DAILY_LIMIT } from './voiceLimits.js';
 
 test('the daily limit round-trips; none or a bad value reads as null', () => {
-  const d = mkdtempSync(join(tmpdir(), 'voice-limits-'));
+  const d = testTmpDir('voice-limits-');
   assert.equal(readVoiceLimit(d), null);
   writeVoiceLimit(d, 45);
   assert.equal(readVoiceLimit(d), 45);

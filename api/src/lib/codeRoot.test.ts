@@ -5,11 +5,11 @@
  * ~/.orchestra/spawn-agent.sh, every transcript stream was blocked because the telemetry bridge was
  * "missing", and so on. These tests run with ORCHESTRA_DIR pointed at an EMPTY temp data dir.
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'fs';
-import { tmpdir } from 'os';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 const API = join(import.meta.dirname, '..', '..');
@@ -34,7 +34,7 @@ const CODE_FILES = [
 ];
 
 test('with ORCHESTRA_DIR an empty data dir and no ORCHESTRA_ROOT, every code file resolves in the checkout', () => {
-  const data = mkdtempSync(join(tmpdir(), 'orch-data-'));
+  const data = testTmpDir('orch-data-');
   const root = codeRootWith({ ORCHESTRA_DIR: data });
   assert.notEqual(root, data);
   for (const f of CODE_FILES) assert.ok(existsSync(join(root, f)), `${f} missing under CODE_ROOT=${root}`);
@@ -42,7 +42,7 @@ test('with ORCHESTRA_DIR an empty data dir and no ORCHESTRA_ROOT, every code fil
 });
 
 test('ORCHESTRA_ROOT, when set, is the code root', () => {
-  const data = mkdtempSync(join(tmpdir(), 'orch-data-'));
+  const data = testTmpDir('orch-data-');
   assert.equal(codeRootWith({ ORCHESTRA_DIR: data, ORCHESTRA_ROOT: '/some/checkout' }), '/some/checkout');
 });
 

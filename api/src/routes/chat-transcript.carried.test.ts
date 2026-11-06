@@ -5,11 +5,11 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.carried.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 const SEAT = 'zz-carried-seat';                // never a real tmux session on any box
@@ -19,7 +19,7 @@ const G3 = '44444444-2222-4333-8444-000000000003';
 const T12 = '2026-10-21T00:00:00Z';
 const T23 = '2026-10-22T00:00:00Z';
 
-const root = mkdtempSync(join(tmpdir(), 'transcript-carried-'));
+const root = testTmpDir('transcript-carried-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

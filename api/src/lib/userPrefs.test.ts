@@ -1,11 +1,11 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readUserPrefs, writeUserPref, userPrefsFile } from './userPrefs.js';
 
-const dir = () => mkdtempSync(join(tmpdir(), 'user-prefs-'));
+const dir = () => testTmpDir('user-prefs-');
 
 test('a person\'s preference round-trips in state/users/<u>/prefs.json; null removes it', () => {
   const d = dir();

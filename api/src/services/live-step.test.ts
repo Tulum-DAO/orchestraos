@@ -5,11 +5,11 @@
  *
  * Run: npx tsx --test src/services/live-step.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from 'fs';
+import { mkdirSync, writeFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import { StepState, LiveStep, SUMMARY_MAX, stepSummary, stepFromProbe, openToolUse, headlessStep, dropHeadlessStep } from './live-step.js';
 
 const out = (ev: Record<string, unknown>, wall = '2026-10-31T08:00:00.000Z') => ({ kind: 'out', wall, ev });
@@ -83,7 +83,7 @@ test('a tmux seat: the probe\'s state, with the summary from the open tool call 
 });
 
 test('the log is followed as it grows, shared by everyone who asks for that seat', () => {
-  const root = mkdtempSync(join(tmpdir(), 'live-step-'));
+  const root = testTmpDir('live-step-');
   const dir = join(root, 'state', 'headless', 'dev-demo');
   mkdirSync(dir, { recursive: true });
   const log = join(dir, 'events.jsonl');

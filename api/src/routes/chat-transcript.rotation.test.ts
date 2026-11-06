@@ -6,11 +6,11 @@
  *
  * Run: npx tsx --test src/routes/chat-transcript.rotation.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, renameSync as fsRename, rmSync as fsRm } from 'fs';
+import { mkdirSync, writeFileSync, symlinkSync, renameSync as fsRename, rmSync as fsRm } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
 const SEAT = 'zz-rotation-seat';              // never a real tmux session on any box
@@ -19,7 +19,7 @@ const CUR = '22222222-2222-4333-8444-000000000002';
 const OTHER = '22222222-2222-4333-8444-000000000003';
 const SWAP = '2026-10-22T11:15:56.814239+00:00';
 
-const root = mkdtempSync(join(tmpdir(), 'transcript-rot-'));
+const root = testTmpDir('transcript-rot-');
 const home = join(root, 'home');
 const orch = join(root, 'orch');
 const projects = join(home, '.claude', 'projects', '-repo');

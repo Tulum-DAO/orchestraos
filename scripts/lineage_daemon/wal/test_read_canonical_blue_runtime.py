@@ -7,14 +7,13 @@ fail-closed the swap (LEFT JOIN -> runtime None -> the builder refuses, never gu
 import os
 import sqlite3
 import sys
-import tempfile
 
 sys.path.insert(0, "scripts")
 from lineage_daemon.wal.bg_beat import read_canonical_blue  # noqa: E402
 
 
-def _db(with_lineage=True, runtime="gemini"):
-    d = tempfile.mkdtemp()
+def _db(d, with_lineage=True, runtime="gemini"):
+    d = str(d)
     os.makedirs(os.path.join(d, "state"))
     p = os.path.join(d, "state", "orchestra-registry.db")
     c = sqlite3.connect(p)
@@ -34,18 +33,18 @@ def _db(with_lineage=True, runtime="gemini"):
     return d
 
 
-def test_read_canonical_blue_surfaces_gemini_runtime():
-    d = _db(with_lineage=True, runtime="gemini")
+def test_read_canonical_blue_surfaces_gemini_runtime(tmp_path):
+    d = _db(tmp_path, with_lineage=True, runtime="gemini")
     blue = read_canonical_blue(d, "demo-gemini-pred2")
     assert blue["runtime"] == "gemini"
     assert blue["model"] == "gemini-3.7-flash"
     assert blue["generation"] == 2
 
 
-def test_read_canonical_blue_missing_lineage_runtime_is_none_not_error():
+def test_read_canonical_blue_missing_lineage_runtime_is_none_not_error(tmp_path):
     # LEFT JOIN: a seat with no lineage row still resolves (runtime None), never
     # fails-closed the swap — the builder then refuses a resume_command (safe).
-    d = _db(with_lineage=False)
+    d = _db(tmp_path, with_lineage=False)
     blue = read_canonical_blue(d, "demo-gemini-pred2")
     assert blue["runtime"] is None
     assert blue["generation"] == 2

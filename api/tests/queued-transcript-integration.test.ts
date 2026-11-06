@@ -5,14 +5,14 @@
  * path, not just mergeQueuedItems in isolation. Also proves includeQueued=false
  * (the SSE tailer's call) leaves the envelope free of queued nodes.
  */
+import { testTmpDir } from '../src/lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'fs';
+import { rmSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
-const dir = mkdtempSync(join(tmpdir(), 'qint-'));
+const dir = testTmpDir('qint-');
 const DBP = join(dir, 'tasks.db');
 
 function seed() {

@@ -3,16 +3,16 @@
  *
  * Run: npx tsx --test src/routes/agent-messages.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { readAgentMessage } from './agent-messages.js';
 
 function store(): string {
-  const p = join(mkdtempSync(join(tmpdir(), 'agent-msg-')), 'tasks.db');
+  const p = join(testTmpDir('agent-msg-'), 'tasks.db');
   const db = new Database(p);
   db.exec(`create table messages (id text primary key, from_agent text, to_agent text, subject text, body text,
            priority text, created_at text, type text)`);

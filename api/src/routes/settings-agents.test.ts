@@ -3,18 +3,18 @@
  * members and admins, and Stop: admin only, re-checked, logged.
  * Run: npx tsx --test src/routes/settings-agents.test.ts   (from api/)
  */
+import { testTmpDir } from '../lib/testTmp.js';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSettingsAgentsRouter, STOP_LOG_KEY } from './settings-agents.js';
 import { commandHash } from '../lib/backgroundProcesses.js';
 import type { ProcInfo, ProcSource } from '../lib/backgroundProcesses.js';
 
-const d = mkdtempSync(join(tmpdir(), 'settings-agents-'));
+const d = testTmpDir('settings-agents-');
 mkdirSync(join(d, 'state'));
 writeFileSync(join(d, 'state', 'seat-settings.json'), JSON.stringify({ seats: {
   'dev-a': { auto_compact: true, compact_at: 70 },

@@ -5,10 +5,10 @@
  *
  * Run: npx tsx --test src/lib/loginShells.test.ts   (from api/)
  */
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { tmpdir } from 'os';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { createRequire } from 'module';
 import {
@@ -20,7 +20,7 @@ const { listedLoginShell } = require('../../../dashboard-login-shells.js') as {
   listedLoginShell: (session: string, dir: string, now?: number) => boolean;
 };
 
-const fresh = () => mkdtempSync(join(tmpdir(), 'login-shells-'));
+const fresh = () => testTmpDir('login-shells-');
 const T0 = Date.parse('2026-10-31T12:00:00Z');
 
 test('an unlisted login-x is refused: the name alone is never enough', () => {

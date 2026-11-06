@@ -1,12 +1,12 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, appendFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendSettingChange, lastChanges } from './settingsLog.js';
 
 test('the latest change per key wins; a bad line is skipped; no file is no changes', () => {
-  const d = mkdtempSync(join(tmpdir(), 'settings-log-'));
+  const d = testTmpDir('settings-log-');
   assert.equal(lastChanges(d).size, 0);
   appendSettingChange(d, { key: 'general.timeZone', scope: 'everyone', by: 'sam@x.net', at: '2026-11-03T10:00:00Z', value: 'UTC' });
   mkdirSync(join(d, 'state'), { recursive: true });

@@ -1,3 +1,4 @@
+import { testTmpDir } from './testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseModelPut } from './agentModelPut.js';
@@ -27,8 +28,7 @@ test('a switch with an effort waits long enough for both, and the dashboard prox
 
 test('forgetAgentEffort hands the name to scripts/agent_effort.py forget, which writes under its lock', async () => {
   const { forgetAgentEffort } = await import('./agentModelPut.js');
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
+  const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import('node:fs');
   const { join } = await import('node:path');
   const { fileURLToPath } = await import('node:url');
   const calls: string[][] = [];
@@ -37,7 +37,7 @@ test('forgetAgentEffort hands the name to scripts/agent_effort.py forget, which 
   assert.match(calls[0][1], /scripts\/agent_effort\.py$/);
   assert.deepEqual(calls[0].slice(2), ['forget', 'x', '--orchestra-dir', '/data']);
   // And for real, through the Python helper: the lock file is the writers' own.
-  const d = mkdtempSync(join(tmpdir(), 'efforts-'));
+  const d = testTmpDir('efforts-');
   mkdirSync(join(d, 'state'), { recursive: true });
   const f = join(d, 'state', 'agent-efforts.json');
   writeFileSync(f, JSON.stringify({ efforts: { x: 'high', y: 'low' } }));
