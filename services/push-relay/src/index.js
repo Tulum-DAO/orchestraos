@@ -5,9 +5,9 @@
 //   gateway -> relay: POST /v1/installs, POST /v1/push (HMAC-signed)
 //   anyone  -> relay: GET /health (or /v1/health): booleans only, 503 when it could not push
 //
-// The relay writes every alert's text itself from a fixed template. A gateway sends a kind, a
-// count and an opaque card id, never words, so the worst a gateway can do is nudge devices that
-// chose it. See README.md for the protocol.
+// Alerts may use the legacy fixed template ("Approval waiting") or optional gateway-supplied
+// plain-text title/body (content-bearing cards). Serialized APNs payloads stay <= 4096 bytes;
+// overflow sets an explicit flag instead of silently truncating. See README.md for the protocol.
 
 import { APPLE_APP_ATTESTATION_ROOT_PEM } from "./apple-root.js";
 import { AttestError, verifyAssertion, verifyAttestation } from "./attest.js";
@@ -225,12 +225,77 @@ async function createInstall(request, c) {
   return json({ install_id, install_secret: secret });
 }
 
-export function alertFor(kind, count) {
+// Apple documents a 4 KB (4096 byte) maximum for the APNs JSON payload on alert pushes.
+// https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns
+export const APNS_ALERT_MAX_BYTES = 4096;
+const TITLE_MAX_CHARS = 120;
+// Soft guidance only — APNs 4096-byte serialized payload is the hard gate (overflow path).
+const BODY_MAX_CHARS = 3500;
+
+/** Strip control characters; optionally cap length. Returns null when empty/invalid. */
+export function sanitizePlainText(value, maxChars) {
+  if (typeof value !== "string") return null;
+  // Keep spaces/newlines; drop other C0 controls and DEL.
+  const cleaned = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+  if (!cleaned) return null;
+  if (maxChars != null && cleaned.length > maxChars) return cleaned.slice(0, maxChars);
+  return cleaned;
+}
+
+function defaultAlert(count) {
   const n = Number.isInteger(count) && count > 0 ? count : 1;
   return {
     title: "OrchestraOS",
     body: n === 1 ? "Approval waiting" : `${n} approvals waiting`,
   };
+}
+
+/**
+ * Build the APS alert. When title/body are omitted (legacy gateways), keep the fixed
+ * "Approval waiting" template. When provided, use sanitized plain text so cards and
+ * pushes can carry decision context (lock-screen visible; gateway chooses what to send).
+ */
+export function alertFor(kind, count, opts = {}) {
+  const defaults = defaultAlert(count);
+  const title = opts.title != null ? sanitizePlainText(opts.title, TITLE_MAX_CHARS) : null;
+  // Body: strip controls only — length is gated by APNS_ALERT_MAX_BYTES via overflow.
+  const body = opts.body != null ? sanitizePlainText(opts.body, null) : null;
+  if (title == null && body == null) return defaults;
+  return {
+    title: title || defaults.title,
+    body: body || defaults.body,
+  };
+}
+
+/**
+ * Assemble the APNs payload and enforce the 4096-byte serialized size.
+ * Never silently truncates decision text: if content would exceed the limit, replace the
+ * body with an explicit overflow notice and set payload.overflow = true so the client
+ * fetches the full authenticated card.
+ */
+export function buildPushPayload({ kind, count, card_id, category, title, body }) {
+  const alert = alertFor(kind, count, { title, body });
+  const payload = {
+    aps: { alert, badge: count, sound: "default", category, "thread-id": "approvals" },
+    kind,
+    card_id,
+  };
+  const enc = new TextEncoder();
+  let bytes = enc.encode(JSON.stringify(payload)).length;
+  let overflow = false;
+  if (bytes > APNS_ALERT_MAX_BYTES) {
+    overflow = true;
+    payload.aps.alert = {
+      title: sanitizePlainText(alert.title, 80) || "OrchestraOS",
+      body: "Card details exceed push size. Open OrchestraOS to review the full card.",
+    };
+    payload.overflow = true;
+    bytes = enc.encode(JSON.stringify(payload)).length;
+    if (bytes > APNS_ALERT_MAX_BYTES) {
+      throw new HttpError(413, "push payload exceeds APNs 4096-byte limit");
+    }
+  }
+  return { payload, overflow, bytes };
 }
 
 async function push(request, c) {
@@ -240,7 +305,7 @@ async function push(request, c) {
   const sigHex = request.headers.get("X-Install-Signature") || "";
   if (!Number.isInteger(ts) || Math.abs(now - ts) > SIGNATURE_SKEW_S) throw new HttpError(401, "timestamp missing or skewed");
   const body = parseJson(raw);
-  const { install_id, handle, kind, count, card_id, category, collapse } = body;
+  const { install_id, handle, kind, count, card_id, category, collapse, title, body: alertBody } = body;
   if (typeof install_id !== "string" || typeof handle !== "string") throw new HttpError(400, "install_id and handle are required");
 
   const inst = await c.DB.prepare("SELECT secret FROM installs WHERE install_id = ?1").bind(install_id).first();
@@ -254,17 +319,27 @@ async function push(request, c) {
   if (collapse !== undefined && (typeof collapse !== "string" || !/^(card:[A-Za-z0-9_-]{1,64}|summary)$/.test(collapse))) {
     throw new HttpError(400, "bad collapse");
   }
+  if (title !== undefined) {
+    if (typeof title !== "string" || sanitizePlainText(title, TITLE_MAX_CHARS) == null) {
+      throw new HttpError(400, "title must be non-empty plain text");
+    }
+  }
+  if (alertBody !== undefined) {
+    // Do not silently char-truncate decision text here; APNs size enforcement + overflow flag
+    // in buildPushPayload is the hard gate.
+    if (typeof alertBody !== "string" || sanitizePlainText(alertBody, null) == null) {
+      throw new HttpError(400, "body must be non-empty plain text");
+    }
+  }
 
   const dev = await c.DB.prepare("SELECT * FROM devices WHERE handle = ?1").bind(handle).first();
   if (!dev || dev.install_id !== install_id) throw new HttpError(403, "this device has not bound itself to this install");
   await rateLimit(c, "pushInstall", install_id, now);
   await rateLimit(c, "pushHandle", handle, now);
 
-  const payload = {
-    aps: { alert: alertFor(kind, count), badge: count, sound: "default", category, "thread-id": "approvals" },
-    kind,
-    card_id,
-  };
+  const { payload, overflow, bytes } = buildPushPayload({
+    kind, count, card_id, category, title, body: alertBody,
+  });
   const result = await sendAlert({
     env: dev.env,
     token: dev.apns_token,
@@ -277,7 +352,7 @@ async function push(request, c) {
     now: now * 1000,
     fetchImpl: c.fetchImpl,
   });
-  if (result.status === 200) return json({ ok: true });
+  if (result.status === 200) return json({ ok: true, overflow, bytes });
   if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
     await c.DB.prepare("DELETE FROM devices WHERE handle = ?1").bind(handle).run();
     return json({ ok: false, gone: true });

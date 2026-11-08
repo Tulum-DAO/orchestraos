@@ -18,9 +18,12 @@ No dependencies. It runs on the Workers free plan with one D1 database.
   ever sees the handle, never the APNs token.
 - **Pushes only to devices that chose that gateway.** The app binds its handle to a gateway
   install with an App Attest assertion; a gateway can push to a handle only if it's bound to it.
-- **Writes every alert itself.** A gateway sends a kind, a count and an opaque card id. The
-  alert reads "Approval waiting" or "N approvals waiting". No gateway text reaches APNs, so the
-  relay never carries card content and can't be used to send arbitrary messages.
+- **Alerts are content-bearing when the gateway opts in.** A gateway may send plain-text
+  `title` and `body` (decision context for approval cards). When omitted, the legacy fixed
+  template still applies: "Approval waiting" / "N approvals waiting". Serialized APNs payloads
+  stay within Apple's 4096-byte alert limit; if content would exceed it, the relay sets
+  `overflow: true` and replaces the body with an explicit "open the app for the full card"
+  notice instead of silently truncating decision text. Full card bodies remain on the gateway.
 - **Rate-limits everything** (per device, per install, per IP) and keeps no logs of tokens,
   handles or card ids.
 - **If it's down, nothing is lost but speed:** the apps keep polling their gateway.
@@ -46,10 +49,11 @@ Gateway ↔ relay:
 | Request | Body | Auth |
 |---|---|---|
 | `POST /v1/installs` | `{}` | → `{install_id, install_secret}` (the secret is shown once) |
-| `POST /v1/push` | `{install_id, handle, kind: "approval", count, card_id, category, collapse}` | `X-Install-Timestamp` (±300 s) and `X-Install-Signature` = hex HMAC-SHA256(secret, `"<ts>.<raw body>"`) |
+| `POST /v1/push` | `{install_id, handle, kind: "approval", count, card_id, category, collapse, title?, body?}` | `X-Install-Timestamp` (±300 s) and `X-Install-Signature` = hex HMAC-SHA256(secret, `"<ts>.<raw body>"`) |
 
 `category` is `approval.single`, `approval.multipart` or `approval.summary`; `collapse` is
-`card:<card_id>` or `summary`. Responses: `{ok: true}`; `{ok: false, gone: true}` when APNs says
+`card:<card_id>` or `summary`. Optional `title` / `body` are plain text (control characters
+stripped). Responses: `{ok: true, overflow, bytes}` on success; `{ok: false, gone: true}` when APNs says
 the token is gone (the relay deletes the device; the gateway should drop the handle); `429` when
 rate-limited; `502` with APNs' reason otherwise.
 
