@@ -36,6 +36,12 @@ HOOKS = [
     # Never give it an "onFailure" key: "allow" is not a valid value (the row is silently dropped, even a
     # working deny is ignored) and "block" would fail closed. It decides by stdout JSON on exit 0 only.
     ("PreToolUse", "", "hooks/gate-hook.py", "py", {"timeout": 600}),
+    # Core Claude safety guards (batch 1). Bash matcher where the tool is Bash-only.
+    ("PreToolUse", "Bash", "hooks/git_state_guard.py", "py"),
+    ("PreToolUse", "Bash", "hooks/worktree_path_guard.py", "py"),
+    ("PreToolUse", "Bash", "hooks/delete-guard.sh", "bash"),
+    ("PreToolUse", "Bash", "hooks/send_shape_guard.py", "py"),
+    ("PreToolUse", "Bash", "hooks/body_backtick_guard.py", "py"),
     ("PostToolUse", "", "hooks/state-event-hook.py", "py"),
     ("PostToolUseFailure", "", "hooks/state-event-hook.py", "py"),   # closes the open call too
     ("PermissionDenied", "", "hooks/state-event-hook.py", "py"),
@@ -46,6 +52,7 @@ HOOKS = [
     ("Stop", "", "scripts/lineage_daemon/bus_feeder.py", "py"),
     ("SessionEnd", "", "scripts/lineage_daemon/bus_feeder.py", "py"),
     ("Notification", "", "scripts/lineage_daemon/bus_feeder.py", "py"),
+    ("Stop", "", "hooks/write-handoff.sh", "bash"),
     ("Stop", "", "hooks/agent-queue-drain.py", "py"),   # LAST on Stop: the digest may block
 ]
 GATE_SCRIPT = "hooks/gate-hook.py"
@@ -62,7 +69,12 @@ def _command(repo_root: Path, data_dir: Path, rel: str, runner: str) -> str:
     Claude proceeds; a present script runs normally and its verdict reaches Claude unchanged.
     (A missing script under a bare interpreter call blocked every tool on a host, 2026-09-17.)"""
     script = str(Path(repo_root) / rel)
-    run = f'"{NODE}" "{script}"' if runner == "node" else f'"{PY}" "{script}"'
+    if runner == "node":
+        run = f'"{NODE}" "{script}"'
+    elif runner == "bash":
+        run = f'bash "{script}"'
+    else:
+        run = f'"{PY}" "{script}"'
     return (f'[ -f "{script}" ] && ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run} '
             f'|| exit 0 {MARKER}')
 
@@ -202,6 +214,10 @@ def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bo
             rules.append(target)
         hook = {"type": "command", "command": _command(repo_root, data_dir, rel, runner)}
         hook.update({k: v for k, v in extra.items() if k not in ("type", "command")})
+        # Dedup by script path: a second install (or a HOOKS list that repeated a rel) used to
+        # append the same command twice into one matcher rule, so fleet hooks double-fired.
+        if any(rel in (h.get("command") or "") for h in target.get("hooks", [])):
+            continue
         target["hooks"].append(hook)
         installed += 1
     rows = [h["command"] for rules in hooks.values() for r in rules for h in r.get("hooks", []) if _is_ours(h.get("command", ""))]
