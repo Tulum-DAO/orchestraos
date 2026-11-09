@@ -45,7 +45,7 @@ def test_process_table_default_shape(tmp_path):
                      "menu_bridge": 60, "identity_regenerator": 60}
     assert by["identity_regenerator"].argv[-3:] == ["-m", "scripts.identity_store.regenerator", "start-if-armed"]
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
-    assert all(e.enabled for e in table if e.name not in ("telegram", "grok_bot_webhook"))   # both opt-in
+    assert all(e.enabled for e in table if e.name not in ("telegram", "grok_bot_webhook", "red_alert_watch"))  # opt-in
     for e in table:
         assert e.cwd == str(st.repo_root)
 
