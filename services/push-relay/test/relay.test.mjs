@@ -5,7 +5,7 @@ import { before, beforeEach, describe, test } from "node:test";
 import { APPLE_APP_ATTESTATION_ROOT_PEM } from "../src/apple-root.js";
 import { resetProviderTokenCache } from "../src/apns.js";
 import { decodeCbor } from "../src/cbor.js";
-import { createRelay, LIMITS } from "../src/index.js";
+import { createRelay, LIMITS, alertFor, buildPushPayload, APNS_ALERT_MAX_BYTES, sanitizePlainText } from "../src/index.js";
 import { pemToDer } from "../src/x509.js";
 import { apnsKeyPem, assert as assertion, attest, cbor, fakeD1, makeCa, req, signPush } from "./helpers.mjs";
 
@@ -262,10 +262,12 @@ describe("updates and forget (assertion)", () => {
 // ------------------------------------------------------------------ push
 
 describe("push (gateway, HMAC-signed)", () => {
-  test("a signed push to a device bound to this install reaches APNs with RELAY-written text", async () => {
+  test("legacy push without title/body keeps fixed relay-written text", async () => {
     const { handle, inst } = await bound();
-    const r = await pushReq(inst, PUSH(inst, handle, { count: 3, text: "SECRET CARD TEXT", title: "x" }));
-    assert.deepEqual(await r.json(), { ok: true });
+    const r = await pushReq(inst, PUSH(inst, handle, { count: 3 }));
+    const resp = await r.json();
+    assert.equal(resp.ok, true);
+    assert.equal(resp.overflow, false);
     assert.equal(sent.length, 1);
     const { url, init, body: payload } = sent[0];
     assert.equal(url, `https://api.sandbox.push.apple.com/3/device/${TOKEN}`);
@@ -276,7 +278,49 @@ describe("push (gateway, HMAC-signed)", () => {
         category: "approval.single", "thread-id": "approvals" },
       kind: "approval", card_id: "card_123",
     });
-    assert.ok(!JSON.stringify(payload).includes("SECRET"));
+  });
+
+  test("content-bearing title/body reach APNs as plain text", async () => {
+    const { handle, inst } = await bound();
+    const r = await pushReq(inst, PUSH(inst, handle, {
+      title: "Speaker confirmation",
+      body: "Person 1 may be Alex (topic: BizyPro). Accept / someone else / leave unknown?",
+    }));
+    const resp = await r.json();
+    assert.equal(resp.ok, true);
+    assert.equal(resp.overflow, false);
+    assert.ok(resp.bytes <= 4096);
+    const payload = sent[0].body;
+    assert.equal(payload.aps.alert.title, "Speaker confirmation");
+    assert.match(payload.aps.alert.body, /Person 1 may be Alex/);
+    assert.equal(payload.kind, "approval");
+    assert.equal(payload.card_id, "card_123");
+    assert.equal(payload.overflow, undefined);
+  });
+
+  test("control characters are stripped from title/body; empty after sanitize is refused", async () => {
+    const { handle, inst } = await bound();
+    const ok = await pushReq(inst, PUSH(inst, handle, { title: "Hello\u0007World", body: "Line\u0000 one" }));
+    assert.equal(ok.status, 200);
+    assert.equal(sent[0].body.aps.alert.title, "HelloWorld");
+    assert.equal(sent[0].body.aps.alert.body, "Line one");
+    const bad = await pushReq(inst, PUSH(inst, handle, { title: "\u0000\u0001", body: "ok" }));
+    assert.equal(bad.status, 400);
+  });
+
+  test("oversized content sets overflow flag and replaces body with explicit notice", async () => {
+    const { handle, inst } = await bound();
+    const huge = "X".repeat(5000);
+    const r = await pushReq(inst, PUSH(inst, handle, { title: "Huge card", body: huge }));
+    const resp = await r.json();
+    assert.equal(resp.ok, true);
+    assert.equal(resp.overflow, true);
+    assert.ok(resp.bytes <= 4096);
+    const payload = sent[0].body;
+    assert.equal(payload.overflow, true);
+    assert.match(payload.aps.alert.body, /exceed push size/i);
+    assert.ok(!payload.aps.alert.body.includes("XXXX"));
+    assert.ok(JSON.stringify(payload).length <= 4096);
   });
 
   test("the provider token is an ES256 JWT for the team and key", async () => {
@@ -407,4 +451,33 @@ test("an expired leaf is refused; a leaf a few minutes in the future is accepted
   assert.match((await r.json()).error, /not valid now/);
   clock.ms = Date.now() - 60 * 1000;
   assert.equal((await register()).r.status, 200);
+});
+
+// ------------------------------------------------------------------ content-bearing helpers
+
+test("alertFor stays backward compatible when title/body omitted", () => {
+  assert.deepEqual(alertFor("approval", 1), { title: "OrchestraOS", body: "Approval waiting" });
+  assert.deepEqual(alertFor("approval", 4), { title: "OrchestraOS", body: "4 approvals waiting" });
+});
+
+test("sanitizePlainText rejects non-strings and blank", () => {
+  assert.equal(sanitizePlainText(null, 10), null);
+  assert.equal(sanitizePlainText("   ", 10), null);
+  assert.equal(sanitizePlainText("abcdefghijKLM", 10), "abcdefghij");
+});
+
+test("buildPushPayload reports bytes and overflow against APNs 4096 limit", () => {
+  const small = buildPushPayload({
+    kind: "approval", count: 1, card_id: "c1", category: "approval.single",
+    title: "T", body: "short",
+  });
+  assert.equal(small.overflow, false);
+  assert.ok(small.bytes < APNS_ALERT_MAX_BYTES);
+  const big = buildPushPayload({
+    kind: "approval", count: 1, card_id: "c1", category: "approval.single",
+    title: "T", body: "Y".repeat(5000),
+  });
+  assert.equal(big.overflow, true);
+  assert.equal(big.payload.overflow, true);
+  assert.ok(big.bytes <= APNS_ALERT_MAX_BYTES);
 });
