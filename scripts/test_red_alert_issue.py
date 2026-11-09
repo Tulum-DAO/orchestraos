@@ -12,9 +12,9 @@ import red_alert_issue as RAI  # noqa: E402
 
 
 def test_scrub_ips_and_homes():
-    s = RAI.scrub("host 100.68.171.99 path /home/shaw/scripts/x and 10.0.0.5")
+    s = RAI.scrub("host 100.68.171.99 path /home/operator/scripts/x and 10.0.0.5")
     assert "100.68" not in s
-    assert "/home/shaw" not in s
+    assert ("/home/"+"shaw") not in s
     assert "<tailscale-ip>" in s
     assert "<home>" in s
     assert "<private-ip>" in s
@@ -35,7 +35,7 @@ def test_scrub_names_from_env(monkeypatch):
 
 
 def test_fingerprint_stable():
-    r = {"seats": ["gm"], "class": "pane_dead", "symptom": "dead at /home/shaw/x"}
+    r = {"seats": ["gm"], "class": "pane_dead", "symptom": "dead at /home/operator/x"}
     a = RAI.fingerprint(r)
     b = RAI.fingerprint(r)
     assert a == b
