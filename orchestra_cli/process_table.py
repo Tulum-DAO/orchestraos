@@ -58,7 +58,11 @@ def build_process_table(st: Settings) -> list:
                   env={"EXPIRE_PENDING": "0"}, interval=60, note="deliver answered approvals to their seat"),
         # An in-agent menu (Claude's AskUserQuestion widget) becomes a decision card on the
         # approvals surface; the operator's answer is driven back into the pane.
-        ProcEntry("menu_bridge", "beat", [py, str(root / "scripts" / "menu_bridge.py"), "--cron"], cwd,
+                ProcEntry("red_alert_watch", "beat",
+                  [py, str(root / "scripts" / "red_alert_watch.py")], cwd,
+                  interval=60, enabled=st.red_alert_watch_enabled,
+                  note="RED ALERT classify + card (never auto-files GitHub; [red_alert] watch_enabled)"),
+ProcEntry("menu_bridge", "beat", [py, str(root / "scripts" / "menu_bridge.py"), "--cron"], cwd,
                   interval=60, enabled=st.menu_bridge_enabled, note="in-agent menus -> decision cards ([menus] bridge_enabled)"),
         # Identity store: when the cutover is armed, the database is the identity truth and the
         # regenerator daemon rewrites registry.json / agent-sessions.json from it after every

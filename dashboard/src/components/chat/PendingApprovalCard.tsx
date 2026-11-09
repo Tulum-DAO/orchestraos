@@ -13,6 +13,7 @@ import DecisionQuestion from './DecisionQuestion';
 import { isTerminalMenu } from '../../lib/decisionCard';
 import DecisionCard, { ApprovalAnswer, FooterDismiss } from './DecisionCard';
 import ApprovalExtras from './ApprovalExtras';
+import CreateIssueButton from '../red-alert/CreateIssueButton';
 import { approvalCardBody, approvalCardAgent } from '../../lib/approvalCard';
 
 export interface UnifiedApproval {
@@ -97,6 +98,9 @@ export default function PendingApprovalCard({ item, highlighted, onChanged, id, 
       onDismiss={isMenu ? dismiss : undefined} report={{ id: item.id, from: approvalCardAgent(item) || null }}>
       {/* A menu sent read-only (a multi-part menu this client is not given whole) only says where to answer it. */}
       {/* In a popover its Dismiss is under the notice (FooterDismiss); elsewhere the header's ✕. */}
+      {String(item.op_key || '').startsWith('red-alert:') && (
+        <CreateIssueButton opKey={item.op_key} />
+      )}
       {isMenu ? (
         <>
           <div className="mx-4 mb-3 text-xs text-warning bg-warning/10 border border-warning/30 rounded-xl px-3 py-2">

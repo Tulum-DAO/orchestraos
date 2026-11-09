@@ -199,3 +199,13 @@ reap_after_generations = 2
 # (FLEET_BEAT_DISABLED, BUS_DRAIN_DISABLED, self_retire_armed). Exported as
 # ORCH_RUNTIME_DIR by `orchestra up`.
 runtime_dir = "~/runtime"
+
+
+# RED ALERT watchdog beat (classify seats + post cards). Default off.
+[red_alert]
+watch_enabled = false
+
+# Create-issue button target. Default unset / empty = preview works, filing disabled.
+# Do not point a public default at Tulum-DAO/orchestraos.
+[github_issues]
+repo = ""

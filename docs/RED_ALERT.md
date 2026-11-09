@@ -149,3 +149,14 @@ never the fleet's. A card whose premise dies gets a correction, never a silent c
 `claude --resume <sid>`, permanent fix #1 = remove ^Z from the bottom bar (web `ActionBar.tsx`,
 API `keyMap`, iOS terminal view). Incident ids and captures stay in the operator's own
 `state/red-alert/` — this file carries the shape, never the identifiers.
+
+## Create issue (human-only)
+
+Dashboard red-alert cards expose a **Create issue** button. It never auto-files.
+It shows a scrubbed preview (tailnet names, IPs, absolute home paths, chat ids,
+client/person names via `ORCHESTRA_SCRUB_NAMES`, secrets) and requires confirm.
+Target repo: `orchestra.toml` `[github_issues] repo = "owner/name"` (default unset).
+If an open issue already carries the fingerprint marker, we comment instead of creating.
+Auth: box `gh` login or `GITHUB_TOKEN`/`GH_TOKEN`; clear error if neither.
+
+Watch beat: `[red_alert] watch_enabled = true` (default false) starts `red_alert_watch` via `orchestra up`.
