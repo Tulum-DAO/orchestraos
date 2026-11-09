@@ -42,5 +42,5 @@ def test_checkpoint_truncates_wal(tmp_path: Path):
 
 def test_no_hardcoded_home_in_module():
     text = Path(DC.__file__).read_text()
-    assert "/home/shaw" not in text
+    assert ("/home/" + "shaw") not in text
     assert "ShawCole" not in text
