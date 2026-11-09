@@ -251,7 +251,7 @@ def test_OI_FINDING2_every_decision_is_RECORDED_and_the_command_text_is_NEVER_wr
     bodies, and a guard log that became a secret carrier would be self-inflicted."""
     log = tmp_path / "ssg.log"
     monkeypatch.setattr(g, "LOG_PATH", str(log))
-    secret_ish = "SUPERSECRETBODY"
+    secret_ish = "SUPERSECRETBODY"  # pragma: allowlist secret
     _verdict(f"python3 {_P} --from a --to b --subject s --body {secret_ish}")          # ALLOW
     _verdict(f"python3 {_P} --from a --to b ; python3 {_P} --from c --to d")           # REFUSE R1
     _verdict(f"python3 {_P} --from a --to b --body x 2{_GT}/dev/null")                 # REFUSE R2
