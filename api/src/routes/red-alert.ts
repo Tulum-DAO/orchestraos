@@ -71,8 +71,10 @@ export async function handleList(req: Request, res: Response, run: Runner = defa
 
 function parseIssueJson(stdout: string): any {
   const text = stdout.trim();
-  // last JSON object in stdout
-  const start = text.lastIndexOf('{');
+  // Preview/create print one JSON object; prefer whole-stdout parse so nested
+  // braces inside "body" do not truncate the document.
+  try { return JSON.parse(text); } catch { /* fall through */ }
+  const start = text.indexOf('{');
   if (start < 0) return null;
   try { return JSON.parse(text.slice(start)); } catch { return null; }
 }
