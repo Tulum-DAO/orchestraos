@@ -56,9 +56,12 @@ def build_process_table(st: Settings) -> list:
         # cards never expire on their own (operator ruling).
         ProcEntry("approval_resume", "beat", [py, str(root / "scripts" / "approval_resume.py")], cwd,
                   env={"EXPIRE_PENDING": "0"}, interval=60, note="deliver answered approvals to their seat"),
+        ProcEntry("db_checkpoint", "beat", [py, str(root / "scripts" / "db_checkpoint.py")], cwd,
+                  interval=st.db_checkpoint_interval, enabled=st.db_checkpoint_enabled,
+                  note="SQLite WAL checkpoint under the data dir ([db_checkpoint]; default on, every 5 min)"),
         # An in-agent menu (Claude's AskUserQuestion widget) becomes a decision card on the
         # approvals surface; the operator's answer is driven back into the pane.
-                ProcEntry("red_alert_watch", "beat",
+        ProcEntry("red_alert_watch", "beat",
                   [py, str(root / "scripts" / "red_alert_watch.py")], cwd,
                   interval=60, enabled=st.red_alert_watch_enabled,
                   note="RED ALERT classify + local report + card; report-only by default; structured auto-file if token file present"),

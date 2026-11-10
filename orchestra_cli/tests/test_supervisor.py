@@ -41,6 +41,7 @@ def test_process_table_default_shape(tmp_path):
     assert by["arturo"].port == 5071 and by["arturo"].argv[-1].endswith("services/arturo/run.sh")
     beats = {e.name: e.interval for e in table if e.kind == "beat"}
     assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60,
+                     "db_checkpoint": 300,
                      "red_alert_watch": 60,
                      "menu_bridge": 60, "identity_regenerator": 60}
     assert by["identity_regenerator"].argv[-3:] == ["-m", "scripts.identity_store.regenerator", "start-if-armed"]
@@ -67,6 +68,9 @@ def test_process_table_honors_config_toggles(tmp_path):
     st3 = _settings(tmp_path, "[red_alert]\nwatch_enabled = false\n")
     by3 = {e.name: e for e in PT.build_process_table(st3)}
     assert by3["red_alert_watch"].enabled is False
+    st4 = _settings(tmp_path, "[db_checkpoint]\nenabled = false\ninterval_seconds = 120\n")
+    by4 = {e.name: e for e in PT.build_process_table(st4)}
+    assert by4["db_checkpoint"].enabled is False and by4["db_checkpoint"].interval == 120
 
 
 def test_render_dry_run_lists_every_entry_and_interval(tmp_path):

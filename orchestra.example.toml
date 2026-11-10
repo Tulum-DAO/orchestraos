@@ -213,3 +213,9 @@ repair_enabled = false
 # Token file (optional, auto-file only): <data>/state/github-reporter-token (mode 0600).
 [github_issues]
 repo = "Tulum-DAO/orchestraos"
+
+# SQLite WAL checkpoint beat. Default on (every 5 minutes) under orchestra up.
+# Discovers *.db under the data dir; never hardcodes a home path.
+[db_checkpoint]
+enabled = true
+interval_seconds = 300

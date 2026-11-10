@@ -452,7 +452,15 @@ def resume_command_for(runtime: str, sid: str, model: str | None = None) -> str:
             "resume_command_for: runtime='service' is a process, not a "
             "resumable conversational seat (spec §4.1)")
     if rt == "claude":
-        return f"claude --resume {sid} --dangerously-skip-permissions"
+        # Restore the model variant on resume. A command without --model comes back on the
+        # CLI default, so a seat whose row says e.g. claude-opus-5[1m] can land on a
+        # different variant. Sentinel values (unknown, n/a, …) are omitted: emitting
+        # `--model unknown` breaks the launch; stay resumable instead.
+        cmd = f"claude --resume {sid} --dangerously-skip-permissions"
+        m = (model or "").strip()
+        if m and m.lower() not in _MODEL_SENTINELS:
+            cmd += f" --model {_shlex.quote(m)}"
+        return cmd
     if rt in ("gemini", "agy"):
         return f"agy --conversation {sid} --dangerously-skip-permissions"
     if rt == "codex":
@@ -1371,7 +1379,9 @@ def promote(canonical_id: str, successor_session: str, *,
                     f"— a seat verb must REFUSE such a target, never default it "
                     f"to claude (spec §4.1). NOTHING was written.")
             try:
-                rc = resume_command_for(succ_runtime, sid)
+                rc = resume_command_for(
+                    succ_runtime, sid,
+                    model=model or alias.get("model") or pred.get("model"))
             except RuntimeRefused as e:
                 raise PromotionRefused(
                     f"REFUSED promotion of {successor_session} -> {canonical_id}: "

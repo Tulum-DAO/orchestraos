@@ -29,6 +29,10 @@ export TZ="${ORCHESTRA_TZ:-${TZ:-UTC}}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Which env knobs the CALLER actually set, captured BEFORE either is defaulted —
+# the split-fence check below needs "set by the caller", which is unrecoverable afterwards.
+_REGISTRY_FROM_ENV="${REGISTRY+yes}"
+_ORCHESTRA_DIR_FROM_ENV="${ORCHESTRA_DIR+yes}"
 # shellcheck source=scripts/orchestra-env.sh
 source "$SCRIPT_DIR/scripts/orchestra-env.sh"
 # shellcheck source=scripts/seat_nice.sh
@@ -42,6 +46,20 @@ source "$SCRIPT_DIR/scripts/seat_nice.sh"     # seats run below the services' CP
 ORCHESTRA_DIR="${ORCHESTRA_DIR:-${ORCH_DIR:-$(cd "$SCRIPT_DIR" && python3 -c 'from orchestra_cli.settings import data_dir; print(data_dir())')}}"
 [ -n "$ORCHESTRA_DIR" ] || { echo "spawn-agent: could not resolve the data dir (orchestra_cli.settings)" >&2; exit 1; }
 REGISTRY="${REGISTRY:-$ORCHESTRA_DIR/registry.json}"
+# If the caller set BOTH knobs and they name different trees, this spawn would
+# read its flat registry from one and write identity rows into the other.
+# Refuse instead of minting a split seat.
+if [[ -n "$_REGISTRY_FROM_ENV" && -n "$_ORCHESTRA_DIR_FROM_ENV" ]]; then
+    _reg_tree="$(cd "$(dirname "$REGISTRY")" 2>/dev/null && pwd || dirname "$REGISTRY")"
+    _orc_tree="$(cd "$ORCHESTRA_DIR" 2>/dev/null && pwd || printf '%s' "$ORCHESTRA_DIR")"
+    if [[ "$_reg_tree" != "$_orc_tree" ]]; then
+        echo "spawn-agent.sh: REFUSING — REGISTRY and ORCHESTRA_DIR name different trees" >&2
+        echo "  REGISTRY      -> $_reg_tree" >&2
+        echo "  ORCHESTRA_DIR -> $_orc_tree" >&2
+        echo "  Point both at one tree." >&2
+        exit 2
+    fi
+fi
 OMNI_DIR="${OMNI_CONTEXT_DIR:-$HOME/scripts/omni-context}"
 STATE_DIR="$ORCHESTRA_DIR/state"
 mkdir -p "$STATE_DIR" "$ORCHESTRA_DIR/logs"
@@ -56,6 +74,33 @@ NC='\033[0m'
 log() { echo -e "${CYAN}[spawn]${NC} $*"; }
 warn() { echo -e "${YELLOW}[spawn]${NC} $*"; }
 err() { echo -e "${RED}[spawn]${NC} $*" >&2; }
+
+# Under pytest (or when SPAWN_PROTECTED_ROOT is set), refuse a spawn/kill whose
+# registry or state resolves to a protected production root, before any write.
+# Production is named from the passwd home (tests often set HOME to a temp dir).
+# Default protected root: $live_home/.orchestra (the usual data dir).
+# SPAWN_PROTECTED_ROOT only ADDS a root; it can never unprotect the default.
+# Called at the top of spawn_agent and kill_agent, not at source time, so
+# sourcing this file for unit tests stays legal.
+_refuse_protected_roots_under_test() {
+    [[ -n "${PYTEST_CURRENT_TEST:-}" || -n "${SPAWN_PROTECTED_ROOT:-}" ]] || return 0
+    local live_home root reg state
+    live_home="$(getent passwd "$(id -un)" | cut -d: -f6 2>/dev/null || true)"
+    reg="$(realpath -m "$REGISTRY")"; state="$(realpath -m "$STATE_DIR")"
+    for root in ${live_home:+"$live_home/.orchestra"} ${SPAWN_PROTECTED_ROOT:-}; do
+        [[ -n "$root" ]] || continue
+        root="$(realpath -m "$root")"
+        if [[ "$reg" == "$root/registry.json" || "$state" == "$root/state" ]]; then
+            err "spawn-agent.sh: REFUSING under test — registry/state resolve to a protected root"
+            err "  REGISTRY  -> $reg"
+            err "  STATE_DIR -> $state"
+            err "  Point ORCHESTRA_DIR (the data root) at a scratch tree."
+            exit 2
+        fi
+    done
+}
+
+# vlog:
 # vlog: detail that helps when debugging a spawn but reads as an alarm to a newcomer (benign
 # model-banner checks, where generated settings went). Shown with --verbose or
 # ORCHESTRA_SPAWN_VERBOSE=1. Real failures always use warn/err.
@@ -454,6 +499,7 @@ list_running() {
 }
 
 kill_agent() {
+    _refuse_protected_roots_under_test
     local agent_id="$1"
     local tmux_name
     tmux_name=$(get_agent_field "$agent_id" "tmux_session") || { err "Unknown agent: $agent_id"; exit 1; }
@@ -514,6 +560,7 @@ for aid in r['agents']:
 }
 
 spawn_agent() {
+    _refuse_protected_roots_under_test
     local agent_id="$1"
     local task="${2:-}"
     # --resume <sid> (gm msg_e9a921fe ruling (2), 2026-09-16): the ONE sanctioned resume

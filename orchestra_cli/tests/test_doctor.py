@@ -610,3 +610,10 @@ def test_doctor_reports_red_alert_defaults(tmp_path):
     assert by["red-alert:watch"].status == "OK" and "report-only" in by["red-alert:watch"].detail
     assert "Tulum-DAO/orchestraos" in by["red-alert:repo"].detail
     assert by["red-alert:reporter-token"].status == "INFO"
+
+
+def test_doctor_reports_db_checkpoint_default(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    row = _by_name(D.run_doctor(st, _probes()))["db-checkpoint:service"]
+    assert row.status == "OK" and "enabled" in row.detail
