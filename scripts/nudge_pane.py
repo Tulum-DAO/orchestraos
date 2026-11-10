@@ -15,6 +15,9 @@ Prefer msg_store for anything durable; this is only the wake.
 
 A headless seat's pane holds its supervisor, not a composer: its nudge goes through the gateway's
 /agent-message (the supervisor's stdin), never into the pane. Same exit codes.
+
+EXIT CODES: 0 submitted · 1 typed but not submitted · 2 refused on purpose · 3 NOT SENT
+(the target could not be read or written — "cannot tell", never "fine").
 """
 from __future__ import annotations
 
@@ -27,6 +30,17 @@ import time
 
 def tmux(*args) -> subprocess.CompletedProcess:
     return subprocess.run(["tmux", *args], capture_output=True, text=True)
+
+
+def pane_readable(session: str) -> bool:
+    """True when `tmux capture-pane` can read this target.
+
+    An idle composer and an unreadable/absent pane can both look empty. Until this
+    check existed, a failed capture could be mistaken for success. capture-pane
+    failing is the observable that separates them (missing session, or a target
+    tmux will not accept here).
+    """
+    return tmux("capture-pane", "-p", "-t", session).returncode == 0
 
 
 def composer_line(session: str):
@@ -48,18 +62,24 @@ def attached(session: str) -> bool:
 RC_NOT_SENT = 3     # another sender held the pane: nothing typed
 
 
-def nudge(session: str, text: str, *, force: bool = False, settle: float = 0.6) -> int:
-    """_nudge_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py, gm
-    msg_2291dee3). Another typer holding the pane past 5 s -> RC_NOT_SENT (nothing typed; the
-    caller nudges again next cycle). A headless seat: through the gateway (nudge_headless)."""
+def nudge(session: str, text: str, *, force: bool = False, settle: float = 0.6, dry_run: bool = False) -> int:
+    """_nudge_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py).
+    Another typer holding the pane past 5 s -> RC_NOT_SENT (nothing typed; the
+    caller nudges again next cycle). A headless seat: through the gateway (nudge_headless).
+    dry_run reads and decides but types nothing and does not take the pane lock."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import gateway_deliver
     if gateway_deliver.headless_seat(session):
+        if dry_run:
+            print(f"nudge_pane: DRY RUN would queue for {session}'s CLI (headless): {text[:70]!r}")
+            return 0
         return nudge_headless(session, text, force=force)
+    if dry_run:
+        return _nudge_unlocked(session, text, force=force, settle=settle, dry_run=True)
     try:
         import pane_lock
         with pane_lock.pane_lock(session, wait_s=5.0):
-            return _nudge_unlocked(session, text, force=force, settle=settle)
+            return _nudge_unlocked(session, text, force=force, settle=settle, dry_run=False)
     except pane_lock.PaneBusy:
         print(f"nudge_pane: another sender holds {session}'s pane lock; NOT SENT", file=sys.stderr)
         return RC_NOT_SENT
@@ -80,7 +100,13 @@ def nudge_headless(session: str, text: str, *, force: bool = False, deliver=None
     return 2
 
 
-def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: float = 0.6) -> int:
+def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: float = 0.6, dry_run: bool = False) -> int:
+    # Unreadable/absent is RC_NOT_SENT ("cannot tell"), not a purposeful refusal (2)
+    # and never a submit (0). composer_line() is None or "" in both idle and failed-capture cases.
+    if not pane_readable(session):
+        print(f"nudge_pane: cannot read {session} (no such pane, or tmux rejects this target here); "
+              f"NOT SENT (rc={RC_NOT_SENT})", file=sys.stderr)
+        return RC_NOT_SENT
     if attached(session) and not force:
         print(f"nudge_pane: a client is attached to {session}; refusing (use --force if you own that client)", file=sys.stderr)
         return 2
@@ -93,6 +119,9 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
         # used to pass, which could be a person's draft or a menu row such as "1. Yes".)
         print(f"nudge_pane: composer of {session} already holds text {before[:60]!r}; refusing", file=sys.stderr)
         return 2
+    if dry_run:
+        print(f"nudge_pane: DRY RUN would type into {session}")
+        return 0
     import inject_journal                        # typed-not-entered row; no row, no typing
     try:
         inject_journal.record(session, text, text[:40])
@@ -118,6 +147,10 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
     tmux("send-keys", "-t", session, "Enter")
     for _ in range(3):
         time.sleep(1.5)
+        if not pane_readable(session):
+            print(f"nudge_pane: {session} became unreadable after the write; "
+                  f"CANNOT CONFIRM — reporting NOT SENT rather than assuming delivery", file=sys.stderr)
+            return RC_NOT_SENT
         line = composer_line(session)
         if line == "":                       # an EMPTY composer is the only proof of a submit; other
             inject_journal.clear(session)    # text there (a menu, someone's words) proves nothing
@@ -147,8 +180,9 @@ def main(argv=None) -> int:
     ap.add_argument("session")
     ap.add_argument("text")
     ap.add_argument("--force", action="store_true", help="nudge even if a client is attached")
+    ap.add_argument("--dry-run", action="store_true", help="read the composer, print the decision, type nothing")
     ns = ap.parse_args(argv)
-    return nudge(ns.session, ns.text, force=ns.force)
+    return nudge(ns.session, ns.text, force=ns.force, dry_run=ns.dry_run)
 
 
 if __name__ == "__main__":
