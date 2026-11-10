@@ -150,13 +150,28 @@ never the fleet's. A card whose premise dies gets a correction, never a silent c
 API `keyMap`, iOS terminal view). Incident ids and captures stay in the operator's own
 `state/red-alert/` — this file carries the shape, never the identifiers.
 
-## Create issue (human-only)
+## Filing issues (structured auto-file vs human free text)
 
-Dashboard red-alert cards expose a **Create issue** button. It never auto-files.
-It shows a scrubbed preview (tailnet names, IPs, absolute home paths, chat ids,
-client/person names via `ORCHESTRA_SCRUB_NAMES`, secrets) and requires confirm.
-Target repo: `orchestra.toml` `[github_issues] repo` (default `Tulum-DAO/orchestraos`, overridable). With no GitHub auth, a prefilled `/issues/new` URL is offered instead of filing.
-If an open issue already carries the fingerprint marker, we comment instead of creating.
-Auth: box `gh` login or `GITHUB_TOKEN`/`GH_TOKEN`; clear error if neither.
+Every perceived or actual issue is captured **locally** first (the red-alert report
+under the data dir). That local record may contain logs, pane snapshots, and free text.
 
-Watch beat: `[red_alert] watch_enabled = true` (default false) starts `red_alert_watch` via `orchestra up`.
+**Structured auto-file** (optional, no human at the keyboard) is run by deterministic
+code (`scripts/red_alert_reporter.py`), never an LLM, agent, hook, MCP, or prompt.
+The GitHub token lives in a 0600 file (`<data>/state/github-reporter-token`) and is
+never placed in seat/agent environment. The outbound repo is pinned in
+`[github_issues] repo` (default `Tulum-DAO/orchestraos`); issue content cannot change
+it. The issue body contains only allowlisted structured fields: alert type enum,
+component from a fixed list, error/exit/http codes, orchestraos version/commit,
+OS/arch, counts, timestamp, fingerprint hash. Unknown fields are dropped, not
+scrubbed. Free text from logs, agent output, panes, prompts, paths, or user data
+is never copied. Rate limit + fingerprint dedupe apply.
+
+**Human path:** anything with free text (a user "Report a problem", stack traces,
+log excerpts) stays local and only leaves the box after a scrubbed preview and
+explicit confirm, or via a prefilled `/issues/new` URL the human submits. Dashboard
+cards keep the **Create issue** button for this path.
+
+Watch beat: `[red_alert] watch_enabled` defaults **true**, in **report-only** mode
+(classify + local report + card; no pane repairs). Set `repair_enabled = true` to
+allow automatic repairs. `state/red-alert/DISARM` also forces report-only.
+`orchestra doctor` reports the watch mode, the pinned repo, and the reporter token.

@@ -201,10 +201,15 @@ reap_after_generations = 2
 runtime_dir = "~/runtime"
 
 
-# RED ALERT watchdog beat (classify seats + post cards). Default off.
+# RED ALERT watchdog beat. Default on, report-only: classify + local report + card.
+# No pane repairs unless repair_enabled = true (state/red-alert/DISARM also forces report-only).
+# Auto-file (when a 0600 reporter token file is present) is a structured allowlisted
+# summary only — no logs, paths, pane content, or user free text.
 [red_alert]
-watch_enabled = false
+watch_enabled = true
+repair_enabled = false
 
-# Create-issue button target. Default is the public OrchestraOS repo (overridable).
+# Issue target is pinned here (or ORCHESTRA_GITHUB_ISSUES_REPO). Content cannot change it.
+# Token file (optional, auto-file only): <data>/state/github-reporter-token (mode 0600).
 [github_issues]
 repo = "Tulum-DAO/orchestraos"

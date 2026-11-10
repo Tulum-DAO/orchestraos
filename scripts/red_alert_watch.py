@@ -517,7 +517,28 @@ def fleet_down(reg: dict) -> dict | None:
 
 
 def armed() -> bool:
+    """False when state/red-alert/DISARM is present (report + card only, never repair)."""
     return not os.path.exists(os.path.join(RA.state_dir(), "DISARM"))
+
+
+def repairs_allowed() -> bool:
+    """Pane repairs require both: no DISARM file, and [red_alert] repair_enabled (default off).
+
+    Fail closed: any error reading settings means report-only. Tests may set
+    ORCHESTRA_RED_ALERT_REPAIR=1 to exercise the repair path.
+    """
+    if not armed():
+        return False
+    env = (os.environ.get("ORCHESTRA_RED_ALERT_REPAIR") or "").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    if env in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from orchestra_cli.settings import load_settings
+        return bool(load_settings().red_alert_repair_enabled)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def excluded() -> set[str]:
@@ -531,7 +552,7 @@ def handle(seat: str, session: str, r: dict, ev: dict, *, dry: bool) -> None:
     rid = r["id"]
     v = _view(r)
     card = read_card(r["card_id"]) if r.get("card_id") else None
-    d = decide(v, attached=bool(ev["attached"].get(seat)), answer=norm_answer(card), now=time.time(), armed=armed())
+    d = decide(v, attached=bool(ev["attached"].get(seat)), answer=norm_answer(card), now=time.time(), armed=repairs_allowed())
     log(f"{rid} {seat} {r['class']} -> {d}")
     if dry:
         return
@@ -644,7 +665,7 @@ def tick(*, only: str | None = None, dry: bool = False, registry_path: str | Non
             continue
         r = file_finding(seat, f, ev)
         handle(seat, session, r, ev, dry=dry)
-    log(f"tick seats={len(seats)} findings={findings} armed={armed()}")
+    log(f"tick seats={len(seats)} findings={findings} armed={armed()} repairs={repairs_allowed()}")
     return 0
 
 
