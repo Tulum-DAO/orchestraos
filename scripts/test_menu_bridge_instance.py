@@ -74,7 +74,7 @@ def test_bridge_one_stamps_instance_on_payload(monkeypatch):
     # stamp_input_kinds is imported inside bridge_one from watch_gateway
     import types
     fake_wg = types.SimpleNamespace(stamp_input_kinds=lambda p: p)
-    sys.modules["watch_gateway"] = fake_wg
+    monkeypatch.setitem(sys.modules, "watch_gateway", fake_wg)
     rid = mb.bridge_one(
         Store(), "seat-a", CAP, 0, 10, "idle",
         debounce_s=0, instance_fn=lambda sess, cap: "inst-7",
