@@ -67,8 +67,8 @@ class Settings:
     router_interval: int = 60
     # [red_alert] watch_enabled: cron beat that classifies seats + files cards (default off)
     red_alert_watch_enabled: bool = False
-    # [github_issues] repo: owner/name for Create-issue button (default unset = disabled)
-    github_issues_repo: str = ""
+    # [github_issues] repo: owner/name for Create-issue button (default public OrchestraOS repo)
+    github_issues_repo: str = "Tulum-DAO/orchestraos"
     # [seats] nice: the CPU priority seats start at (scripts/seat_nice.sh validates it; 0 = off)
     seat_nice: str = "10"
     runtime_dir: Path = Path(DEFAULT_RUNTIME_DIR)
@@ -239,7 +239,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         router_enabled=bool(_get(raw, "router", "enabled", True)),
         router_interval=int(_get(raw, "router", "interval_seconds", 60)),
         red_alert_watch_enabled=bool(_get(raw, "red_alert", "watch_enabled", False)),
-        github_issues_repo=str(_get(raw, "github_issues", "repo", "") or ""),
+        github_issues_repo=str(_get(raw, "github_issues", "repo", "Tulum-DAO/orchestraos") or "Tulum-DAO/orchestraos"),
         seat_nice=str(_get(raw, "seats", "nice", 10)),
         runtime_dir=Path(os.path.expanduser(str(rot.get("runtime_dir", DEFAULT_RUNTIME_DIR)))),
     )

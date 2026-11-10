@@ -32,7 +32,7 @@ export default function RedAlerts() {
       <h1 className="text-lg font-semibold">Red Alerts</h1>
       <p className="text-xs text-tone-400">
         Watchdog cards land in Approvals. This list is every report on disk.
-        Create issue never auto-files — preview + confirm; repo setting defaults unset.
+        Create issue never auto-files — preview + confirm. Default target is Tulum-DAO/orchestraos; without GitHub auth a prefilled issue URL is offered.
       </p>
       <div className="flex gap-2 text-xs">
         {['open', 'awaiting-approval', 'resolved', 'all'].map((k) => (

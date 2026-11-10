@@ -1,8 +1,9 @@
 /**
  * CreateIssueButton — human-only GitHub issue filing from a red-alert card.
  * Never auto-files. Shows a scrubbed preview; operator confirms. Target repo
- * is a setting (default unset). If an open issue for the same fingerprint
- * exists, the server comments instead.
+ * defaults to Tulum-DAO/orchestraos (overridable). With GitHub auth, files via
+ * API (or comments on an open issue with the same fingerprint). Without auth,
+ * a prefilled github.com /issues/new URL is offered — nothing is filed automatically.
  */
 import { useState } from 'react';
 import { post } from '../../lib/api';
@@ -17,6 +18,8 @@ type Preview = {
   title?: string;
   body?: string;
   can_file?: boolean;
+  can_open_url?: boolean;
+  new_issue_url?: string;
   blocked_reason?: string | null;
   error?: string;
 };
@@ -95,16 +98,13 @@ export function CreateIssueButton({ opKey, reportId }: { opKey?: string | null; 
           {error && <div className="text-red-400">{error}</div>}
           {preview && (
             <>
-              {!preview.repo_configured && (
+              {!preview.auth_ok && (
                 <div className="text-amber-400">
-                  Target repo unset — set <code>[github_issues] repo = "owner/name"</code> in orchestra.toml to enable filing.
-                  Preview still works.
+                  No GitHub auth on this box — open the prefilled issue URL (nothing is filed automatically).
+                  {preview.blocked_reason ? <> {preview.blocked_reason}</> : null}
                 </div>
               )}
-              {preview.repo_configured && !preview.auth_ok && (
-                <div className="text-red-400">No GitHub auth: {preview.blocked_reason}</div>
-              )}
-              <div><span className="text-tone-400">Repo:</span> {preview.repo || '(not configured)'}</div>
+              <div><span className="text-tone-400">Repo:</span> {preview.repo || 'Tulum-DAO/orchestraos'}</div>
               <div><span className="text-tone-400">Fingerprint:</span> {preview.fingerprint}</div>
               <div className="font-medium text-tone-100">{preview.title}</div>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-tone-300 bg-black/30 p-2 rounded">{preview.body}</pre>
@@ -113,11 +113,18 @@ export function CreateIssueButton({ opKey, reportId }: { opKey?: string | null; 
                   disabled={loading} onClick={() => void confirm(true)}>
                   Dry-run
                 </button>
-                <button type="button" className="px-2 py-1 rounded bg-red-700 hover:bg-red-600 disabled:opacity-40"
-                  disabled={loading || !preview.can_file}
-                  onClick={() => void confirm(false)}>
-                  Confirm &amp; file
-                </button>
+                {preview.can_file ? (
+                  <button type="button" className="px-2 py-1 rounded bg-red-700 hover:bg-red-600 disabled:opacity-40"
+                    disabled={loading}
+                    onClick={() => void confirm(false)}>
+                    Confirm & file
+                  </button>
+                ) : preview.new_issue_url ? (
+                  <a className="px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white"
+                    href={preview.new_issue_url} target="_blank" rel="noreferrer">
+                    Open prefilled issue
+                  </a>
+                ) : null}
                 <button type="button" className="px-2 py-1 rounded border border-tone-600"
                   onClick={() => { setOpen(false); setPreview(null); setResult(null); }}>
                   Cancel
@@ -127,7 +134,9 @@ export function CreateIssueButton({ opKey, reportId }: { opKey?: string | null; 
           )}
           {result?.ok && (
             <div className="text-green-400">
-              {result.dry_run ? `Dry-run: would ${result.action}` : `${result.action}d`}
+              {result.action === 'open_url'
+                ? (result.dry_run ? 'Dry-run: would open prefilled issue URL' : 'Open the prefilled issue URL (nothing was filed)')
+                : result.dry_run ? `Dry-run: would ${result.action}` : `${result.action}d`}
               {result.url ? <> — <a className="underline" href={result.url} target="_blank" rel="noreferrer">{result.url}</a></> : null}
               {result.number != null ? ` (#${result.number})` : null}
             </div>

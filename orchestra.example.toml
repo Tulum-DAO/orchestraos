@@ -205,7 +205,6 @@ runtime_dir = "~/runtime"
 [red_alert]
 watch_enabled = false
 
-# Create-issue button target. Default unset / empty = preview works, filing disabled.
-# Do not point a public default at Tulum-DAO/orchestraos.
+# Create-issue button target. Default is the public OrchestraOS repo (overridable).
 [github_issues]
-repo = ""
+repo = "Tulum-DAO/orchestraos"

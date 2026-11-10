@@ -3,14 +3,16 @@
 
 Never auto-files. The dashboard (or CLI) shows a scrubbed preview; the operator
 confirms; then we create an issue or comment on an open one with the same
-fingerprint. Target repo comes from orchestra.toml [github_issues] repo
-(owner/name). Default is unset — feature visible, filing disabled until configured.
+fingerprint, or (with no GitHub auth) return a prefilled github.com issue URL.
+
+Target repo: orchestra.toml [github_issues] repo, else ORCHESTRA_GITHUB_ISSUES_REPO,
+else Tulum-DAO/orchestraos (public default, overridable).
 
     python3 scripts/red_alert_issue.py preview <report-id>
     python3 scripts/red_alert_issue.py create  <report-id> [--yes]
     python3 scripts/red_alert_issue.py scrub   --text-file -
 
-Auth: `gh` on PATH (box login) or GITHUB_TOKEN / GH_TOKEN. Clear error if neither.
+Auth: `gh` on PATH or GITHUB_TOKEN / GH_TOKEN files via the API. With neither, a prefilled /issues/new URL is returned so no token is required.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -79,8 +82,12 @@ def fingerprint(report: dict) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def load_repo_setting() -> str | None:
-    """owner/name from orchestra.toml [github_issues] repo, else env, else None."""
+DEFAULT_REPO = "Tulum-DAO/orchestraos"
+ISSUE_LABEL = "red-alert"
+
+
+def load_repo_setting() -> str:
+    """owner/name: env, then orchestra.toml [github_issues] repo, else public default."""
     env = (os.environ.get("ORCHESTRA_GITHUB_ISSUES_REPO") or "").strip()
     if env:
         return env
@@ -89,14 +96,21 @@ def load_repo_setting() -> str | None:
     except ImportError:  # pragma: no cover
         import tomli as tomllib  # type: ignore
     cfg = Path(os.environ.get("ORCHESTRA_CONFIG") or (ROOT / "orchestra.toml"))
-    if not cfg.is_file():
-        return None
-    try:
-        raw = tomllib.loads(cfg.read_text())
-    except Exception:  # noqa: BLE001
-        return None
-    repo = ((raw.get("github_issues") or {}).get("repo") or "").strip()
-    return repo or None
+    if cfg.is_file():
+        try:
+            raw = tomllib.loads(cfg.read_text())
+            repo = ((raw.get("github_issues") or {}).get("repo") or "").strip()
+            if repo:
+                return repo
+        except Exception:  # noqa: BLE001
+            pass
+    return DEFAULT_REPO
+
+
+def new_issue_url(repo: str, title: str, body: str, labels: str = ISSUE_LABEL) -> str:
+    """Prefilled github.com /issues/new URL (no token required). Title/body must already be scrubbed."""
+    q = urlencode({"title": title, "body": body, "labels": labels})
+    return f"https://github.com/{repo}/issues/new?{q}"
 
 
 def _gh_auth_ok() -> tuple[bool, str]:
@@ -152,58 +166,111 @@ def build_preview(report: dict) -> dict[str, Any]:
     ]
     repo = load_repo_setting()
     auth_ok, auth_how = _gh_auth_ok()
+    title = title[:240]
+    body = "\n".join(body_parts)
+    url = new_issue_url(repo, title, body)
     return {
         "ok": True,
         "report_id": rid,
         "fingerprint": fp,
         "repo": repo,
-        "repo_configured": bool(repo),
+        "repo_configured": True,
         "auth_ok": auth_ok,
         "auth": auth_how,
-        "title": title[:240],
-        "body": "\n".join(body_parts),
-        "can_file": bool(repo) and auth_ok,
-        "blocked_reason": (
-            None if (repo and auth_ok)
-            else ("set orchestra.toml [github_issues] repo = \"owner/name\" (default unset)" if not repo
-                  else auth_how)
+        "title": title,
+        "body": body,
+        "new_issue_url": url,
+        "can_file": auth_ok,
+        "can_open_url": True,
+        "blocked_reason": None if auth_ok else (
+            "no GitHub auth — open the prefilled issue URL (nothing is filed automatically)"
         ),
     }
 
 
+def _github_token() -> str:
+    return (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+
+
+def _github_api(method: str, path: str, token: str, payload: dict | None = None) -> tuple[int, Any]:
+    """Minimal GitHub REST call. Never logs the token. path may include a query string."""
+    import urllib.error
+    import urllib.request
+
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        f"https://api.github.com{path}",
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "orchestraos-red-alert",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode()
+            return int(resp.status), (json.loads(body) if body else None)
+    except urllib.error.HTTPError as e:
+        err = (e.read() or b"").decode(errors="replace")[-400:]
+        raise RuntimeError(f"GitHub API {e.code}: {err}") from e
+
+
 def find_open_issue(repo: str, fp: str) -> dict | None:
     """Return {number, url, title} if an open issue carries our fingerprint marker."""
-    gh = shutil.which("gh")
-    if not gh:
-        return None
     marker = f"orchestraos-red-alert-fp:{fp}"
+    gh = shutil.which("gh")
+    if gh:
+        try:
+            r = subprocess.run(
+                [gh, "issue", "list", "--repo", repo, "--state", "open",
+                 "--search", marker, "--json", "number,url,title,body", "--limit", "20"],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ},
+            )
+        except (OSError, subprocess.SubprocessError):
+            r = None
+        else:
+            if r.returncode == 0:
+                try:
+                    items = json.loads(r.stdout or "[]")
+                except json.JSONDecodeError:
+                    items = []
+                for it in items:
+                    if marker in (it.get("body") or ""):
+                        return {"number": it["number"], "url": it["url"], "title": it.get("title")}
+    token = _github_token()
+    if not token:
+        return None
+    q = urlencode({"q": f'repo:{repo} is:issue is:open "{marker}"'})
     try:
-        r = subprocess.run(
-            [gh, "issue", "list", "--repo", repo, "--state", "open",
-             "--search", marker, "--json", "number,url,title,body", "--limit", "20"],
-            capture_output=True, text=True, timeout=60,
-            env={**os.environ},
-        )
-    except (OSError, subprocess.SubprocessError):
+        _, data = _github_api("GET", f"/search/issues?{q}", token)
+    except (OSError, RuntimeError):
         return None
-    if r.returncode != 0:
-        return None
-    try:
-        items = json.loads(r.stdout or "[]")
-    except json.JSONDecodeError:
-        return None
-    for it in items:
+    for it in (data or {}).get("items") or []:
         if marker in (it.get("body") or ""):
-            return {"number": it["number"], "url": it["url"], "title": it.get("title")}
+            return {"number": it["number"], "url": it.get("html_url") or it.get("url"), "title": it.get("title")}
     return None
 
 
 def create_or_comment(preview: dict, *, dry_run: bool = False) -> dict:
-    if not preview.get("repo_configured"):
-        return {"ok": False, "error": preview.get("blocked_reason") or "repo not configured"}
+    repo = preview.get("repo") or DEFAULT_REPO
+    url = preview.get("new_issue_url") or new_issue_url(repo, preview.get("title") or "", preview.get("body") or "")
+    # No auth: never file; return the prefilled URL so a human can open it.
     if not preview.get("auth_ok"):
-        return {"ok": False, "error": preview.get("auth") or "no github auth"}
-    repo = preview["repo"]
+        return {
+            "ok": True,
+            "dry_run": bool(dry_run),
+            "action": "open_url",
+            "url": url,
+            "repo": repo,
+            "title": preview.get("title"),
+            "body": preview.get("body"),
+            "auth": preview.get("auth"),
+        }
     fp = preview["fingerprint"]
     existing = find_open_issue(repo, fp)
     if dry_run:
@@ -215,31 +282,58 @@ def create_or_comment(preview: dict, *, dry_run: bool = False) -> dict:
             "title": preview["title"],
             "body": preview["body"],
             "repo": repo,
+            "new_issue_url": url,
         }
+    comment_body = scrub(
+        f"### Update from red-alert `{preview['report_id']}`\n\n"
+        f"{preview['body']}"
+    )
     gh = shutil.which("gh")
-    if not gh:
-        # token-only path: use API via curl-ish — require gh for now
-        return {"ok": False, "error": "`gh` CLI required to file (token alone not wired yet)"}
-    if existing:
-        body = scrub(
-            f"### Update from red-alert `{preview['report_id']}`\n\n"
-            f"{preview['body']}"
-        )
+    if gh:
+        if existing:
+            r = subprocess.run(
+                [gh, "issue", "comment", str(existing["number"]), "--repo", repo, "--body", comment_body],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode != 0:
+                return {"ok": False, "error": (r.stderr or r.stdout)[-400:]}
+            return {"ok": True, "action": "comment", "number": existing["number"], "url": existing["url"]}
         r = subprocess.run(
-            [gh, "issue", "comment", str(existing["number"]), "--repo", repo, "--body", body],
+            [gh, "issue", "create", "--repo", repo, "--title", preview["title"],
+             "--body", preview["body"], "--label", ISSUE_LABEL],
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0:
             return {"ok": False, "error": (r.stderr or r.stdout)[-400:]}
-        return {"ok": True, "action": "comment", "number": existing["number"], "url": existing["url"]}
-    r = subprocess.run(
-        [gh, "issue", "create", "--repo", repo, "--title", preview["title"], "--body", preview["body"]],
-        capture_output=True, text=True, timeout=60,
-    )
-    if r.returncode != 0:
-        return {"ok": False, "error": (r.stderr or r.stdout)[-400:]}
-    url = (r.stdout or "").strip().splitlines()[-1] if r.stdout else ""
-    return {"ok": True, "action": "create", "url": url}
+        created = (r.stdout or "").strip().splitlines()[-1] if r.stdout else ""
+        return {"ok": True, "action": "create", "url": created}
+
+    token = _github_token()
+    if not token:
+        return {"ok": False, "error": "neither `gh` nor GITHUB_TOKEN/GH_TOKEN is available"}
+    try:
+        owner, name = repo.split("/", 1)
+    except ValueError:
+        return {"ok": False, "error": f"invalid repo {repo!r} (expected owner/name)"}
+    try:
+        if existing:
+            _, data = _github_api(
+                "POST", f"/repos/{owner}/{name}/issues/{existing['number']}/comments",
+                token, {"body": comment_body},
+            )
+            return {
+                "ok": True, "action": "comment",
+                "number": existing["number"],
+                "url": existing.get("url") or (data or {}).get("html_url"),
+            }
+        _, data = _github_api(
+            "POST", f"/repos/{owner}/{name}/issues", token,
+            {"title": preview["title"], "body": preview["body"], "labels": [ISSUE_LABEL]},
+        )
+        data = data or {}
+        return {"ok": True, "action": "create", "number": data.get("number"), "url": data.get("html_url")}
+    except (OSError, RuntimeError) as e:
+        return {"ok": False, "error": str(e)[:400]}
 
 
 def cmd_preview(rid: str) -> int:

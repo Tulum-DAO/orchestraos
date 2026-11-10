@@ -155,7 +155,7 @@ API `keyMap`, iOS terminal view). Incident ids and captures stay in the operator
 Dashboard red-alert cards expose a **Create issue** button. It never auto-files.
 It shows a scrubbed preview (tailnet names, IPs, absolute home paths, chat ids,
 client/person names via `ORCHESTRA_SCRUB_NAMES`, secrets) and requires confirm.
-Target repo: `orchestra.toml` `[github_issues] repo = "owner/name"` (default unset).
+Target repo: `orchestra.toml` `[github_issues] repo` (default `Tulum-DAO/orchestraos`, overridable). With no GitHub auth, a prefilled `/issues/new` URL is offered instead of filing.
 If an open issue already carries the fingerprint marker, we comment instead of creating.
 Auth: box `gh` login or `GITHUB_TOKEN`/`GH_TOKEN`; clear error if neither.
 
