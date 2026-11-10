@@ -199,3 +199,10 @@ reap_after_generations = 2
 # (FLEET_BEAT_DISABLED, BUS_DRAIN_DISABLED, self_retire_armed). Exported as
 # ORCH_RUNTIME_DIR by `orchestra up`.
 runtime_dir = "~/runtime"
+
+# SQLite WAL checkpoint beat. Default on (every 5 minutes) under orchestra up.
+# Discovers *.db under the data dir; never hardcodes a home path.
+[db_checkpoint]
+enabled = true
+interval_seconds = 300
+
