@@ -191,3 +191,14 @@ def test_http_status_non_int_is_dropped():
     p = R.structured_payload(_report(evidence={"http_status": "529 with log: " + INJECT[0]}))
     assert "http_status" not in p
     assert INJECT[0] not in str(p)
+
+
+def test_dry_run_without_token_does_not_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("ORCHESTRA_GITHUB_REPORTER_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    monkeypatch.setattr(R, "read_reporter_token", lambda: "")
+    monkeypatch.setattr(R, "_rate_ok", lambda fp, now=None: True)
+    out = R.maybe_auto_file(_report(), dry_run=True)
+    assert out["ok"] and out["action"] == "dry_run" and out.get("would_need_token") is True
+    for s in INJECT:
+        assert s not in out["body"]

@@ -389,12 +389,15 @@ def maybe_auto_file(report: dict, *, dry_run: bool = False, file_fn=None) -> dic
             out["action"] = "rate_limited"
             return out
         token = read_reporter_token()
+        # Dry-run always returns the structured payload and never touches the network,
+        # even when no token file is present (verification / DISARM boxes).
+        if dry_run:
+            out.update({"ok": True, "action": "dry_run", "dry_run": True,
+                        "would_need_token": not bool(token)})
+            return out
         if not token and file_fn is None:
             out["reason"] = "no reporter token file"
             out["action"] = "no_token"
-            return out
-        if dry_run:
-            out.update({"ok": True, "action": "dry_run", "dry_run": True})
             return out
         if file_fn is not None:
             result = file_fn(repo, title, body, payload)
