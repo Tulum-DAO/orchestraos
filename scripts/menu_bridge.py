@@ -38,6 +38,101 @@ import menu_bridge_core as core
 
 DEBOUNCE_S = 5.0
 
+# Menu instance lookup: the gateway owns the resolver; the bridge only asks it.
+# Any failure means "no instance" — the card then behaves exactly as before.
+# Token: WATCH_GATEWAY_TOKEN_FILE, else $ORCHESTRA_DIR/state/watch-gateway-token
+# (never a product-specific path).
+INSTANCE_URL = os.environ.get(
+    "WATCH_GATEWAY_URL",
+    "http://{host}:{port}".format(
+        host=os.environ.get("WATCH_GATEWAY_HOST", "127.0.0.1"),
+        port=os.environ.get("WATCH_GATEWAY_PORT", "9091"),
+    ),
+)
+INSTANCE_TIMEOUT_S = 1.0
+
+
+def _token_file():
+    env = os.environ.get("WATCH_GATEWAY_TOKEN_FILE")
+    if env:
+        return env
+    orch = os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR")
+    if orch:
+        return os.path.join(orch, "state", "watch-gateway-token")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "state", "watch-gateway-token")
+
+
+def _gateway_token():
+    try:
+        with open(_token_file()) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+class _TransportError(Exception):
+    """The gateway could not be reached (timeout / refused), as opposed to a refusal."""
+
+
+def _lookup(session, capture, opener, token, timeout):
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    import menu_instance
+    if not token or not isinstance(capture, dict):
+        return None
+    url = f"{INSTANCE_URL}/menu-instance?session={urllib.parse.quote(session, safe='')}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with opener(req, timeout=timeout) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return None
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError:
+        return None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise _TransportError(str(e)) from e
+    except ValueError:
+        return None
+    if not isinstance(body, dict) or body.get("ok") is not True:
+        return None
+    inst = body.get("instance")
+    # Bind only if the gateway resolved against the SAME menu this bridge captured.
+    if not inst or body.get("signature") != menu_instance.signature(capture):
+        return None
+    return str(inst)
+
+
+def lookup_instance(session, capture, opener=None, token=None, timeout=INSTANCE_TIMEOUT_S):
+    """The instance of the menu `capture` on `session`, or None. Never raises."""
+    import urllib.request
+    try:
+        return _lookup(session, capture, opener or urllib.request.urlopen,
+                       _gateway_token() if token is None else token, timeout)
+    except Exception:  # noqa: BLE001 — identity is additive; a lookup never breaks a bridge
+        return None
+
+
+def make_instance_fn(opener=None, token=None, timeout=INSTANCE_TIMEOUT_S):
+    """A per-tick lookup: after one transport failure it stops asking, so a stalled
+    gateway costs one timeout per tick, not one per menu."""
+    import urllib.request
+    state = {"down": False}
+    tok = _gateway_token() if token is None else token
+    op = opener or urllib.request.urlopen
+
+    def fn(session, capture):
+        if state["down"]:
+            return None
+        try:
+            return _lookup(session, capture, op, tok, timeout)
+        except _TransportError:
+            state["down"] = True
+            return None
+        except Exception:  # noqa: BLE001
+            return None
+    return fn
+
 
 # ---------------------------------------------------------------------------
 # 1. bridge_one — create (or dedup to) a single pending menu row
@@ -89,7 +184,7 @@ def _live_reread(source_session):
 
 def bridge_one(store, source_session, capture, first_seen_ts, now, state,
                debounce_s=DEBOUNCE_S, walk_fn=None, reread_fn=None,
-               store_but_mark=False):
+               store_but_mark=False, instance_fn=None):
     """Bridge a single parked/idle, debounced pane-menu into the ledger.
 
     Returns the approval row id (new or the existing op_key-deduped row) when
@@ -162,6 +257,15 @@ def bridge_one(store, source_session, capture, first_seen_ts, now, state,
     from watch_gateway import stamp_input_kinds
     stamp_input_kinds(payload)
     op_key = core.menu_op_key(source_session, capture["question"], capture.get("context") or "")
+    # Stamp instance onto the menu payload only when the gateway proves it for
+    # THIS capture; otherwise omitted. create() dedups exactly as before.
+    if instance_fn is not None:
+        try:
+            inst = instance_fn(source_session, capture)
+        except Exception:  # noqa: BLE001
+            inst = None
+        if inst:
+            payload["instance"] = inst
     rid = store.create(
         from_agent=source_session,
         question=capture["question"],
@@ -471,7 +575,7 @@ def backfill_bridge_origin(store, db_path=None):
 # ---------------------------------------------------------------------------
 
 def run_cron_cycle(store, sessions_status, now, debounce_s=DEBOUNCE_S,
-                   walk_fn=None, skip=None, store_but_mark=False):
+                   walk_fn=None, skip=None, store_but_mark=False, instance_fn=None):
     """One reconciliation cycle for a STATELESS cron (fresh process each tick).
 
     PASSIVE-ONLY (Finding-1): walk_fn defaults to _noop_walk_fn, so the cron path
@@ -528,7 +632,7 @@ def run_cron_cycle(store, sessions_status, now, debounce_s=DEBOUNCE_S,
         first_seen.setdefault(op_key, seed)
         rid = bridge_one(store, session, capture, first_seen[op_key], now, state,
                          debounce_s=0.0, walk_fn=walk_fn,
-                         store_but_mark=store_but_mark)
+                         store_but_mark=store_but_mark, instance_fn=instance_fn)
         if rid is not None:
             bridged.append(op_key)
 
@@ -610,7 +714,8 @@ def _would_surface(fleet, skip=None):
     return out
 
 
-def run_pickup_cron(store, fleet, now, cfg=None, killswitch_path=None, shadow=False):
+def run_pickup_cron(store, fleet, now, cfg=None, killswitch_path=None, shadow=False,
+                    instance_fn=None):
     """One PASSIVE surface-pickup tick. Kill-switch first, then (shadow OR
     disabled) => compute would-surface + write NOTHING, else armed run_cron_cycle
     with the no-op walk_fn + gm skip-list. store/fleet/cfg/killswitch injectable
@@ -629,7 +734,8 @@ def run_pickup_cron(store, fleet, now, cfg=None, killswitch_path=None, shadow=Fa
     # of skipped; the capability fail-safe (handle_pending) still protects old
     # clients. The flip is a the operator arm coordinated by all-model-parity + gm — not here.
     result = run_cron_cycle(store, fleet, now=now, walk_fn=_noop_walk_fn, skip=skip,
-                            store_but_mark=bool(cfg.get("store_but_mark")))
+                            store_but_mark=bool(cfg.get("store_but_mark")),
+                            instance_fn=instance_fn)
     result["armed"] = True
     return result
 
@@ -647,7 +753,8 @@ def new_seen_state():
     return {"first_seen": {}, "bridged": set()}
 
 
-def run_cycle(store, sessions_status, seen_state, now, debounce_s=DEBOUNCE_S):
+def run_cycle(store, sessions_status, seen_state, now, debounce_s=DEBOUNCE_S,
+              instance_fn=None):
     """One reconciliation cycle over injected fleet state.
 
     sessions_status: {session -> {"state": str, "pending_menu": capture|None}}
@@ -676,7 +783,7 @@ def run_cycle(store, sessions_status, seen_state, now, debounce_s=DEBOUNCE_S):
         if op_key not in first_seen:
             first_seen[op_key] = now
         rid = bridge_one(store, session, capture, first_seen[op_key], now, state,
-                         debounce_s)
+                         debounce_s, instance_fn=instance_fn)
         if rid is not None:
             bridged.append(op_key)
 
@@ -812,7 +919,8 @@ def main(argv=None, store=None, seen_state=None, now=None):
         if cron:
             from approval_schema import ApprovalStore
             store = ApprovalStore(); store.migrate()
-        res = run_pickup_cron(store, fleet, now=now, shadow=would_surface)
+        res = run_pickup_cron(store, fleet, now=now, shadow=would_surface,
+                              instance_fn=None if would_surface else make_instance_fn())
         print(f"[surface-pickup] {json.dumps(res)}")
         return 0
 
