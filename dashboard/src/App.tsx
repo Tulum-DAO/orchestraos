@@ -9,6 +9,7 @@ import Tasks from './pages/Tasks';
 import ActivityPage from './pages/Activity';
 import Voice from './pages/Voice';
 import Approvals from './pages/Approvals';
+import RedAlerts from './pages/RedAlerts';
 import Workflows from './pages/Workflows';
 import Analytics from './pages/Analytics';
 import Skills from './pages/Skills';
@@ -74,6 +75,7 @@ function AppRoutes() {
             <Route path="activity" element={<ActivityPage />} />
             <Route path="voice" element={<Voice />} />
             <Route path="approvals" element={<Approvals />} />
+            <Route path="red-alerts" element={<RedAlerts />} />
             <Route path="workflows" element={<Workflows />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="skills" element={<Skills />} />

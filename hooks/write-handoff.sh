@@ -4,8 +4,6 @@
 
 SESSION_ID="${1:-unknown}"
 CWD="${2:-$(pwd)}"
-ORCHESTRA_DIR="$HOME/scripts/agent-orchestra"
-
 # Determine project from CWD
 PROJECT=$(basename "$CWD")
 

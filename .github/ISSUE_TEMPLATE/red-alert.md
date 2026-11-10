@@ -4,7 +4,8 @@ about: Same shape as the in-app report button — paste the report the system fi
 labels: red-alert
 ---
 
-<!-- In the app: agent page → siren button → File report. It writes
+<!-- In the app: Red Alerts / a red-alert card → Create issue (preview, then confirm).
+     Or: agent page → report button → File report. It writes
      $ORCHESTRA_DIR/state/red-alert/<ts>-<seat>-<class>.json and captures the evidence.
      Paste that JSON (or its id + the symptom) below. Nothing here reaches anyone's fleet but yours. -->
 

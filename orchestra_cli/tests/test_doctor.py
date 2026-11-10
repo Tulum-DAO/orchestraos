@@ -602,6 +602,16 @@ def test_post_call_secret_row_warns_with_the_fix_and_clears_when_set(tmp_path, m
     assert row.status == "OK"
 
 
+def test_doctor_reports_red_alert_defaults(tmp_path):
+    """A fresh install: watch is on (report-only), repo is pinned, no token -> auto-file off."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    by = _by_name(D.run_doctor(st, _probes()))
+    assert by["red-alert:watch"].status == "OK" and "report-only" in by["red-alert:watch"].detail
+    assert "Tulum-DAO/orchestraos" in by["red-alert:repo"].detail
+    assert by["red-alert:reporter-token"].status == "INFO"
+
+
 def test_doctor_reports_db_checkpoint_default(tmp_path):
     root = _repo(tmp_path)
     st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")

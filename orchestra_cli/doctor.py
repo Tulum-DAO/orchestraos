@@ -632,9 +632,36 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     hp = probes.git_hooks_path(root)
     checks.append(Check("git:hooks", OK if hp else WARN, hp or "core.hooksPath unset",
                         "git config core.hooksPath .git-hooks  (pre-push secret scan)", required=False))
+    # RED ALERT + structured reporter + db-checkpoint (fresh-install wiring).
     try:
         from orchestra_cli.process_table import build_process_table
         table = {e.name: e for e in build_process_table(st)}
+        watch = table.get("red_alert_watch")
+        if watch is None:
+            checks.append(Check("red-alert:watch", MISSING, "red_alert_watch is not in the process table",
+                                "upgrade orchestraOS", required=False))
+        elif watch.enabled:
+            mode = "report-only" if not st.red_alert_repair_enabled else "repairs enabled"
+            checks.append(Check("red-alert:watch", OK, f"enabled, {mode} (DISARM still honored)", required=False))
+        else:
+            checks.append(Check("red-alert:watch", INFO, "disabled ([red_alert] watch_enabled = false)",
+                                "set [red_alert] watch_enabled = true to classify seats", required=False))
+        repo = (st.github_issues_repo or "Tulum-DAO/orchestraos").strip()
+        checks.append(Check("red-alert:repo", OK, f"issues pinned to {repo} (content cannot retarget)", required=False))
+        tok = st.data_dir / "state" / "github-reporter-token"
+        if tok.is_file():
+            mode = tok.stat().st_mode
+            if mode & 0o077:
+                checks.append(Check("red-alert:reporter-token", WARN,
+                                    f"{tok} is group/world-readable; auto-file will refuse it",
+                                    "chmod 0600 the reporter token file", required=False))
+            else:
+                checks.append(Check("red-alert:reporter-token", OK,
+                                    f"{tok} present (mode 0600); structured auto-file enabled", required=False))
+        else:
+            checks.append(Check("red-alert:reporter-token", INFO,
+                                "no reporter token file; auto-file off (human preview / prefilled URL still work)",
+                                f"install a 0600 token at {tok} to enable structured auto-file", required=False))
         ck = table.get("db_checkpoint")
         if ck is None:
             checks.append(Check("db-checkpoint:service", MISSING, "db_checkpoint is not in the process table",
@@ -646,7 +673,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("db-checkpoint:service", INFO, "disabled ([db_checkpoint] enabled = false)",
                                 "set [db_checkpoint] enabled = true", required=False))
     except Exception as e:  # noqa: BLE001
-        checks.append(Check("db-checkpoint:service", WARN, f"status unavailable: {e}", required=False))
+        checks.append(Check("red-alert:watch", WARN, f"status unavailable: {e}", required=False))
 
     return checks
 

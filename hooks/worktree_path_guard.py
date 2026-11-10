@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash) guard: refuse `git worktree add` with a path INSIDE the live tree (gm msg_72115512 (5)).
 
-WHY: worktrees nested under ~/scripts/agent-orchestra (.workspace/, .claude/worktrees/, a seat's
+WHY: worktrees nested under the live OrchestraOS checkout (.workspace/, .claude/worktrees/, a seat's
 subdir) are inside every tree-wide edit, grep and sweep run from the live root. On 2026-10-08 a
 token-redaction pass from the root rewrote the working copies of ~53 nested worktrees belonging to
 other seats, and each nested full checkout was another on-disk copy of every committed secret.
@@ -18,8 +18,10 @@ import os
 import shlex
 import sys
 
-LIVE_ROOT = os.path.realpath(os.environ.get("WORKTREE_GUARD_LIVE_ROOT",
-                                            os.path.expanduser("~/scripts/agent-orchestra")))
+_DEFAULT_LIVE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+LIVE_ROOT = os.path.realpath(os.environ.get("WORKTREE_GUARD_LIVE_ROOT")
+                             or os.environ.get("ORCHESTRA_ROOT")
+                             or _DEFAULT_LIVE)
 # `git worktree add` options that take a separate value argument.
 _ADD_OPTS_WITH_VALUE = {"-b", "-B", "--reason", "--orphan"}
 _SEPARATORS = {"&&", "||", ";", "|", "&"}

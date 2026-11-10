@@ -667,6 +667,13 @@ def report(*, reported_by: str, channel: str, severity: str, seats: list[str], s
     path = os.path.join(state_dir(), fname)
     _write(path, doc)
     doc["_path"] = path
+    # Local report is the source of truth. Auto-file is a structured allowlisted summary
+    # only, and a no-op without a reporter token file. Never let filing break capture.
+    try:
+        import red_alert_reporter as _reporter
+        _reporter.maybe_auto_file(doc)
+    except Exception:  # noqa: BLE001
+        pass
     return doc
 
 

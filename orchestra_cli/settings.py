@@ -65,6 +65,12 @@ class Settings:
     boundary_delivery_armed: bool = True
     router_enabled: bool = True
     router_interval: int = 60
+    # [red_alert] watch_enabled: classify + local report + card (default on, report-only)
+    red_alert_watch_enabled: bool = True
+    # [red_alert] repair_enabled: allow automatic pane repairs (default off = report-only)
+    red_alert_repair_enabled: bool = False
+    # [github_issues] repo: owner/name for Create-issue button (default public OrchestraOS repo)
+    github_issues_repo: str = "Tulum-DAO/orchestraos"
     # [seats] nice: the CPU priority seats start at (scripts/seat_nice.sh validates it; 0 = off)
     seat_nice: str = "10"
     # [db_checkpoint] WAL checkpoint beat (default on, every 5 minutes)
@@ -237,6 +243,9 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         boundary_delivery_armed=bool(rot.get("boundary_delivery_armed", True)),
         router_enabled=bool(_get(raw, "router", "enabled", True)),
         router_interval=int(_get(raw, "router", "interval_seconds", 60)),
+        red_alert_watch_enabled=bool(_get(raw, "red_alert", "watch_enabled", True)),
+        red_alert_repair_enabled=bool(_get(raw, "red_alert", "repair_enabled", False)),
+        github_issues_repo=str(_get(raw, "github_issues", "repo", "Tulum-DAO/orchestraos") or "Tulum-DAO/orchestraos"),
         seat_nice=str(_get(raw, "seats", "nice", 10)),
         db_checkpoint_enabled=bool(_get(raw, "db_checkpoint", "enabled", True)),
         db_checkpoint_interval=int(_get(raw, "db_checkpoint", "interval_seconds", 300)),
@@ -303,6 +312,14 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
     """
     env = dict(os.environ if base is None else base)
     for k in INSTALLER_SESSION_ENV:
+        env.pop(k, None)
+    # Lethal trifecta: never put a GitHub token (or the reporter token-file path) in
+    # seat / supervised-process env. The reporter reads its own 0600 token file.
+    for k in (
+        "GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_PAT", "GH_PAT",
+        "ORCHESTRA_GITHUB_TOKEN", "ORCHESTRA_GITHUB_REPORTER_TOKEN", "GITHUB_REPORTER_TOKEN",
+        "ORCHESTRA_GITHUB_REPORTER_TOKEN_FILE",
+    ):
         env.pop(k, None)
     data = str(st.data_dir)
     root = str(st.repo_root)
