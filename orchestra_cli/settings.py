@@ -67,6 +67,9 @@ class Settings:
     router_interval: int = 60
     # [seats] nice: the CPU priority seats start at (scripts/seat_nice.sh validates it; 0 = off)
     seat_nice: str = "10"
+    # [db_checkpoint] WAL checkpoint beat (default on, every 5 minutes)
+    db_checkpoint_enabled: bool = True
+    db_checkpoint_interval: int = 300
     runtime_dir: Path = Path(DEFAULT_RUNTIME_DIR)
 
     @property
@@ -235,6 +238,8 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         router_enabled=bool(_get(raw, "router", "enabled", True)),
         router_interval=int(_get(raw, "router", "interval_seconds", 60)),
         seat_nice=str(_get(raw, "seats", "nice", 10)),
+        db_checkpoint_enabled=bool(_get(raw, "db_checkpoint", "enabled", True)),
+        db_checkpoint_interval=int(_get(raw, "db_checkpoint", "interval_seconds", 300)),
         runtime_dir=Path(os.path.expanduser(str(rot.get("runtime_dir", DEFAULT_RUNTIME_DIR)))),
     )
     return st

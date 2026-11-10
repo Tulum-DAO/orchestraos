@@ -600,3 +600,10 @@ def test_post_call_secret_row_warns_with_the_fix_and_clears_when_set(tmp_path, m
     (st.data_dir / ".env.secrets").write_text("ELEVENLABS_WEBHOOK_SECRET=x\n")
     row = _by_name(D.run_doctor(st, _probes()))["arturo:post-call-secret"]
     assert row.status == "OK"
+
+
+def test_doctor_reports_db_checkpoint_default(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    row = _by_name(D.run_doctor(st, _probes()))["db-checkpoint:service"]
+    assert row.status == "OK" and "enabled" in row.detail
