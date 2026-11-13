@@ -789,7 +789,8 @@ def _grok_is_idle(session: str, sig: dict) -> bool:
       1. delivery is armed (env ROUTER_GROK_DELIVERY_ARMED=1 or ~/runtime sentinel),
       2. the grok composer signature is VERIFIED (runtime_signatures 'verified'),
       3. the seat's own events.jsonl says its last turn ENDED (grok_context),
-      4. the composer line carries no human-typed text (same input_line_state check).
+      4. the live composer is an empty ❯ line with the grok footer under it.
+         A ❯ that appears only in scrollback does not count.
     The pane's claude-era hook file is NOT consulted (a pane outlives its occupants).
     Any failure => False: the row stays pending and note_hold SLA-escalates it."""
     try:
@@ -803,10 +804,7 @@ def _grok_is_idle(session: str, sig: dict) -> bool:
     ansi = tmux("capture-pane", "-t", session, "-e", "-p")
     if ansi.returncode != 0:
         return False
-    prompt_lines = [l for l in ansi.stdout.split("\n") if sig["prompt_char"] in l]
-    if not prompt_lines:
-        return False
-    return input_line_state(prompt_lines[-1], sig) != "typed"
+    return grok_composer_line_state(ansi.stdout, sig) == "empty"
 
 
 def agent_is_idle(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:

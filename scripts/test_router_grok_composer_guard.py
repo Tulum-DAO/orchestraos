@@ -135,3 +135,31 @@ def test_claude_typed_line_is_unchanged(monkeypatch):
     _tmux(monkeypatch, "❯ hello\n")
     assert mr._input_line_typed("p", "claude") is True
     assert seen == []
+
+
+def test_grok_shipped_sentinel_signature_holds(monkeypatch):
+    # the shipped grok signature marks itself unverified with a NUL-led prompt sentinel
+    assert _typed_on(monkeypatch, _screen(""), sig=mr.PROMPT_SIGNATURES["grok"]) is True
+
+
+# _grok_is_idle (the delivery gate) reads the composer with the same reader: only an "empty"
+# live composer is idle, so the gate and the typed-line re-read under the lock agree.
+
+def _fake_router_idle(monkeypatch, ok=True):
+    mod = types.ModuleType("grok_context")
+    mod.router_idle = lambda session, signature_verified: (ok and signature_verified, "t")
+    monkeypatch.setitem(sys.modules, "grok_context", mod)
+
+
+def test_grok_idle_gate_reads_the_live_composer(monkeypatch):
+    _fake_router_idle(monkeypatch)
+    _tmux(monkeypatch, _screen(""))
+    assert mr._grok_is_idle("p", SIG) is True
+    _tmux(monkeypatch, _screen(" [MSG from a | high] hi"))
+    assert mr._grok_is_idle("p", SIG) is False
+
+
+def test_grok_idle_gate_is_not_fooled_by_a_scrollback_prompt(monkeypatch):
+    _fake_router_idle(monkeypatch)
+    _tmux(monkeypatch, "● x\n❯\n● still working")
+    assert mr._grok_is_idle("p", SIG) is False
