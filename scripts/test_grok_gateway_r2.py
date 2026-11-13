@@ -100,6 +100,8 @@ def test_guard_is_the_only_thing_that_changed_for_a_verified_signature(G, monkey
     """Control: once the signature is verified, the guard steps aside and the
     normal gates run (the ❯ pane is injected). Proves the refusal above IS the guard."""
     monkeypatch.setattr(G, "_composer_signature_verified", lambda rt: True)
+    monkeypatch.setattr(G, "_grok_gateway_ready", lambda s: (True, "grok-gateway-ready"))   # the gate itself: test_grok_gateway_readiness
+    monkeypatch.setattr(G, "_grok_screen_ready", lambda raw: (True, "grok-gateway-ready"))  # and its re-read of the pre-inject screen
     t = _env(G, monkeypatch, GROK_IDLE, captures=(IDLE_PANE, IDLE_PANE, IDLE_PANE, IDLE_PANE))
     ok, info = G.verified_inject("zz-grok", "hello")
     assert info.get("reason") != "unverified-composer"

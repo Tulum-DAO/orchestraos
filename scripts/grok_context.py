@@ -61,6 +61,15 @@ TAIL_BYTES = 262144
 DELIVERY_ARM_ENV = "ROUTER_GROK_DELIVERY_ARMED"
 DELIVERY_ARM_SENTINEL = os.path.join("runtime", "ROUTER_GROK_DELIVERY_ARMED")
 
+#: OFF-SWITCH for watch_gateway keystrokes INTO a grok pane (POST /agent-message: phone, watch,
+#: dashboard). Default ON. GATEWAY_GROK_INJECT_ARMED=0 turns it off at gateway start; the
+#: ~/runtime/GATEWAY_GROK_INJECT_DISARMED file turns it off live, no restart. Separate from
+#: ROUTER_GROK_DELIVERY_ARMED: the router still holds grok mail. Being on is not enough to type:
+#: watch_gateway._grok_gateway_ready still needs a verified signature, an idle/working turn and
+#: an empty live composer.
+GATEWAY_INJECT_ARM_ENV = "GATEWAY_GROK_INJECT_ARMED"
+GATEWAY_INJECT_DISARM_SENTINEL = os.path.join("runtime", "GATEWAY_GROK_INJECT_DISARMED")
+
 
 # ---------------------------------------------------------------------------
 # paths
@@ -403,6 +412,25 @@ def status_for_pid(pid: int, *, cmdline_fn=None, root=None) -> dict:
         "phase": st["phase"],
         "confidence": "grok-events" if st["state"] != "unknown" else "process",
     }
+
+
+def gateway_inject_armed() -> bool:
+    """Is watch_gateway allowed to type INTO a grok pane? Default ON.
+
+    Off when GATEWAY_GROK_INJECT_ARMED is "0" or the DISARMED sentinel exists (checked on every
+    call, so the file switches it off live). ROUTER_GROK_DELIVERY_ARMED neither sets nor clears it.
+    """
+    if os.environ.get(GATEWAY_INJECT_ARM_ENV) == "0":
+        return False
+    # os.stat, not os.path.exists: exists() answers False on PermissionError too, which would read a
+    # sentinel nobody can check as "no sentinel" (armed). Only a certainly-absent file leaves it on.
+    try:
+        os.stat(os.path.join(os.path.expanduser("~"), GATEWAY_INJECT_DISARM_SENTINEL))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return False
 
 
 def delivery_armed() -> bool:
