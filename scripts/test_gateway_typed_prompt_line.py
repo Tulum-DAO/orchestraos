@@ -211,6 +211,9 @@ def test_mid_turn_is_accepted_only_for_runtimes_proven_to_queue(monkeypatch):
         monkeypatch.setattr(G, "_agent_status", lambda rt=rt: types.SimpleNamespace(
             get_agent_status=lambda s: {"state": "working", "activity": "x", "process": {"runtime": rt}}))
         monkeypatch.setattr(G, "_composer_signature_verified", lambda r: True)
+        # grok's own readiness gate (test_grok_gateway_readiness) runs first; this test is about
+        # the mid-turn rule behind it, so the gate is held open here.
+        monkeypatch.setattr(G, "_grok_gateway_ready", lambda s: (True, "grok-gateway-ready"))
         ok, info = G.verified_inject("tgt", "hello")
         if accepted:
             assert info.get("reason") != "busy", (rt, info)

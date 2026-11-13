@@ -4200,11 +4200,14 @@ def _is_prompt_line(line: str) -> bool:
     return False
 
 
-#: Runtimes whose pane composer the gateway must NOT type into until the runtime's prompt
-#: signature is verified (R2). The router already HOLDS grok mail on the same signature; without
-#: this, POST /agent-message (phone/watch, dashboard gatewayInject, boundary_delivery) would
-#: type into a Grok TUI whose composer glyph has never been measured, because
-#: _is_prompt_line accepts any line starting with ❯ / › / >.
+#: Runtimes the gateway types into only through their own readiness gate (R2 + grok readiness).
+#: For grok that is _grok_gateway_ready: a verified signature, gateway_inject_armed() (default
+#: ON; off-switch GATEWAY_GROK_INJECT_ARMED=0 or ~/runtime/GATEWAY_GROK_INJECT_DISARMED), an
+#: events.jsonl turn that is idle or working, and grok_composer_line_state == 'empty' on an ANSI
+#: capture whose footer is the bottom line. Without this, POST /agent-message (phone/watch,
+#: dashboard gatewayInject, boundary_delivery) would type into a Grok TUI on the strength of
+#: _is_prompt_line, which matches any ❯, including scrollback, and ❯ is also Claude's glyph.
+#: ROUTER_GROK_DELIVERY_ARMED is separate; router mail stays held.
 UNVERIFIED_COMPOSER_GUARD_RUNTIMES = frozenset({"grok"})
 
 
@@ -4216,6 +4219,67 @@ def _composer_signature_verified(runtime) -> bool:
         return bool(_rs.signature_verified(runtime))
     except Exception:
         return False
+
+
+#: events.jsonl turn states the gateway may type into a grok pane. 'working' is MEASURED safe
+#: on a fenced grok 1.0.50 seat (2 of 2 runs, input landed in waiting_for_model and in
+#: streaming_text): grok queues typed input + Enter mid-turn (footer shows "1 queued"), the
+#: running turn completes intact, and the queued line runs as the next turn. Same contract as
+#: Claude's mid-turn queue. 'unknown' is refused.
+GROK_INJECT_TURN_STATES = frozenset({"idle", "working"})
+
+
+def _grok_gateway_ready(session) -> tuple:
+    """(ready, why). Ready only when the signature is verified, the gateway's arm is on (default
+    on), events.jsonl says idle or working, and the visible ANSI composer is an empty grok prompt
+    with the grok footer under it, on the bottom line. Anything else refuses. This does not call
+    _is_prompt_line: a ❯ in scrollback with no footer under it is 'absent'."""
+    if not _composer_signature_verified("grok"):
+        return False, ("grok composer signature is not verified yet; "
+                       "nothing is typed into this pane until it is")
+    try:
+        import grok_context as _gc
+        import runtime_signatures as _rs
+    except Exception:
+        return False, "grok gateway inject reader unavailable; nothing is typed"
+    if not _gc.gateway_inject_armed():
+        return False, ("grok gateway inject is switched off "
+                       "(GATEWAY_GROK_INJECT_ARMED=0 or runtime/GATEWAY_GROK_INJECT_DISARMED); "
+                       "nothing is typed into this pane")
+    try:
+        turn = _gc.seat_turn_state(session)
+    except Exception as e:
+        return False, (f"grok events.jsonl unreadable ({type(e).__name__}); "
+                       "nothing is typed")
+    if not isinstance(turn, dict) or turn.get("state") not in GROK_INJECT_TURN_STATES:
+        state = turn.get("state") if isinstance(turn, dict) else "unknown"
+        return False, (f"grok turn is {state}; nothing is typed until events.jsonl "
+                       "shows a turn boundary")
+    raw = _capture_pane(session, lines=0, ansi=True)
+    if raw is None:
+        return False, "grok pane capture failed; nothing is typed"
+    try:
+        composer = _rs.grok_composer_line_state(raw)
+    except Exception as e:
+        return False, (f"grok composer classifier failed ({type(e).__name__}); "
+                       "nothing is typed")
+    if composer != "empty":
+        return False, (f"grok composer is {composer}; nothing is typed unless the "
+                       "live prompt line is empty")
+    # The classifier takes the LAST ❯+footer pair anywhere in the capture. Grok redraws its
+    # footer in place (measured: a full pane history holds exactly one footer), so a pair above
+    # the bottom is agent output quoting a screen, not the live composer. Anchor it: the footer
+    # must be the last non-empty line on screen.
+    try:
+        _footer_re = _rs.PROMPT_SIGNATURES["grok"]["idle_footer_re"]
+        _tail = [ln for ln in _strip_ansi(raw).splitlines() if ln.strip()]
+        _anchored = bool(_footer_re and _tail and re.search(_footer_re, _tail[-1].strip()))
+    except Exception:
+        _anchored = False
+    if not _anchored:
+        return False, ("grok footer is not the bottom line; the composer the classifier "
+                       "found is not the live one, so nothing is typed")
+    return True, "grok-gateway-ready"
 
 
 def _status_runtime(st) -> str:
@@ -4371,17 +4435,19 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
                                  "orchestra-builder/terminal, not chat"}
     st = _agent_status().get_agent_status(session)
     state = _STATE_MAP.get(st.get("state"), st.get("state"))
-    # R2: an UNVERIFIED composer is refused before any other gate and regardless of force —
-    # force is the human override for stranded input, not for typing into a TUI whose prompt
-    # has never been verified. Mail is not lost: the router keeps msg_store rows pending (and
-    # scripts/grok_mail_watch.py wakes a grok seat); a direct /agent-message caller gets this
-    # reason back.
+    # R2 + grok readiness: a grok pane must pass _grok_gateway_ready before any other gate and
+    # regardless of force — force is the human override for stranded input, not for typing into
+    # a TUI whose prompt has never been verified, whose arm is off, whose turn is unknown, or
+    # whose composer is not an empty live prompt. The reason stays "unverified-composer" so
+    # callers keep the same refusal. Mail is not lost: the router keeps msg_store rows pending
+    # (and scripts/grok_mail_watch.py wakes a grok seat); a direct /agent-message caller gets
+    # the gate's reason back.
     _rt = _status_runtime(st)
-    if _rt in UNVERIFIED_COMPOSER_GUARD_RUNTIMES and not _composer_signature_verified(_rt):
-        return False, {"reason": "unverified-composer", "state": state, "runtime": _rt,
-                       "activity": (f"{_rt} composer signature is not verified; nothing is "
-                                    "typed into this pane from here (use the terminal, or "
-                                    "send mail: the seat's mail watcher wakes it)")}
+    if _rt in UNVERIFIED_COMPOSER_GUARD_RUNTIMES:
+        _ready, _why = _grok_gateway_ready(session)
+        if not _ready:
+            return False, {"reason": "unverified-composer", "state": state, "runtime": _rt,
+                           "activity": _why}
     # ENUMERATE THE SAFE CASES AND DENY THE REST: idle, plus mid-turn (the CLI queues), plus
     # stalled (mid-turn that stopped moving — still a live prompt, see STALLED_STATES), plus
     # the composer-holds classes only under an explicit human force. waiting_permission,
