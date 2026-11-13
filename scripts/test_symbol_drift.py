@@ -150,3 +150,10 @@ def test_the_diff_shows_every_statement_after_the_docstring(tmp_path, capsys):
 def test_signature_level_changes_are_drift(tmp_path, capsys, change):
     sp, a, b = _trees(tmp_path, BASE, BASE.replace(*change), {"symbols": [{"file": "mod.py", "name": "f"}]})
     assert _run(capsys, sp, "--a", a, "--b", b)[0] == 1
+
+
+def test_a_long_expression_chain_in_both_trees_is_equal_not_a_crash(tmp_path, capsys):
+    """review R2: a deepcopy of a 250-term chain hit the recursion limit and read as drift."""
+    src = "def f():\n    return " + " + ".join(f"x{i}" for i in range(300)) + "\n"
+    sp, a, b = _trees(tmp_path, src, src, {"symbols": [{"file": "mod.py", "name": "f"}]})
+    assert _run(capsys, sp, "--a", a, "--b", b)[0] == 0

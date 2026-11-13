@@ -30,7 +30,6 @@ or a file cannot be read. A gate never passes on absent evidence.
 """
 import argparse
 import ast
-import copy
 import difflib
 import json
 import os
@@ -63,9 +62,8 @@ def find_symbol(source, name):
 
 
 def normalised(nodes):
-    """A comparable form: docstrings dropped (on a copy), positions ignored."""
-    return [ast.dump(_strip_docstrings(copy.deepcopy(n)), annotate_fields=True, include_attributes=False)
-            for n in nodes]
+    """A comparable form of already-stripped nodes: positions ignored."""
+    return [ast.dump(n, annotate_fields=True, include_attributes=False) for n in nodes]
 
 
 def _inside(tree, rel):
@@ -107,14 +105,19 @@ def compare(spec, tree_a, tree_b):
             with open(_inside(tree, f), encoding="utf-8") as fh:
                 nodes.append(find_symbol(fh.read(), sym["name"]))
         na, nb = nodes
+        # Strip ONCE (the nodes come from a fresh parse, so in place is safe) and reuse the result for
+        # the comparison and the diff: stripping twice ate a second leading string, and a deepcopy
+        # hit the recursion limit on a long expression chain (review R2).
+        na = [_strip_docstrings(n) for n in na]
+        nb = [_strip_docstrings(n) for n in nb]
         if not na or not nb:
             out.append((key, "MISSING-A" if not na else "MISSING-B", ""))
             continue
         if normalised(na) == normalised(nb):
             out.append((key, "EQUAL", ""))
             continue
-        ua = [ln for n in na for ln in ast.unparse(_strip_docstrings(copy.deepcopy(n))).splitlines()]
-        ub = [ln for n in nb for ln in ast.unparse(_strip_docstrings(copy.deepcopy(n))).splitlines()]
+        ua = [ln for n in na for ln in ast.unparse(n).splitlines()]
+        ub = [ln for n in nb for ln in ast.unparse(n).splitlines()]
         diff = "\n".join(difflib.unified_diff(ua, ub, "a/" + fa, "b/" + fb, lineterm="", n=1))
         out.append((key, "DIFF", diff))
     return out
@@ -134,7 +137,7 @@ def main(argv=None):
             spec = json.load(fh)
         check_spec(spec)
         rows = compare(spec, ns.a, ns.b)
-    except (OSError, ValueError, SyntaxError, KeyError, TypeError) as e:
+    except (OSError, ValueError, SyntaxError, KeyError, TypeError, RecursionError) as e:
         print(f"symbol_drift: cannot read the spec or a file: {e.__class__.__name__}: {e}", file=sys.stderr)
         return 2
     allow = spec.get("allow", {})
