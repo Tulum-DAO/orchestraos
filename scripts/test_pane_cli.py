@@ -9,7 +9,11 @@ consumers read that wrong:
 
 These tests run a REAL tmux through a `tmux` shim that pins `-S <private socket>`, with TMUX
 removed from the environment, so nothing here can reach a live tmux server. The fake CLI is a
-symlink named `claude` to sleep, so its argv[0] is `claude` exactly as a real one's is.
+symlink named `claude` to the Python interpreter, run as `claude 613` from the lab's bin dir where a
+script named `613` sleeps: its argv is `claude 613` exactly, argv[0] `claude` as a real one's is.
+(It used to be a symlink to sleep. uutils coreutils, the default from Ubuntu 26.04, is a multicall
+binary that picks the utility from argv[0] and refuses a `claude` name, so the fake never started
+and every test here timed out on CI. Python ignores argv[0].)
 """
 import json
 import os
@@ -47,7 +51,8 @@ def lab(monkeypatch):
     shim = bindir / "tmux"
     shim.write_text(f'#!/bin/sh\nexec "{REAL_TMUX}" -S "{sock}" "$@"\n')
     shim.chmod(0o755)
-    (bindir / "claude").symlink_to(shutil.which("sleep"))
+    (bindir / "claude").symlink_to(os.path.realpath(sys.executable))
+    (bindir / "613").write_text("import time\ntime.sleep(613)\n")    # `claude 613` runs this
     os.mkfifo(bindir / "gemini")       # a node-wrapped CLI's script path: `cat` blocks on it
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("ORCH_RELAUNCH_MIN_AGE_S", "0")        # the startup-gap floor has its own test
@@ -83,7 +88,7 @@ def _kill_fake_clis(lab_dir=None):
 
 def _seat(tmux, name, keys):
     """A seat as spawn-agent.sh makes one: a shell pane, the command typed into it."""
-    tmux("new-session", "-d", "-s", name, "-x", "100", "-y", "20", "sh")
+    tmux("new-session", "-d", "-s", name, "-x", "100", "-y", "20", "-c", str(tmux.bindir), "sh")
     tmux("send-keys", "-t", f"={name}:", keys, "Enter")
 
 
