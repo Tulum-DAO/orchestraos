@@ -1584,6 +1584,10 @@ def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     ansi = tmux("capture-pane", "-t", session, "-e", "-p")
     if ansi.returncode != 0:
         return True
+    if runtime == "grok":
+        # Grok's composer has its own reader (the ❯ glyph is also Claude's, and a ❯ in scrollback
+        # is not the composer); same "empty" rule as _grok_is_idle, anything else holds.
+        return grok_composer_line_state(ansi.stdout or "", sig) != "empty"
     prompt_lines = [l for l in (ansi.stdout or "").split("\n") if sig["prompt_char"] in l]
     return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
 

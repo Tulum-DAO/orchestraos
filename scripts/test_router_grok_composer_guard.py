@@ -98,3 +98,40 @@ def test_claude_path_never_consults_the_grok_guard(monkeypatch):
     assert seen == []
     mr.stuck_own_message("p", "grok")
     assert seen == [("p", mr.PROMPT_SIGNATURES["grok"])]
+
+
+# _input_line_typed (the router's typed-text re-read under the pane lock) reads a grok pane with
+# grok's own composer reader: only an "empty" live composer lets a paste through.
+
+def _typed_on(monkeypatch, screen, sig=SIG, rc=0):
+    monkeypatch.setitem(mr.PROMPT_SIGNATURES, "grok", sig)
+    _tmux(monkeypatch, screen, rc=rc)
+    return mr._input_line_typed("p", "grok")
+
+
+def test_grok_typed_line_reads_the_live_composer(monkeypatch):
+    assert _typed_on(monkeypatch, _screen("")) is False
+    assert _typed_on(monkeypatch, _screen(" [MSG from a | high] hi")) is True
+
+
+def test_grok_prompt_glyph_only_in_scrollback_holds(monkeypatch):
+    # an empty-looking prompt line in scrollback, no grok footer under it: not a composer
+    assert _typed_on(monkeypatch, "● x\n❯\n● still working") is True
+
+
+def test_grok_unverified_signature_holds_even_on_an_empty_composer(monkeypatch):
+    assert _typed_on(monkeypatch, _screen(""), sig={"prompt_char": "❯"}) is True
+
+
+def test_grok_capture_failure_holds(monkeypatch):
+    assert _typed_on(monkeypatch, "", rc=1) is True
+
+
+def test_claude_typed_line_is_unchanged(monkeypatch):
+    seen = []
+    monkeypatch.setattr(mr, "grok_composer_line_state", lambda *a: seen.append(a) or "empty")
+    _tmux(monkeypatch, "❯ \n")
+    assert mr._input_line_typed("p", "claude") is False
+    _tmux(monkeypatch, "❯ hello\n")
+    assert mr._input_line_typed("p", "claude") is True
+    assert seen == []
