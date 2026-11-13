@@ -422,11 +422,15 @@ def gateway_inject_armed() -> bool:
     """
     if os.environ.get(GATEWAY_INJECT_ARM_ENV) == "0":
         return False
+    # os.stat, not os.path.exists: exists() answers False on PermissionError too, which would read a
+    # sentinel nobody can check as "no sentinel" (armed). Only a certainly-absent file leaves it on.
     try:
-        return not os.path.exists(
-            os.path.join(os.path.expanduser("~"), GATEWAY_INJECT_DISARM_SENTINEL))
-    except OSError:
+        os.stat(os.path.join(os.path.expanduser("~"), GATEWAY_INJECT_DISARM_SENTINEL))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
         return False
+    return False
 
 
 def delivery_armed() -> bool:

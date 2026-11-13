@@ -4258,8 +4258,16 @@ def _grok_gateway_ready(session) -> tuple:
     raw = _capture_pane(session, lines=0, ansi=True)
     if raw is None:
         return False, "grok pane capture failed; nothing is typed"
+    return _grok_screen_ready(raw)
+
+
+def _grok_screen_ready(raw) -> tuple:
+    """(ready, why) for ONE grok capture: an empty grok prompt with its footer as the bottom line.
+    verified_inject asks it twice: inside _grok_gateway_ready, and again on the pre-inject capture
+    every later gate reads, so a screen that changed in between is refused, not acted on."""
     try:
-        composer = _rs.grok_composer_line_state(raw)
+        import runtime_signatures as _rs
+        composer = _rs.grok_composer_line_state(raw or "")
     except Exception as e:
         return False, (f"grok composer classifier failed ({type(e).__name__}); "
                        "nothing is typed")
@@ -4272,7 +4280,7 @@ def _grok_gateway_ready(session) -> tuple:
     # must be the last non-empty line on screen.
     try:
         _footer_re = _rs.PROMPT_SIGNATURES["grok"]["idle_footer_re"]
-        _tail = [ln for ln in _strip_ansi(raw).splitlines() if ln.strip()]
+        _tail = [ln for ln in _strip_ansi(raw or "").splitlines() if ln.strip()]
         _anchored = bool(_footer_re and _tail and re.search(_footer_re, _tail[-1].strip()))
     except Exception:
         _anchored = False
@@ -4495,9 +4503,18 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
     # The pre-inject screen: what the gates below and the submit witness read.
     pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
     pre = _strip_ansi(pre_raw)
+    # A grok pane's readiness was read on an earlier capture; the screen every gate below acts on
+    # must pass it too, or a screen that changed in between (a draft typed, the footer gone, a
+    # rating prompt up) would get the text, an Enter or a '0'. Regardless of force, like the gate.
+    _grok = _rt in UNVERIFIED_COMPOSER_GUARD_RUNTIMES
+    if _grok:
+        _ready, _why = _grok_screen_ready(pre_raw)
+        if not _ready:
+            return False, {"reason": "unverified-composer", "state": state, "runtime": _rt,
+                           "activity": _why}
 
     # Auto-dismiss modal rating prompts (e.g. Antigravity "How's the CLI experience so far? [0] Skip")
-    if any("How's the CLI experience so far" in ln or "[0] Skip" in ln for ln in pre.splitlines()):
+    if not _grok and any("How's the CLI experience so far" in ln or "[0] Skip" in ln for ln in pre.splitlines()):
         with _session_send_lock(session):
             _tmux("send-keys", "-t", _st(session), "0")
             _time.sleep(0.5)
@@ -4520,7 +4537,9 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
     # NEVER paste over typed-but-unsubmitted input (standing the operator rule: he
     # sometimes types directly into agent sessions — that text is sacred), mid-turn included.
     # Dim-styled ghost suggestions are NOT typed input and do not block.
-    if not force:
+    # A grok pane's typed-text check is the grok classifier above ('empty' on this same capture,
+    # held even under force); the generic reader would read grok's footer row as a draft.
+    if not force and not _grok:
         # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission), asked
         # about the live prompt line itself so a working screen does not hide a draft.
         typed = _typed_on_prompt_line(pre_raw) or ""

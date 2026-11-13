@@ -116,6 +116,19 @@ def test_the_sentinel_disarms_live_without_a_restart(gc, tmp_path):
     assert gc.gateway_inject_armed() is True
 
 
+def test_a_sentinel_that_cannot_be_checked_is_off(gc, monkeypatch):
+    """codex R1: os.path.exists swallows PermissionError and said 'no sentinel' (armed). Only a
+    sentinel that is certainly ABSENT leaves the arm on; any other error switches it off."""
+    import os as _os
+    real_stat = _os.stat
+    def stat(p, *a, **k):
+        if str(p).endswith("GATEWAY_GROK_INJECT_DISARMED"):
+            raise PermissionError(13, "denied")
+        return real_stat(p, *a, **k)
+    monkeypatch.setattr(gc.os, "stat", stat)
+    assert gc.gateway_inject_armed() is False
+
+
 def test_the_router_arm_and_the_gateway_arm_are_separate(gc, monkeypatch):
     monkeypatch.setenv("ROUTER_GROK_DELIVERY_ARMED", "1")
     monkeypatch.setenv("GATEWAY_GROK_INJECT_ARMED", "0")
@@ -182,14 +195,34 @@ def test_an_unreadable_events_log_refuses(G, monkeypatch):
 # ------------------------------------------------------------------ verified_inject consults it
 
 def test_verified_inject_types_into_a_ready_grok_pane(G, monkeypatch):
-    """Control for the refusals below: a ready gate steps aside and the normal gates run. The gate
-    is held open here (its own knobs are tested above); the captures are the plain ❯ pane the normal
-    composer gates accept."""
-    t = _ready_env(G, monkeypatch, capture="history line\n\u276f \n")
-    monkeypatch.setattr(G, "_grok_gateway_ready", lambda s: (True, "grok-gateway-ready"))
+    """Control for the refusals below, END TO END with the REAL gate: a ready grok screen (empty ❯,
+    the grok footer on the bottom line) passes every gate behind it too. The footer row under the
+    prompt is chrome, not a draft: the generic typed-text reader must not refuse it as text."""
+    t = _ready_env(G, monkeypatch)
     ok, info = G.verified_inject("zz-grok", "hello")
-    assert info.get("reason") != "unverified-composer"
-    assert any("-l" in c for c in _typed(t))
+    assert ok is True, info
+    assert [c[-1] for c in _typed(t)] == ["hello", "Enter"]
+
+
+def _two_screens(G, monkeypatch, gate_screen, pre_screen):
+    """The gate reads one capture; every later read (the pre-inject screen) sees another."""
+    t = _ready_env(G, monkeypatch)
+    t._c = [gate_screen] + [pre_screen] * 6
+    return t
+
+
+@pytest.mark.parametrize("pre_screen", ["some history\n❯ \n",                       # no footer: not grok's live prompt
+                                        TYPED_COMPOSER,                               # someone typed in between
+                                        "How's the CLI experience so far?\n[0] Skip\n"])   # no composer at all
+@pytest.mark.parametrize("kw", [dict(), dict(force=True), dict(idle_only=True)])
+def test_the_screen_the_inject_acts_on_is_held_to_the_grok_gate_too(G, monkeypatch, pre_screen, kw):
+    """codex R1: the gate passed on its own capture, then the screen changed before the pre-inject
+    capture every later gate reads. That screen must also be an empty, anchored grok composer, or
+    nothing is sent: no text, no Enter, no '0' to a rating prompt. force does not bypass it."""
+    t = _two_screens(G, monkeypatch, EMPTY_COMPOSER, pre_screen)
+    ok, info = G.verified_inject("zz-grok", "hello", **kw)
+    assert (ok, info["reason"]) == (False, "unverified-composer"), info
+    assert _typed(t) == []
 
 
 @pytest.mark.parametrize("knob", [dict(armed=False), dict(turn="unknown"), dict(capture=TYPED_COMPOSER),
