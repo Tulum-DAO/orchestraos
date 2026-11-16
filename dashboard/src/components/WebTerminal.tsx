@@ -115,12 +115,18 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
 
     ws.onopen = () => {
       term.write('\x1b[33m[Connected]\x1b[0m\r\n');
-      // Single resize on connect — no repeated fit() calls that cause scroll churn
+      // Fit and tell the pty now, then once more after layout settles (Safari chrome / Funnel).
       fit.fit();
       const dims = fit.proposeDimensions();
       if (dims && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
       }
+      const settle = () => {
+        if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+        doResize();
+      };
+      requestAnimationFrame(() => requestAnimationFrame(settle));
+      window.setTimeout(settle, 250);
     };
 
     // Buffer initial history burst, write it all at once to avoid scroll animation
@@ -269,24 +275,24 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
       xtermTextarea.addEventListener('focus', handleTermFocus);
     }
 
-    // ── Resize: fit once on connect, then only on orientation change ──
+    // ── Resize: fit on connect, and whenever the fitted col/row count changes ──
     const isMobile = window.innerWidth < 768;
     let lastWidth = window.innerWidth;
+    let lastFitted = { cols: 0, rows: 0 };
 
     const doResize = () => {
       fit.fit();
       const dims = fit.proposeDimensions();
-      if (dims && ws.readyState === WebSocket.OPEN) {
-        const colAdjust = isMobile ? 1 : 0;
-        const cols = Math.max(40, dims.cols - colAdjust);
-        ws.send(JSON.stringify({ type: 'resize', cols, rows: dims.rows }));
-        if (colAdjust > 0) term.resize(cols, dims.rows);
+      if (dims && dims.cols && dims.rows && ws.readyState === WebSocket.OPEN) {
+        // Use the fitted size as-is (no floor of 40: a narrow phone may be narrower).
+        if (dims.cols === lastFitted.cols && dims.rows === lastFitted.rows) return;
+        lastFitted = { cols: dims.cols, rows: dims.rows };
+        ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
       }
     };
 
-    // On mobile: only resize on orientation change (width change).
-    // Keyboard open/close changes height only — ignore it completely.
-    // On desktop: use ResizeObserver normally.
+    // Desktop: ResizeObserver. Mobile: also ResizeObserver + visualViewport when
+    // the fitted cols/rows change; keep the keyboard anchor. Orientation still resizes.
     let resizeObserver: ResizeObserver | null = null;
 
     // Phone: keep the line being typed into right above the key bar when the keyboard
@@ -306,12 +312,14 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
     };
     const anchorSubs: { dispose: () => void }[] = [];
 
+    const onViewportOrBox = () => { scheduleAnchor(); doResize(); };
+
     if (isMobile) {
       container.style.overflow = 'hidden';
       anchorSubs.push(term.onCursorMove(scheduleAnchor), term.onRender(scheduleAnchor));
-      resizeObserver = new ResizeObserver(scheduleAnchor);
+      resizeObserver = new ResizeObserver(onViewportOrBox);
       resizeObserver.observe(container);
-      window.visualViewport?.addEventListener('resize', scheduleAnchor);
+      window.visualViewport?.addEventListener('resize', onViewportOrBox);
       xtermTextarea?.addEventListener('focus', scheduleAnchor);
 
       const handleOrientation = () => {
@@ -347,7 +355,7 @@ export default function WebTerminal({ session, machine, closing = false }: WebTe
         xtermTextarea.removeEventListener('focus', handleTermFocus);
       }
       window.visualViewport?.removeEventListener('resize', updateVvh);
-      window.visualViewport?.removeEventListener('resize', scheduleAnchor);
+      window.visualViewport?.removeEventListener('resize', onViewportOrBox);
       xtermTextarea?.removeEventListener('focus', scheduleAnchor);
       anchorSubs.forEach((d) => d.dispose());
       cancelAnimationFrame(anchorFrame);

@@ -191,7 +191,9 @@ wss.on("connection", (ws, req) => {
   if (!session) { ws.send("\r\n\x1b[31mError: session required\x1b[0m\r\n"); ws.close(); return; }
   console.log("[ws-terminal] " + machine + ":" + session);
   sendHistory(ws, session, machine);
-  setAggressiveResize(session, machine);
+  // Do not set aggressive-resize here: the server's window-size is "latest", so this
+  // client's resize is what the window uses. Forcing aggressive-resize shrinks the
+  // shared seat to the smallest attached viewer and fights "latest".
 
   if (!pty) { ws.send("\r\n\x1b[33m[Web terminal unavailable: node-pty is not installed on this host]\x1b[0m\r\n"); ws.close(); return; }
   let shell, args;
