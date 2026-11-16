@@ -71,6 +71,20 @@ _PLACEHOLDER_RES = (
 def _is_placeholder(text):
     return any(r.match(text) for r in _PLACEHOLDER_RES)
 
+
+# Codex's idle status line below the composer (model, effort, cwd), e.g.
+# "  gpt-5 medium · ~/seats/codex-dev". Chrome, not a human-typed draft row.
+_CODEX_STATUS_FOOTER_RE = re.compile(
+    r"^\s*\S.+\s+(low|medium|high|xhigh|minimal)\s+·\s+(~/|/)",
+    re.I,
+)
+
+
+def is_codex_status_footer(line: str) -> bool:
+    """True if `line` is Codex's model · effort · cwd footer, not a wrapped draft row."""
+    s = (line or "").replace(" ", " ").strip()
+    return bool(_CODEX_STATUS_FOOTER_RE.match(s))
+
 # Per-runtime "the turn is in flight" markers (composer not accepting input). Presence of
 # any of these on the screen => 'submitted' (working), which outranks the composer line
 # read (a working pane may still render the last prompt). Verified by effect on the live

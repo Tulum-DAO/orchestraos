@@ -319,19 +319,24 @@ def _typed_chars(raw: str) -> str:
 
 
 def composer_typed_text(raw_line: str) -> str:
-    """Typed (non-ghost) composer content of a raw ANSI '❯' or '>' line, '' if none.
+    """Typed (non-ghost) composer content of a raw ANSI composer line, '' if none.
     Delegates to composer_state (the ONE SGR-aware reader, gm ghost-suggestion commission):
-    pick the runtime signature from the glyph (❯→claude, else gemini), classify, and return
+    pick the runtime signature from the glyph (❯→claude, ›→codex, else gemini), classify, and return
     the typed text only. A ghost/placeholder/empty line yields ''."""
     from scripts.composer_state import classify_input_line
     from scripts.runtime_signatures import PROMPT_SIGNATURES
-    sig = PROMPT_SIGNATURES["claude"] if "❯" in raw_line else PROMPT_SIGNATURES["gemini"]
+    if "❯" in raw_line:
+        sig = PROMPT_SIGNATURES["claude"]
+    elif "›" in raw_line:
+        sig = PROMPT_SIGNATURES["codex"]
+    else:
+        sig = PROMPT_SIGNATURES["gemini"]
     state, text = classify_input_line(raw_line, sig)
     return text if state == "typed" else ""
 
 
 def _find_chrome(stripped: list[str], raw_lines: list[str] | None = None) -> dict | None:
-    """Locate the live input box: bottom-most '❯' or '>' line framed by rule lines.
+    """Locate the live input box: bottom-most '❯', '›' (Codex), or '>' line framed by rule lines.
 
     Screen anatomy (bottom-up): status bar / rule / ❯ or > composer / rule / spinner
     zone / output. Submitted history also renders '❯ text' or '> text' but is never the
@@ -344,7 +349,7 @@ def _find_chrome(stripped: list[str], raw_lines: list[str] | None = None) -> dic
         raw_lines = stripped
     for i in range(n - 1, -1, -1):
         t = stripped[i].replace('\xa0', ' ').strip()
-        if not (t.startswith('❯') or (t.startswith('>') and not t.startswith('>>'))):
+        if not (t.startswith('❯') or t.startswith('›') or (t.startswith('>') and not t.startswith('>>'))):
             continue
         # look for framing rules within 4 lines either side
         top = next((j for j in range(i - 1, max(-1, i - 5), -1)
@@ -354,10 +359,14 @@ def _find_chrome(stripped: list[str], raw_lines: list[str] | None = None) -> dic
         if top is None or bottom is None:
             continue
         # display text (ghost + typed), may wrap across lines i..bottom-1
-        disp = [stripped[i].replace('\xa0', ' ').strip().lstrip('❯>').strip()]
+        from scripts.composer_state import is_codex_status_footer
+        disp = [stripped[i].replace('\xa0', ' ').strip().lstrip('❯>›').strip()]
         typed = [composer_typed_text(raw_lines[i])]
         for k in range(i + 1, bottom):
-            disp.append(stripped[k].strip())
+            row = stripped[k].strip()
+            if is_codex_status_footer(row):
+                break  # model · effort · cwd footer is chrome, not a wrapped draft
+            disp.append(row)
             typed.append(_typed_chars(raw_lines[k]).strip())
         display = ' '.join(l for l in disp if l).strip()
         typed_text = ' '.join(l for l in typed if l).strip()
