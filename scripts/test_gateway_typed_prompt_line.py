@@ -227,3 +227,72 @@ def test_the_real_claude_spinner_without_an_esc_hint_is_a_turn():
     """Captured from a live Claude pane mid-turn (2026-10-22): the spinner line has no esc hint."""
     line = "* Fermenting… (1h 14m 31s · ↓ 78.0k tokens · thought for 3s)"
     assert G._turn_above_composer(f"output\n{line}\n\n──────\n❯ \n──────\n")
+
+
+# ─────────────────────────────── Codex idle footer is not unsent typed text
+# Shape taken from a live idle Codex pane (tmux capture-pane -e -p): a dim
+# "Ask Codex to do anything" placeholder, then a blank line, then the
+# model · effort · cwd status footer. Seat names and paths are anonymized.
+
+def _codex_idle_screen():
+    rule = "─" * 40
+    prompt = "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m"
+    footer = "  gpt-5 medium · ~/seats/codex-dev"
+    return f"{rule}\n\n{prompt}\n\n{footer}\n\n"
+
+
+def test_codex_idle_footer_is_not_typed_unsent_text():
+    """The inject gate must not treat Codex's status footer as a draft."""
+    from scripts.composer_state import composer_text, is_codex_status_footer
+    screen = _codex_idle_screen()
+    assert is_codex_status_footer("  gpt-5 medium · ~/seats/codex-dev")
+    assert not is_codex_status_footer("please re-run the whole migration suite")
+    assert G._typed_on_prompt_line(screen) == ""
+    assert composer_text(screen, runtime="codex") == ""
+
+
+def test_a_codex_wrapped_draft_is_still_typed():
+    """A real multi-line draft under › still counts as unsent text."""
+    screen = (
+        "──────\n"
+        "› please re-run the whole migration\n"
+        "  suite and report back\n"
+        "──────\n"
+    )
+    assert G._typed_on_prompt_line(screen) == (
+        "please re-run the whole migration suite and report back"
+    )
+
+
+def test_a_codex_draft_does_not_swallow_the_status_footer():
+    """Footer below a real draft is chrome; only the draft is typed text."""
+    screen = (
+        "──────\n"
+        "› please re-run the suite\n"
+        "\n"
+        "  gpt-5 medium · ~/seats/codex-dev\n"
+    )
+    assert G._typed_on_prompt_line(screen) == "please re-run the suite"
+
+
+def test_find_chrome_reads_a_codex_box_with_the_codex_signature():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "agent_status_codex_chrome", Path(__file__).resolve().parent / "agent-status.py")
+    A = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(A)
+    prompt = "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m"
+    raw = [
+        "─" * 40,
+        "",
+        prompt,
+        "  please wrap this draft",
+        "─" * 40,
+        "  gpt-5 medium · ~/seats/codex-dev",
+    ]
+    import re as _re
+    stripped = [_re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", ln) for ln in raw]
+    chrome = A._find_chrome(stripped, raw)
+    assert chrome is not None
+    # placeholder is a ghost, not typed; the wrap row is the draft; footer is outside the box
+    assert chrome["composer_text"] == "please wrap this draft"

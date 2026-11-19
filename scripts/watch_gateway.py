@@ -4073,7 +4073,7 @@ def _typed_on_prompt_line(pre_raw: str):
     composer_state's line reader, NOT the whole-screen classifier: that one reads any screen with a
     working marker as 'submitted' and reports no typed text, which mid-turn (now a state we type
     into) would let a send paste over a draft the operator is typing."""
-    from scripts.composer_state import classify_input_line, _infer_runtime, PROMPT_SIGNATURES
+    from scripts.composer_state import classify_input_line, _infer_runtime, PROMPT_SIGNATURES, is_codex_status_footer
     raw_lines = (pre_raw or "").splitlines()
     stripped = [_strip_ansi(ln) for ln in raw_lines]
     # The whole input box first: the detector's box finder reads every wrapped row of a draft
@@ -4103,6 +4103,8 @@ def _typed_on_prompt_line(pre_raw: str):
         t = row.replace("\xa0", " ").strip()
         if t and set(t) <= set("─━-═"):
             break
+        if is_codex_status_footer(t):
+            break  # model · effort · cwd footer (and the blank above it) is chrome
         if t:
             more.append(t)
     return " ".join([typed] + more).strip() if (typed or more) else ""
