@@ -58,6 +58,31 @@ def test_build_full_transcript_caps_and_flags_truncation():
     assert "truncated" in t
 
 
+def test_one_user_turn_uses_a_literal_digest_not_an_interpretation():
+    assert endcall.short_call_literal([{"role": "user", "text": "Hey"}]) == "1 turn: 'Hey'; no reply"
+
+
+def test_short_call_literal_cannot_invent_a_decision_or_time():
+    digest = endcall.short_call_literal([{"role": "user", "text": "hello"},
+                                          {"role": "arturo", "text": "hi"}])
+    assert digest == "1 turn: 'hello'; reply: 'hi'"
+    assert "Thursday" not in digest and "moved" not in digest and "team" not in digest
+
+
+def test_digest_grounding_rejects_fabricated_people_times_and_decisions():
+    turns = [{"role": "user", "text": "Hey"}]
+    assert not endcall.digest_is_grounded(
+        "FYI, handled by Arturo: weekly team sync moved to Thursday 2 PM.", turns,
+        wrapper_words=("FYI", "handled", "by", "Arturo"))
+
+
+def test_digest_grounding_accepts_only_transcript_words_and_known_wrapper():
+    turns = [{"role": "user", "text": "research competitors"},
+             {"role": "arturo", "text": "research competitors"}]
+    assert endcall.digest_is_grounded("FYI, handled by Arturo: research competitors.", turns,
+                                      wrapper_words=("FYI", "handled", "by", "Arturo"))
+
+
 def test_inject_sends_full_transcript_when_provided():
     captured = {}
     def fake_post(session, text):

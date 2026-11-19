@@ -52,6 +52,40 @@ def build_full_transcript(turns, max_chars=6000):
     return body
 
 
+def short_call_literal(turns):
+    """Return the only permitted GM digest for fewer than two non-empty user turns.
+
+    A short call does not carry enough evidence for an interpretive summary.  This string is
+    composed solely from the literal user turn and literal Arturo reply, so it cannot invent a
+    person, time, decision, or follow-up.
+    """
+    users = [sanitize_summary(t.get("text", "")).replace("\n", " ") for t in turns
+             if t.get("role") == "user" and sanitize_summary(t.get("text", ""))]
+    if len(users) >= 2:
+        return None
+    replies = [sanitize_summary(t.get("text", "")).replace("\n", " ") for t in turns
+               if t.get("role") == "arturo" and sanitize_summary(t.get("text", ""))]
+    if not users:
+        return "0 turns; no reply" if not replies else f"0 turns; reply: {replies[-1]!r}"
+    noun = "turn" if len(users) == 1 else "turns"
+    reply = "no reply" if not replies else f"reply: {replies[-1]!r}"
+    return f"{len(users)} {noun}: {users[-1]!r}; {reply}"
+
+
+def digest_is_grounded(digest, turns, wrapper_words=()):
+    """True only when every meaningful digest token appears in the call transcript.
+
+    The optional wrapper words cover the non-claim label (for example, "FYI, handled by
+    Arturo").  A model-introduced person, time, decision, or status word makes this fail closed.
+    """
+    source = set(re.findall(r"[a-z0-9]+", " ".join(
+        sanitize_summary(t.get("text", "")).lower() for t in turns
+        if t.get("role") in ("user", "arturo"))))
+    allowed = {str(w).lower() for w in wrapper_words}
+    words = re.findall(r"[a-z0-9]+", sanitize_summary(digest).lower())
+    return bool(words) and all(len(w) < 3 or w in source or w in allowed for w in words)
+
+
 def build_marker(call_id: str, abs_path: str) -> str:
     if not VC_RE.match(call_id):
         raise ValueError("bad call_id")
