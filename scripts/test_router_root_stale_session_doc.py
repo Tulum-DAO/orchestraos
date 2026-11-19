@@ -143,3 +143,23 @@ def test_a_root_without_a_live_pointer_stays_a_silent_retry(_sandbox_orchestra_d
         _write_canonical(_sandbox_orchestra_dir, ROOT, ROOT)
     sess, _fwd, reason = mr.resolve_delivery_target(ROOT, live, _stale_meta(**extra))
     assert (sess, reason) == (None, 'no-live-head'), (sess, reason)
+
+
+def test_each_stale_root_is_logged_once_on_stderr_never_stdout(_sandbox_orchestra_dir, capsys, monkeypatch):
+    """The counter that keeps stale root docs visible: one stderr line per root and session per
+    process, nothing on stdout (the batch resolver CLI prints JSON there)."""
+    monkeypatch.setattr(mr, '_STALE_ROOT_DOCS_SEEN', set())
+    _write_canonical(_sandbox_orchestra_dir, ROOT, ROOT)
+    for _ in range(3):
+        mr.resolve_delivery_target(ROOT, {ROOT}, _stale_meta())
+    out, err = capsys.readouterr()
+    assert out == ''
+    assert err.count(f'STALE-ROOT-DOC {ROOT}:') == 1, err
+
+
+def test_a_direct_live_root_logs_nothing(_sandbox_orchestra_dir, capsys, monkeypatch):
+    monkeypatch.setattr(mr, '_STALE_ROOT_DOCS_SEEN', set())
+    _write_canonical(_sandbox_orchestra_dir, ROOT, ROOT)
+    meta = _stale_meta(**{ROOT: {'tmux_session': ROOT, 'lineage_root': None, 'status': 'online', 'succeeded_by': None}})
+    assert mr.resolve_delivery_target(ROOT, {ROOT}, meta) == (ROOT, None, 'direct-live')
+    assert 'STALE-ROOT-DOC' not in capsys.readouterr().err
