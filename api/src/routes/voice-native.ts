@@ -13,8 +13,8 @@
  *
  * Browser auth for the socket is voice-live.ts's, unchanged (Origin guard, then cookie / JWT / Tailscale login from
  * loopback): both sockets are one implementation, bridgeBrowserSocket. The two HTTP routes take the same browser
- * auth, and ALSO a request combo-proxy (:5053) vouched for as an admin: the tracker's Arturo widget reaches plain HTTP
- * through combo, which authenticates the tailnet caller and replaces Tailscale-User-Login with its own x-orchestra-*
+ * auth, and ALSO a request combo-proxy (:5053) vouched for as an admin: an embedding app (an Arturo widget served from
+ * another origin) reaches plain HTTP through combo, which authenticates the tailnet caller and replaces Tailscale-User-Login with its own x-orchestra-*
  * headers. A header alone proves nothing (the dashboard proxy forwards client headers as sent): the shared proxy
  * secret in x-orchestra-proxy-auth is checked timing-safe (lib/combo-vouch.ts), and x-orchestra-role must be admin.
  *

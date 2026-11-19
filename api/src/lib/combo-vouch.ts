@@ -1,12 +1,12 @@
 /**
- * Did the local combo proxy vouch for this request? The API-side twin of dashboard-proxy.js comboProxyVouched():
+ * Did the local combo proxy vouch for this request? A trusted reverse proxy in front of the dashboard:
  * combo-proxy (:5053) authenticates a tailnet caller, then stamps `x-orchestra-proxy-auth: <shared secret>` plus its
  * own x-orchestra-user / x-orchestra-role, and the dashboard proxy forwards the headers to this API as they are.
  *
  * A bare `x-orchestra-user` proves nothing (any client can send it, and the dashboard proxy passes client headers
  * through), so the secret is what is checked: timing-safe, against the same file combo reads
  * (ORCHESTRA_PROXY_AUTH_FILE, default ~/.secrets/orchestra-proxy-auth.secret). A secret file that group or others
- * can read is ignored (as lib/proxy_identity.cjs does), and so is any request that did not come from loopback.
+ * can read is ignored, and so is any request that did not come from loopback.
  * Read per call, so a rotated secret applies at once and a test can point the env at a fixture.
  */
 import { readFileSync, statSync } from 'fs';

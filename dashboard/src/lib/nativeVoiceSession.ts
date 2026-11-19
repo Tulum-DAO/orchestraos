@@ -26,7 +26,7 @@ const PLAYBACK_LEAD_S = 0.08;
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** The worklet: hands each 128-sample block of the mic to the page. Loaded from a Blob URL, so it needs no file
- *  served next to the app (the tracker's widget build serves the app from a different base). */
+ *  served next to the app (an embedded widget build serves the app from a different base). */
 const WORKLET_SRC = `class OosMicTap extends AudioWorkletProcessor {
   process(inputs) { const ch = inputs[0] && inputs[0][0]; if (ch) this.port.postMessage(ch.slice(0)); return true; }
 }
