@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { isCrossSiteWrite, refuseCrossSiteWrites } from './cross-site-write.js';
+import { crossSiteWriteGuard, isCrossSiteWrite, isForeignOriginWrite } from './cross-site-write.js';
 
 test('cross-site and same-site writes are refused, every write method', () => {
   for (const m of ['POST', 'PUT', 'PATCH', 'DELETE', 'post']) {
@@ -32,7 +32,7 @@ test('a duplicated header with any foreign value is refused', () => {
 test('by effect: a forged text/plain POST never reaches the route; a same-origin one does', async () => {
   let reached = 0;
   const app = express();
-  app.use(refuseCrossSiteWrites);
+  app.use(crossSiteWriteGuard((o) => o === 'https://own.example'));
   app.use(express.json());
   app.post('/api/x', (_req, res) => { reached++; res.status(400).json({ error: 'route ran' }); });
   app.get('/api/x', (_req, res) => { reached++; res.json({ ok: true }); });
@@ -47,6 +47,10 @@ test('by effect: a forged text/plain POST never reaches the route; a same-origin
     const own = await fetch(`${base}/api/x`, { method: 'POST', body: '{}',
       headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' } });
     assert.equal(own.status, 400);
+    const oldSafari = await fetch(`${base}/api/x`, { method: 'POST', body: 'x',
+      headers: { 'content-type': 'text/plain', origin: 'https://evil.example' } });
+    assert.equal(oldSafari.status, 403, 'no Sec-Fetch-Site + a foreign Origin is refused');
+    assert.equal(reached, 1);
     const read = await fetch(`${base}/api/x`, { headers: { 'sec-fetch-site': 'cross-site' } });
     assert.equal(read.status, 200);
     assert.equal(reached, 2);
@@ -58,8 +62,19 @@ test('by effect: a forged text/plain POST never reaches the route; a same-origin
 test('wiring: server.ts mounts the guard before the body parser and every /api route', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
-  const guard = src.indexOf('app.use(refuseCrossSiteWrites)');
-  assert.ok(guard > 0, 'server.ts must app.use(refuseCrossSiteWrites)');
+  const guard = src.indexOf('app.use(crossSiteWriteGuard(');
+  assert.ok(guard > 0, 'server.ts must app.use(crossSiteWriteGuard(...))');
+  assert.match(src.slice(guard, guard + 200), /corsOriginDecision\(/, 'the guard uses the CORS origin decision');
   assert.ok(guard < src.indexOf("app.use(express.json("), 'before express.json');
   assert.ok(guard < src.indexOf("app.use('/api/"), 'before the first /api router');
+});
+
+test('no Sec-Fetch-Site (old Safari): judged by Origin through the CORS decision', () => {
+  const ok = (o: string) => o === 'https://own.example';
+  assert.equal(isForeignOriginWrite('POST', undefined, 'https://evil.example', ok), true);
+  assert.equal(isForeignOriginWrite('POST', undefined, 'null', ok), true);
+  assert.equal(isForeignOriginWrite('POST', undefined, 'https://own.example', ok), false);
+  assert.equal(isForeignOriginWrite('POST', undefined, undefined, ok), false, 'no Origin = not a browser');
+  assert.equal(isForeignOriginWrite('GET', undefined, 'https://evil.example', ok), false);
+  assert.equal(isForeignOriginWrite('POST', 'same-origin', 'https://evil.example', ok), false, 'Sec-Fetch-Site wins when present');
 });
