@@ -284,6 +284,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
     ("POST", "/arturo/ptt/stream/end"): "ptt",
+    # Native GPT-Live from the iOS/Mac app (and the Quest, bearer in the subprotocol): the call itself.
+    ("GET", "/arturo/gptlive/ws"): "ptt",
     # DEVICE call lifecycle, not an admin op. gm msg_7d0c4b4c, with ipad-dev's by-effect proof: a
     # device ends every relay call with POST /voice-call-ended then /stream/end. I first filed it
     # `admin` alongside the fleet-wide voice CONFIG writes because all three are POST/PUT under the
@@ -329,6 +331,61 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
 }
 
 
+# WebSocket bearer in Sec-WebSocket-Protocol (Quest GPT-Live): a browser or
+# WebView WebSocket cannot set Authorization, so on the routes listed here ONLY, the device token may
+# arrive as the subprotocol "orchestra.bearer.<token>", offered BESIDE "orchestra.v1". DEVICE tokens only (never the fleet bearer), same
+# scope and owner stamp as the header. The server selects and echoes ONLY "orchestra.v1": the token is never
+# reflected in the response. Never a ?token=. Never logged: the access/refusal logs carry no headers, and an
+# upgrade offering a bearer WITHOUT "orchestra.v1" is refused BEFORE the handshake, because aiohttp's "client
+# protocols don't overlap" warning prints the whole offered list (web_ws), token included.
+WS_BEARER_PREFIX = "orchestra.bearer."
+WS_SUBPROTOCOL = "orchestra.v1"
+WS_PROTOCOL_BEARER_ROUTES = frozenset({("GET", "/arturo/gptlive/ws")})
+assert WS_PROTOCOL_BEARER_ROUTES <= set(ROUTE_SCOPES), "a protocol-bearer route must declare a scope"
+
+
+def _route_key(request):
+    """(METHOD, canonical route) or (METHOD, None). Never raises: the auth path also runs on handler
+    unit tests' request doubles, which carry headers only."""
+    route = getattr(getattr(request, "match_info", None), "route", None)
+    canonical = getattr(getattr(route, "resource", None), "canonical", None)
+    return (str(getattr(request, "method", "") or "").upper(), canonical)
+
+
+def _offered_ws_bearer_protocols(request):
+    raw = request.headers.get("Sec-WebSocket-Protocol", "")
+    return [p.strip() for p in raw.split(",") if p.strip().startswith(WS_BEARER_PREFIX)]
+
+
+def _ws_protocol_bearer(request):
+    """The token from EXACTLY ONE offered "orchestra.bearer.<token>" subprotocol on an allowed route's
+    WebSocket upgrade, else None (none, several, wrong route, not an upgrade: fail closed)."""
+    if not request.headers.get("Sec-WebSocket-Protocol"):
+        return None                        # the common case: no subprotocol offered at all
+    if _route_key(request) not in WS_PROTOCOL_BEARER_ROUTES:
+        return None
+    if request.headers.get("Upgrade", "").lower() != "websocket":
+        return None
+    offered = _offered_ws_bearer_protocols(request)
+    if len(offered) != 1 or not _offers_ws_subprotocol(request):
+        return None
+    token = offered[0][len(WS_BEARER_PREFIX):]
+    return token or None
+
+
+def _offers_ws_subprotocol(request):
+    raw = request.headers.get("Sec-WebSocket-Protocol", "")
+    return WS_SUBPROTOCOL in [p.strip() for p in raw.split(",")]
+
+
+def _ws_offers_protocols_without_v1(request):
+    """True when the upgrade offers ANY subprotocol but not "orchestra.v1": nothing could be selected, so
+    aiohttp would log the whole offered list, which may hold a token (also a mis-cased or second-line bearer,
+    security review 10-16 (c)). The handler refuses this before prepare(); no protocols at all is fine."""
+    raw = request.headers.get("Sec-WebSocket-Protocol", "")
+    return bool(raw.strip()) and not _offers_ws_subprotocol(request)
+
+
 def _device_store():
     from pathlib import Path as _P
     from scripts.device_tokens import DeviceStore
@@ -345,14 +402,24 @@ def resolve_principal(request) -> dict | None:
     should have to remember that."""
     from scripts.device_tokens import ALL_SCOPES, LEGACY_LABEL
     got = request.headers.get("Authorization", "")
-    if not got.startswith("Bearer "):
-        return None
-    token = got[len("Bearer "):]
+    if got:
+        if not got.startswith("Bearer "):
+            return None
+        token = got[len("Bearer "):]
+    else:
+        # Only on a WS_PROTOCOL_BEARER_ROUTES upgrade with no Authorization header: the subprotocol bearer.
+        token = _ws_protocol_bearer(request)
+        if token:
+            return _device_principal(token)        # DEVICE tokens only: never the fleet bearer
     if not token:
         return None
     expected = gateway_token()
     if expected and hmac.compare_digest(token, expected):
         return {"id": "legacy", "label": LEGACY_LABEL, "scopes": list(ALL_SCOPES)}
+    return _device_principal(token)
+
+
+def _device_principal(token):
     try:
         rec = _device_store().resolve(token)
     except Exception as e:  # noqa: BLE001 — an unreadable store must not authenticate anyone
@@ -8738,6 +8805,164 @@ async def handle_arturo_ptt_stream_end(request):
     return await _stream_forward(request, "POST", "/end", timeout_s=15)
 
 
+# GET /arturo/gptlive/ws — native GPT-Live from the iOS app. The scope middleware has already refused a caller without `ptt`
+# (401/403) BEFORE any upgrade. The gateway connects to arturo's native service (services/arturo/native,
+# its own tmux service, NOT arturo-proxy) FIRST, with the principal it builds itself, and accepts the
+# device's upgrade only once arturo has: any 4xx/5xx arturo answers before the upgrade reaches the
+# device as-is (503 = ARTURO_NATIVE_GPTLIVE off, the one "native is off" signal); unreachable -> 502.
+# Frames pass verbatim both ways (text and binary); the protocol inside belongs to arturo + the app.
+ARTURO_GPTLIVE_WS_URL = os.environ.get("ARTURO_GPTLIVE_WS_URL", "ws://127.0.0.1:5076/native/ws")
+GPTLIVE_MAX_SESSIONS = 4          # gateway-wide; a 5th upgrade -> 429
+GPTLIVE_IDLE_S = 120.0            # no frame either way this long -> both sides closed 1000 "idle"
+GPTLIVE_HEARTBEAT_S = 20.0        # ping the device; a dead phone is noticed without a frame
+GPTLIVE_MAX_MSG = 4 * 1024 * 1024
+#: device id -> 1 while its session is live (one per device; a second upgrade -> 409)
+_GPTLIVE_SESSIONS: dict = {}
+#: (device ws, arturo ws) for every relay currently pumping, so on_shutdown can close them: an open
+#: native call otherwise holds aiohttp's shutdown past restart_watch_gateway.sh's wait.
+_GPTLIVE_LIVE: set = set()
+#: set by on_shutdown: a pump that ends now ends BECAUSE of the restart, so both sides get 1001
+#: "gateway restart", never a 1011 "arturo dropped" from whichever socket closed first.
+_GPTLIVE_STOPPING = [False]
+
+
+async def _gptlive_on_shutdown(app):
+    _GPTLIVE_STOPPING[0] = True
+    for dev_ws, up_ws in list(_GPTLIVE_LIVE):
+        for w in (up_ws, dev_ws):
+            try:
+                await w.close(code=1001, message=b"gateway restart")
+            except Exception as e:  # noqa: BLE001 — one stuck socket must not stop the rest closing
+                log.warning(f"gptlive: shutdown close failed: {e}")
+
+
+def _ws_close_code(code, fallback):
+    """A code we may SEND: 1005/1006/None are receive-only (no frame / abnormal)."""
+    return code if isinstance(code, int) and (1000 <= code <= 1003 or 1007 <= code <= 1014
+                                              or 3000 <= code <= 4999) else fallback
+
+
+async def handle_arturo_gptlive_ws(request):
+    import aiohttp
+    import asyncio
+    from aiohttp import web
+    ran, principal = _resolved_principal(request)
+    if not ran or not principal:                 # defence in depth; the middleware refused first
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if _ws_offers_protocols_without_v1(request):
+        return _json({"ok": False, "error": f"offer {WS_SUBPROTOCOL!r} when offering subprotocols"},
+                     status=400)
+    # Validate the device's handshake BEFORE any upstream session (security review (d)): a malformed but
+    # authenticated upgrade used to open an arturo-native session that ws.prepare then refused. can_prepare
+    # checks the upgrade headers without performing the handshake, so arturo's own refusals (403/503) still
+    # reach the device as an HTTP status before the upgrade, as the contract says.
+    if not web.WebSocketResponse(protocols=(WS_SUBPROTOCOL,)).can_prepare(request).ok:
+        return _json({"ok": False, "error": "not a valid WebSocket upgrade"}, status=400)
+    dev = principal.get("id")
+    if dev in _GPTLIVE_SESSIONS:
+        return _json({"ok": False, "error": "a GPT-Live session is already open for this device"}, status=409)
+    if len(_GPTLIVE_SESSIONS) >= GPTLIVE_MAX_SESSIONS:
+        return _json({"ok": False, "error": "too many GPT-Live sessions"}, status=429)
+    _GPTLIVE_SESSIONS[dev] = 1                   # reserve before any await, so two upgrades cannot race
+    try:
+        # never forward a credential-shaped query param upstream (security re-review 10-16 #2): a client that
+        # wrongly sends ?token= must not land it in arturo-native's logs
+        from urllib.parse import urlencode
+        _q = [(k, v) for k, v in request.query.items() if k.lower() not in ("token", "access_token", "bearer")]
+        upstream_url = ARTURO_GPTLIVE_WS_URL + (("?" + urlencode(_q)) if _q else "")
+        session = aiohttp.ClientSession()
+        try:
+            try:
+                up_headers = _arturo_principal_headers(request, voice=True)
+                up_headers["X-Arturo-Device"] = str(dev)           # built here; a client's own never passes
+                up = await session.ws_connect(upstream_url, headers=up_headers,
+                                              max_msg_size=GPTLIVE_MAX_MSG, autoping=True,
+                                              timeout=aiohttp.ClientWSTimeout(ws_close=5))
+            except aiohttp.WSServerHandshakeError as e:
+                st = e.status if 400 <= (e.status or 0) <= 599 else 502
+                return _json({"ok": False, "error": f"arturo refused GPT-Live ({e.status})"}, status=st)
+            except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
+                log.warning(f"gptlive: arturo unreachable: {e}")
+                return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+            ws = web.WebSocketResponse(heartbeat=GPTLIVE_HEARTBEAT_S, max_msg_size=GPTLIVE_MAX_MSG,
+                                       protocols=(WS_SUBPROTOCOL,))
+            try:
+                await ws.prepare(request)
+                _GPTLIVE_LIVE.add((ws, up))
+                await _gptlive_pump(request, ws, up)
+            finally:
+                _GPTLIVE_LIVE.discard((ws, up))
+                if not up.closed:
+                    await up.close()
+            return ws
+        finally:
+            await session.close()
+    finally:
+        _GPTLIVE_SESSIONS.pop(dev, None)
+
+
+async def _gptlive_pump(request, dev_ws, up_ws):
+    """Shovel frames until one side ends, then close the other with that side's code + reason
+    (device vanished -> 1001 upstream; arturo dropped abnormally -> 1011 to the device), or both
+    with 1000 "idle" after GPTLIVE_IDLE_S with no frame either way."""
+    import aiohttp
+    import asyncio
+    loop = asyncio.get_running_loop()
+    last = [loop.time()]
+    ended = {}
+
+    async def shovel(src, dst, name):
+        reason, code = "", None
+        while True:                      # not `async for`: it swallows the CLOSE frame and its reason
+            msg = await src.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                last[0] = loop.time()
+                await dst.send_str(msg.data)
+            elif msg.type == aiohttp.WSMsgType.BINARY:
+                last[0] = loop.time()
+                await dst.send_bytes(msg.data)
+            elif msg.type == aiohttp.WSMsgType.CLOSE:
+                code, reason = msg.data, msg.extra or ""     # from the frame: close_code lags it
+                break
+            elif msg.type in (aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                break
+        ended.setdefault("by", (name, code if code is not None else src.close_code, reason))
+
+    async def idle():
+        while True:
+            left = GPTLIVE_IDLE_S - (loop.time() - last[0])
+            if left <= 0:
+                ended.setdefault("by", ("idle", 1000, "idle"))
+                return
+            await asyncio.sleep(left)
+
+    tasks = [asyncio.ensure_future(shovel(dev_ws, up_ws, "device")),
+             asyncio.ensure_future(shovel(up_ws, dev_ws, "arturo")),
+             asyncio.ensure_future(idle())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    who, code, reason = ended.get("by", ("device", None, ""))
+    log.info(f"gptlive: session ended by {who} code={code} reason={reason[:60]!r}")
+    msg = (reason or "").encode()[:120]
+    if _GPTLIVE_STOPPING[0]:
+        who, code, msg = "shutdown", 1001, b"gateway restart"
+        await dev_ws.close(code=1001, message=msg)
+        await up_ws.close(code=1001, message=msg)
+    elif who == "idle":
+        await up_ws.close(code=1000, message=b"idle")
+        await dev_ws.close(code=1000, message=b"idle")
+    elif who == "device":
+        if code in (None, 1006):
+            request["access_outcome"] = "client-gone"
+        await up_ws.close(code=_ws_close_code(code, 1001), message=msg)
+    else:
+        await dev_ws.close(code=_ws_close_code(code, 1011), message=msg)
+
+
 ARTURO_PTT_VENDOR_URL = os.environ.get("ARTURO_PTT_VENDOR_URL") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/ptt/vendor")
 
 
@@ -11605,6 +11830,7 @@ def build_app():
     app.on_shutdown.append(_events_on_shutdown)
     app.on_shutdown.append(_attention_on_shutdown)
     app.on_shutdown.append(_terminal_on_shutdown)
+    app.on_shutdown.append(_gptlive_on_shutdown)
     app.on_startup.append(_start_pending_model_switches)
     app.on_startup.append(_start_attention_detector)
     app.on_startup.append(_start_supervision)
@@ -11681,6 +11907,7 @@ def build_app():
     app.router.add_post("/arturo/text/prewarm", handle_arturo_text_prewarm)
     app.router.add_post("/arturo/transcribe", handle_arturo_transcribe)
     app.router.add_get("/arturo/health", handle_arturo_health)
+    app.router.add_get("/arturo/gptlive/ws", handle_arturo_gptlive_ws)
     app.router.add_get("/arturo/threads", handle_arturo_threads)
     app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
     app.router.add_patch("/arturo/threads/{conversation_id}", handle_arturo_thread_rename)
