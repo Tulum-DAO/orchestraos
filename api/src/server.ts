@@ -73,6 +73,7 @@ import { loadConfig } from './lib/config.js';
 import { principal, installRole } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
+import { refuseCrossSiteWrites } from './lib/cross-site-write.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
 import { isTerminalRelay } from './lib/terminal-relay-secret.js';
 import { capabilities } from './lib/capabilities.js';
@@ -145,6 +146,8 @@ app.use((req, res, next) => cors({
 // Forensic access log. Mounted before the routes and before the body parser so a
 // request is recorded even if parsing rejects it.
 app.use(accessLog);
+// A write another site started is refused before any route or body parser (lib/cross-site-write.ts: CSRF).
+app.use(refuseCrossSiteWrites);
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));
