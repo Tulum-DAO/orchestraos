@@ -2,7 +2,7 @@
  * voiceReady.ts — whether a call can start, before anyone presses Call: GET /api/voice/live/ready answers {ok:true}
  * or {ok:false, reason} (whether a voice key exists and a call will start; the key itself is never sent; the same
  * answer for every agent). The composer's round button (lib/roundAction.ts) then offers Call only when it is ok, and
- * otherwise is a disabled Send with the reason. Asked when the composer opens and when the page regains focus; never
+ * otherwise is a dimmed Call with the reason. Asked when the composer opens and when the page regains focus; never
  * polled. No answer (a server without the route: 404, or a dropped request) is "unknown": Call stays, with the
  * failure fallback.
  */

@@ -4,7 +4,8 @@
  *   - something to send (text, or an attachment)  → Send (an arrow);
  *   - nothing to send while the agent is working, where a stop exists → Stop;
  *   - nothing to send otherwise → Call (starts that agent's call, what the phone button did); End during a call;
- *   - nothing to send and no call possible here → Send, disabled, with the reason as its tooltip. Never a dead Call.
+ *   - nothing to send and the call cannot start → Call, dimmed, with the reason as its tooltip. An empty box always
+ *     shows the call, never a Send (Shaw, 2026-11-19); a composer with no call at all keeps a disabled Send.
  * Pure: the button (components/kit/RoundAction.tsx) draws what this decides.
  */
 export type RoundMode = 'send' | 'stop' | 'call' | 'end' | 'idle';
@@ -32,6 +33,7 @@ export function roundView(i: RoundInputs, names: { agent: string } = { agent: 't
   }
   if (i.canStop && !i.sending) return { mode: 'stop', enabled: true, label: 'Stop the agent', title: 'Stop — interrupt the agent’s turn (Esc)' };
   if (i.call?.available) return { mode: 'call', enabled: true, label: `Call ${names.agent}`, title: `Call ${names.agent}` };
-  const why = i.call ? (i.call.reason || `A call to ${names.agent} isn't possible here`) : 'Type a message to send';
-  return { mode: 'idle', enabled: false, label: 'Send', title: why };
+  if (i.call) return { mode: 'call', enabled: false, label: `Call ${names.agent}`,
+                       title: i.call.reason || `A call to ${names.agent} isn't possible here` };
+  return { mode: 'idle', enabled: false, label: 'Send', title: 'Type a message to send' };
 }

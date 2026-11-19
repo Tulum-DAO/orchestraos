@@ -50,6 +50,7 @@ import {
   type ThreadTurn,
 } from '../../lib/arturoThreads';
 import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
+import { callUnavailableReason, refreshHealthUntilReady } from '../../lib/handsFreeHealth';
 import SpawnedAgentCard from './SpawnedAgentCard';
 import ModelPicker from '../kit/ModelPicker';
 import { useArturoBrain } from '../../stores/arturoBrain';
@@ -131,14 +132,22 @@ export function ArturoPill() {
   const brainChoice = useArturoBrain((s) => s.choice);
   const chooseBrain = useArturoBrain((s) => s.choose);
   const [modelOpen, setModelOpen] = useState(false);
-  // Whether this server can start Live voice mode (GEMINI_API_KEY; /health.live), read once: the button
-  // is gated the same way as on the home page.
+  // Whether this server can start Live voice mode (GEMINI_API_KEY; /health.live): the button is gated the same
+  // way as on the home page. Read on mount and again on every open, retried until a call is possible, so one
+  // failed read (a proxy 502, Arturo still starting) never leaves the call unavailable while the pane is up.
   const [health, setHealth] = useState<ArturoHealth | null>(null);
   useEffect(() => {
+    if (!open) return;
     let alive = true;
-    void arturoHealth().then((h) => { if (alive) setHealth(h); });
-    return () => { alive = false; };
-  }, []);
+    let chain = 0;
+    // A fresh chain per open and per return to the page (a call that stayed down past the retries comes back).
+    const check = () => { const mine = ++chain; void refreshHealthUntilReady(arturoHealth, setHealth, { cancelled: () => !alive || mine !== chain }); };
+    check();
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', check);
+    return () => { alive = false; document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', check); };
+  }, [open]);
   const ta = useRef<HTMLTextAreaElement>(null);
   // Same composer buttons as the Arturo home (Shaw 2026-09-21: "the buttons we see when Arturo
   // first loads are the same buttons we should see in every instance of Ask Arturo"): attach,
@@ -555,11 +564,11 @@ export function ArturoPill() {
                       aria-pressed={dictating} title={dictateTitle(inCall, dictMode)}
                       onClick={toggleDictation} disabled={dictateLocked(inCall, dictMode)}><Mic size={16} /></button>
             )}
-            {/* The one round button (lib/roundAction.ts): Send, his call when the box is empty (End during it), or a
-                disabled Send that says why a call isn't possible. Its icons crossfade in place. */}
+            {/* The one round button (lib/roundAction.ts): Send, his call whenever the box is empty (End during it;
+                dimmed, saying why, when a call can't start). Its icons crossfade in place. */}
             <RoundAction className="circle-btn white" callIcon={<AudioLines size={16} />}
               view={roundView({ hasContent: !!arturoComposerText(draft, attachments.length), sending: busy,
-                                call: { inCall, available: handsFreeReady(health), reason: handsFreeTitle(handsFreeReady(health), aname) } },
+                                call: { inCall, available: handsFreeReady(health), reason: callUnavailableReason(health, handsFreeTitle(handsFreeReady(health), aname), aname) } },
                               { agent: aname })}
               onAction={(mode) => { if (mode === 'send') void send(); else if (mode === 'call' || mode === 'end') void toggleCall(); }} />
           </div>
