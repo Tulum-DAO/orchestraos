@@ -168,6 +168,26 @@ def data_dir(include_env: bool = True) -> Path:
     return _configured_data_dir(raw)
 
 
+DEFAULT_NTFY_BASE = "http://localhost:9080"
+
+
+def ntfy_base() -> str:
+    """Where approval pushes are POSTed: $NTFY_BASE, then [notify] ntfy_base in orchestra.toml, then
+    DEFAULT_NTFY_BASE. An ntfy bound only to a private interface (a tailnet address, say) refuses
+    localhost, and before this key the only way to say so was an env var every caller had to carry.
+    Read on every call; a trailing slash is dropped so f"{base}/{topic}" stays one slash."""
+    env = os.environ.get("NTFY_BASE", "").strip()
+    if env:
+        return env.rstrip("/")
+    cfg = config_path_for(repo_root_from_env())
+    try:
+        raw = read_toml(cfg) if cfg.is_file() else {}
+    except (OSError, ValueError):
+        raw = {}
+    val = _get(raw, "notify", "ntfy_base", DEFAULT_NTFY_BASE)
+    return (val if isinstance(val, str) else DEFAULT_NTFY_BASE).strip().rstrip("/") or DEFAULT_NTFY_BASE
+
+
 PROTECTED_ENV = "ORCHESTRA_TEST_PROTECTED_DIRS"
 
 
