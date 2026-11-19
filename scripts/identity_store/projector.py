@@ -407,8 +407,9 @@ _LIVE_IDENTITY_FIELDS = ("session_id", "generation", "model", "resume_command")
 def _canonical_authoritative_tmux_session(doc, crow):
     """``tmux_session`` on a LIVE canonical row comes from ``canonical``, not the stored document.
 
-    The message router finds a seat's pane in agent-sessions.json, falling back to registry.json,
-    and never reads ``canonical``. A green's documents are written at spawn and name its boot alias
+    The message router finds a seat's pane in agent-sessions.json, falling back to registry.json;
+    its hot path never reads ``canonical``, and its fallback filters candidates by the document's
+    value before consulting it. A green's documents are written at spawn and name its boot alias
     (``<root>-g<N>``). After a blue-green swap renames the pane to the bare root and repoints
     ``canonical``, those documents still name an alias that no longer exists: every message to the
     seat is held and nothing alarms, because a silenced seat looks idle. The documents round-trip
@@ -420,8 +421,11 @@ def _canonical_authoritative_tmux_session(doc, crow):
     already happened on the next projection.
 
     Override, never add: a document without the key does not gain it. Fail-safe on absent
-    authority: no canonical row, or a NULL/empty ``tmux_session``, serves the document unchanged."""
-    if not crow:
+    authority: no canonical row, or a NULL/empty ``tmux_session``, serves the document unchanged.
+
+    So ``canonical.tmux_session`` is the ONLY place to change a live seat's pane name: writing
+    ``tmux_session`` into a live root's stored document has no visible effect."""
+    if not crow or not isinstance(doc, dict):
         return doc
     val = crow.get("tmux_session")
     if not val or "tmux_session" not in doc:

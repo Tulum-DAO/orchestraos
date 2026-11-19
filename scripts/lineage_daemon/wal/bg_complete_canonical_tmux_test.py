@@ -225,3 +225,22 @@ def test_absent_or_null_canonical_authority_serves_the_document_unchanged():
     assert projector._canonical_authoritative_tmux_session(doc, {"tmux_session": ""}) == doc
     assert projector._canonical_authoritative_tmux_session({"name": "x"}, {"tmux_session": "x"}) == {"name": "x"}
     assert projector._canonical_authoritative_tmux_session(doc, {"tmux_session": "x"})["tmux_session"] == "x"
+
+
+def test_a_session_doc_whose_canonical_generation_row_is_missing_still_follows_canonical(tmp_path):
+    """The sessions projection's second branch: canonical points at a generation id with no row."""
+    orchestra_dir, _blue_id, _g = _make_world(tmp_path / "orch")
+    conn = orchestra_db.get_connection(os.path.join(orchestra_dir, "state", "orchestra-registry.db"))
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("UPDATE canonical SET generation_id=?, tmux_session=? WHERE root=?", (999999, ROOT, ROOT))
+        conn.commit()
+    finally:
+        conn.close()
+    reg, ses = _project(orchestra_dir, str(tmp_path / "proj"))
+    assert ses[ROOT]["tmux_session"] == ROOT
+    assert reg["agents"][ROOT]["tmux_session"] == ROOT
+
+
+def test_a_non_dict_document_is_served_unchanged():
+    assert projector._canonical_authoritative_tmux_session(None, {"tmux_session": "x"}) is None
