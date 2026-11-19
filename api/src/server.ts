@@ -68,6 +68,7 @@ import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
 import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket, createVoiceLiveReadyRouter } from './routes/voice-live.js';
+import { setupVoiceNativeWebSocket, createVoiceNativeRouter } from './routes/voice-native.js';
 import { loadConfig } from './lib/config.js';
 import { principal, installRole } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
@@ -212,6 +213,7 @@ app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/api/roadmaps', roadmapsRouter);
 app.use('/api/voice', createVoiceLiveReadyRouter());   // GET /live/ready: will a call start (read-only)
+app.use('/api/voice', createVoiceNativeRouter());      // GET /native/ready + POST /call-ended (native GPT-Live)
 app.use('/api/voice', voiceRouter);
 app.use('/api', awayRouter); // /api/away + /api/presence (RFC 0002, the away card)
 app.use('/api', usageRouter); // /api/usage: plan usage per provider (admin only)
@@ -328,6 +330,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 setupTerminalWebSocket(wss);
 setupVoiceLiveWebSocket(server);
+setupVoiceNativeWebSocket(server);   // /api/voice/native -> gateway /arturo/gptlive/ws (native GPT-Live)
 
 // HOST must be passed explicitly: server.listen(PORT, cb) makes Node bind ALL interfaces,
 // so `[api] host = "127.0.0.1"` in orchestra.toml was stated intent the code never honoured.

@@ -332,7 +332,8 @@ export class VoiceSession {
         routeTranscriptEvent(msg, this.cb);
         return;
       }
-      this.playPcm24k(ev.data as ArrayBuffer);
+      // A hung-up socket's late audio is dropped: playing it would reopen the playback context closed at hang-up.
+      if (this.ws === ws) this.playPcm24k(ev.data as ArrayBuffer);
     });
 
     const finish = () => {
@@ -344,6 +345,7 @@ export class VoiceSession {
         this.ws = null;
         this.muted = false;
         this.stopMicCapture();
+        this.closePlayback();
         this.setState('idle');
       }
       if (id) this.cb.onCallEnded?.(buildVoiceCallMarker(id), id);
@@ -376,6 +378,7 @@ export class VoiceSession {
     // started in the meantime (finish() acts on the session only for the CURRENT socket).
     this.ws = null;
     this.stopMicCapture();
+    this.closePlayback();
     this.setState('idle');
   }
 
@@ -459,6 +462,16 @@ export class VoiceSession {
     const startAt = Math.max(ctx.currentTime, this.playbackTime);
     src.start(startAt);
     this.playbackTime = startAt + audioBuffer.duration;
+  }
+
+  /** The call is over: close its playback context (one per call was left open before, piling up across calls). */
+  private closePlayback() {
+    this.flushPlayback();
+    const ctx = this.playbackCtx;
+    this.playbackCtx = null;
+    this.playbackAnalyser = null;
+    this.playbackTime = 0;
+    if (ctx) { try { void ctx.close().catch(() => {}); } catch { /* already closed */ } }
   }
 
   private flushPlayback() {

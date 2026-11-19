@@ -77,6 +77,8 @@ export interface ThreadViewCall {
   liveUser?: string;
   liveArturo?: string;
   connecting?: boolean;
+  /** The engine the live call runs on ('native' = GPT-Live native, the iPhone app's engine). */
+  engine?: 'native' | 'relay' | null;
 }
 
 export interface ThreadViewChoice {
@@ -334,7 +336,8 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
             <CallCard key={r.key} skin={skin === 'bubbles' ? 'modern' : skin} callId={r.callId} turns={r.turns.map((t) => ({ role: t.role, text: t.text, ...(t.parts ? { parts: t.parts } : {}), ...(t.id !== undefined ? { key: String(t.id) } : {}) }))}
               live={r.live} startTs={r.startTs} endTs={r.endTs}
               liveSince={r.live ? call?.liveSince : null} liveUser={r.live ? call?.liveUser : undefined}
-              liveArturo={r.live ? call?.liveArturo : undefined} connecting={r.live && !!call?.connecting} />
+              liveArturo={r.live ? call?.liveArturo : undefined} connecting={r.live && !!call?.connecting}
+                            engine={r.live ? call?.engine : undefined} />
           );
         }
         if (r.kind === 'result') {

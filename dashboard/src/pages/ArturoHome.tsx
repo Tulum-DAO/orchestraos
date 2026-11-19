@@ -621,7 +621,7 @@ export default function ArturoHome() {
             {/* His thread through the kit's thread view (components/kit/ThreadView.tsx): replies, tool runs, calls,
                 finished work, his choice cards; the page adds only what it alone has (extras). */}
             <ThreadView rows={rows} skin={threadSkin} by={aname} lastUserKey={lastUserKey(turns)} stick={stick}
-              call={{ liveSince: callSince, liveUser: call.liveUser, liveArturo: call.liveArturo, connecting: call.callState === 'connecting' }}
+              call={{ liveSince: callSince, liveUser: call.liveUser, liveArturo: call.liveArturo, connecting: call.callState === 'connecting', engine: call.engine }}
               choice={{
                 onAnswer: (m, text, a) => { const c = m.choices!; void send(text, c.card_id ? cardAnswer(c.card_id, c.options, a.picked, a.words) : undefined); },
                 onDismiss: async (m) => {
