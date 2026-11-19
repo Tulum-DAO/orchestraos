@@ -49,8 +49,20 @@ def test_stream_routes_registered():
     assert ("POST", "/arturo/ptt/stream/end") in routes
 
 
+def _without_block(src, start, end):
+    """src minus the lines from the one starting with `start` up to (not including) the one starting with `end`."""
+    lines = src.split("\n")
+    i = next(k for k, ln in enumerate(lines) if ln.startswith(start))
+    j = next(k for k in range(i + 1, len(lines)) if lines[k].startswith(end))
+    return "\n".join(lines[:i] + lines[j:])
+
+
 def test_stream_gateway_has_no_relay_logic():
     src = pathlib.Path("scripts/watch_gateway.py").read_text()
+    # The native GPT-Live call (GET /arturo/gptlive/ws) IS a WebSocket proxy, on purpose, and its device-bearer helpers
+    # read the Upgrade header. Both blocks are cut out by name so the PTT stream forward stays held to "thin".
+    src = _without_block(src, "# WebSocket bearer in Sec-WebSocket-Protocol", "def _device_store")
+    src = _without_block(src, "# GET /arturo/gptlive/ws", "ARTURO_PTT_VENDOR_URL")
     for forbidden in ("RelayManager", "PartialsEngine", "user_audio_chunk", "websocket",
                       "StreamRegistry", "scribe_v1"):
         assert forbidden not in src, f"gateway must stay a thin forward: {forbidden!r}"

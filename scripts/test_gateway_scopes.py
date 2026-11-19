@@ -467,7 +467,8 @@ def test_PIN_the_multi_verb_map_and_the_admin_ptt_voice_rows_exactly():
                              "POST /red-alert/report", "POST /runtimes/available/refresh",
                              "POST /telemetry", "PUT /arturo/assistant/name", "PUT /arturo/avatar",
                              "PUT /arturo/ptt/vendor", "PUT /arturo/ptt/voice", "PUT /gate/mode"]
-    assert rows("ptt") == ["GET /arturo/ptt/stream/events", "POST /arturo/ptt",
+    # GET /arturo/gptlive/ws: native GPT-Live calls (iOS/Mac header bearer, Quest subprotocol bearer), restored 11-19.
+    assert rows("ptt") == ["GET /arturo/gptlive/ws", "GET /arturo/ptt/stream/events", "POST /arturo/ptt",
                            "POST /arturo/ptt/stream/audio", "POST /arturo/ptt/stream/end",
                            "POST /voice-call-ended"]
     assert rows("voice") == ["GET /live", "POST /arturo/transcribe"]
