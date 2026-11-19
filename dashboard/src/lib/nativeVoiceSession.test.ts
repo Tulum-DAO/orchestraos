@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- loose stand-ins for browser objects */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
