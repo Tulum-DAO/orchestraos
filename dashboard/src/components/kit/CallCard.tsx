@@ -78,6 +78,8 @@ export interface CallCardProps {
   liveUser?: string;
   liveArturo?: string;
   connecting?: boolean;
+  /** The live call's engine: a native GPT-Live call says so in its header. */
+  engine?: 'native' | 'relay' | null;
 }
 
 /** Arturo's tools that hand the work to a background job (services/arturo: async_task and the tools built on it). */
@@ -119,7 +121,7 @@ function Lines({ lines, skin, bubble }: { lines: CallLine[]; skin: Skin; bubble:
   );
 }
 
-function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSince, liveUser, liveArturo, connecting, skin, agent, scoped }:
+function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSince, liveUser, liveArturo, connecting, engine, skin, agent, scoped }:
   CallCardProps & { skin: Skin; agent: { agentId: string; name: string; skin?: 'bubbles' | 'modern' } | null; scoped: boolean }) {
   // An agent's call turns take its chat's skin; Arturo's keep his card's own bubbles.
   const turnSkin = agent?.skin ?? 'modern';
@@ -162,7 +164,8 @@ function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSin
     : record?.started_at && record?.ended_at ? record.ended_at - record.started_at
     : startTs && endTs ? endTs - startTs : null;
   // An unknown length is left out rather than shown as a placeholder.
-  const label = seconds == null ? 'Voice chat' : `Voice chat · ${fmtClock(seconds)}`;
+  const base = live && engine === 'native' ? 'Voice chat · GPT-Live native' : 'Voice chat';
+  const label = seconds == null ? base : `${base} · ${fmtClock(seconds)}`;
   const who = agent?.name || assistantName();
 
   // The record's lines stand in only when the thread holds none for this call.

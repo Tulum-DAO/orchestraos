@@ -146,12 +146,36 @@ function closeLoud(ws: WebSocket, code: number, reason: string) {
   try { ws.close(code, reason.slice(0, 123)); } catch { /* already gone */ }
 }
 
-export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = GATEWAY_WS_URL) {
+/** What differs between the browser sockets this file bridges to the gateway (relay /live, native /arturo/gptlive/ws).
+ *  Everything else (the CSWSH Origin guard, browser auth, the bearer check, buffering frames until the upstream
+ *  opens, verbatim passthrough both ways) is one implementation: bridgeBrowserSocket below. */
+export interface BrowserBridgeSpec {
+  /** The browser-facing path this bridge owns (exact pathname match). */
+  path: string;
+  /** After Origin + auth, before the bearer is read: the upstream path (+query) to dial, or a raw HTTP refusal. */
+  upstream: (url: URL, req: IncomingMessage) => { path: string } | { refuse: string };
+  /** The gateway answered the upgrade with an HTTP status instead of 101. */
+  onUpstreamRejected: (clientWs: WebSocket, status: number) => void;
+  /** The gateway's socket closed while the browser's is still open. */
+  onUpstreamClosed: (clientWs: WebSocket, code: number, reason: string) => void;
+  /** The upstream socket errored while the browser's is still open. */
+  onUpstreamError: (clientWs: WebSocket, err: Error) => void;
+  /** Tests only: a shorter upstream handshake timeout than UPSTREAM_HANDSHAKE_MS. */
+  handshakeMs?: number;
+}
+
+/** The upstream gets this long to answer the upgrade before the browser is told the bridge failed. */
+export const UPSTREAM_HANDSHAKE_MS = 10_000;
+/** Frames held for an upstream that has not opened yet: past this the browser is closed 1009 (too big), so a
+ *  stalled upstream can never make this process buffer a stream of mic audio without bound. */
+export const MAX_PENDING_BYTES = 2 * 1024 * 1024;
+
+export function bridgeBrowserSocket(httpServer: HttpServer, gatewayWsUrl: string, spec: BrowserBridgeSpec) {
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.prependListener('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     const url = new URL(req.url || '/', 'http://internal');
-    if (url.pathname !== VOICE_LIVE_PATH) return; // not ours — fall through untouched (e.g. /ws/terminal)
+    if (url.pathname !== spec.path) return; // not ours — fall through untouched (e.g. /ws/terminal)
 
     if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
       // CSWSH guard runs BEFORE auth — no auth oracle for cross-site callers.
@@ -166,20 +190,11 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       return;
     }
 
-    // The agent the call is with, when the page names one: a safe id the caller may see, by the same scope rule as
-    // every /api/agents/:id route (an out-of-scope id gets the same 404 an unknown one does). None: Arturo's own call.
-    const agent = url.searchParams.get('agent');
-    if (agent !== null) {
-      if (!isSafeAgentId(agent)) {
-        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nbad agent id');
-        socket.destroy();
-        return;
-      }
-      if (!canPrincipalSeeAgent(principal(req as any), { id: agent, tags: defaultResolveTags(agent) })) {
-        socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nagent not found');
-        socket.destroy();
-        return;
-      }
+    const target = spec.upstream(url, req);
+    if ('refuse' in target) {
+      socket.write(target.refuse);
+      socket.destroy();
+      return;
     }
 
     const gatewayToken = readGatewayToken();
@@ -194,28 +209,28 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       return;
     }
 
-    const voice = url.searchParams.get('voice') || 'Fenrir';
-
     wss.handleUpgrade(req, socket, head, (clientWs) => {
       // MEDIUM finding (security review, commit 4840bf6247): the gateway
       // bearer must never appear in a URL (query strings land in access
       // logs, proxy logs, etc.). Send it as an Authorization header instead
       // — the same pattern routes/voice.ts already uses for /voice-call.
       const upstream = new WebSocket(
-        `${gatewayWsUrl}/live?voice=${encodeURIComponent(voice)}${agent !== null ? `&agent=${encodeURIComponent(agent)}` : ''}`,
-        { headers: { Authorization: `Bearer ${gatewayToken}` } },
+        `${gatewayWsUrl}${target.path}`,
+        { headers: { Authorization: `Bearer ${gatewayToken}` }, handshakeTimeout: spec.handshakeMs ?? UPSTREAM_HANDSHAKE_MS },
       );
 
       let upstreamOpen = false;
       const pending: Array<{ data: any; isBinary: boolean }> = [];
+      let pendingBytes = 0;
 
       upstream.on('open', () => {
         upstreamOpen = true;
         for (const m of pending.splice(0)) upstream.send(m.data, { binary: m.isBinary });
+        pendingBytes = 0;
       });
 
       upstream.on('unexpected-response', (_req, res) => {
-        closeLoud(clientWs, 1011, `voice bridge upstream rejected the connection (HTTP ${res.statusCode})`);
+        spec.onUpstreamRejected(clientWs, res.statusCode || 0);
       });
 
       upstream.on('message', (data, isBinary) => {
@@ -224,25 +239,24 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
 
       upstream.on('close', (code, reasonBuf) => {
         if (clientWs.readyState !== WebSocket.OPEN) return;
-        // No close code (1005 none sent, 1006 dropped): a code the browser side may not be sent, so passing it on threw
-        // and left the page's call open. That is the call ending: say so plainly. A real code passes through.
-        if (!code || code === 1005 || code === 1006) {
-          try { clientWs.close(1000, 'call ended'); } catch { /* already gone */ }
-          return;
-        }
-        closeLoud(clientWs, code, reasonBuf?.toString() || 'gateway closed the voice session');
+        spec.onUpstreamClosed(clientWs, code, reasonBuf?.toString() || '');
       });
 
       upstream.on('error', (err) => {
-        if (clientWs.readyState === WebSocket.OPEN) {
-          closeLoud(clientWs, 1011, `voice bridge upstream error: ${err.message}`);
-        }
+        if (clientWs.readyState === WebSocket.OPEN) spec.onUpstreamError(clientWs, err);
       });
 
       clientWs.on('message', (data, isBinary) => {
         if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
           upstream.send(data as any, { binary: isBinary });
         } else {
+          pendingBytes += (data as Buffer).length ?? 0;
+          if (pendingBytes > MAX_PENDING_BYTES) {
+            pending.length = 0;
+            try { clientWs.close(1009, 'too much audio before the voice service answered'); } catch { /* gone */ }
+            try { upstream.terminate(); } catch { /* noop */ }
+            return;
+          }
           pending.push({ data, isBinary });
         }
       });
@@ -250,6 +264,42 @@ export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = G
       clientWs.on('close', () => { try { upstream.close(); } catch { /* noop */ } });
       clientWs.on('error', () => { try { upstream.close(); } catch { /* noop */ } });
     });
+  });
+}
+
+export function setupVoiceLiveWebSocket(httpServer: HttpServer, gatewayWsUrl = GATEWAY_WS_URL) {
+  bridgeBrowserSocket(httpServer, gatewayWsUrl, {
+    path: VOICE_LIVE_PATH,
+    upstream: (url, req) => {
+      // The agent the call is with, when the page names one: a safe id the caller may see, by the same scope rule as
+      // every /api/agents/:id route (an out-of-scope id gets the same 404 an unknown one does). None: Arturo's own call.
+      const agent = url.searchParams.get('agent');
+      if (agent !== null) {
+        if (!isSafeAgentId(agent)) {
+          return { refuse: 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nbad agent id' };
+        }
+        if (!canPrincipalSeeAgent(principal(req as any), { id: agent, tags: defaultResolveTags(agent) })) {
+          return { refuse: 'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nagent not found' };
+        }
+      }
+      const voice = url.searchParams.get('voice') || 'Fenrir';
+      return { path: `/live?voice=${encodeURIComponent(voice)}${agent !== null ? `&agent=${encodeURIComponent(agent)}` : ''}` };
+    },
+    onUpstreamRejected: (clientWs, status) => {
+      closeLoud(clientWs, 1011, `voice bridge upstream rejected the connection (HTTP ${status})`);
+    },
+    onUpstreamClosed: (clientWs, code, reason) => {
+      // No close code (1005 none sent, 1006 dropped): a code the browser side may not be sent, so passing it on threw
+      // and left the page's call open. That is the call ending: say so plainly. A real code passes through.
+      if (!code || code === 1005 || code === 1006) {
+        try { clientWs.close(1000, 'call ended'); } catch { /* already gone */ }
+        return;
+      }
+      closeLoud(clientWs, code, reason || 'gateway closed the voice session');
+    },
+    onUpstreamError: (clientWs, err) => {
+      closeLoud(clientWs, 1011, `voice bridge upstream error: ${err.message}`);
+    },
   });
 }
 

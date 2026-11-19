@@ -37,6 +37,7 @@ class FakeWS {
   /** The browser delivering 'close' later, as it does after close(). */
   deliverClose() { this.#fire('close'); }
   deliverJson(obj) { this.#fire('message', { data: JSON.stringify(obj) }); }
+  deliverBinary(buf) { this.#fire('message', { data: buf }); }
   #fire(t, ev = {}) { for (const fn of this.#l[t] || []) fn(ev); }
 }
 class FakeNode { connect() {} disconnect() {} }
@@ -225,4 +226,33 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   const online = await run(true);
   assert.match(online[0], /Chrome or Edge/, 'online with a dead service: still the browser advice');
   console.log('PASS: offline is reported as offline; a dead service online still says Chrome or Edge');
+}
+
+// ── hang-up closes the call's playback AudioContext; a hung-up socket's late audio does not reopen one ─────────
+{
+  installBrowser();
+  const made = [];
+  class PlayCtx extends FakeAudioContext {
+    currentTime = 0; closed = false;
+    constructor() { super(); made.push(this); }
+    createAnalyser() { const n = new FakeNode(); n.fftSize = 0; return n; }
+    createBuffer() { return { duration: 0.1, copyToChannel() {} }; }
+    createBufferSource() { const n = new FakeNode(); n.start = () => {}; n.stop = () => {}; return n; }
+    close() { this.closed = true; return Promise.resolve(); }
+  }
+  globalThis.window.AudioContext = PlayCtx;
+  const s = new VoiceSession({});
+  const p = s.start({ route: '/' });
+  await tick();
+  pendingGum.shift()(new FakeStream());
+  await p; await tick();
+  const ws = sockets[0];
+  ws.deliverBinary(new ArrayBuffer(4800));               // Arturo speaks: a playback context opens
+  const before = made.length;
+  assert.ok(before >= 2, 'mic + playback contexts were made');
+  s.stop();
+  assert.ok(made.every((c) => c.closed), 'every AudioContext of the call is closed at hang-up');
+  ws.deliverBinary(new ArrayBuffer(4800));               // late audio from the hung-up socket
+  assert.strictEqual(made.length, before, 'late audio does not open a new playback context');
+  console.log('PASS: hang-up closes the call\'s AudioContexts; late audio from the old socket is dropped');
 }

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { HandsFreeCall, isInCall } from '../lib/handsFree';
+import { EngineSwitch } from '../lib/voiceEngine';
+import { NativeVoiceSession } from '../lib/nativeVoiceSession';
+import { fetchNativeReady } from '../lib/nativeVoice';
 import { VoiceSession, type CallToolEvent, type VoiceSessionStartOptions, type VoiceSessionState } from '../lib/voiceSession';
 import { useCallStore } from '../stores/callStore';
 import { askSwitchCall, useArturoCall } from '../lib/switchCall';
@@ -19,11 +22,19 @@ export function useHandsFreeCall(ev: {
   const [liveUser, setLiveUser] = useState('');
   const [liveArturo, setLiveArturo] = useState('');
   const [muted, setMuted] = useState(false);
+  const [engine, setEngine] = useState<'native' | 'relay' | null>(null);
   const evRef = useRef(ev);
   evRef.current = ev;
   const ctl = useRef<HandsFreeCall | null>(null);
   if (!ctl.current) {
-    ctl.current = new HandsFreeCall((cb) => new VoiceSession(cb), {
+    // Native GPT-Live (the iPhone app's engine) when the server says it is ready, else the relay (lib/voiceEngine.ts).
+    ctl.current = new HandsFreeCall((cb) => new EngineSwitch(cb, {
+      makeNative: (ncb) => new NativeVoiceSession(ncb),
+      makeRelay: (rcb) => new VoiceSession(rcb),
+      ready: () => fetchNativeReady(),
+      log: (m) => console.info(m),
+      onEngine: (e) => setEngine(e),
+    }), {
       onState: (s) => { setCallState(s); if (s === 'idle' || s === 'error') { setLiveUser(''); setLiveArturo(''); } },
       onPartial: (text, role) => { if (role === 'user') setLiveUser(text); else setLiveArturo(text); },
       onFinal: (text, role) => {
@@ -46,7 +57,7 @@ export function useHandsFreeCall(ev: {
     return () => { if (useArturoCall.getState().live === mine) useArturoCall.setState({ live: null }); };
   }, [live]);
   return {
-    callState, liveUser, liveArturo, inCall: isInCall(callState), muted,
+    callState, liveUser, liveArturo, inCall: isInCall(callState), muted, engine,
     toggleMute: () => ctl.current!.toggleMute(),
     // One call at a time: with an agent's call live, starting this one asks first, and only a yes ends that call.
     toggle: async (opts: VoiceSessionStartOptions) => {

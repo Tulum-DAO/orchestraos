@@ -474,7 +474,7 @@ export function ArturoPill() {
           <div ref={olderRef} data-anchor-skip data-older-sentinel aria-hidden style={{ height: 0, flexShrink: 0 }} />
           <OlderPagesNote show={paged.loading} />
           <ThreadView rows={rows} skin="pane" by={aname} lastUserKey={lastUserKey(keyed)} stick={stick}
-            call={{ liveSince: callSince, liveUser, liveArturo, connecting: callState === 'connecting' }}
+            call={{ liveSince: callSince, liveUser, liveArturo, connecting: callState === 'connecting', engine: call.engine }}
             noteText={(m) => (m.text === STARTING_TEXT ? m.text : `I can't do that yet — ${m.text}.`)}
             choice={{
               onAnswer: (m, text, a) => { const c = m.choices!; void send(text, c.card_id ? cardAnswer(c.card_id, c.options, a.picked, a.words) : undefined); },
