@@ -86,6 +86,10 @@ host = ""
 # "whatsapp". required (defaults to "none" — the harness runs with zero
 # notification channels configured).
 channel = "none"
+# Where approval pushes go: your ntfy server's base URL. Optional; $NTFY_BASE
+# wins, and blank means http://localhost:9080. Set it when ntfy listens only on
+# a private interface (for example your tailnet address), not on localhost.
+ntfy_base = ""
 
 [notify.telegram]
 # Only read when notify.channel = "telegram". BYO bot: create one with

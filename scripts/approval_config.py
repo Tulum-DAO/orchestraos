@@ -8,7 +8,7 @@ from pathlib import Path
 # lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
 if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+from orchestra_cli.settings import data_dir as _data_dir, ntfy_base as _ntfy_base  # noqa: E402
 
 #: The LIVE install: the data dir this checkout is CONFIGURED for (orchestra.toml [data] dir, else
 #: the product default), deliberately ignoring ORCHESTRA_DIR, so the pytest fence below names the one
@@ -83,7 +83,7 @@ def __getattr__(name):
         return db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-NTFY_BASE = os.environ.get("NTFY_BASE", "http://localhost:9080")
+NTFY_BASE = _ntfy_base()   # $NTFY_BASE, then orchestra.toml [notify] ntfy_base, then localhost:9080
 NTFY_APPROVALS_TOPIC = os.environ.get("NTFY_APPROVALS_TOPIC", "approvals")
 NTFY_ANSWERS_TOPIC = os.environ.get("NTFY_ANSWERS_TOPIC", "approval-answers")
 NTFY_TOKEN_FILE = Path(os.environ.get("NTFY_TOKEN_FILE", os.path.expanduser("~/.config/jarvis/ntfy-token")))

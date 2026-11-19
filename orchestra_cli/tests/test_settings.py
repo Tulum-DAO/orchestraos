@@ -294,3 +294,52 @@ def test_child_env_hands_arturo_the_configured_public_url_and_the_operators_env_
     assert mine["ORCHESTRA_PUBLIC_URL"] == "https://mine.ts.net:9"
     st.raw = {}
     assert "ORCHESTRA_PUBLIC_URL" not in S.child_env(st, base={})
+
+
+# --- [notify] ntfy_base: where approval pushes go -------------------------------------------------
+
+def _ntfy_cfg(tmp_path, monkeypatch, body: str | None):
+    monkeypatch.delenv("NTFY_BASE", raising=False)
+    cfg = tmp_path / "orchestra.toml"
+    if body is not None:
+        cfg.write_text(body)
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(cfg))
+
+
+def test_ntfy_base_defaults_to_localhost_with_no_key_or_no_file(tmp_path, monkeypatch):
+    _ntfy_cfg(tmp_path, monkeypatch, None)
+    assert S.ntfy_base() == "http://localhost:9080"
+    _ntfy_cfg(tmp_path, monkeypatch, '[notify]\nchannel = "none"\nntfy_base = ""\n')
+    assert S.ntfy_base() == "http://localhost:9080"
+
+
+def test_ntfy_base_comes_from_the_toml_key(tmp_path, monkeypatch):
+    _ntfy_cfg(tmp_path, monkeypatch, '[notify]\nntfy_base = "https://ntfy.example.test:9080/"\n')
+    assert S.ntfy_base() == "https://ntfy.example.test:9080"
+
+
+def test_ntfy_base_env_wins_over_the_toml_key(tmp_path, monkeypatch):
+    _ntfy_cfg(tmp_path, monkeypatch, '[notify]\nntfy_base = "https://ntfy.example.test:9080"\n')
+    monkeypatch.setenv("NTFY_BASE", "http://127.0.0.2:9999")
+    assert S.ntfy_base() == "http://127.0.0.2:9999"
+
+
+def test_ntfy_base_survives_a_broken_toml_or_a_non_string(tmp_path, monkeypatch):
+    _ntfy_cfg(tmp_path, monkeypatch, "[notify\nntfy_base = ")
+    assert S.ntfy_base() == "http://localhost:9080"
+    _ntfy_cfg(tmp_path, monkeypatch, "[notify]\nntfy_base = 9080\n")
+    assert S.ntfy_base() == "http://localhost:9080"
+
+
+def test_approval_config_posts_to_the_configured_base(tmp_path, monkeypatch):
+    """approval_config.NTFY_BASE is what approval_notify POSTs to: it must carry the toml key."""
+    import importlib, sys
+    _ntfy_cfg(tmp_path, monkeypatch, '[notify]\nntfy_base = "https://ntfy.example.test:9080"\n')
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    monkeypatch.syspath_prepend(scripts)
+    import approval_config
+    try:
+        assert importlib.reload(approval_config).NTFY_BASE == "https://ntfy.example.test:9080"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(sys.modules["approval_config"])
