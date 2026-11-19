@@ -404,6 +404,37 @@ _ARCHIVE_IDENTITY_FIELDS = ("session_id", "resume_command")
 _LIVE_IDENTITY_FIELDS = ("session_id", "generation", "model", "resume_command")
 
 
+def _canonical_authoritative_tmux_session(doc, crow):
+    """``tmux_session`` on a LIVE canonical row comes from ``canonical``, not the stored document.
+
+    The message router finds a seat's pane in agent-sessions.json, falling back to registry.json;
+    its hot path never reads ``canonical``, and its fallback filters candidates by the document's
+    value before consulting it. A green's documents are written at spawn and name its boot alias
+    (``<root>-g<N>``). After a blue-green swap renames the pane to the bare root and repoints
+    ``canonical``, those documents still name an alias that no longer exists: every message to the
+    seat is held and nothing alarms, because a silenced seat looks idle. The documents round-trip
+    through the projection, so they never correct themselves; ``_db_first_live_identity`` cannot
+    help (``generations`` has no tmux_session column, the value lives only on ``canonical``).
+
+    Correcting the projection makes ``canonical.tmux_session`` the single authority for every swap
+    path (the hand rotation, the background swap and the repoint-only path) and repairs swaps that
+    already happened on the next projection.
+
+    Override, never add: a document without the key does not gain it. Fail-safe on absent
+    authority: no canonical row, or a NULL/empty ``tmux_session``, serves the document unchanged.
+
+    So ``canonical.tmux_session`` is the ONLY place to change a live seat's pane name: writing
+    ``tmux_session`` into a live root's stored document has no visible effect."""
+    if not crow or not isinstance(doc, dict):
+        return doc
+    val = crow.get("tmux_session")
+    if not val or "tmux_session" not in doc:
+        return doc
+    out = dict(doc)
+    out["tmux_session"] = val
+    return out
+
+
 def _db_first_live_identity(doc, gen):
     """gm msg_816d4940 (by effect 2026-09-16 13:05 Tulum: after swap_generation moved task-gm
     canonical to gen 2 / sid 0000000b, registry.json still read generation 1 / session_id None
@@ -480,7 +511,10 @@ def _build_faithful_registry(snap):
         doc = docs["agent"].get(root)
         base = doc[1] if doc is not None else {"name": root, "lineage_root": root}
         gen = gen_by_id.get(crow["generation_id"])
-        agents[root] = _db_first_live_identity(base, gen) if gen else base
+        row = _db_first_live_identity(base, gen) if gen else base
+        # the pane the router resolves comes from canonical, not a spawn-time document that
+        # still names the green's boot alias
+        agents[root] = _canonical_authoritative_tmux_session(row, crow)
 
     # (2) swap-retired predecessors (KEPT) + (3) provisional aliases.
     provisional = {}
@@ -543,7 +577,10 @@ def _build_faithful_sessions(snap):
         gen = gen_by_id.get(crow["generation_id"])
         row = sessions.get(root)
         if gen and isinstance(row, dict):
-            sessions[root] = _db_first_live_identity(row, gen)
+            # message-router.py reads this file FIRST, so a stale alias hurts most here
+            sessions[root] = _canonical_authoritative_tmux_session(_db_first_live_identity(row, gen), crow)
+        elif isinstance(row, dict):
+            sessions[root] = _canonical_authoritative_tmux_session(row, crow)
     for gen in snap["generations"]:
         if gen["root"] in canonical and gen["retired_at"] is not None:
             key = f"{gen['root']}-gen{gen['generation']}"
