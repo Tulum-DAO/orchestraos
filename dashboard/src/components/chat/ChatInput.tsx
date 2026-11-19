@@ -80,7 +80,7 @@ interface Props {
   /** Interrupt the agent's turn (the same Esc key the Dev-mode ActionBar sends). Absent = no Stop. */
   onStop?: () => Promise<unknown> | void;
   /** This composer's call, for the round button (lib/roundAction.ts): empty box → Call, End during a call; no call
-   *  possible → a disabled Send with the reason. Absent = no call here (the empty button is a disabled Send). */
+   *  possible → a dimmed Call with the reason. Absent = no call here (the empty button is a disabled Send). */
   call?: { inCall: boolean; available: boolean; reason?: string; agentName: string; onToggle: () => void };
 }
 
@@ -674,7 +674,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           </div>}
           {trailing}
           {/* THE ROUND BUTTON (lib/roundAction.ts): Send with something to send, Stop mid-turn, Call when empty (End during
-              a call), a disabled Send with the reason when no call is possible. One button; its icons crossfade. */}
+              a call), a dimmed Call with the reason when no call is possible. One button; its icons crossfade. */}
           <RoundAction
             view={roundView({ hasContent: !!(text.trim() || hasFiles), sending, blocked: !!disabled, canStop: !!onStop && !!canStop,
                               call: call ? { inCall: call.inCall, available: call.available, reason: call.reason } : undefined },
