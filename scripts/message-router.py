@@ -564,6 +564,24 @@ def _describe_topology(to_agent: str, sessions: set, meta: dict) -> str:
         return "topology unavailable"
 
 
+# Roots served through the canonical pointer because their own session doc names a dead session.
+# Once per root and session per process: the swap's doc repoint is what should end these lines.
+_STALE_ROOT_DOCS_SEEN: set = set()
+
+
+def _note_stale_root_doc(root: str, canon_sess: str) -> None:
+    """One stderr line per (root, session) per process. stderr, never stdout: the batch resolver
+    CLI prints its JSON map on stdout. Never raises."""
+    try:
+        if (root, canon_sess) in _STALE_ROOT_DOCS_SEEN:
+            return
+        _STALE_ROOT_DOCS_SEEN.add((root, canon_sess))
+        sys.stderr.write(f"{now_iso()} [router] STALE-ROOT-DOC {root}: own session doc names a dead "
+                         f"session; resolved via canonical.tmux_session {canon_sess}\n")
+    except Exception:  # noqa: BLE001 — observability must never break delivery
+        pass
+
+
 def _lineage_root_resolve(to_agent: str, entry: dict, sessions: set, meta: dict):
     """No usable succeeded_by target: fall back to members sharing lineage_root.
 
@@ -573,6 +591,16 @@ def _lineage_root_resolve(to_agent: str, entry: dict, sessions: set, meta: dict)
     (retryable, log-only). Several and no pointer answer -> ambiguous-lineage (fail loud)."""
     root = entry.get("lineage_root")
     if not root:
+        # A ROOT address (lineage_root=None names no root above it): the swap renames the green
+        # `<root>-g<N>` session to the bare root and only THEN repoints canonical.tmux_session
+        # (bg_complete._consolidate_green_to_bare), but the root's session doc in the DB keeps the
+        # boot alias and wins in load_agent_meta, so its own session reads as dead. A LIVE pointer
+        # is the owner. Anything else stays the silent retry it always was. Without this, every
+        # promoted seat missed pushed approvals and mail until its next turn ended.
+        canon_sess, _canon_sid = _canonical_for(to_agent)
+        if canon_sess and canon_sess in sessions:
+            _note_stale_root_doc(to_agent, canon_sess)
+            return (canon_sess, None, "lineage-root-canonical")
         return (None, to_agent, "no-live-head")
     live_members = []
     for a, e in meta.items():
