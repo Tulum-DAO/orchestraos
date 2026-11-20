@@ -73,6 +73,7 @@ import { loadConfig } from './lib/config.js';
 import { principal, installRole } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
+import { crossSiteWriteGuard } from './lib/cross-site-write.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
 import { isTerminalRelay } from './lib/terminal-relay-secret.js';
 import { capabilities } from './lib/capabilities.js';
@@ -108,22 +109,27 @@ const warnedOrigins = new Set<string>();
 // every request (2026-09-29). Requests with no Origin (curl, server-side callers) are
 // allowed: CORS is a browser control and refusing them adds nothing.
 // The decision itself lives in lib/cors-origin.ts, with its own tests.
+// The one origin decision both the CORS layer and the cross-site write guard use (see below).
+function corsOriginDecision(req: express.Request, origin: string | undefined) {
+  // x-forwarded-host is trusted ONLY from a loopback peer — i.e. the dashboard proxy on
+  // this machine, which is the only thing that should ever be forwarding for us. Any
+  // client can send that header, and honouring it from an arbitrary peer would let a
+  // caller nominate itself as same-origin and be handed Access-Control-Allow-Origin
+  // (flagged in review, 2026-09-29). The API binds loopback today, so this costs nothing
+  // and stops the bypass if it is ever exposed directly.
+  const peer = req.socket.remoteAddress || '';
+  const peerIsLocal = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
+  return originDecision({
+    origin: origin || undefined,
+    forwardedHost: peerIsLocal ? String(req.headers['x-forwarded-host'] || '') || undefined : undefined,
+    hostHeader: req.headers.host,
+    allowlist: corsAllowlist(),
+  });
+}
+
 app.use((req, res, next) => cors({
   origin(origin, cb) {
-    // x-forwarded-host is trusted ONLY from a loopback peer — i.e. the dashboard proxy on
-    // this machine, which is the only thing that should ever be forwarding for us. Any
-    // client can send that header, and honouring it from an arbitrary peer would let a
-    // caller nominate itself as same-origin and be handed Access-Control-Allow-Origin
-    // (flagged in review, 2026-09-29). The API binds loopback today, so this costs nothing
-    // and stops the bypass if it is ever exposed directly.
-    const peer = req.socket.remoteAddress || '';
-    const peerIsLocal = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
-    const decision = originDecision({
-      origin: origin || undefined,
-      forwardedHost: peerIsLocal ? String(req.headers['x-forwarded-host'] || '') || undefined : undefined,
-      hostHeader: req.headers.host,
-      allowlist: corsAllowlist(),
-    });
+    const decision = corsOriginDecision(req, origin);
     if (!decision.allow && origin && !warnedOrigins.has(origin)) {
       warnedOrigins.add(origin);
       // Say what actually happened: the header is withheld, so a CROSS-origin browser read
@@ -145,6 +151,8 @@ app.use((req, res, next) => cors({
 // Forensic access log. Mounted before the routes and before the body parser so a
 // request is recorded even if parsing rejects it.
 app.use(accessLog);
+// A write another site started is refused before any route or body parser (lib/cross-site-write.ts: CSRF).
+app.use(crossSiteWriteGuard((origin, req) => corsOriginDecision(req, origin).allow));
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));
