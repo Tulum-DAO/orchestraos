@@ -3038,13 +3038,60 @@ def merge_forwarded_meta(store, msg_id: str, forwarded_from: str) -> None:
 
 # --- Main ---------------------------------------------------------------------
 
+#: A send kicks a pass at once (msg_store.kick_router_after_send), but a kick that lands while
+#: another pass holds LOCKFILE exits on the spot, and that pass already read its candidates: the
+#: row then waited for the next beat (up to a minute). So a pass that ran ends by asking whether a
+#: pending row arrived after it began, and if so runs once more as a FRESH process with the same
+#: argv (no in-process cache carries over). Any burst of sends is one catch-up; at most
+#: ROUTER_CATCHUP_MAX in a row. 0 turns catch-up off.
+ROUTER_CATCHUP_MAX = int(os.environ.get("ROUTER_CATCHUP_MAX", "2"))
+
+
+def _cpu_seconds() -> float:
+    import resource
+    own = resource.getrusage(resource.RUSAGE_SELF)
+    kids = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return own.ru_utime + own.ru_stime + kids.ru_utime + kids.ru_stime
+
+
+def pending_since(conn, since_iso: str) -> int:
+    """Pending rows created after since_iso (msg_store writes created_at as UTC isoformat)."""
+    return conn.execute("SELECT COUNT(*) FROM messages WHERE status='pending' AND created_at > ?",
+                        (since_iso,)).fetchone()[0]
+
+
+def finish_pass(ran, started_iso, wall0, cpu0, *, store=None, execve=None, env=None):
+    """Log one PASS line, then re-exec once more if mail arrived during the pass."""
+    if not ran:
+        return None
+    env = os.environ if env is None else env
+    depth = int(env.get("ROUTER_CATCHUP_DEPTH") or 0)
+    try:
+        store = store or MessageStore()
+        with store._conn() as conn:
+            fresh = pending_since(conn, started_iso)
+    except Exception as e:  # noqa: BLE001 — the beat stays the backstop
+        log(f"[catchup] pending check failed (non-fatal): {e}")
+        fresh = 0
+    again = bool(fresh) and depth < ROUTER_CATCHUP_MAX
+    log(f"PASS wall={time.monotonic() - wall0:.1f}s cpu={_cpu_seconds() - cpu0:.2f}s "
+        f"depth={depth} new_pending={fresh}{' -> catch-up pass' if again else ''}")
+    if not again:
+        return False
+    sys.stdout.flush()
+    sys.stderr.flush()
+    (execve or os.execve)(sys.executable, [sys.executable, *sys.argv],
+                          {**env, "ROUTER_CATCHUP_DEPTH": str(depth + 1)})
+    return True
+
+
 # Delivery model: see docs/DELIVERY.md
 def main():
     # Lock (stale after 5 min)
     if LOCKFILE.exists():
         try:
             if time.time() - LOCKFILE.stat().st_mtime < 300:
-                return
+                return False
         except OSError:
             pass
     LOCKFILE.write_text(str(os.getpid()))
@@ -3497,10 +3544,14 @@ def main():
         save_downs(down_state)
     finally:
         LOCKFILE.unlink(missing_ok=True)
+    return True
 
 
 if __name__ == "__main__":
     # DEC-1787031444 bind 2: --would-digest = shadow (log would-digest
     # composition, deliver nothing via the digest path; singles unchanged).
     DIGEST_SHADOW = "--would-digest" in sys.argv[1:]
-    main()
+    _pass_started = now_iso()
+    _wall0, _cpu0 = time.monotonic(), _cpu_seconds()
+    _ran = main()
+    finish_pass(_ran, _pass_started, _wall0, _cpu0)
