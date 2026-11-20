@@ -3551,7 +3551,10 @@ if __name__ == "__main__":
     # DEC-1787031444 bind 2: --would-digest = shadow (log would-digest
     # composition, deliver nothing via the digest path; singles unchanged).
     DIGEST_SHADOW = "--would-digest" in sys.argv[1:]
+    # Read the catch-up depth and take it OUT of the environment: mail this pass sends kicks a
+    # router that inherits os.environ, and that pass must start with its own full budget.
+    _depth = os.environ.pop("ROUTER_CATCHUP_DEPTH", "0")
     _pass_started = now_iso()
     _wall0, _cpu0 = time.monotonic(), _cpu_seconds()
     _ran = main()
-    finish_pass(_ran, _pass_started, _wall0, _cpu0)
+    finish_pass(_ran, _pass_started, _wall0, _cpu0, env={**os.environ, "ROUTER_CATCHUP_DEPTH": _depth})

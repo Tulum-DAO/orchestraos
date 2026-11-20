@@ -132,3 +132,34 @@ def test_the_lost_kick_by_effect(store, tmp_path, monkeypatch):
     ex = Exec()
     mr.finish_pass(True, started, time.monotonic(), 0.0, store=store, execve=ex, env={})
     assert len(ex.calls) == 1               # the row is not left for the next beat
+
+
+def test_a_kick_from_inside_a_catch_up_pass_starts_with_a_full_budget():
+    """The router sends mail itself, and that send's kick copies os.environ: the depth must not
+    ride along. Runs the real __main__ block with main() and finish_pass() stubbed."""
+    import json
+    import subprocess
+    import sys
+    src = open(os.path.join(_here, "message-router.py")).read()
+    block = src[src.index('if __name__ == "__main__":'):].replace('if __name__ == "__main__":', "if True:", 1)
+    code = ("import json, os, sys, time\n"
+            "seen = {}\n"
+            "def main():\n    seen['kick_sees'] = os.environ.get('ROUTER_CATCHUP_DEPTH'); return False\n"
+            "def now_iso(): return ''\n"
+            "def _cpu_seconds(): return 0.0\n"
+            "def finish_pass(*a, env=None): seen['pass_depth'] = env['ROUTER_CATCHUP_DEPTH']\n"
+            + block + "\nprint(json.dumps(seen))\n")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30,
+                         env={**os.environ, "ROUTER_CATCHUP_DEPTH": "2"})
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == {"kick_sees": None, "pass_depth": "2"}
+
+
+@pytest.mark.parametrize("row_ts,counted", [
+    ("2026-11-20T07:00:01+00:00", True),           # microsecond 0: isoformat drops the fraction
+    ("2026-11-20T07:00:00+00:00", False),          # same second, earlier than .5
+    ("2026-11-20T07:00:00.600000+00:00", True),
+])
+def test_created_at_compares_right_when_the_fraction_is_missing(store, row_ts, counted):
+    with store._conn() as conn:
+        conn.execute("INSERT INTO messages (id, status, created_at) VALUES ('m', 'pending', ?)", (row_ts,))
+        assert bool(mr.pending_since(conn, "2026-11-20T07:00:00.500000+00:00")) is counted
