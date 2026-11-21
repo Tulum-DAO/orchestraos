@@ -2201,9 +2201,10 @@ def _project_folder_for(session, parent):
         return None
 
 
-def _asked_parent(value, session, registry=None):
-    """spawn_agent's `reports_to`: a registered seat (exact name, or the same words), never Arturo or the new
-    seat itself. None when not given; a NOT RUN line when it names no registered seat."""
+def _asked_parent(value, session, registry=None, directory=None):
+    """spawn_agent's `reports_to`: a registered seat, never Arturo or the new seat itself. Named by its id, its
+    current or old name (the dashboard's Rename: seat_resolve, the one resolver), or the id's words ("pm first
+    project", "the acme project manager"). None when not given; a NOT RUN line when it names no registered seat."""
     value = str(value or "").strip()
     if not value:
         return None
@@ -2212,10 +2213,20 @@ def _asked_parent(value, session, registry=None):
         names = list((reg.get("agents") or {}).keys())
     except Exception:
         return None
-    hit = next((n for n in names if n == value), None) or next(
+    if directory is None:
+        try:
+            directory = _seat_directory()
+        except Exception as e:  # noqa: BLE001 - no names readable: the registry's ids and words alone
+            log.warning(f"reports_to: seat names unreadable: {e!r}")
+            directory = []
+    seat = _find_seat(value, directory)
+    hit = seat["id"] if seat and seat.get("exact") and seat["id"] in names else None
+    hit = hit or next((n for n in names if n == value), None) or next(
         (n for n in names if _name_tokens(n) == _name_tokens(value, spoken=True)), None)
     if not hit or hit == session or hit.lower().startswith("arturo"):
-        return (f"NOT RUN: '{value}' is not a registered seat to report to. Registered: {', '.join(sorted(names))}. "
+        shown = _seat_names(directory)
+        listed = ", ".join(f"{n} ({shown[n]})" if shown.get(n) else n for n in sorted(names))
+        return (f"NOT RUN: '{value}' is not a registered seat to report to. Registered: {listed}. "
                 f"Ask the operator which one, or leave reports_to out.")
     return hit
 
@@ -2349,13 +2360,15 @@ def _registry_hierarchy(registry=None):
     return sorted(rows, key=lambda h: (h["tier"], h["agent_id"]))
 
 
-def _list_agents_text(hierarchy_agents, live_sessions, infra, detect=None):
+def _list_agents_text(hierarchy_agents, live_sessions, infra, detect=None, names=None):
     """list_agents' answer. RUNNING only when the status detector sees an agent CLI on the seat's
     pane (the dashboard's truth); a session holding a shell or a nested tmux client is "session up,
     no agent running in it", and a detector that could not answer is "could not tell". The detector
-    runs only for seats with a session, in parallel."""
+    runs only for seats with a session, in parallel. `names` ({id: name}, _seat_names()): a renamed
+    seat shows its name beside its id, so the name the operator uses is in the list."""
     from concurrent.futures import ThreadPoolExecutor
     detect = detect or _detector_state
+    names = names or {}
     live_ids = [h.get("agent_id", "") for h in hierarchy_agents if h.get("agent_id", "") in live_sessions]
     with ThreadPoolExecutor(max_workers=8) as ex:
         states = dict(zip(live_ids, ex.map(lambda n: detect(n) or "unknown", live_ids)))
@@ -2373,11 +2386,12 @@ def _list_agents_text(hierarchy_agents, live_sessions, infra, detect=None):
         else:
             status = "session up, could not tell whether the agent runs"
         always_on = " (always-on)" if h.get("always_on") else ""
+        shown = f"{aid} ({names[aid]})" if names.get(aid) else aid
         if h.get("tier"):
             under = f", reports to {h['reports_to']}" if h.get("reports_to") else ""
-            parts.append(f"  {aid}: {h['tier']} {h.get('role') or 'agent'}{under} — {status}{always_on}")
+            parts.append(f"  {shown}: {h['tier']} {h.get('role') or 'agent'}{under} — {status}{always_on}")
         else:
-            parts.append(f"  {aid}: {h.get('role', '?')} for {h.get('project', '')} — {status}{always_on}")
+            parts.append(f"  {shown}: {h.get('role', '?')} for {h.get('project', '')} — {status}{always_on}")
     hierarchy_ids = {h.get("agent_id") for h in hierarchy_agents}
     orphans = sorted(s for s in live_sessions - infra if s not in hierarchy_ids)
     if orphans:
@@ -3891,7 +3905,8 @@ def execute_tool(name, args, user_turns=None):
 # one close agent is assumed and said; several are asked about; a dead one is offered revival; a name no agent
 # ever had is offered as a new agent.
 _AGENT_ARG = {"agent_message": "to_agent", "inject_message": "session_name", "get_agent_output": "session_name",
-              "kill_agent": "session_name", "read_agent_conversation": "agent_id", "spawn_agent": "session_name"}
+              "kill_agent": "session_name", "read_agent_conversation": "agent_id", "spawn_agent": "session_name",
+              "answer_menu": "session"}
 _READS_ONLY = frozenset({"get_agent_output", "read_agent_conversation"})
 
 
@@ -3947,6 +3962,42 @@ def _revive_question(seat, refused_resume=False):
                    f"revive='fresh'.")
 
 
+def _seat_directory():
+    """Every agent with its names: seat_names (the dashboard's Rename) first, registry.json and the session file
+    for the ids (scripts/identity_store/seat_resolve.load_directory). The ONE source every agent lookup by name
+    here reads; raises when it can't be read (callers fail open)."""
+    if str(_REPO_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(_REPO_ROOT))
+    from scripts.identity_store import seat_resolve as _sr
+    from orchestra_cli.settings import data_dir as _dd
+    return _sr.load_directory(_dd())
+
+
+def _find_seat(text, directory=None):
+    """The agent a person's words name, through the one resolver (seat_resolve.resolve, the person's rules), as
+    its directory row plus "exact" (an id, name or old name, alive or not) or None. Never raises."""
+    try:
+        directory = _seat_directory() if directory is None else directory
+        from scripts.identity_store import seat_resolve as _sr
+        res = _sr.resolve(text, directory, _sr.PERSON)
+    except Exception as e:  # noqa: BLE001 - a lookup that can't run finds nothing; the caller's own path stands
+        log.warning(f"seat lookup failed for {str(text)[:40]!r}: {e!r}")
+        return None
+    seat = res.get("seat")
+    return {**seat, "exact": res["kind"] in ("deliver", "dead")} if seat else None
+
+
+def _seat_names(directory=None):
+    """{id: current name} for every agent renamed away from its id (the same directory the lookups read); {} when
+    it can't be read."""
+    try:
+        directory = _seat_directory() if directory is None else directory
+    except Exception:  # noqa: BLE001
+        return {}
+    return {d["id"]: d["name"] for d in directory
+            if not d.get("builtin") and d.get("name") and d["name"] != d["id"]}
+
+
 def _resolve_agent_arg(name, args):
     """(args, early, note): args with the agent named by its id; `early` a result to return instead of running
     the tool (ask which, ask to revive, offer to create); `note` a line to put before the tool's result. Any
@@ -3956,11 +4007,9 @@ def _resolve_agent_arg(name, args):
     if not raw:
         return args, None, None
     try:
-        if str(_REPO_ROOT) not in _sys.path:
-            _sys.path.insert(0, str(_REPO_ROOT))
+        directory = _seat_directory()
         from scripts.identity_store import seat_resolve as _sr
         from orchestra_cli.settings import data_dir as _dd
-        directory = _sr.load_directory(_dd())
         if not any(not d.get("builtin") for d in directory):
             return args, None, None                     # no agents readable at all: a broken source, not an answer
         thread = _current_thread()
@@ -4455,7 +4504,7 @@ def _execute_tool_raw(name, args, user_turns=None):
             # operator two freshly registered seats were not real agents, 2026-10-24).
             hierarchy_agents = _registry_hierarchy()
         if hierarchy_agents:
-            return _list_agents_text(hierarchy_agents, live_sessions, infra)
+            return _list_agents_text(hierarchy_agents, live_sessions, infra, names=_seat_names())
         else:
             # Fallback: raw tmux list if hierarchy is empty
             agent_sessions = sorted(live_sessions - infra)
