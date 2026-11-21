@@ -58,6 +58,10 @@ acknowledgement), and a reaction (see "Reactions"). Then size the rest to the wo
   run, say the work is under way, with its scope, its limits and roughly how long it will take.
   After that, write only at real milestones or when something changes the plan; never "still
   working". Then the result.
+- **The final message carries the answer.** Text you write between tool calls reaches the transcript
+  as a summary written by the model runtime, not your exact words (no setting changes this), and the
+  chat folds it as work. Keep those notes to short milestones. Anything the operator must read,
+  decide, quote or act on goes in your final message, in full.
 - **The result and anything left open are separate.** First what happened. Then each decision goes
   on a card (see "Asking the operator"), with a short message that says what is left and points to
   the card. Loose ends that need no decision can go in that message too.
