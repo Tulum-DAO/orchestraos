@@ -5,6 +5,9 @@
 - an isolated tmux server (TMUX unset, TMUX_TMPDIR -> tmp): any spawn/rotate a test performs
   lands on a server the fleet's router, orphan scan and identity store never see, and the
   fixture kills that server on teardown.
+- a `tailscale` on PATH that answers nothing: `orchestra init` reads `tailscale status --json` to write
+  state/tailscale-users, and a test must never read (or write into a fixture) the developer's own login.
+  A test that wants an answer puts its own fake `tailscale` earlier on PATH.
 scripts/test_sandbox_env.sh exports the same sandbox for manual by-effect proofs."""
 import os
 import subprocess
@@ -19,6 +22,11 @@ def _sandbox(tmp_path, monkeypatch):
     sock_dir.mkdir()
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("TMUX_TMPDIR", str(sock_dir))
+    no_ts = tmp_path / "no-tailscale-bin"
+    no_ts.mkdir()
+    (no_ts / "tailscale").write_text("#!/bin/sh\nexit 1\n")
+    (no_ts / "tailscale").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{no_ts}{os.pathsep}{os.environ.get('PATH', '')}")
     yield
     env = dict(os.environ, TMUX_TMPDIR=str(sock_dir))
     env.pop("TMUX", None)

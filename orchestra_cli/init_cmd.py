@@ -389,6 +389,13 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         os.chmod(tok, 0o600)
         report.append(Step("gateway-token", True, f"wrote {tok} (chmod 600)"))
 
+    # 5a. who the web terminal and the voice call let in: no install issues a session cookie, so with no
+    # state/tailscale-users nobody got in, the owner included. Absent -> this machine's own Tailscale
+    # login, as admin. A present file (even an empty one) is never touched; no login -> a hint, never a failure.
+    from . import tailscale_users as TU
+    ts = TU.seed(data_dir)
+    report.append(Step("tailscale-users", ts.did, ts.detail))
+
     # 5b. tasks.db schema — msg_store.py, scripts/message-router.py and the rotation beat
     # open <data>/state/tasks.db expecting messages + conversations; only the api created
     # them (first boot), so beats starting at t=0 under `orchestra up` crashed with

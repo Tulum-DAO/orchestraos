@@ -26,7 +26,9 @@ STUBS = {
     "node": '[ -f "$S/node" ] && echo v22.23.3 || exit 127',
     "curl": 'echo "echo setup-script-ran"',
     "tailscale": 'case "$1" in '
-                 'status) if [ "$2" = "--json" ]; then [ -f "$S/ts_running" ] && echo \'{"BackendState":"Running","Self":{"DNSName":"box.example.ts.net."}}\' '
+                 'status) if [ "$2" = "--json" ]; then [ -f "$S/ts_running" ] && { u=owner@example.com; [ -f "$S/ts_tagged" ] && u=tagged-devices; '
+                 'echo "{\\"BackendState\\":\\"Running\\",\\"Self\\":{\\"DNSName\\":\\"box.example.ts.net.\\",\\"UserID\\":7},'
+                 '\\"User\\":{\\"7\\":{\\"ID\\":7,\\"LoginName\\":\\"$u\\"}}}"; } '
                  '|| echo \'{"BackendState":"NeedsLogin"}\'; fi;; '
                  'up) [ -f "$S/ts_signin" ] && touch "$S/ts_running" || { echo "To authenticate, visit: https://login.example/x"; exit 1; };; '
                  'serve) if [ "$2" = "status" ]; then [ -f "$S/serve_json" ] && { cat "$S/serve_json"; exit 0; }; '
@@ -84,6 +86,9 @@ case "$1" in
            echo "Note: ...";;
   pair) [ -f "$S/pair_fails" ] && { echo "Run the tailscale serve step from docs/ONBOARDING.md"; exit 2; }
         touch "$S/minted"; echo "[QR CODE]";;
+  # The real command (orchestra_cli/tailscale_users.py) on this box's data dir, reading the stub tailscale.
+  tailscale-users) ORCHESTRA_DIR="$HOME/.orchestra" ORCHESTRA_CONFIG="$S/no-config.toml" PYTHONPATH="$ORCH_REAL_ROOT" \
+                   exec python3 -m orchestra_cli "$@";;
   doctor) [ "$2" = "--share" ] && echo "--- orchestra doctor --share ---" || echo "CHECK STATUS";;
 esac
 exit 0
@@ -107,7 +112,7 @@ def box(tmp_path):
     mem.write_text("MemTotal:        8000000 kB\n")
     env = {"PATH": f"{bin_}:/usr/bin:/bin", "HOME": str(home), "S": str(s), "USER": "orchestra",
            "ORCH_INSTALL_ALLOW_NO_TTY": "1", "ORCH_INSTALL_EUID": "1000", "ORCH_INSTALL_OS_RELEASE": str(osr),
-           "ORCH_INSTALL_MEMINFO": str(mem), "ORCH_INSTALL_RETRY_SLEEP": "0"}
+           "ORCH_INSTALL_MEMINFO": str(mem), "ORCH_INSTALL_RETRY_SLEEP": "0", "ORCH_REAL_ROOT": str(ROOT)}
 
     class Box:
         state, path = s, tmp_path
@@ -375,3 +380,42 @@ def test_only_an_answer_with_its_time_counts(box):
     (box.state / "status_apr_welcome_0001").write_text("answered")
     r = box.run()
     assert r.returncode == 3 and "Setup complete" not in r.stdout, r.stdout
+
+
+# --- step 9: who the web terminal and the voice call let in (state/tailscale-users) ---------------------
+# Found on the first real client install: nothing wrote this file and no install issues a session cookie,
+# so the web terminal and the voice call refused the owner.
+
+def _users_file(box):
+    return box.path / "home" / ".orchestra" / "state" / "tailscale-users"
+
+
+def test_step_9_lets_this_servers_own_tailscale_login_in_as_admin(box):
+    box.set("ts_signin", "claude_login", "welcome_answered")
+    r = box.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    f = _users_file(box)
+    assert f.read_text().splitlines()[-1] == "owner@example.com admin"
+    assert oct(f.stat().st_mode & 0o777) == "0o600"
+    assert r.stdout.index("tailscale-users: wrote") < r.stdout.index("Step 9 of 10 done")
+
+
+@pytest.mark.parametrize("content", ["", "someone@example.org member\n"], ids=["empty", "listed"])
+def test_step_9_never_touches_a_file_that_is_already_there(box, content):
+    f = _users_file(box)
+    f.parent.mkdir(parents=True)
+    f.write_text(content)
+    box.set("ts_signin", "claude_login", "welcome_answered")
+    r = box.run()
+    assert r.returncode == 0, r.stdout
+    assert f.read_text() == content
+    assert "tailscale-users: present, kept as is" in r.stdout
+
+
+def test_step_9_with_no_person_login_writes_nothing_says_how_and_carries_on(box):
+    box.set("ts_signin", "claude_login", "welcome_answered", "ts_tagged")
+    r = box.run()
+    assert r.returncode == 0 and "Setup complete" in r.stdout, r.stdout
+    assert not _users_file(box).exists()
+    hint = [l for l in r.stdout.splitlines() if l.startswith("tailscale-users: not written")]
+    assert len(hint) == 1 and f"echo 'you@example.com admin' >> {_users_file(box)}" in hint[0], r.stdout

@@ -239,6 +239,11 @@ serve_port() {
 }
 serve_port 443 http://127.0.0.1:8891 dashboard
 serve_port 8445 http://127.0.0.1:8890 "phone app's address"
+# Who the web terminal and the voice call let in (state/tailscale-users). No install issues a session
+# cookie, so without that file they refuse everyone, you included. When it is absent this writes this
+# server's own Tailscale login as admin; a file already there is never touched. When the login cannot
+# be read it writes nothing and prints one line saying how to add it by hand; setup carries on.
+( cd "$CHECKOUT" && orchestra tailscale-users --seed ) || true
 done_ 9 "OrchestraOS is running and starts again after a reboot"
 
 # ---- 10. Your first agent and your phone [person] ------------------------------------------------
