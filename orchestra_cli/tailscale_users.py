@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -60,9 +61,15 @@ def self_login(status_json: str) -> tuple:
         return None, "Tailscale's status could not be read"
     if doc.get("BackendState") in ("NeedsLogin", "NoState"):
         return None, "this server is not signed in to Tailscale"
-    uid = (doc.get("Self") or {}).get("UserID")
-    entry = (doc.get("User") or {}).get(str(uid)) if uid not in (None, "", 0) else None
-    login = str((entry or {}).get("LoginName") or "").strip()
+    me, users = doc.get("Self"), doc.get("User")
+    uid = me.get("UserID") if isinstance(me, dict) else None
+    # Only THIS node's owner. Every peer's owner is in the User map too, so a Self with no UserID (or 0)
+    # is "unknown", never "pick one": that would make some peer's owner admin of the web shell.
+    if isinstance(uid, bool) or not isinstance(uid, (int, str)) or str(uid).strip() in ("", "0"):
+        uid = None
+    entry = users.get(str(uid)) if uid is not None and isinstance(users, dict) else None
+    name = entry.get("LoginName") if isinstance(entry, dict) else None
+    login = name.strip() if isinstance(name, str) else ""
     if not login:
         return None, "Tailscale did not say which login this server is signed in with"
     if not _LOGIN.match(login):
@@ -84,7 +91,12 @@ def read_status() -> str:
 
 
 def hand_fix(path: Path, login: Optional[str] = None) -> str:
-    return f"echo '{login or 'you@example.com'} admin' >> {path}"
+    """A copy-paste shell line; both the line and the path are quoted (a login may hold a ', a path a space)."""
+    return f"echo {shlex.quote((login or 'you@example.com') + ' admin')} >> {shlex.quote(str(path))}"
+
+
+def _one_line(text: str, n: int = 80) -> str:
+    return " ".join(str(text).split())[:n]
 
 
 @dataclass
@@ -95,8 +107,21 @@ class SeedResult:
 
 
 def seed(data_dir, status: Callable[[], str] = read_status) -> SeedResult:
-    """Write this machine's own Tailscale login as admin when the file is absent. Never overwrites."""
+    """Write this machine's own Tailscale login as admin when the file is absent. Never overwrites, never
+    raises: `orchestra init` (and so `orchestra upgrade`) must not fail on this step."""
     path = users_path(data_dir)
+    try:
+        return _seed(path, status)
+    except Exception as e:  # noqa: BLE001 — an unwritable state/ dir, an odd status shape: a hint, not a crash
+        return SeedResult(False, _not_written(path, f"it could not be written ({type(e).__name__}: {_one_line(e)})"))
+
+
+def _not_written(path: Path, why: str) -> str:
+    return (f"not written: {why}. The web terminal and the voice call let nobody in "
+            f"until you add your Tailscale login: {hand_fix(path)}")
+
+
+def _seed(path: Path, status: Callable[[], str]) -> SeedResult:
     if os.path.lexists(path):
         return SeedResult(False, f"present, kept as is ({path})")
     try:
@@ -104,10 +129,9 @@ def seed(data_dir, status: Callable[[], str] = read_status) -> SeedResult:
     except FileNotFoundError:
         login, why = None, "tailscale is not installed"
     except (OSError, subprocess.SubprocessError) as e:
-        login, why = None, f"`tailscale status --json` did not answer ({str(e)[:60]})"
+        login, why = None, f"`tailscale status --json` did not answer ({_one_line(e, 60)})"
     if not login:
-        return SeedResult(False, f"not written: {why}. The web terminal and the voice call let nobody in "
-                                 f"until you add your Tailscale login: {hand_fix(path)}")
+        return SeedResult(False, _not_written(path, why))
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         # O_EXCL: a file that appeared since the check above is still never overwritten.
@@ -121,9 +145,13 @@ def seed(data_dir, status: Callable[[], str] = read_status) -> SeedResult:
 
 
 def status_of(raw: Optional[str], env_value: Optional[str], path: Path) -> tuple:
-    """(ok, detail, kind) for doctor. kind: env | file | absent | empty."""
-    if env_value and allowed_logins(env_value):
-        return True, f"{ENV} lets in {len(allowed_logins(env_value))} login(s)", "env"
+    """(ok, detail, kind) for doctor. kind: env | env-empty | file | absent | empty. Like both readers, a
+    non-empty ORCHESTRA_TAILSCALE_USERS is used INSTEAD of the file, even when it names no login."""
+    if env_value:
+        n = len(allowed_logins(env_value))
+        if n:
+            return True, f"{ENV} lets in {n} login(s)", "env"
+        return False, f"{ENV} is set but lists no login (it overrides {path}): nobody is let in", "env-empty"
     if raw is None:
         return False, f"{path} is missing: the web terminal and the voice call let nobody in", "absent"
     logins = allowed_logins(raw)

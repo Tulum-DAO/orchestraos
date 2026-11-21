@@ -853,7 +853,7 @@ in the shell that runs `orchestra up`, then restart it, e.g.
 but its terminal fails to connect, and `<data>/logs/dashboard.log` shows
 `[ws] refused ... (host-not-served)`.
 
-The web terminal and the voice call let in only the Tailscale logins in `<data>/state/tailscale-users` (one `login [admin|member]` per line); `orchestra init` and the client installer write this machine's own login there as admin when the file is absent. If the log shows `[ws] refused /ws/terminal: authenticated session required`, run `orchestra tailscale-users --seed`, or add yours by hand: `echo 'you@example.com admin' >> ~/.orchestra/state/tailscale-users`.
+The web terminal and the voice call let in only the Tailscale logins in `<data>/state/tailscale-users` (one `login [admin|member]` per line); `orchestra init` (so also `orchestra upgrade`) and the client installer write the Tailscale account this server is signed in with there as admin when the file is absent; `ORCHESTRA_TAILSCALE_USERS`, while set, overrides the file. If the log shows `[ws] refused /ws/terminal: authenticated session required`, run `orchestra tailscale-users --seed`, or add yours by hand: `echo 'you@example.com admin' >> ~/.orchestra/state/tailscale-users`.
 
 No Tailscale? From your laptop, `ssh -L 8891:127.0.0.1:8891 <user>@<server>` and then
 open `http://127.0.0.1:8891` while that ssh session stays open.

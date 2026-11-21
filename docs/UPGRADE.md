@@ -44,6 +44,10 @@ What it does, in order:
    Claude Code hook rows are re-written against the new checkout path, venv and npm
    refresh, and the API and dashboard are rebuilt when any of their source is newer than
    the last build (`--no-venv` / `--no-npm` / `--no-build` are passed through).
+   When `<data>/state/tailscale-users` is absent, it also writes the Tailscale account this server is
+   signed in with as **admin** of the web terminal and voice call. If someone else's account (or a pre-auth key they made) signed the
+   server in, that account becomes admin: check the login the step prints. While `ORCHESTRA_TAILSCALE_USERS` is set,
+   it overrides the file.
 5. `orchestra doctor`; its exit code is the command's.
 
 Then restart, so the running services use the new code:

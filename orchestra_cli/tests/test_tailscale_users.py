@@ -147,7 +147,21 @@ def test_the_doctor_row_is_in_the_full_run_and_share_names_it(tmp_path):
     (json.dumps({"BackendState": "Running", "Self": {"UserID": 7}, "User": {}}), "did not say which login"),
     (json.dumps({"BackendState": "Running", "Self": {"UserID": 9}, "User": {"9": {"LoginName": "tagged-devices"}}}),
      "not a person's login"),
-], ids=["bad-json", "logged-out", "no-user-entry", "tagged"])
+    # Every peer's owner is in the User map: with no usable Self.UserID, none of them may be picked.
+    (json.dumps({**STATUS, "Self": {"DNSName": "box.example.ts.net.", "UserID": 0}}), "did not say which login"),
+    (json.dumps({**STATUS, "Self": {"DNSName": "box.example.ts.net."}}), "did not say which login"),
+    (json.dumps({**STATUS, "Self": {"UserID": None}, "User": {"None": {"LoginName": "peer@example.com"}}}),
+     "did not say which login"),
+    (json.dumps({**STATUS, "Self": {"UserID": True}, "User": {"True": {"LoginName": "peer@example.com"},
+                                                               "1": {"LoginName": "peer@example.com"}}}),
+     "did not say which login"),
+    (json.dumps({"BackendState": "Running", "Self": "x"}), "did not say which login"),
+    (json.dumps({"BackendState": "Running", "Self": {"UserID": 7}, "User": ["x"]}), "did not say which login"),
+    (json.dumps({"BackendState": "Running", "Self": {"UserID": 7}, "User": {"7": "x"}}), "did not say which login"),
+    (json.dumps({"BackendState": "Running", "Self": {"UserID": 7}, "User": {"7": {"LoginName": 5}}}),
+     "did not say which login"),
+], ids=["bad-json", "logged-out", "no-user-entry", "tagged", "uid-0-with-peers", "uid-absent-with-peers",
+        "uid-null", "uid-bool", "self-not-a-dict", "user-not-a-dict", "entry-not-a-dict", "login-not-a-string"])
 def test_no_login_writes_nothing_and_says_how_to_add_it(tmp_path, monkeypatch, body, why):
     fake_tailscale(tmp_path, monkeypatch, body)
     data, steps, report = _init(tmp_path)
@@ -156,6 +170,108 @@ def test_no_login_writes_nothing_and_says_how_to_add_it(tmp_path, monkeypatch, b
     assert why in detail and f"echo 'you@example.com admin' >> {data / 'state' / 'tailscale-users'}" in detail
     assert "\n" not in detail                       # one line
     assert "tailscale-users" not in [s.step for s in I.failed_steps(report)]             # a hint, never an init failure
+
+
+def test_seed_never_raises_on_any_status_text(tmp_path):
+    for body in ('{"Self": "x"}', '{"Self": {"UserID": 7}, "User": 3}', "[]", "null", '"x"', "{}", "\x00"):
+        res = TU.seed(tmp_path / body.encode().hex(), status=lambda b=body: b)
+        assert not res.did and res.detail.startswith("not written:"), (body, res)
+
+
+def test_a_status_reader_that_blows_up_is_a_hint_not_a_crash(tmp_path):
+    res = TU.seed(tmp_path, status=lambda: (_ for _ in ()).throw(RuntimeError("boom\nsecond line")))
+    assert not res.did and "RuntimeError: boom second line" in res.detail and "\n" not in res.detail
+    assert not TU.users_path(tmp_path).exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes through a read-only dir")
+def test_an_unwritable_state_dir_does_not_crash_init(tmp_path, monkeypatch):
+    fake_tailscale(tmp_path, monkeypatch, json.dumps(STATUS))
+    state = tmp_path / "data" / "state"
+    state.mkdir(parents=True)
+    os.chmod(state, 0o500)
+    try:
+        res = TU.seed(tmp_path / "data")
+        assert not res.did and "PermissionError" in res.detail and "echo 'you@example.com admin' >>" in res.detail
+        assert not (state / "tailscale-users").exists()
+    finally:
+        os.chmod(state, 0o700)
+
+
+def test_init_keeps_going_when_the_seed_step_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(TU, "seed", lambda *a, **k: (_ for _ in ()).throw(PermissionError("state/ is root's")))
+    data, steps, report = _init(tmp_path)
+    assert not steps["tailscale-users"].did and "PermissionError" in steps["tailscale-users"].detail
+    assert "tailscale-users" not in [s.step for s in I.failed_steps(report)]
+    assert "seed:state/tasks.db" in steps                    # the steps after it still ran
+
+
+# --- a symlink at the path is "present": never followed, never written through --------------------------
+
+def test_a_dangling_symlink_is_kept_and_its_target_never_created(tmp_path, monkeypatch):
+    fake_tailscale(tmp_path, monkeypatch, json.dumps(STATUS))
+    path = tmp_path / "data" / "state" / "tailscale-users"
+    path.parent.mkdir(parents=True)
+    target = tmp_path / "elsewhere" / "planted"
+    target.parent.mkdir()
+    path.symlink_to(target)
+    _, steps, _ = _init(tmp_path)
+    assert not steps["tailscale-users"].did and "present" in steps["tailscale-users"].detail
+    assert not target.exists() and path.is_symlink() and os.readlink(path) == str(target)
+
+
+def test_a_dangling_symlink_counts_as_present_before_tailscale_is_asked(tmp_path):
+    # lexists, not exists: the symlink itself is the operator's file, whatever it points at.
+    path = TU.users_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.symlink_to(tmp_path / "nowhere")
+    res = TU.seed(tmp_path, status=lambda: (_ for _ in ()).throw(AssertionError("tailscale was asked")))
+    assert not res.did and res.detail.startswith("present")
+
+
+def test_a_symlink_to_a_file_elsewhere_leaves_that_file_untouched(tmp_path, monkeypatch):
+    fake_tailscale(tmp_path, monkeypatch, json.dumps(STATUS))
+    path = tmp_path / "data" / "state" / "tailscale-users"
+    path.parent.mkdir(parents=True)
+    target = tmp_path / "elsewhere.txt"
+    target.write_bytes(b"not yours\n")
+    path.symlink_to(target)
+    mtime = target.stat().st_mtime_ns
+    _, steps, _ = _init(tmp_path)
+    assert not steps["tailscale-users"].did
+    assert target.read_bytes() == b"not yours\n" and target.stat().st_mtime_ns == mtime and path.is_symlink()
+
+
+def test_the_race_guard_never_writes_through_a_symlink_that_appears_after_the_check(tmp_path, monkeypatch):
+    # The lexists check passes, then a dangling symlink appears before the open: O_EXCL must refuse it.
+    path = TU.users_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    target = tmp_path / "planted"
+
+    def status():
+        path.symlink_to(target)
+        return json.dumps(STATUS)
+    res = TU.seed(tmp_path, status=status)
+    assert not res.did and "present" in res.detail and not target.exists()
+
+
+# --- the copy-paste fix line ---------------------------------------------------------------------------
+
+def test_the_hand_fix_line_is_valid_shell_for_odd_logins_and_paths(tmp_path):
+    path = tmp_path / "data dir" / "state" / "tailscale-users"
+    path.parent.mkdir(parents=True)
+    line = TU.hand_fix(path, "o'brien@example.com")
+    subprocess.run(["bash", "-c", line], check=True, timeout=10)
+    assert path.read_text() == "o'brien@example.com admin\n"
+    assert TU.allowed_logins(path.read_text()) == ["o'brien@example.com"]
+
+
+def test_doctor_warns_when_the_env_allowlist_is_set_but_names_no_login(tmp_path):
+    path = tmp_path / "state" / "tailscale-users"
+    path.parent.mkdir(parents=True)
+    path.write_text("owner@example.com admin\n")              # a good file the readers IGNORE while the env is set
+    row = _doctor_row(tmp_path, env={"ORCHESTRA_TAILSCALE_USERS": "admin"})
+    assert row.status == D.WARN and "lists no login" in row.detail and "ORCHESTRA_TAILSCALE_USERS" in row.remedy
 
 
 def test_tailscale_not_installed_writes_nothing_and_says_how_to_add_it(tmp_path, monkeypatch):
@@ -195,7 +311,8 @@ def test_the_written_file_is_read_by_the_real_readers(tmp_path, monkeypatch):
 def test_the_written_file_gives_admin_in_the_api_parser(tmp_path, monkeypatch):
     tsx = ROOT / "api" / "node_modules" / ".bin" / "tsx"
     if not tsx.exists():
-        pytest.skip("api/node_modules is not installed: the TS parser cannot run (CI runs it in api-typecheck)")
+        pytest.skip("api/node_modules is not installed: the TS parser cannot run here (no CI job runs this "
+                    "Python -> TS round trip; api-typecheck runs the TS parser on its own fixtures only)")
     fake_tailscale(tmp_path, monkeypatch, json.dumps(STATUS))
     data, _, _ = _init(tmp_path)
     script = tmp_path / "read.ts"

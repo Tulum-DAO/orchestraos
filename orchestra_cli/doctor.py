@@ -261,7 +261,9 @@ def tailscale_users_check(probes: DoctorProbes, data_dir: Path) -> "Check":
     ok, detail, kind = TU.status_of(raw, (probes.env_get or os.environ.get)(TU.ENV), path)
     if ok:
         return Check("terminal:tailscale-users", OK, detail, required=False)
-    if kind == "absent":
+    if kind == "env-empty":
+        fix = f"put a login in {TU.ENV} (login [admin|member], comma-separated), or unset it so {path} applies"
+    elif kind == "absent":
         fix = "orchestra tailscale-users --seed  (writes this machine's own Tailscale login as admin)"
     else:
         try:
