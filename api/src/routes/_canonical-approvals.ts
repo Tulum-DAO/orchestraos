@@ -58,6 +58,8 @@ export interface AnswerResult {
   why?: string;
   id: string;
   status?: number;
+  /** A task for you that was snoozed: answered ok, nothing recorded, still waiting (watch_gateway.apply_answer). */
+  snoozed?: boolean;
 }
 
 /** Who is on the other end of an answer request, for approval.py's caller check (plan Task 7a). */

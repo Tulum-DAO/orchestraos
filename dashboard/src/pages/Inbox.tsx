@@ -1,19 +1,19 @@
 import { useState, useMemo } from 'react';
 import QuestionnaireForm from '../components/QuestionnaireForm';
 import { isLiveQuestionnaire } from '../lib/questionnaireForm';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
   Inbox as InboxIcon, ShieldCheck,
   ClipboardList,
   ChevronDown, ChevronRight, Clock, MessageSquare,
 } from 'lucide-react';
-import { dismissMenuCard, post } from '../lib/api';
+import { dismissMenuCard } from '../lib/api';
 import type { MenuOption } from '../lib/menuAnswer';
 import { MultiPartAnswer } from '../components/chat/MultiPartCard';
 import DecisionQuestion from '../components/chat/DecisionQuestion';
 import { isTerminalMenu } from '../lib/decisionCard';
-import DecisionCard, { ApprovalAnswer } from '../components/chat/DecisionCard';
+import DecisionCard, { CardVerbsAnswer } from '../components/chat/DecisionCard';
 import ApprovalExtras from '../components/chat/ApprovalExtras';
 import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
 
@@ -123,17 +123,6 @@ export default function Inbox() {
     refetchInterval: 10000,
   });
 
-  const approveMutation = useMutation({
-    mutationFn: (id: string) => post(`/approvals/unified/${id}/approve`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['unified-approvals'] }),
-  });
-
-  const denyMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-      post(`/approvals/unified/${id}/deny`, { reason }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['unified-approvals'] }),
-  });
-
   // Merge into unified feed
   const pendingApprovals = (approvalsData?.items ?? []).filter(i => i.status === 'pending');
   const pendingQuestionnaires = (qData?.questionnaires ?? []).filter(q => q.status === 'pending');
@@ -221,10 +210,6 @@ export default function Inbox() {
           if (item.kind === 'approval') {
             const a = item.data;
             const isMenu = a.kind === 'menu';
-            const approving = approveMutation.isPending && approveMutation.variables === a.id;
-            const denying = denyMutation.isPending && denyMutation.variables?.id === a.id;
-            const approvalError = (approveMutation.variables === a.id && approveMutation.error?.message)
-              || (denyMutation.variables?.id === a.id && denyMutation.error?.message) || null;
             const dismiss = async () => {
               const err = await dismissMenuCard(a.id, a.agent_id, a.menu?.question || a.title);
               if (!err) void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
@@ -262,9 +247,7 @@ export default function Inbox() {
                     {a.menu?.notice || 'Multi-part menu — open the agent to answer.'}
                   </div>
                 ) : (
-                  <ApprovalAnswer sending={approving || denying} error={approvalError}
-                    onApprove={() => approveMutation.mutate(a.id)}
-                    onDeny={(reason) => denyMutation.mutate({ id: a.id, reason })} />
+                  <CardVerbsAnswer card={a} onAnswered={() => void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] })} />
                 )}
               </DecisionCard>
             );

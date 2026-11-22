@@ -1,17 +1,19 @@
 /**
  * PendingApprovalCard — one waiting row of the unified approvals feed (GET /api/approvals/unified), drawn and
  * answered exactly as the Approvals page draws it: a multi-part menu as MultiPartAnswer (read part by part, answered
- * on the same card), a question as the one question card (DecisionQuestion), an approval with Approve and Deny, and
+ * on the same card), a question as the one question card (DecisionQuestion), any other card with its own verbs
+ * (CardVerbsAnswer, lib/cardVerbs.ts: Approve and Deny on an approval, Done / Can't / Snooze on a task for you), and
  * a menu sent read-only with the notice that says where to answer it. The Approvals page and a card reference's
  * popover (components/kit/CardChip.tsx) both draw it, so an answer from either goes the same route.
  */
 import { useState } from 'react';
-import { dismissMenuCard, post } from '../../lib/api';
+import { dismissMenuCard } from '../../lib/api';
+import { cardVerbs, verbOptionLines } from '../../lib/cardVerbs';
 import type { MenuOption } from '../../lib/menuAnswer';
 import { MultiPartAnswer } from './MultiPartCard';
 import DecisionQuestion from './DecisionQuestion';
 import { isTerminalMenu } from '../../lib/decisionCard';
-import DecisionCard, { ApprovalAnswer, FooterDismiss } from './DecisionCard';
+import DecisionCard, { CardVerbsAnswer, FooterDismiss } from './DecisionCard';
 import ApprovalExtras from './ApprovalExtras';
 import CreateIssueButton from '../red-alert/CreateIssueButton';
 import { approvalCardBody, approvalCardAgent } from '../../lib/approvalCard';
@@ -56,8 +58,6 @@ export default function PendingApprovalCard({ item, highlighted, onChanged, id, 
 }) {
   const [ownExpanded, setExpanded] = useState(false);
   const expanded = shownExpanded ?? ownExpanded;
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const isMenu = item.kind === 'menu';
   const domId = id ?? `approval-${item.id}`;
   const extra = <ApprovalExtras item={item} expanded={expanded} onToggle={onToggle ?? (() => setExpanded((v) => !v))} />;
@@ -65,12 +65,6 @@ export default function PendingApprovalCard({ item, highlighted, onChanged, id, 
     const err = await dismissMenuCard(item.id, item.agent_id, item.menu?.question || item.title);
     if (!err) onChanged();
     return err;
-  };
-  const send = async (verb: 'approve' | 'deny', body: Record<string, unknown>) => {
-    setSending(true); setError(null);
-    try { await post(`/approvals/unified/${encodeURIComponent(item.id)}/${verb}`, body); onChanged(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Could not send'); }
-    finally { setSending(false); }
   };
 
   // A multi-part menu is read from the agent's screen part by part, then answered on the same card.
@@ -95,7 +89,8 @@ export default function PendingApprovalCard({ item, highlighted, onChanged, id, 
     <DecisionCard id={domId} highlighted={highlighted}
       kind={isMenu ? 'decision' : 'approval'} question={item.title} agent={approvalCardAgent(item) || null}
       risk={item.risk_level} body={approvalCardBody(item)} open extra={extra}
-      onDismiss={isMenu ? dismiss : undefined} report={{ id: item.id, from: approvalCardAgent(item) || null }}>
+      onDismiss={isMenu ? dismiss : undefined} report={{ id: item.id, from: approvalCardAgent(item) || null }}
+      answers={isMenu ? undefined : verbOptionLines(cardVerbs(item))}>
       {/* A menu sent read-only (a multi-part menu this client is not given whole) only says where to answer it. */}
       {/* In a popover its Dismiss is under the notice (FooterDismiss); elsewhere the header's ✕. */}
       {String(item.op_key || '').startsWith('red-alert:') && (
@@ -109,9 +104,7 @@ export default function PendingApprovalCard({ item, highlighted, onChanged, id, 
           <FooterDismiss />
         </>
       ) : (
-        <ApprovalAnswer sending={sending} error={error}
-          onApprove={() => void send('approve', {})}
-          onDeny={(reason) => void send('deny', { reason })} />
+        <CardVerbsAnswer card={item} onAnswered={onChanged} />
       )}
     </DecisionCard>
   );

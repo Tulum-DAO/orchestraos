@@ -3,7 +3,8 @@
  * Approvals and Inbox pages. One bordered card: a header (list icon, the question in bold, the kind chip, the
  * agent, "· N risk", and a ✕ on menus that can be dismissed), the card's text with its bold section labels,
  * anything extra the page adds (a learning proposal's sandbox result), then the answer area as children:
- * MenuAnswerBlock for decisions and menus, ApprovalAnswer for approvals. Once answered, the answer area is
+ * MenuAnswerBlock for decisions and menus, CardVerbsAnswer for everything else (the card's own verbs: Approve / Deny
+ * on an approval, Done / Can't / Snooze on a task for you; lib/cardVerbs.ts). Once answered, the answer area is
  * replaced by the outcome line, and the outline takes the outcome's colour.
  *
  * Theme colours only (card, border, muted, info, success, warning, destructive), so light and dark both work.
@@ -26,8 +27,11 @@ import { CHIP_LABEL, approvalAction, riskText, type CardKind } from '../../lib/d
 import type { ScreenAnswer } from '../../lib/screenCards';
 import type { RefCardState } from '../../lib/cardRefs';
 import { useScreenCard } from '../../lib/threadKit/useScreenCard';
+import { post } from '../../lib/api';
+import { cardVerbs, sendErrorText, verbFromPick, verbRequest, type CardVerb, type VerbCard, type VerbSet } from '../../lib/cardVerbs';
 
-/** The answer area inside a card says how an answer Arturo hands back is applied (ApprovalAnswer's Approve/Deny). */
+/** The answer area inside a card says how an answer Arturo hands back is applied (ApprovalAnswer's Approve/Deny,
+ *  TaskAnswer's Done / Can't / Snooze). */
 type Answerer = (a: ScreenAnswer) => string | null;
 const AnswerSlot = createContext<((fn: Answerer | null) => void) | null>(null);
 /** In a popover: the card's dismiss, which its answer area draws (FooterDismiss) instead of the header's ✕. */
@@ -74,6 +78,8 @@ export interface DecisionCardProps {
   /** Reports the card into the cards-on-screen context (lib/screenCards.ts): its id and who asked; the card adds the
    *  rest. `state`/`answer` for a card that is no longer open. */
   report?: { id: string; from?: string | null; state?: RefCardState; answer?: string | null };
+  /** The answers it reports while waiting (lib/cardVerbs verbOptionLines); an approval's Approve / Deny when not given. */
+  answers?: string[];
 }
 
 export default function DecisionCard(p: DecisionCardProps) {
@@ -90,7 +96,8 @@ export default function DecisionCard(p: DecisionCardProps) {
     id: p.report.id, kind: p.kind, from: p.report.from ?? p.agent ?? null,
     state: p.dismissed ? 'dismissed' : live ? 'waiting' : p.report.state ?? 'answered',
     question: p.question, ...(summary ? { summary } : {}),
-    ...(live && p.kind === 'approval' ? { options: ['A. Approve', 'B. Deny (needs a reason)'] } : {}),
+    ...(live && p.answers ? { options: p.answers }
+      : live && p.kind === 'approval' ? { options: ['A. Approve', 'B. Deny (needs a reason)'] } : {}),
     ...(!live && p.report.answer ? { answer: p.report.answer } : {}),
   } : null, (a) => (live && answerer.current ? answerer.current(a) : 'That card is no longer waiting.'));
 
@@ -254,11 +261,11 @@ export function ApprovalAnswer({ onApprove, onDeny, sending, error }: {
   return (
     <div className="border-t border-border px-4 py-3 space-y-2.5">
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" disabled={sending} onClick={() => act('approve')}
+        <button type="button" disabled={sending} onClick={() => act('approve')} data-card-verb="approve"
                 className="flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold bg-success text-success-foreground hover:opacity-90 disabled:opacity-50">
           {sending && <Loader2 size={14} className="animate-spin" />}Approve
         </button>
-        <button type="button" disabled={sending} onClick={() => act('deny')}
+        <button type="button" disabled={sending} onClick={() => act('deny')} data-card-verb="deny"
                 className="rounded-xl py-2.5 text-sm font-semibold border border-destructive/60 text-destructive hover:bg-destructive/10 disabled:opacity-50">
           Deny
         </button>
@@ -270,6 +277,73 @@ export function ApprovalAnswer({ onApprove, onDeny, sending, error }: {
              className={clsx('w-full rounded-xl border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-info',
                needReason ? 'border-destructive/60' : 'border-border')} />
       {needReason && <div className="text-px11 text-destructive">Add a reason to deny.</div>}
+      {error && <div className="text-px11 text-warning">{error}</div>}
+    </div>
+  );
+}
+
+/** The answer area of a card that is not a question: the card's OWN verbs (lib/cardVerbs.ts), sent where each one
+ *  goes. Approve / Deny on an approval; Done / Can't / Snooze on a task for you, which the server refuses Approve on.
+ *  The agent's chat, the Approvals page and the Inbox all draw this one, so a card answers the same everywhere. */
+export function CardVerbsAnswer({ card, onAnswered }: { card: VerbCard & { id: string }; onAnswered: () => void }) {
+  const set = cardVerbs(card);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const send = async (verb: string, words = '') => {
+    const req = verbRequest(card.id, verb, words);
+    if ('error' in req) { setError(req.error); return; }
+    setSending(true); setError(null);
+    try { await post(req.path, req.body); onAnswered(); }
+    catch (e) { setError(sendErrorText(e)); }
+    finally { setSending(false); }
+  };
+  if (set.mode === 'task') return <TaskAnswer set={set} sending={sending} error={error} onVerb={(v, w) => void send(v, w)} />;
+  return <ApprovalAnswer sending={sending} error={error} onApprove={() => void send('approve')} onDeny={(reason) => void send('deny', reason)} />;
+}
+
+const GRID_COLS: Record<number, string> = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3' };
+
+const VERB_CLASS: Record<CardVerb['tone'], string> = {
+  go: 'bg-success text-success-foreground hover:opacity-90',
+  stop: 'border border-destructive/60 text-destructive hover:bg-destructive/10',
+  quiet: 'border border-border text-foreground hover:bg-muted',
+};
+
+/** A task for you's answer area: its verbs side by side (Done, Can't, Snooze), and a field for a note the agent sees
+ *  with Done or Can't. */
+export function TaskAnswer({ set, onVerb, sending, error }: {
+  set: VerbSet; onVerb: (verb: string, words: string) => void; sending?: boolean; error?: string | null;
+}) {
+  const [text, setText] = useState('');
+  // An answer Arturo hands back presses the same buttons, its words as the note.
+  const slot = useContext(AnswerSlot);
+  const latest = useRef({ sending, onVerb, set });
+  useEffect(() => { latest.current = { sending, onVerb, set }; });
+  useEffect(() => {
+    if (!slot) return;
+    slot((ans) => {
+      const v = verbFromPick(latest.current.set, ans.picks[0] || '');
+      if (!v) return `${latest.current.set.verbs.map((x) => x.label).join(', ')}: those are the only answers this card takes.`;
+      if (latest.current.sending) return 'That card is already being answered.';
+      latest.current.onVerb(v.verb, ans.words ?? '');
+      return null;
+    });
+    return () => slot(null);
+  }, [slot]);
+  return (
+    <div className="border-t border-border px-4 py-3 space-y-2.5">
+      <div className={clsx('grid gap-2', GRID_COLS[set.verbs.length] ?? 'grid-cols-3')}>
+        {set.verbs.map((v, i) => (
+          <button key={v.verb} type="button" disabled={sending} data-card-verb={v.verb}
+                  onClick={() => onVerb(v.verb, v.takesWords ? text : '')}
+                  className={clsx('flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold disabled:opacity-50', VERB_CLASS[v.tone])}>
+            {sending && i === 0 && <Loader2 size={14} className="animate-spin" />}{v.label}
+          </button>
+        ))}
+      </div>
+      <input value={text} disabled={sending} onChange={(e) => setText(e.target.value)}
+             placeholder="A note, if you want (the agent sees it)"
+             className="w-full rounded-xl border border-border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-info" />
       {error && <div className="text-px11 text-warning">{error}</div>}
     </div>
   );
