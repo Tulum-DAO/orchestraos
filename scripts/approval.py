@@ -295,6 +295,22 @@ def _peer_caller(args):
                                       forwarded_for=args.forwarded_for)
 
 
+def _patch_refusal(store, rid, fields):
+    """One line saying why `patch` changed nothing (update_fields refuses a missing id, a card that is not
+    pending, a card that is not a human_task, or no patchable field)."""
+    if not any(k in store._PATCHABLE for k in fields):
+        return "nothing to change: pass --summary, --feature, --evidence, --block-task or --blocks-what"
+    row = store.get(rid)
+    if row is None:
+        return f"card {rid} not found"
+    if row.get("status") != "pending":
+        return (f"card {rid} is {row.get('status')}, not pending: a card that is no longer pending is never changed; "
+                f"file a new card if the operator must see something new")
+    if row.get("kind") != "human_task":
+        return f"card {rid} is a {row.get('kind') or 'approval'} card: patch changes only human_task cards"
+    return f"card {rid} could not be changed"
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -643,6 +659,9 @@ def main(argv=None):
             if v is not None:
                 fields[k] = v
         ok = store.update_fields(args.id, **fields)
+        if not ok:
+            # Say why: a silent exit 4 had a client agent retry the same patch for several turns.
+            print(f"REFUSED: {_patch_refusal(store, args.id, fields)}", file=sys.stderr)
         print(args.id if ok else "")
         return 0 if ok else 4
     if args.cmd == "retire":
