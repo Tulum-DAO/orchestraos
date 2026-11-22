@@ -338,6 +338,9 @@ def onboarding_check(data_dir: Path) -> "Check":
     """Arturo's onboarding flag (<data>/state/arturo/onboarding.json): present, inferred on an upgrade
     (with the evidence), or a fresh install that has not finished onboarding. READ-ONLY: doctor never
     writes the flag; Arturo does on its next read (services/arturo/onboarding_progress.py)."""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
     from services.arturo import onboarding_progress as OP
     state, detail = OP.describe(Path(data_dir) / "state" / "arturo", data_dir)
     if state == "undecided":

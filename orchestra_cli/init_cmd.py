@@ -48,6 +48,25 @@ def grok_link_step(home: Path, which: Callable[[str], Optional[str]] = None) -> 
     return Step("grok-link", True, f"linked {link} -> {real} (the service PATH looks in ~/.local/bin)")
 
 
+def onboarding_step(data_dir: Path) -> Step:
+    try:
+        pkg_root = str(Path(__file__).resolve().parent.parent)        # where services/arturo ships
+        if pkg_root not in sys.path:
+            sys.path.insert(0, pkg_root)
+        from services.arturo import onboarding_progress as OP
+        res = OP.ensure_onboarded(Path(data_dir) / "state" / "arturo", data_dir)
+    except Exception as e:  # noqa: BLE001 — Arturo decides on its own first read instead
+        return Step("arturo-onboarding", False, f"not decided here ({type(e).__name__}); Arturo decides when it starts")
+    if res["how"] == "inferred":
+        return Step("arturo-onboarding", True, "an earlier install: onboarding.json written (upgrade-inferred: "
+                    + "; ".join(res["evidence"]) + ")")
+    if res["how"] == "undecided":
+        return Step("arturo-onboarding", False, "undecided: cannot read " + ", ".join(res["unreadable"])
+                    + " (Arturo looks again when it starts)")
+    return Step("arturo-onboarding", False, "onboarding finished (flag present)" if res["how"] == "flag"
+                else "a first run: Arturo's onboarding runs")
+
+
 def failed_steps(report):
     """The steps that make `orchestra init` exit 1. A step that did nothing on purpose (skipped, declined,
     present) is not one; an installer refusal or error is, and its detail says "failed"."""
@@ -359,6 +378,12 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         else:
             p.write_text(json.dumps(payload, indent=2) + "\n")
             report.append(Step(f"seed:{rel}", True, f"wrote {p}"))
+
+    # 4a. Arturo's onboarding, decided at the first moment the new code runs on this data dir: on a fresh
+    # install nothing has registered a seat yet (`orchestra starter` and --demo come later), so it is
+    # marked a first run; on an upgrade (`orchestra upgrade` runs init) a T0 seat or a saved operator
+    # name writes onboarding.json as upgrade-inferred (orchestra-builder D-7). Never fails init.
+    report.append(onboarding_step(data_dir))
 
     # 4b. the data dir is a small local git repo: rotation writes the successor's readback
     # there and the promotion gate (T4) proves it by commit — "unverifiable is never a pass".

@@ -88,3 +88,41 @@ def test_run_doctor_includes_the_row(tmp_path, data):
                             python_version=(3, 12, 0), git_hooks_path=lambda _r: "")
     rows = {c.name: c for c in D.run_doctor(st, probes)}
     assert rows["arturo:onboarding"].detail.startswith("fresh-not-onboarded:")
+
+
+# ---- `orchestra init` decides first: before `orchestra starter` or --demo can register a seat ----
+
+def _init(tmp_path, data, demo=False):
+    from orchestra_cli import init_cmd as I
+    from orchestra_cli.tests.test_init import Runner, _repo
+    root = tmp_path / "repo" if (tmp_path / "repo").exists() else _repo(tmp_path)
+    report = I.run_init(root, data_dir=data, run=Runner(), skip_npm=True, skip_venv=True, skip_build=True, demo=demo)
+    return {r.step: r for r in report}
+
+
+@pytest.mark.parametrize("demo", [False, True])
+def test_init_on_a_fresh_data_dir_marks_a_first_run_and_a_later_team_does_not_flip_it(tmp_path, demo):
+    data = tmp_path / "data"
+    steps = _init(tmp_path, data, demo=demo)
+    assert steps["arturo-onboarding"].detail == "a first run: Arturo's onboarding runs"
+    assert not (_state(data) / "onboarding.json").exists()
+    assert "fresh_at" in json.loads((_state(data) / "onboarding-progress.json").read_text())
+    (data / "registry.json").write_text(json.dumps({"agents": {"gm": {"tier": "T0"}}}))   # orchestra starter
+    assert D.onboarding_check(data).detail.startswith("fresh-not-onboarded:")
+    assert _init(tmp_path, data)["arturo-onboarding"].did is False
+
+
+def test_init_on_an_earlier_install_writes_the_upgrade_inferred_flag(tmp_path, data):
+    (data / "registry.json").write_text(json.dumps({"agents": {"gm": {"tier": "T0"}}}))
+    step = _init(tmp_path, data)["arturo-onboarding"]
+    assert step.did is True and "upgrade-inferred" in step.detail
+    assert json.loads((_state(data) / "onboarding.json").read_text())["reason"] == "upgrade-inferred"
+    assert D.onboarding_check(data).detail.startswith("inferred-on-upgrade:")
+
+
+def test_init_with_an_unreadable_registry_decides_nothing_and_does_not_fail(tmp_path, data):
+    from orchestra_cli import init_cmd as I
+    (data / "registry.json").write_text("{")
+    step = _init(tmp_path, data)["arturo-onboarding"]
+    assert step.did is False and step.detail.startswith("undecided:") and step not in I.failed_steps([step])
+    assert not (_state(data) / "onboarding.json").exists() and not (_state(data) / "onboarding-progress.json").exists()

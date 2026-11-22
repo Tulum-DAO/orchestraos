@@ -187,7 +187,9 @@ is finished (the paired phone and Mac apps do not run onboarding), and it rememb
 stopped, with the history shown, and Arturo does not greet again.
 
 An install from before onboarding existed has no `onboarding.json`, yet it is not a first run. The
-first time Arturo finds no flag it decides once (`onboarding_progress.ensure_onboarded`): if the
+first time the new code finds no flag it decides once (`onboarding_progress.ensure_onboarded`, run
+by `orchestra init` / `orchestra upgrade` before any seat can be registered, again when Arturo
+starts, and on Arturo's reads): if the
 registry has a T0 seat (gm, or another manager) or `operator.json` holds a name, it writes
 `onboarding.json` as `{"reason": "upgrade-inferred", "evidence": [...], "inferred_at": ...}` and
 onboarding does not run; with none of that it records `fresh_at` in `onboarding-progress.json` and

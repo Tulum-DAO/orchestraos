@@ -8983,5 +8983,12 @@ if __name__ == "__main__":
         sweep_unredeemed_pairings()
     except Exception as e:  # noqa: BLE001 — housekeeping must never stop the proxy starting
         log.warning(f"startup pairing sweep failed: {e}")
+    try:
+        # Onboarding decided at boot, before a seat can appear (orchestra-builder D-7): an upgrade with
+        # evidence is flagged upgrade-inferred, a fresh install is marked a first run.
+        _onb_boot = _progress.ensure_onboarded(ARTURO_STATE, ORCHESTRA_DIR)
+        log.info(f"onboarding at startup: {_onb_boot['how']} {_onb_boot['evidence'] or ''}")
+    except Exception as e:  # noqa: BLE001 — /health and every turn decide again
+        log.warning(f"startup onboarding check failed: {e}")
     log.info(f"ARTURO Proxy (clone of :5052) starting on :{ARTURO_PORT} (model={LLM_MODEL}, tools={[t['function']['name'] for t in TOOLS]})")
     app.run(host="127.0.0.1", port=ARTURO_PORT, threaded=True)
