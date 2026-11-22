@@ -201,6 +201,15 @@ def in_dev(seat, orch_dir=None) -> bool:
 
 
 def display_name(seat, orch_dir=None) -> str:
+    """The agent's name: its seat name (the dashboard's Rename, scripts/identity_store/seat_names.py) first, then
+    the registry's display name, then its id."""
+    try:
+        from scripts.identity_store import seat_names as SN
+        name = SN.current_name_ro(data_dir(orch_dir), seat)
+        if name and str(name).strip():
+            return str(name).strip()
+    except Exception:  # noqa: BLE001 - no identity store here: the registry below
+        pass
     try:
         reg = json.loads((data_dir(orch_dir) / "registry.json").read_text()).get("agents") or {}
         row = reg.get(seat) or {}

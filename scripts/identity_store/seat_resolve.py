@@ -131,6 +131,12 @@ def resolve(text, directory, caller=PERSON, context_project=None):
             if same:
                 exact.append(_seat_out(seat, how))
                 break
+    if len(exact) > 1:
+        # an id written exactly as it is wins over another agent's name with the same letters (a seat "ops"
+        # created after another was renamed "Ops"): the id is what every card and list shows
+        by_id = [o for o in exact if o["via"] == "id" and o["id"] == qb]
+        if len(by_id) == 1:
+            exact = by_id
     if len(exact) == 1:
         return {"kind": "deliver" if exact[0]["alive"] else "dead", "query": q, "seat": exact[0]}
     if exact:
