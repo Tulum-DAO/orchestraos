@@ -223,33 +223,106 @@ def test_the_hook_records_usage_when_claude_code_runs_it(tmp_path):
 
 # ---- the gateway runs the poller (on by default) when the dashboard asks for usage ----
 
-def _kick_env(monkeypatch, tmp_path, poll):
+def _kick_env(monkeypatch, tmp_path, poll, run=None):
     import scripts.usage_poll as P
     calls = []
     monkeypatch.setattr(P, "load_config", lambda raw=None: {"poll": poll, "poll_s": 300})
-    monkeypatch.setattr(P, "run", lambda data_dir, **k: calls.append(data_dir))
+    monkeypatch.setattr(P, "run", run or (lambda data_dir, **k: (calls.append(data_dir), {"ran": True, "outcomes": [{"outcome": "ok"}]})[1]))
     monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
-    monkeypatch.setattr(G, "_usage_poll_thread", {"t": None})
+    monkeypatch.setattr(G, "_usage_poll_thread", {"t": None, "at": 0.0})
     monkeypatch.setattr(G, "_usage_cache", {"rows": [{"provider": "claude"}], "at": 1.0})
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)   # the guard, lifted for these tests (run is stubbed)
     return calls
 
 
-def test_a_usage_read_starts_one_background_poll_and_drops_the_cache_after(monkeypatch, tmp_path):
+def test_a_usage_read_starts_one_background_poll_and_drops_the_cache_after_a_snapshot(monkeypatch, tmp_path):
     calls = _kick_env(monkeypatch, tmp_path, True)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)   # the guard below, lifted for this one test
     assert G._kick_usage_poll() is True
     G._usage_poll_thread["t"].join(5)
     assert calls == [tmp_path]
     assert G._usage_cache["rows"] is None, "the next read shows the new reading"
 
 
+def test_a_run_that_wrote_nothing_keeps_the_cache(monkeypatch, tmp_path):
+    """A "cached" outcome (the login's slot is not open yet) must not drop the cache, or every read misses
+    and kicks again (the delta review: 10 reads in 0.5 s = 4 threads)."""
+    _kick_env(monkeypatch, tmp_path, True, run=lambda d, **k: {"ran": True, "outcomes": [{"outcome": "cached"}]})
+    G._kick_usage_poll()
+    G._usage_poll_thread["t"].join(5)
+    assert G._usage_cache["rows"] == [{"provider": "claude"}]
+    _kick_env(monkeypatch, tmp_path, True, run=lambda d, **k: (_ for _ in ()).throw(OSError("x")))
+    G._kick_usage_poll()
+    G._usage_poll_thread["t"].join(5)
+    assert G._usage_cache["rows"] == [{"provider": "claude"}], "a failed run keeps it too"
+
+
+def test_ten_rapid_reads_start_at_most_one_thread(monkeypatch, tmp_path):
+    import threading
+    started = []
+    gate = threading.Event()
+
+    def slow(d, **k):
+        started.append(d)
+        gate.wait(5)
+        return {"ran": True, "outcomes": []}
+    _kick_env(monkeypatch, tmp_path, True, run=slow)
+    for _ in range(10):
+        G._kick_usage_poll()
+    t = G._usage_poll_thread["t"]
+    gate.set()
+    t.join(5)
+    assert len(started) == 1, "single-flight while a run is alive"
+    # and after it ends, still none within the poll interval of the last kick
+    for _ in range(10):
+        G._kick_usage_poll()
+    assert len(started) == 1, "rate-limited to the poll interval"
+    G._usage_poll_thread["at"] -= 10 ** 6          # the interval has passed
+    G._kick_usage_poll()
+    G._usage_poll_thread["t"].join(5)
+    assert len(started) == 2
+
+
+def test_a_hung_run_does_not_block_kicks_past_the_deadline(monkeypatch, tmp_path):
+    import threading
+    started = []
+    never = threading.Event()
+
+    def hang(d, **k):
+        started.append(d)
+        never.wait(30)
+        return {"ran": True, "outcomes": []}
+    _kick_env(monkeypatch, tmp_path, True, run=hang)
+    G._kick_usage_poll()
+    hung = G._usage_poll_thread["t"]
+    assert hung.is_alive()
+    G._kick_usage_poll()
+    assert len(started) == 1, "within the deadline: the hung run holds the slot"
+    G._usage_poll_thread["at"] -= G.USAGE_POLL_DEADLINE_S + 10 ** 6     # past the deadline (and the interval)
+    G._kick_usage_poll()
+    assert len(started) == 2, "past the deadline the hung run is abandoned and a new one starts"
+    assert G._usage_poll_thread["t"] is not hung and hung.daemon
+    never.set()
+
+
 def test_no_poll_when_it_is_off_or_under_pytest(monkeypatch, tmp_path):
     calls = _kick_env(monkeypatch, tmp_path, False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     assert G._kick_usage_poll() is False and G._usage_poll_thread["t"] is None
     calls = _kick_env(monkeypatch, tmp_path, True)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x")
     assert G._kick_usage_poll() is True and G._usage_poll_thread["t"] is None and calls == []
+
+
+def test_an_unreadable_toml_is_polling_off_with_a_warning(tmp_path, monkeypatch, capsys):
+    """Fail safe: the operator may have written poll = false before the file broke. A missing file is the
+    defaults (on); a file that does not parse is off."""
+    import scripts.usage_poll as P
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(tmp_path / "orchestra.toml"))
+    assert P.load_config()["poll"] is True, "no file: the defaults"
+    (tmp_path / "orchestra.toml").write_text("[usage\npoll = false\n")
+    cfg = P.load_config()
+    assert cfg["poll"] is False and cfg.get("unreadable") is True
+    assert "polling off" in capsys.readouterr().err
+    assert P.run(tmp_path, now=1.0, config=cfg)["ran"] is False
 
 
 def test_rows_say_first_reading_in_a_moment_while_polling_is_on(monkeypatch, tmp_path):

@@ -123,15 +123,19 @@ def urllib_get(url: str, headers: dict, timeout: float, _extra_handlers=()) -> H
 
 def load_config(raw: dict | None = None) -> dict:
     """[usage] from orchestra.toml: poll (default True: absent means on; only the boolean true is on
-    when the key is set, so poll = false or a wrong type is off), poll_minutes (default 5)."""
+    when the key is set, so poll = false or a wrong type is off), poll_minutes (default 5). A toml
+    that does not parse is OFF (fail safe: the operator may have written poll = false), with a
+    warning on stderr; a missing file is the defaults."""
     if raw is None:
         try:
             sys.path.insert(0, os.path.dirname(_SCRIPTS)) if os.path.dirname(_SCRIPTS) not in sys.path else None
             from orchestra_cli.settings import config_path_for, read_toml, repo_root_from_env
             p = config_path_for(repo_root_from_env())
             raw = read_toml(p) if p.is_file() else {}
-        except Exception:  # noqa: BLE001 — no config is the inert default
-            raw = {}
+        except Exception as e:  # noqa: BLE001 — a toml that cannot be read: OFF, never a guess at what it said
+            print(f"[usage] orchestra.toml unreadable ({type(e).__name__}): polling off until it parses",
+                  file=sys.stderr, flush=True)
+            return {"poll": False, "poll_s": POLL_MIN_S, "unreadable": True}
     sec = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
     mins = sec.get("poll_minutes", POLL_MIN_S // 60)
     if isinstance(mins, bool) or not isinstance(mins, (int, float)) or mins < 1:
