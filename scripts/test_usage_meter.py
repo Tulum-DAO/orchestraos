@@ -269,9 +269,15 @@ def test_ten_rapid_reads_start_at_most_one_thread(monkeypatch, tmp_path):
     for _ in range(10):
         G._kick_usage_poll()
     t = G._usage_poll_thread["t"]
+    # single-flight on its own: the interval has passed but the run is still alive (and within its deadline)
+    monkeypatch.setattr(G, "USAGE_POLL_DEADLINE_S", 600)
+    G._usage_poll_thread["at"] -= 400
+    G._kick_usage_poll()
+    assert len(started) == 1, "single-flight while a run is alive, even past the interval"
+    G._usage_poll_thread["at"] += 400
     gate.set()
     t.join(5)
-    assert len(started) == 1, "single-flight while a run is alive"
+    assert len(started) == 1
     # and after it ends, still none within the poll interval of the last kick
     for _ in range(10):
         G._kick_usage_poll()
