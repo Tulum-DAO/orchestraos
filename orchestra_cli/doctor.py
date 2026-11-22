@@ -315,6 +315,25 @@ def gateway_arms_check(st: Settings, probes: DoctorProbes) -> "Check":
                  required=False)
 
 
+def gateway_env_file_mode_check(st: Settings) -> "Check | None":
+    """WARN when <data dir>/config/watch-gateway.env is readable by group or other (same shape as the
+    reporter-token row). The file is still loaded: refusing it would recreate the dry-run outage the
+    file exists to prevent. None when there is no file (the arms row already says so)."""
+    from . import process_table as PT
+    path = PT.gateway_env_path(st)
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return Check("gateway:arms-file-mode", WARN, f"cannot stat {path} ({type(e).__name__})",
+                     "Fix the file's permissions (plain text, readable by the orchestra user only)", required=False)
+    if mode & 0o044:
+        return Check("gateway:arms-file-mode", WARN, f"{path} is readable by group/other (mode {mode & 0o777:04o})",
+                     f"chmod 0600 {path} (and chmod 700 its directory)", required=False)
+    return Check("gateway:arms-file-mode", OK, f"{path} mode {mode & 0o777:04o}", required=False)
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -364,6 +383,12 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         checks.append(gateway_arms_check(st, probes))
     except Exception as e:  # noqa: BLE001 — one row must never sink the doctor
         checks.append(Check("gateway:arms", WARN, f"check unavailable: {e}", required=False))
+    try:
+        mode_row = gateway_env_file_mode_check(st)
+        if mode_row is not None:
+            checks.append(mode_row)
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("gateway:arms-file-mode", WARN, f"check unavailable: {e}", required=False))
 
     # -- runtimes (the SAME probe definitions the API serves at /api/runtimes/available)
     providers_path = root / "config" / "providers.json"

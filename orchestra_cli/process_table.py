@@ -40,7 +40,9 @@ def load_env_file(path, warn=None) -> tuple:
     around a value is removed). A line with a NUL byte is dropped: an environment cannot carry one, and
     passing it on would stop the gateway from starting. A line that is not KEY=VALUE is skipped and `warn`
     (a callable taking one string) is told its line NUMBER only: the file may hold a value that must never
-    reach a log, so no warning repeats any of the line's text."""
+    reach a log, so no warning repeats any of the line's text. Lines are split on "\n" only (not
+    str.splitlines, which also splits on \x1c-\x1e, \x85, \u2028, \u2029 and would truncate a value
+    and drift the line numbers)."""
     try:
         text = Path(path).read_text()
     except FileNotFoundError:
@@ -48,7 +50,7 @@ def load_env_file(path, warn=None) -> tuple:
     except (OSError, UnicodeDecodeError):
         return "unreadable", {}
     out = {}
-    for n, raw in enumerate(text.splitlines(), 1):
+    for n, raw in enumerate(text.split("\n"), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue

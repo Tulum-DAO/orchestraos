@@ -326,3 +326,48 @@ def test_no_value_from_the_env_file_is_ever_logged(tmp_path):
     assert any("made the spawn fail" in l for l in lines)
     assert lines, "the supervisor logged nothing"
     assert not any(marker in l for l in lines), lines
+
+
+# --- review follow-ups (#599) -------------------------------------------------------------------
+
+def test_a_value_with_a_unicode_or_control_line_separator_is_kept_whole_and_numbers_stay_true(tmp_path):
+    """str.splitlines also splits on \x1c-\x1e, \x85, \u2028, \u2029: a value holding one was truncated and the
+    remainder reported as a malformed "line 2" that is not line 2 of the file. Lines are split on \n only."""
+    p = tmp_path / "x.env"
+    p.write_text("A=x\x1cy\nB=p\u2028q\nC=m\x85n\nnot a pair\nD=4\n", encoding="utf-8")
+    warnings = []
+    status, env = PT.load_env_file(p, warn=warnings.append)
+    assert status == "ok"
+    assert env == {"A": "x\x1cy", "B": "p\u2028q", "C": "m\x85n", "D": "4"}
+    assert len(warnings) == 1 and "line 4" in warnings[0], warnings
+
+
+def test_doctor_warns_when_the_env_file_is_readable_by_group_or_other(tmp_path):
+    st = _settings(tmp_path)
+    p = _env_file(st)
+    p.chmod(0o644)
+    c = D.gateway_env_file_mode_check(st)
+    assert c.status == D.WARN and "group/other" in c.detail and "0644" in c.detail
+    assert "chmod 0600" in c.remedy
+    p.chmod(0o640)
+    assert D.gateway_env_file_mode_check(st).status == D.WARN
+    p.chmod(0o600)
+    assert D.gateway_env_file_mode_check(st).status == D.OK
+
+
+def test_a_world_readable_env_file_is_still_loaded_by_the_supervisor(tmp_path):
+    """The mode row warns; it never refuses the file (a refusal would recreate the dry-run outage)."""
+    st = _settings(tmp_path)
+    _env_file(st).chmod(0o644)
+    seen = {}
+    _supervise(st, seen).tick()
+    assert seen["gateway"]["MENU_SUBMIT_ARMED"] == "1"
+
+
+def test_doctor_has_no_mode_row_without_a_file_and_one_with(tmp_path):
+    st = _settings(tmp_path)
+    assert D.gateway_env_file_mode_check(st) is None
+    assert "gateway:arms-file-mode" not in [c.name for c in D.run_doctor(st, _probes(st, environ={}))]
+    _env_file(st).chmod(0o600)
+    rows = {c.name: c for c in D.run_doctor(st, _probes(st, environ={}))}
+    assert rows["gateway:arms-file-mode"].status == D.OK
