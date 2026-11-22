@@ -70,6 +70,8 @@ import type { LiveBlock } from '../../lib/threadKit/liveBlocks';
 import type { MessagePart, ThreadMessage } from '../../lib/threadKit/thread';
 import { revealReady } from '../../lib/threadKit/streamMarkdown';
 import { aliasReveal, findReveal, revealEntry } from '../../lib/revealStore';
+import { ImageStrip } from './ChatImages';
+import type { ChatImage } from '../../lib/imageRefs';
 
 export interface ThreadViewCall {
   /** When this page's live call started (ms), for the running clock. */
@@ -96,13 +98,15 @@ function NodeSlot({ children }: { children: ReactNode }) {
 }
 
 /** A reply's words when it has no ordered parts: an ended call's marker is its call card, never the raw marker. */
-function ReplyWords({ text, skin, reveal }: { text: string; skin: Skin; reveal?: RevealAs }) {
-  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} />;
+function ReplyWords({ text, skin, reveal, images }: { text: string; skin: Skin; reveal?: RevealAs; images?: ChatImage[] }) {
+  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} images={images} />;
   return (
     <div className={skin === 'modern' ? 'txt' : undefined}>
       {parseVoiceSegments(text).map((seg, i) => seg.kind === 'voicecall'
         ? <CallCard key={i} skin={skin} callId={seg.callId} />
         : isCallEndedLine(seg.text) ? null : <div key={i} className={skin === 'pane' ? 'bubble' : undefined}><Markdown text={seg.text} skin={skin} /></div>)}
+      {/* A reply with a call in it keeps its images too, after the words. */}
+      <ImageStrip images={images} dark={skin === 'pane'} />
     </div>
   );
 }
@@ -155,13 +159,17 @@ function LiveBlockRow({ id, text, done, skin, times, anchored }: { id: string; t
 }
 
 function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean }) {
+  // Images under the words: inside the bubble when the reply is words alone; after its parts otherwise.
+  const inWords = !m.pending && !m.streaming && !m.parts;
+  const after = !inWords && !m.pending && !m.streaming ? <ImageStrip images={m.images} dark={skin === 'pane'} /> : null;
   if (skin === 'pane') {
     return (
       <div className="row arturo group" data-thread-key={m.key}>
         {m.pending ? <div className="bubble thinking">Thinking…</div>
           : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
           : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
-          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} />}
+          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} />}
+        {after}
         {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="meta">ran {m.toolNames.join(', ')}</div>}
         {!m.pending && !m.streaming && m.copyText && <MessageActions copyText={m.copyText} skin={skin} />}
         {extras?.(m)}
@@ -174,7 +182,8 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
       {m.pending ? <span className="thinking" aria-label="thinking" />
         : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
         : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
-        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} /></ReactionAnchor>}
+        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} /></ReactionAnchor>}
+      {after}
       {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="tools">ran {m.toolNames.join(', ')}</div>}
       {!m.pending && !m.streaming && (m.copyText || times) && (
         <MessageActions copyText={m.copyText} skin={skin} meta={times ? <MessageTime ts={m.at} /> : undefined} />

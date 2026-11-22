@@ -15,7 +15,7 @@
 // schema (contract/transcript/transcript.v2.schema.json -> codegen.mjs ->
 // synced transcript.gen.ts). Do not hand-declare wire shapes here — that is
 // the exact web-vs-iOS drift the contract exists to kill.
-import type { ChatItem as GenChatItem, TranscriptEnvelope } from './transcript.gen';
+import type { ChatItem as GenChatItem, ImageRef, TranscriptEnvelope } from './transcript.gen';
 import { transcriptUrl } from './transcriptUrl';
 import type { ResultNode } from './threadKit/results';
 import { compactionText, isCompaction, type CompactionItem } from './compaction';
@@ -42,6 +42,8 @@ export interface ToolBlock {
   resultTs?: string;
   /** The tool call's id (tool_use id): a background job's notice names the call that started it. */
   id?: string;
+  /** The image a Write made (the server's stamp, lib/imageRefs): drawn as a thumbnail under the call. */
+  images?: ImageRef[];
   key: string;
 }
 
@@ -57,7 +59,9 @@ export type RenderNode =
       ref?: string }
   /** afterReaction: the node right after a hidden reaction wake (api chat-transcript reaction_wake), i.e. the agent's
    *  answer to the operator's reaction; never folded into the message before it (view.ts withReactions). */
-  | { kind: 'assistant'; text: string; ts?: string; key: string; afterReaction?: boolean; ref?: string }
+  | { kind: 'assistant'; text: string; ts?: string; key: string; afterReaction?: boolean; ref?: string;
+      /** Images the reply referenced (the server's stamp, one opaque id each): thumbnails under the words. */
+      images?: ImageRef[] }
   | { kind: 'thinking'; text: string; ts?: string; key: string }
   | { kind: 'queued_batch'; count: number; entries: BatchEntryNode[]; ts?: string; key: string }
   /** The chat's compaction notice (lib/compaction.ts): one line that changes in place, keyed by the notice's id. */
@@ -124,7 +128,9 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}),
           ...(midTurn ? { midTurn } : {}), ...(it.ref ? { ref: it.ref } : {}) });
       } else {
-        nodes.push({ kind: 'assistant', text, ts: it.ts, key, ...(it.ref ? { ref: it.ref } : {}) });
+        const images = (it as { images?: ImageRef[] }).images;
+        nodes.push({ kind: 'assistant', text, ts: it.ts, key, ...(it.ref ? { ref: it.ref } : {}),
+          ...(Array.isArray(images) && images.length ? { images } : {}) });
       }
       continue;
     }
@@ -157,6 +163,7 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         ts: it.ts,
         ...(paired?.ts ? { resultTs: paired.ts } : {}),
         ...(it.id ? { id: it.id } : {}),
+        ...(Array.isArray(it.images) && it.images.length ? { images: it.images } : {}),
         key,
       });
       continue;

@@ -92,6 +92,7 @@ struct TextItem: Codable, Equatable {
     let queued: Bool?
     let mid_turn: Bool?
     let machine: String?
+    let images: [ImageRef]?
     let model: String?
     let usage: TokenUsage?
     let ts: String?
@@ -119,6 +120,7 @@ struct ToolUseItem: Codable, Equatable {
     let input: [String: JSONValue]
     let summary: String
     let input_full: String?
+    let images: [ImageRef]?
     let id: String?
     let model: String?
     let usage: TokenUsage?
@@ -136,6 +138,12 @@ struct ToolResultItem: Codable, Equatable {
     let is_error: Bool?
     let ts: String?
     let uuid: String?
+}
+
+struct ImageRef: Codable, Equatable {
+    let id: String
+    let path: String
+    let name: String
 }
 
 struct TokenUsage: Codable, Equatable {
@@ -259,6 +267,7 @@ struct RenderAssistant: Codable, Equatable {
     let exchange: String?
     let kind: String
     let text: String
+    let images: [ImageRef]?
     let ts: String?
     let key: String
 }
@@ -281,6 +290,7 @@ struct RenderTool: Codable, Equatable {
     let input: [String: JSONValue]
     let input_full: String?
     let result: String?
+    let images: [ImageRef]?
     let is_error: Bool?
     let ts: String?
     let key: String

@@ -33,9 +33,11 @@
  * browser reload and a service restart.
  */
 import { Router } from 'express';
+import { findImagePaths, type ImageRef } from '../lib/imageRefs.js';
+import { defaultImageRefsFor } from '../lib/mediaStore.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
-import { loadConfig } from '../lib/config.js';
+import { loadConfig, dataDir } from '../lib/config.js';
 import { tenantScope, installRole, changedBy, type InstallRole } from '../lib/principal.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
@@ -47,6 +49,9 @@ export function gatewayToken(): string {
 }
 
 export interface ArturoDeps {
+  /** Images in the chat: the refs for the image paths one of Arturo's replies names (lib/mediaStore imageRefsFor,
+   *  under his own roots). The API stamps them onto a thread's turns as it relays them, so the client never sends a path. */
+  imageRefs?: (agentId: string, paths: string[]) => ImageRef[];
   /** Whether this install has opted into Arturo at all. Kept injectable so the
    * disabled state is tested without reading the host's real configuration. */
   enabled?: () => boolean;
@@ -211,7 +216,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   const roleOf = deps.installRole ?? ((req: any) => installRole(req));
   const actorOf = deps.actor ?? ((req: any) => changedBy(req));
 
-  async function forward(res: any, path: string, init: RequestInit, timeoutMs: number) {
+  async function forward(res: any, path: string, init: RequestInit, timeoutMs: number, shape: (body: any) => any = (b) => b) {
     const token = deps.token();
     if (!token) { res.status(502).json({ ok: false, error: 'gateway token unavailable' }); return; }
     try {
@@ -219,10 +224,27 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
         ...init,
         headers: { ...(init.headers || {}), 'Authorization': `Bearer ${token}` },
       }, timeoutMs);
-      res.status(status).json(body);
+      res.status(status).json(status === 200 ? shape(body) : body);
     } catch (err: any) {
       res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
     }
+  }
+
+  /** Images in the chat on Arturo's thread: each of his replies that names an image file he may show (his own roots)
+   *  carries `image_refs` (one opaque id per path, lib/mediaStore), stamped here as the thread is relayed. Fail-open. */
+  const refsFor = deps.imageRefs ?? defaultImageRefsFor(dataDir());
+  function stampThreadImages(body: any): any {
+    try {
+      if (!body || !Array.isArray(body.turns)) return body;
+      const turns = body.turns.map((t: any) => {
+        if (!t || t.role === 'user' || typeof t.content !== 'string') return t;
+        const paths = findImagePaths(t.content);
+        if (!paths.length) return t;
+        const refs = refsFor('arturo', paths);
+        return refs.length ? { ...t, image_refs: refs } : t;
+      });
+      return { ...body, turns };
+    } catch { return body; }
   }
 
   router.post('/text', async (req, res) => {
@@ -391,7 +413,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // ?facts=1: the delete dialog's list of the facts first learned in this chat.
     const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}`
       : req.query.jobs ? '?jobs=1' : req.query.facts ? '?facts=1' : page.toString() ? `?${page}` : '';
-    await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000);
+    await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000, stampThreadImages);
   });
 
   // Rename a chat. One line, at most THREAD_TITLE_MAX characters once its whitespace is collapsed (Arturo's

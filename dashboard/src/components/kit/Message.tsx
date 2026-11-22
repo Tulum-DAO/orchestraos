@@ -22,6 +22,8 @@ import { findReveal, revealEntry, type RevealEntry } from '../../lib/revealStore
 import { SlotBadges, SlotBar } from './ReactionBadges';
 import { anchorProps, useReactionSlot } from './reactionsContext';
 import { BUBBLES_AGENT, bubbleWidthOf } from '../../lib/chatSkin';
+import { ImageStrip } from './ChatImages';
+import type { ChatImage } from '../../lib/imageRefs';
 
 export type { Skin } from './Markdown';
 
@@ -46,28 +48,33 @@ const bubbleReveal = (entry?: RevealEntry) => (entry ? { 'data-ru-root': '', 'da
 /** A reply's words, in its skin. `reactions`: this bubble is the message a reaction is given to (Bubbles), so it
  *  carries the message's badges and hover icons on its own border. Anywhere else (a call transcript inside someone
  *  else's message, the live overlay, the lifted copy) it is just the bubble. */
-export function MessageText({ text, skin, reactions = false, widthFrom, reveal }: {
+export function MessageText({ text, skin, reactions = false, widthFrom, reveal, images }: {
   text: string; skin: Skin; reactions?: boolean;
   /** Bubbles: the text the bubble's width is read from, when not the words drawn (chatSkin bubbleWidthOf). */
   widthFrom?: string;
   reveal?: RevealAs;
+  /** Images the reply referenced (components/kit/ChatImages.tsx): thumbnails under the words, inside the bubble. */
+  images?: ChatImage[];
 }) {
   const entry = entryFor(reveal, text);
   const done = reveal?.done ?? true;
-  if (skin === 'modern') return <div className="txt"><Words text={text} skin="modern" entry={entry} done={done} /></div>;
-  if (skin === 'pane') return <div className={`bubble${entry ? ' rv' : ''}`} {...bubbleReveal(entry)}><Words text={text} skin="pane" entry={entry} done={done} /></div>;
-  return <AgentBubble text={text} reactions={reactions} widthFrom={widthFrom} entry={entry} done={done} />;
+  // The pane is dark in either theme: its full-screen view is too.
+  const strip = <ImageStrip images={images} dark={skin === 'pane'} />;
+  if (skin === 'modern') return <div className="txt"><Words text={text} skin="modern" entry={entry} done={done} />{strip}</div>;
+  if (skin === 'pane') return <div className={`bubble${entry ? ' rv' : ''}`} {...bubbleReveal(entry)}><Words text={text} skin="pane" entry={entry} done={done} />{strip}</div>;
+  return <AgentBubble text={text} reactions={reactions} widthFrom={widthFrom} entry={entry} done={done}>{strip}</AgentBubble>;
 }
 
 /** Bubbles: the agent's reply bubble. With a reaction slot (Reactions.tsx ReactionRow) it is the anchor the badges
  *  straddle (desktop: its top inner corner; a phone: its bottom inner corner) and the hover icons sit beside. */
-function AgentBubble({ text, reactions, widthFrom, entry, done }: { text: string; reactions: boolean; widthFrom?: string; entry?: RevealEntry; done: boolean }) {
+function AgentBubble({ text, reactions, widthFrom, entry, done, children }: { text: string; reactions: boolean; widthFrom?: string; entry?: RevealEntry; done: boolean; children?: ReactNode }) {
   const slot = useReactionSlot();
   const s = reactions ? slot : null;
   return (
     <div className={`${BUBBLES_AGENT} ${bubbleWidthOf(widthFrom ?? text)}${entry ? ' rv' : ''}`} data-agent-bubble {...anchorProps(s, 'agent')} data-rx-bubble={s ? '' : undefined}
          {...bubbleReveal(entry)}>
       <Words text={text} skin="bubbles" entry={entry} done={done} />
+      {children}
       {s && <><SlotBar side="agent" /><SlotBadges side="agent" /></>}
     </div>
   );
@@ -97,10 +104,12 @@ export function MessageActions({ copyText, skin, meta }: { copyText: string; ski
   );
 }
 
-export default function Message({ text, copyText = text, skin, meta, revealKey }: {
+export default function Message({ text, copyText = text, skin, meta, revealKey, images }: {
   text: string; copyText?: string; skin: Skin; meta?: ReactNode;
   /** The message's key: if it was streamed here, its words carry on that reveal (MessageText `reveal`). */
   revealKey?: string;
+  /** Images the reply referenced (MessageText `images`). */
+  images?: ChatImage[];
 }) {
   const reveal = revealKey ? { key: revealKey, done: true } : undefined;
   if (skin === 'bubbles') {
@@ -108,7 +117,7 @@ export default function Message({ text, copyText = text, skin, meta, revealKey }
       <div className="flex justify-start group" data-kit-message="bubbles">
         <div className="w-full min-w-0">
           {/* In a message that can be reacted to, the bubble carries its badges and hover icons (ReactionBadges). */}
-          <MessageText text={text} skin="bubbles" reactions reveal={reveal} />
+          <MessageText text={text} skin="bubbles" reactions reveal={reveal} images={images} />
           <MessageActions copyText={copyText} skin="bubbles" meta={meta} />
         </div>
       </div>
@@ -116,7 +125,7 @@ export default function Message({ text, copyText = text, skin, meta, revealKey }
   }
   return (
     <div className="group min-w-0" data-kit-message={skin}>
-      <MessageText text={text} skin={skin} reveal={reveal} />
+      <MessageText text={text} skin={skin} reveal={reveal} images={images} />
       <MessageActions copyText={copyText} skin={skin} meta={meta} />
     </div>
   );

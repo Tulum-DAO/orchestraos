@@ -23,6 +23,7 @@ import { replyCopyText } from '../arturoCopy';
 import type { ChoiceCard } from '../arturo';
 import type { HydratedTurn } from '../arturoResume';
 import { markResults, type FinishedResult, type ResultView, type ResultNode } from './results';
+import { stampedImages, type ChatImage } from '../imageRefs';
 
 export type ThreadSource = 'agent' | 'arturo';
 export type ThreadRole = 'user' | 'assistant';
@@ -42,6 +43,8 @@ export interface ThreadMessage {
   /** What the message's Copy puts on the clipboard: the words as shown, no tool or call cards. */
   copyText: string;
   attachments?: Attachment[];
+  /** Images a reply referenced (lib/imageRefs): the server's stamped ids (an agent's transcript, or Arturo's thread as the API relays it). */
+  images?: ChatImage[];
   /** A line the operator did not type: the server's machine tag (a decision answer, another agent's message, a job
    *  notice), or the session's own brief. */
   machine?: string;
@@ -76,7 +79,9 @@ export interface ThreadThinking { kind: 'thinking'; key: string; text: string; a
 /** One step of a tool run: a call, or what sat between calls. */
 export type ToolRunStep = { kind: 'call'; call: ToolCallView } | ThreadThinking | ThreadResult;
 
-export interface ThreadToolRun { kind: 'tools'; key: string; at?: string; calls: ToolCallView[]; steps: ToolRunStep[] }
+export interface ThreadToolRun { kind: 'tools'; key: string; at?: string; calls: ToolCallView[]; steps: ToolRunStep[];
+  /** Images the run's Writes made (lib/imageRefs). */
+  images?: ChatImage[] }
 
 export interface ThreadResult { kind: 'result'; key: string; at?: string; view?: ResultView; results: FinishedResult[] }
 
@@ -116,13 +121,16 @@ export function agentItem(n: GroupedNode): ThreadItem | null {
         ...(n.queued ? { queued: true } : {}), ...(n.midTurn ? { midTurn: true } : {}),
       };
     }
-    case 'assistant':
-      return { kind: 'message', key: n.key, role: 'assistant', text: n.text, ...at(n.ts), copyText: n.text };
+    case 'assistant': {
+      const images = stampedImages(n.images);
+      return { kind: 'message', key: n.key, role: 'assistant', text: n.text, ...at(n.ts), copyText: n.text, ...(images ? { images } : {}) };
+    }
     case 'thinking':
       return { kind: 'thinking', key: n.key, text: n.text, ...at(n.ts) };
     case 'tool': {
       const call = fromBlock(n);
-      return { kind: 'tools', key: n.key, ...at(n.ts), calls: [call], steps: [{ kind: 'call', call }] };
+      const images = stampedImages(n.images);
+      return { kind: 'tools', key: n.key, ...at(n.ts), calls: [call], steps: [{ kind: 'call', call }], ...(images ? { images } : {}) };
     }
     case 'tool_group': {
       const steps = n.children.flatMap((c): ToolRunStep[] => {
@@ -132,8 +140,9 @@ export function agentItem(n: GroupedNode): ThreadItem | null {
         return [];
       });
       const first = n.children[0];
+      const images = stampedImages(n.children.flatMap((c) => (c.kind === 'tool' && c.images ? c.images : [])));
       return { kind: 'tools', key: n.key, ...at(first && 'ts' in first ? first.ts : undefined),
-        calls: steps.flatMap((s) => (s.kind === 'call' ? [s.call] : [])), steps };
+        calls: steps.flatMap((s) => (s.kind === 'call' ? [s.call] : [])), steps, ...(images ? { images } : {}) };
     }
     case 'result':
       return resultItem(n);
@@ -174,9 +183,12 @@ export function arturoMessage(t: ArturoTurnLike, key: string): ThreadMessage {
   const role: ThreadRole = t.role === 'user' ? 'user' : 'assistant';
   const parts = role === 'assistant' ? messageParts(t.parts) : undefined;
   const attachments: Attachment[] = (t.images ?? []).map((url) => ({ kind: 'image', name: url.split('/').pop() || url, url }));
+  // Images his reply names: the API stamps them on the thread as it relays it (routes/arturo.ts); a reply still streaming has none yet.
+  const images = role === 'assistant' ? stampedImages(t.imageRefs) ?? [] : [];
   return {
     kind: 'message', key, role, text: t.text, ...at(t.ts),
     ...(parts ? { parts } : {}),
+    ...(images.length ? { images } : {}),
     copyText: role === 'assistant' ? replyCopyText(t.text, t.parts) : t.text.trim(),
     ...(attachments.length ? { attachments } : {}),
     ...(t.voice ? { voice: true } : {}), ...(t.callEnd ? { callEnd: t.callEnd } : {}),
