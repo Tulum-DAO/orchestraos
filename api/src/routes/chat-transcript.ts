@@ -33,8 +33,8 @@ import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdow
 import { getRegistry } from '../services/state-reader.js';
 import { principal } from '../lib/principal.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
-import { findImagePaths, imagePathsInToolUse, type ImageRef } from '../lib/imageRefs.js';
-import { defaultImageRefsFor } from '../lib/mediaStore.js';
+import { findImagePaths, imagePathsInToolUse } from '../lib/imageRefs.js';
+import { defaultImageRefsFor, windowPaths, type RefsFor } from '../lib/mediaStore.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -2148,25 +2148,34 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
 }
 
 /**
- * Images in the chat: every image the agent REFERENCED (lib/imageRefs.ts: an absolute path in its
- * reply, the target of a Write) that is really there, under the agent's own roots and an image by
- * its bytes (lib/mediaStore.ts imageRefsFor) gets an opaque id and rides on the item as `images`
- * (ADDITIVE v2). The poll route and the SSE tailer both come through finishWindow, so both lanes
- * carry it. The text is untouched, so the path stays readable. Fail-open: any trouble here leaves
- * the items as they were.
+ * Images in the chat: every image or video the agent REFERENCED (lib/imageRefs.ts: an absolute path
+ * in its reply, the target of a Write) that is really there, under the agent's own roots and an
+ * image or a video by its bytes (lib/mediaStore.ts imageRefsFor) gets an opaque id and rides on the
+ * item as `images` (ADDITIVE v2; a video with `kind: 'video'`). The poll route and the SSE tailer
+ * both come through finishWindow, so both lanes carry it. The text is untouched, so the path stays
+ * readable. The whole window is read first (windowPaths): the table keeps every id this window
+ * shows, so ids stay the same from one stamp to the next however many images the window names.
+ * Fail-open: any trouble here leaves the items as they were.
  */
-export function stampImages(items: any[], agentId: string, refsFor: (agent: string, paths: string[]) => ImageRef[] = defaultImageRefsFor(ORCH_DIR)): any[] {
-  const out: any[] = [];
-  for (const it of items) {
+export function stampImages(items: any[], agentId: string, refsFor: RefsFor = defaultImageRefsFor(ORCH_DIR)): any[] {
+  const perItem: string[][] = items.map((it) => {
     try {
-      let paths: string[] = [];
-      if (it?.kind === 'text' && it.role === 'assistant') paths = findImagePaths(String(it.text || ''));
-      else if (it?.kind === 'tool_use') paths = imagePathsInToolUse(String(it.tool || ''), it.input);
-      if (!paths.length) { out.push(it); continue; }
-      const images = refsFor(agentId, paths);
+      if (it?.kind === 'text' && it.role === 'assistant') return findImagePaths(String(it.text || ''));
+      if (it?.kind === 'tool_use') return imagePathsInToolUse(String(it.tool || ''), it.input);
+    } catch { /* no paths */ }
+    return [];
+  });
+  let window: Set<string> | undefined;
+  try { window = windowPaths(perItem); } catch { window = undefined; }
+  const out: any[] = [];
+  items.forEach((it, i) => {
+    try {
+      const paths = perItem[i];
+      if (!paths.length) { out.push(it); return; }
+      const images = refsFor(agentId, paths, window);
       out.push(images.length ? { ...it, images } : it);
     } catch { out.push(it); }
-  }
+  });
   return out;
 }
 

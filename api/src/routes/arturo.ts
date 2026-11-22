@@ -34,11 +34,12 @@
  */
 import { Router } from 'express';
 import { findImagePaths, type ImageRef } from '../lib/imageRefs.js';
-import { defaultImageRefsFor } from '../lib/mediaStore.js';
+import { defaultImageRefsFor, windowPaths } from '../lib/mediaStore.js';
+import { canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
 import { loadConfig, dataDir } from '../lib/config.js';
-import { tenantScope, installRole, changedBy, type InstallRole } from '../lib/principal.js';
+import { tenantScope, installRole, changedBy, principal, type InstallRole } from '../lib/principal.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
@@ -51,7 +52,11 @@ export function gatewayToken(): string {
 export interface ArturoDeps {
   /** Images in the chat: the refs for the image paths one of Arturo's replies names (lib/mediaStore imageRefsFor,
    *  under his own roots). The API stamps them onto a thread's turns as it relays them, so the client never sends a path. */
-  imageRefs?: (agentId: string, paths: string[]) => ImageRef[];
+  imageRefs?: (agentId: string, paths: string[], window?: ReadonlySet<string>) => ImageRef[];
+  /** Whether this caller may open an agent's media (GET /api/media/:id's own rule, lib/agent-scope canPrincipalSeeAgent).
+   *  Arturo's refs are his; a viewer the media route would refuse gets none (a chip that can only 404 is worse than the
+   *  path in the words). Injectable for tests; absent means that real check. */
+  canSeeMedia?: (req: any, agentId: string) => boolean;
   /** Whether this install has opted into Arturo at all. Kept injectable so the
    * disabled state is tested without reading the host's real configuration. */
   enabled?: () => boolean;
@@ -230,17 +235,25 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     }
   }
 
-  /** Images in the chat on Arturo's thread: each of his replies that names an image file he may show (his own roots)
-   *  carries `image_refs` (one opaque id per path, lib/mediaStore), stamped here as the thread is relayed. Fail-open. */
+  /** Images in the chat on Arturo's thread: each of his replies that names an image or video he may show (his own
+   *  roots) carries `image_refs` (one opaque id per path, lib/mediaStore), stamped here as the thread is relayed. The
+   *  whole thread is read first (windowPaths), so his ids stay the same however many he names. Only for a viewer who
+   *  could open them: the media route checks the caller against agent "arturo", and a client-scoped viewer whose scope
+   *  does not include him would get a 404 for every chip, so his thread reaches that viewer unstamped. Fail-open. */
   const refsFor = deps.imageRefs ?? defaultImageRefsFor(dataDir());
-  function stampThreadImages(body: any): any {
+  const canSeeMedia = deps.canSeeMedia
+    ?? ((req: any, agentId: string) => canPrincipalSeeAgent(principal(req), { id: agentId, tags: defaultResolveTags(agentId) }));
+  function stampThreadImages(body: any, req: any): any {
     try {
       if (!body || !Array.isArray(body.turns)) return body;
-      const turns = body.turns.map((t: any) => {
-        if (!t || t.role === 'user' || typeof t.content !== 'string') return t;
-        const paths = findImagePaths(t.content);
+      if (!canSeeMedia(req, 'arturo')) return body;
+      const mine = (t: any) => !!t && t.role !== 'user' && typeof t.content === 'string';
+      const perTurn: string[][] = body.turns.map((t: any) => (mine(t) ? findImagePaths(t.content) : []));
+      const window = windowPaths(perTurn);
+      const turns = body.turns.map((t: any, i: number) => {
+        const paths = perTurn[i];
         if (!paths.length) return t;
-        const refs = refsFor('arturo', paths);
+        const refs = refsFor('arturo', paths, window);
         return refs.length ? { ...t, image_refs: refs } : t;
       });
       return { ...body, turns };
@@ -413,7 +426,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // ?facts=1: the delete dialog's list of the facts first learned in this chat.
     const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}`
       : req.query.jobs ? '?jobs=1' : req.query.facts ? '?facts=1' : page.toString() ? `?${page}` : '';
-    await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000, stampThreadImages);
+    await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000, (b) => stampThreadImages(b, req));
   });
 
   // Rename a chat. One line, at most THREAD_TITLE_MAX characters once its whitespace is collapsed (Arturo's

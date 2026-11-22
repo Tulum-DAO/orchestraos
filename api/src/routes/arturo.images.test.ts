@@ -24,14 +24,14 @@ function deps(turns: unknown[], asked: string[][]): ArturoDeps {
   } as unknown as ArturoDeps;
 }
 
-async function get(d: ArturoDeps, path: string) {
+async function get(d: ArturoDeps, path: string, headers: Record<string, string> = {}) {
   const app = express();
   app.use(express.json());
   app.use('/api/arturo', createArturoRouter(d));
   const server = app.listen(0);
   const { port } = server.address() as AddressInfo;
   try {
-    const r = await fetch(`http://127.0.0.1:${port}${path}`);
+    const r = await fetch(`http://127.0.0.1:${port}${path}`, { headers });
     return { status: r.status, json: await r.json() };
   } finally { server.close(); }
 }
@@ -66,4 +66,42 @@ test('a thread read with no turns, or a non-200 from the gateway, passes through
   assert.equal(r2.status, 502);
   assert.deepEqual(r2.json, { ok: false, error: 'x' });
   assert.deepEqual(asked, []);
+});
+
+// F3 (#598 re-review): Arturo's refs are minted under agent "arturo", and GET /api/media/:id checks the caller against
+// him. A client-scoped viewer whose scope does not include him got a chip per image that could only 404. Narrowest fix:
+// that viewer's thread is relayed unstamped (the path stays in the words), and the stamper is never asked.
+test('F3: a viewer the media route would refuse for arturo gets his thread unstamped; the stamper is not asked', async () => {
+  const asked: string[][] = [];
+  const turns = [{ role: 'assistant', content: 'Here: /srv/arturo/out/a.png', ts: 2 }];
+  const seen: string[] = [];
+  const blind = { ...deps(turns, asked), canSeeMedia: (_req: unknown, agent: string) => { seen.push(agent); return false; } } as ArturoDeps;
+  const r = await get(blind, '/api/arturo/threads/c1');
+  assert.equal(r.status, 200);
+  assert.equal('image_refs' in r.json.turns[0], false);
+  assert.equal(r.json.turns[0].content, 'Here: /srv/arturo/out/a.png');
+  assert.deepEqual(asked, []);
+  assert.deepEqual(seen, ['arturo'], 'the check is against arturo, the agent his ids are minted for');
+  const sighted = { ...deps(turns, asked), canSeeMedia: () => true } as ArturoDeps;
+  assert.ok((await get(sighted, '/api/arturo/threads/c1')).json.turns[0].image_refs);
+});
+
+test('F3 with the real rule: a client-scoped viewer (arturo is not tagged for that client) is unstamped; no identity is unstamped', async () => {
+  const prev = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
+  try {
+    const asked: string[][] = [];
+    const turns = [{ role: 'assistant', content: 'Here: /srv/arturo/out/a.png', ts: 2 }];
+    const scoped = { 'x-orchestra-user': 'client1', 'x-orchestra-role': 'viewer', 'x-orchestra-client': 'acme' };
+    const r = await get(deps(turns, asked), '/api/arturo/threads/c1', scoped);
+    assert.equal(r.status, 200);
+    assert.equal('image_refs' in r.json.turns[0], false);
+    const anon = await get(deps(turns, asked), '/api/arturo/threads/c1');
+    assert.equal(anon.status, 200);
+    assert.equal('image_refs' in anon.json.turns[0], false);
+    assert.deepEqual(asked, []);
+  } finally {
+    if (prev === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+    else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = prev;
+  }
 });

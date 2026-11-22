@@ -51,3 +51,11 @@ test('a Write to an image path is an image the agent made; a Read or an Edit is 
 test('the name is the basename, never a path', () => {
   assert.equal(imageName('/tmp/out/chart.png'), 'chart.png');
 });
+
+test('video paths are picked up the same way (mp4, m4v, mov, webm); other containers are not', () => {
+  assert.deepEqual(findImagePaths('Recorded /tmp/out/demo.mp4, /srv/p/clip.MOV and (/x/rec.webm); also /x/a.m4v.'),
+    ['/tmp/out/demo.mp4', '/srv/p/clip.MOV', '/x/rec.webm', '/x/a.m4v']);
+  assert.deepEqual(findImagePaths('/tmp/film.mkv /tmp/a.avi /tmp/demo.mp4.zip out/demo.mp4'), []);
+  assert.deepEqual(imagePathsInToolUse('Write', { file_path: '/srv/p/demo.mp4' }), ['/srv/p/demo.mp4']);
+  assert.deepEqual(imagePathsInToolUse('Read', { file_path: '/srv/p/demo.mp4' }), []);
+});

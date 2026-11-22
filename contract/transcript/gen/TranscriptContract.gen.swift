@@ -144,6 +144,7 @@ struct ImageRef: Codable, Equatable {
     let id: String
     let path: String
     let name: String
+    let kind: String?
 }
 
 struct TokenUsage: Codable, Equatable {

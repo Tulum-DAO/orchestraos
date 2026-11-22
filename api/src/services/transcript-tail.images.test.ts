@@ -32,7 +32,8 @@ test('the tailer\'s snapshot and delta items carry images, like the poll route\'
   const made = join(PROJECT, 'chart.png');
   writeFileSync(shot, PNG);
   writeFileSync(made, PNG);
-  writeFileSync(path, [line('user', 'show me', 'u1'), line('assistant', `Here: ${shot} and /etc/not-mine.png`, 'u2')].join('\n'));
+  // Newline-terminated, as every real agent log is: a tailer rightly holds an unterminated last line back.
+  writeFileSync(path, [line('user', 'show me', 'u1'), line('assistant', `Here: ${shot} and /etc/not-mine.png`, 'u2')].join('\n') + '\n');
   const tailer = new TranscriptTailer({ agentId: 'stream-agent', resolve: () => ({ path, sid: 'session-s' }), limit: 150 });
   const events: any[] = [];
   tailer.subscribe((ev) => events.push(ev));
@@ -46,7 +47,7 @@ test('the tailer\'s snapshot and delta items carry images, like the poll route\'
   assert.deepEqual(node.images, reply.images);
 
   // A Write lands while the stream is up: the delta carries the image too.
-  appendFileSync(path, '\n' + line('assistant', [{ type: 'tool_use', id: 't1', name: 'Write', input: { file_path: made, content: '…' } }], 'u3'));
+  appendFileSync(path, line('assistant', [{ type: 'tool_use', id: 't1', name: 'Write', input: { file_path: made, content: '…' } }], 'u3') + '\n');
   tailer.tick();
   const delta = events[events.length - 1];
   assert.equal(delta.type, 'delta');
