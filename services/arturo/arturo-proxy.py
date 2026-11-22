@@ -3087,7 +3087,10 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
 
 
 def onboarded():
-    return (Path(ARTURO_STATE) / "onboarding.json").exists()
+    """onboarding.json exists, or this install plainly predates onboarding (a T0 gm, a T0 manager, a
+    saved operator name) and the flag was written now with reason "upgrade-inferred" (D-7: an upgrade
+    must not re-run the first run). services/arturo/onboarding_progress.ensure_onboarded."""
+    return _progress.ensure_onboarded(ARTURO_STATE, ORCHESTRA_DIR)["onboarded"]
 
 
 def finish_onboarding():
@@ -3098,9 +3101,7 @@ def finish_onboarding():
     if onboarded():
         turn["finished"] = True
         return "Onboarding was already finished."
-    p = Path(ARTURO_STATE) / "onboarding.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"finished_at": time.time()}) + "\n")
+    _progress.write_flag(ARTURO_STATE, {"finished_at": time.time()})
     turn["finished"] = True
     return "Onboarding finished. From here on this thread is ordinary chat."
 

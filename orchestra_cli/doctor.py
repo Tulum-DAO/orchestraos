@@ -334,6 +334,19 @@ def gateway_env_file_mode_check(st: Settings) -> "Check | None":
     return Check("gateway:arms-file-mode", OK, f"{path} mode {mode & 0o777:04o}", required=False)
 
 
+def onboarding_check(data_dir: Path) -> "Check":
+    """Arturo's onboarding flag (<data>/state/arturo/onboarding.json): present, inferred on an upgrade
+    (with the evidence), or a fresh install that has not finished onboarding. READ-ONLY: doctor never
+    writes the flag; Arturo does on its next read (services/arturo/onboarding_progress.py)."""
+    from services.arturo import onboarding_progress as OP
+    state, detail = OP.describe(Path(data_dir) / "state" / "arturo", data_dir)
+    if state == "undecided":
+        return Check("arturo:onboarding", WARN, f"undecided: {detail}",
+                     "Fix or move aside the unreadable file; docs/ARTURO.md (Onboarding)", required=False)
+    return Check("arturo:onboarding", OK if state in ("present", "inferred-on-upgrade") else INFO,
+                 f"{state}: {detail}", required=False)
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -373,6 +386,11 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     reg = st.data_dir / "registry.json"
     checks.append(Check("data:registry", OK if reg.exists() else WARN, str(reg),
                         "Run `orchestra init` (seeds an empty registry)", required=False))
+
+    try:
+        checks.append(onboarding_check(st.data_dir))
+    except Exception as e:  # noqa: BLE001 — one row must never sink the doctor
+        checks.append(Check("arturo:onboarding", WARN, f"check unavailable: {e}", required=False))
 
     # -- gateway token
     tok_ok = st.token_file.exists() and bool(st.token_file.read_text().strip())

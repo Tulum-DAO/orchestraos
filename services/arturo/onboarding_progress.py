@@ -8,9 +8,21 @@ written only by server code, never by the brain:
   onboarding_conversation   the onboarding thread. Every browser and device opens THIS one while
                             onboarding is not finished, so leaving and coming back resumes it.
   team_declined_at          the operator said "not now" to the starter team on a dashboard turn.
+  fresh_at                  when Arturo first looked at this install without onboarding.json and
+                            found it fresh (no evidence of an earlier install). From then on this is
+                            a first run in progress: a team or a name that appears later is the
+                            onboarding's own doing, never evidence of an upgrade.
+  rerun                     set by hand to run onboarding again on an install that is not fresh.
 
 Which devices are paired is read from the device store (Arturo's own codes), never stored here.
 Reset: delete this file together with onboarding.json (docs/ARTURO.md).
+
+Onboarding is finished when <ARTURO_STATE>/onboarding.json exists. That flag arrived with the
+first-run feature, so an install that predates it has no flag although it is plainly not a first
+run (orchestra-builder D-7: an upgraded install re-ran onboarding, offered a starter team for a
+week, and its playbook sent a /clear to an agent). `ensure_onboarded` decides once, the first time
+it sees no flag: positive evidence of an earlier install writes the flag with reason
+"upgrade-inferred"; none marks the install fresh (fresh_at) and onboarding runs as it always did.
 """
 from __future__ import annotations
 
@@ -104,3 +116,145 @@ def paired(device_records, devices=("iPhone", "iPad", "Mac")) -> dict:
         else:
             out.setdefault(device, "code not used yet")
     return {d: out[d] for d in devices if d in out}       # a fixed order, not the store's
+
+
+# ---- onboarded, and the upgrade inference (orchestra-builder D-7) --------------------------------
+FLAG = "onboarding.json"
+UPGRADE_REASON = "upgrade-inferred"
+
+
+def flag_path(state_dir) -> Path:
+    return Path(state_dir) / FLAG
+
+
+def write_flag(state_dir, rec) -> bool:
+    """Write onboarding.json whole, or not at all, and never over an existing one: the record goes to a
+    private temp file first and is hard-linked into place, which fails when the flag already exists
+    (os.replace would overwrite it). True when this call wrote it."""
+    p = flag_path(state_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=FLAG + ".", suffix=".tmp", dir=p.parent)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(rec) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(tmp, p)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+def _read_json(path):
+    """("absent" | "ok" | "unreadable", value)."""
+    try:
+        return "ok", json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return "absent", None
+    except (OSError, ValueError):
+        return "unreadable", None
+
+
+def upgrade_evidence(orchestra_dir, state_dir, pinned_conversation="") -> tuple:
+    """(evidence, unreadable): what says this install existed before onboarding did, and which sources
+    could not be read. POSITIVE evidence only: a missing file is a fresh install's normal state, and an
+    unreadable or malformed one proves nothing either way.
+
+    - registry.json (the data dir's, as starter_team_state reads it) has gm as a T0 seat. That is also
+      every starter_team_state reading of "present" or "incomplete": both need a T0 gm.
+    - starter_team_state would read "other_manager": a T0 seat not named gm.
+    - operator.json holds a name, unless it was learned on the pinned onboarding thread (an install
+      whose onboarding began before fresh_at existed: that name is the onboarding's own)."""
+    evidence, unreadable = [], []
+    status, reg = _read_json(Path(orchestra_dir) / "registry.json")
+    agents = reg.get("agents", {}) if isinstance(reg, dict) else None
+    if status == "unreadable" or (status == "ok" and not isinstance(agents, dict)):
+        unreadable.append("registry.json")
+    elif status == "ok":
+        managers = sorted(n for n, r in agents.items()
+                          if isinstance(r, dict) and str(r.get("tier") or "").upper() == "T0")
+        if "gm" in managers:
+            evidence.append("registry: gm is a T0 seat (starter team present or incomplete)")
+        elif managers:
+            evidence.append(f"starter team state: other_manager ({managers[0]} is T0)")
+    status, op = _read_json(Path(state_dir) / "operator.json")
+    facts = op.get("facts") if isinstance(op, dict) else None
+    if status == "unreadable" or (status == "ok" and not isinstance(facts, dict)):
+        unreadable.append("operator.json")
+    elif status == "ok":
+        name = facts.get("name")
+        if isinstance(name, dict) and str(name.get("value") or "").strip():
+            if not (pinned_conversation and name.get("source_thread") == pinned_conversation):
+                evidence.append("operator.json: a name is saved")
+    return evidence, unreadable
+
+
+def _progress_status(state_dir):
+    status, rec = _read_json(_path(state_dir))
+    if status == "ok" and not isinstance(rec, dict):
+        status = "unreadable"
+    return status, (rec if status == "ok" else {})
+
+
+def ensure_onboarded(state_dir, orchestra_dir, now=None) -> dict:
+    """Is onboarding finished on this install? {"onboarded", "how", "evidence", "unreadable"}, how one of:
+    flag (onboarding.json exists: finished, or inferred earlier), inferred (written now), fresh (a first
+    run, marked or in progress), undecided (a source is unreadable and nothing else proves an upgrade:
+    onboarding runs, and the next call looks again)."""
+    out = {"onboarded": False, "how": "fresh", "evidence": [], "unreadable": []}
+    if flag_path(state_dir).exists():
+        return {**out, "onboarded": True, "how": "flag"}
+    pstatus, rec = _progress_status(state_dir)
+    if pstatus == "unreadable":
+        return {**out, "how": "undecided", "unreadable": [FILENAME]}
+    if rec.get("fresh_at") is not None or rec.get("rerun"):
+        return out
+    evidence, unreadable = upgrade_evidence(orchestra_dir, state_dir,
+                                            str(rec.get("onboarding_conversation") or ""))
+    if evidence:
+        when = float(now if now is not None else time.time())
+        try:
+            write_flag(state_dir, {"reason": UPGRADE_REASON, "evidence": evidence, "inferred_at": when})
+        except OSError:
+            pass                     # still not a first run; the next call writes it
+        return {**out, "onboarded": True, "how": "inferred", "evidence": evidence, "unreadable": unreadable}
+    if unreadable:
+        return {**out, "how": "undecided", "unreadable": unreadable}
+    try:
+        with _LOCK:
+            pstatus, rec = _progress_status(state_dir)
+            if pstatus == "ok" or pstatus == "absent":
+                if rec.get("fresh_at") is None:
+                    rec["fresh_at"] = float(now if now is not None else time.time())
+                    _write(state_dir, rec)
+    except OSError:
+        pass                         # unmarked: the next call decides again, the same way
+    return out
+
+
+def describe(state_dir, orchestra_dir) -> tuple:
+    """READ-ONLY (orchestra doctor): (state, detail). state is "present", "inferred-on-upgrade",
+    "fresh-not-onboarded", "will-infer" (no flag yet, evidence found: Arturo writes it on its next
+    read) or "undecided"."""
+    status, flag = _read_json(flag_path(state_dir))
+    if status != "absent":
+        if isinstance(flag, dict) and flag.get("reason") == UPGRADE_REASON:
+            ev = "; ".join(str(e) for e in flag.get("evidence") or []) or "no evidence recorded"
+            return "inferred-on-upgrade", f"{flag_path(state_dir)}: {UPGRADE_REASON} ({ev})"
+        return "present", f"{flag_path(state_dir)}: onboarding finished"
+    pstatus, rec = _progress_status(state_dir)
+    if pstatus == "unreadable":
+        return "undecided", f"no {FLAG}; {_path(state_dir)} is unreadable, so onboarding runs"
+    if rec.get("rerun"):
+        return "fresh-not-onboarded", f"no {FLAG}; onboarding re-run requested ({FILENAME} rerun)"
+    if rec.get("fresh_at") is not None:
+        return "fresh-not-onboarded", f"no {FLAG}; a first run (found fresh, no earlier install)"
+    evidence, unreadable = upgrade_evidence(orchestra_dir, state_dir, str(rec.get("onboarding_conversation") or ""))
+    if evidence:
+        return "will-infer", f"no {FLAG} yet; Arturo writes it ({UPGRADE_REASON}) on its next read: " + "; ".join(evidence)
+    if unreadable:
+        return "undecided", f"no {FLAG}; cannot read {', '.join(unreadable)}, so onboarding runs until it can"
+    return "fresh-not-onboarded", f"no {FLAG}; no earlier install found, so onboarding runs"
