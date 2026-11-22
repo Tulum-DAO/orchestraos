@@ -77,6 +77,7 @@ export interface ImageRef {
   id: string;
   path: string;
   name: string;
+  kind?: 'image' | 'video';
 }
 
 export interface TokenUsage {

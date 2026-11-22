@@ -146,3 +146,37 @@
   background: var(--bui-surface);
   cursor: default;
 }
+
+/* A video tile: the player fills the same fixed box (letterboxed), its own controls play it in place; the corner
+   button opens it large. No zoom cursor: a click is the player's. */
+.chat-video { cursor: default; background: #000; }
+.chat-video video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.chat-video-open {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  cursor: pointer;
+}
+.chat-video-open:hover { background: rgba(0, 0, 0, .75); }
+.chat-video-open:focus-visible { outline: 2px solid var(--bui-accent); outline-offset: 2px; }
+/* A video plays large: the stage's width (up to 1280px), letterboxed, never taller than the stage. */
+.chat-image-overlay-video { width: 100%; max-width: 1280px; height: auto; max-height: 100%; background: #000; }
+.chat-image-overlay-btn:disabled { opacity: .6; cursor: progress; }
