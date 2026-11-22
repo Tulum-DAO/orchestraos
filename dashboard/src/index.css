@@ -480,12 +480,25 @@ main {
   .fleet-dot-down, .fleet-dot-up { top: 50%; }
 }
 
-/* Bubbles: the person's bubble in the colour of the agent it was sent to. The thread sets the two variables
+/* Bubbles: the person's bubble in the colour of the agent it was sent to. The thread sets the variables
    (lib/bubbleColour.ts: the agent's look, flipped to the theme's ink where it would vanish into the page, with
-   black or white text at WCAG AA); where none is set, the old blue with white text. Modern never reads them. */
+   black or white text at WCAG AA, and an edge that stands off the page and the compact card); where none is set,
+   the old blue with white text. Modern never reads them. */
 .bubble-user-colour {
   background-color: var(--bubble-user-bg, oklch(54.6% 0.245 262.881 / 0.9));
   color: var(--bubble-user-fg, #fff);
+  /* its edge: a 1px inner line (no change to its box), shaded where the colour alone would not stand off the card */
+  box-shadow: inset 0 0 0 1px var(--bubble-user-edge, transparent);
+}
+/* A message still on its way (TranscriptCards PendingBubble): only the background fades, toward the page; the words
+   get their own colour for it (still AA) and the edge stays the agent's. Never `opacity`, which fades the words too. */
+.bubble-user-colour.is-sent {
+  background-color: var(--bubble-user-sent-bg, var(--bubble-user-bg, oklch(54.6% 0.245 262.881 / 0.9)));
+  color: var(--bubble-user-sent-fg, var(--bubble-user-fg, #fff));
+}
+.bubble-user-colour.is-held {
+  background-color: var(--bubble-user-held-bg, var(--bubble-user-bg, oklch(54.6% 0.245 262.881 / 0.9)));
+  color: var(--bubble-user-held-fg, var(--bubble-user-fg, #fff));
 }
 
 /* Living avatars: the surface behind each avatar, so the cut-out ring around its status dot and provider

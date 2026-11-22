@@ -17,6 +17,7 @@ import { interleave } from '../../lib/decisions';
 import { agentRows } from '../../lib/threadKit/view';
 import ThreadView from '../kit/ThreadView';
 import { useChatStyle } from '../../lib/agentPrefs';
+import { useBubbleColour } from './useBubbleColour';
 import { subagentSkin } from '../../lib/subagentView';
 
 interface Props {
@@ -58,6 +59,8 @@ export default function SubagentTranscriptView({ agentId, subagentId, banner }: 
   }, [agentId, subagentId]);
 
   const skin = subagentSkin(useChatStyle(agentId));
+  // Its prompts drawn as the agent chat draws yours: in Bubbles, in the colour of the agent it works for.
+  const bubbleColour = useBubbleColour(agentId);
   const rows = useMemo(() => {
     const nodes = groupToolRuns(markResults(buildRenderList(items), agentId));
     return agentRows(interleave(nodes, []), [], 'idle', { modern: skin === 'modern' });
@@ -65,7 +68,7 @@ export default function SubagentTranscriptView({ agentId, subagentId, banner }: 
   const follow = useMemo(() => ({ follow: stick.follow }), [stick.follow]);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0" data-testid="subagent-transcript">
+    <div className="flex flex-col flex-1 min-h-0" data-testid="subagent-transcript" style={bubbleColour}>
       <div data-testid="subagent-banner" className="shrink-0 border-b border-amber-700/40 bg-amber-500/10">
         <div className="w-full max-w-[860px] mx-auto px-4 py-1.5 flex items-center gap-3 text-px12 text-amber-700 dark:text-amber-200/90">
           <span className="truncate min-w-0">{banner.text}</span>

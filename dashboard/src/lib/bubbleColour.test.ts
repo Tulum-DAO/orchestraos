@@ -5,7 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { AA_TEXT, MIN_SURFACE, PAGE_BG, TEXT_ON_DARK, TEXT_ON_LIGHT, bubbleColours, bubbleVars, normalHex, textOn } from './bubbleColour.ts';
+import {
+  AA_TEXT, EDGE_CONTRAST, FADE, MIN_SURFACE, PAGE_BG, SURFACES, TEXT_ON_DARK, TEXT_ON_LIGHT, bubbleColours, bubbleVars, mixHex, normalHex, textOn,
+} from './bubbleColour.ts';
 import { BUBBLES_USER } from './chatSkin.ts';
 import { INK_COLOR, PALETTES, SWATCHES, contrastRatio, type Theme } from '../components/avatar/avatarCore.ts';
 
@@ -70,7 +72,7 @@ test('every swatch an agent can wear, in both themes: text at WCAG AA (4.5:1) an
   }
 });
 
-test('any colour at all gets text at AA: the better of black and white never drops under 4.5:1 (Red, every grey, a hue sweep)', () => {
+test('any colour at all gets text at AA: white where it reaches 4.5:1, else black, never under 4.5:1 (Red, every grey, a hue sweep)', () => {
   const red = bubbleColours('#E5243B', 'light');
   assert.equal(red.bg, '#e5243b', 'the agent colour itself, never altered');
   assert.ok(red.contrast >= AA_TEXT);
@@ -89,9 +91,69 @@ test('any colour at all gets text at AA: the better of black and white never dro
 test('textOn and the CSS variables', () => {
   assert.equal(textOn('#000000'), TEXT_ON_DARK);
   assert.equal(textOn('#ffffff'), TEXT_ON_LIGHT);
-  assert.deepEqual(bubbleVars({ bg: '#123456', fg: '#ffffff', contrast: 9 }), { '--bubble-user-bg': '#123456', '--bubble-user-fg': '#ffffff' });
+  assert.equal(textOn('#e5243b'), TEXT_ON_DARK, 'white on Red: it reaches AA, and reads more naturally there than black');
+  const c = bubbleColours('#1E6BE6', 'dark');
+  assert.deepEqual(bubbleVars(c), {
+    '--bubble-user-bg': c.bg, '--bubble-user-fg': c.fg, '--bubble-user-edge': c.edge,
+    '--bubble-user-sent-bg': c.sent.bg, '--bubble-user-sent-fg': c.sent.fg,
+    '--bubble-user-held-bg': c.held.bg, '--bubble-user-held-fg': c.held.fg,
+  });
   assert.equal(normalHex('#AbC'), '#aabbcc');
   assert.equal(normalHex('ink'), null);
+});
+
+// What a person really sees for a bubble with `opacity` on it: its background and its words, each composited over the
+// page. 1 (no opacity) is the bubble as computed.
+const over = (c: string, page: string, alpha: number) => mixHex(c, page, 1 - alpha);
+const SWATCH_COLOURS = [...new Set([...SWATCHES.map((s) => s.hex), ...PALETTES.all.map((s) => s.hex), '#000000', '#ffffff'])];
+
+test('a message still on its way (just sent, held, queued): its words stay at AA for every swatch in both themes', () => {
+  // The PendingBubble as written: its state classes, and any opacity on the bubble (which would fade the words too).
+  const cards = src('components/chat/TranscriptCards.tsx');
+  const pending = cards.slice(cards.indexOf('export function PendingBubble'), cards.indexOf('export function QueuedBatchCard'));
+  const states = /waiting \? '([^']*)' : '([^']*)'/.exec(pending);
+  assert.ok(states, 'PendingBubble picks its look by state');
+  const opacityOf = (cls: string) => { const m = /\bopacity-(\d+)\b/.exec(`${cls} ${pending.match(/bubble-user-colour[^']*/)?.[0] ?? ''}`); return m ? +m[1] / 100 : 1; };
+  const look = { held: states![1], sent: states![2] };
+  assert.match(look.held, /\bis-held\b/);
+  assert.match(look.sent, /\bis-sent\b/);
+  let worst = Infinity;
+  for (const theme of THEMES) {
+    for (const c of SWATCH_COLOURS.concat('ink')) {
+      const b = bubbleColours(c, theme);
+      for (const state of ['sent', 'held'] as const) {
+        const a = opacityOf(look[state]);
+        const bg = over(b[state].bg, PAGE_BG[theme], a), fg = over(b[state].fg, PAGE_BG[theme], a);
+        const ratio = contrastRatio(bg, fg);
+        worst = Math.min(worst, ratio);
+        assert.ok(ratio >= AA_TEXT, `${c} ${state} in ${theme}: ${fg} on ${bg} is ${ratio.toFixed(2)}:1`);
+      }
+      // the faded background is the agent colour toward the page, never another colour
+      assert.equal(b.sent.bg, mixHex(b.bg, PAGE_BG[theme], FADE.sent));
+      assert.equal(b.held.bg, mixHex(b.bg, PAGE_BG[theme], FADE.held));
+    }
+  }
+  assert.ok(worst >= AA_TEXT, `worst ${worst.toFixed(2)}:1`);
+  const css = src('index.css');
+  assert.match(css, /\.bubble-user-colour\.is-sent\s*\{[^}]*var\(--bubble-user-sent-bg[^}]*color:\s*var\(--bubble-user-sent-fg/);
+  assert.match(css, /\.bubble-user-colour\.is-held\s*\{[^}]*var\(--bubble-user-held-bg[^}]*color:\s*var\(--bubble-user-held-fg/);
+});
+
+test("every bubble's edge stands off the page and the compact agent card by 3:1 (Yellow gets a darker line)", () => {
+  for (const theme of THEMES) {
+    for (const c of SWATCH_COLOURS.concat('ink')) {
+      const b = bubbleColours(c, theme);
+      for (const s of SURFACES[theme]) {
+        assert.ok(contrastRatio(b.edge, s) >= EDGE_CONTRAST, `${c} in ${theme}: edge ${b.edge} on ${s} is ${contrastRatio(b.edge, s).toFixed(2)}:1`);
+      }
+    }
+  }
+  const yellow = bubbleColours('#FFC61A', 'light');
+  assert.ok(contrastRatio(yellow.bg, '#f5f5f5') < 1.5, 'the premise: Yellow alone is faint on the light card');
+  assert.notEqual(yellow.edge, yellow.bg);
+  assert.ok(contrastRatio(yellow.edge, '#000000') < contrastRatio(yellow.bg, '#000000'), 'a darker shade of it');
+  assert.equal(bubbleColours('#1E6BE6', 'light').edge, '#1e6be6', 'a colour that already stands off keeps its own edge');
+  assert.match(src('index.css'), /\.bubble-user-colour\s*\{[^}]*box-shadow:\s*inset 0 0 0 1px var\(--bubble-user-edge/);
 });
 
 test('the Bubbles bubble reads the agent colour; Modern does not', () => {
@@ -109,4 +171,9 @@ test('the Bubbles bubble reads the agent colour; Modern does not', () => {
   assert.match(src('components/call/CallBar.tsx'), /useBubbleColour\(party\.id\)/);
   assert.match(src('components/call/CallBar.tsx'), /data-call-bar=\{call\.phase\} style=\{bubbleColour\}/);
   assert.match(src('components/chat/useBubbleColour.ts'), /useAgentRecord\(agentId\)\.color/);
+  // ...and Settings' chat-style preview (the agent of its sidebar row) and a subagent's drill-in (the agent it works for)
+  assert.match(src('components/settings/sections/DisplayPreview.tsx'), /useBubbleColour\(ARTURO_ID\)/);
+  assert.match(src('components/settings/sections/DisplayPreview.tsx'), /data-preview-thread style=\{bubbleColour\}/);
+  assert.match(src('components/chat/SubagentTranscriptView.tsx'), /useBubbleColour\(agentId\)/);
+  assert.match(src('components/chat/SubagentTranscriptView.tsx'), /data-testid="subagent-transcript" style=\{bubbleColour\}/);
 });
