@@ -8,7 +8,7 @@
  * line, never a bar at 0%. Pure, so every case is pinned by a test without a DOM.
  */
 import type { UsageRow } from './usageLine.ts';
-import { AGENTS_ACCOUNT, usageFor } from './modelPickerPanel.ts';
+import { AGENTS_ACCOUNT, agentsAccountOf, usageFor } from './modelPickerPanel.ts';
 
 export type UsageTone = 'ok' | 'warn' | 'full';
 
@@ -45,8 +45,9 @@ export interface UsageProviderView {
 
 export interface UsageOverview {
   providers: UsageProviderView[];
-  /** Providers that report no usage: "Gemini", "Grok", with why. */
-  silent: { id: string; name: string; reason: string }[];
+  /** Providers with no reading: "Gemini", "Grok", with why. `pending`: the poller is on and the first reading is on its
+   *  way (say "First reading in a moment" and how to turn polling off). */
+  silent: { id: string; name: string; reason: string; pending: boolean }[];
 }
 
 const NAMES: Record<string, string> = { claude: 'Claude', codex: 'ChatGPT (Codex)', gemini: 'Gemini', grok: 'Grok' };
@@ -86,7 +87,7 @@ export function hasAccountChoice(p: Pick<UsageProviderView, 'accounts'>): boolea
 
 const order = (list: readonly string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
 
-export function usageOverview(rows: unknown, now: Date = new Date(), agentsAccount: string = AGENTS_ACCOUNT): UsageOverview {
+export function usageOverview(rows: unknown, now: Date = new Date(), agentsAccountIn?: string): UsageOverview {
   const all = Array.isArray(rows) ? (rows as UsageRow[]).filter((r) => r && typeof r.provider === 'string') : [];
   const ids = [...new Set(all.map((r) => r.provider))].sort((a, b) => order(PROVIDER_ORDER, a) - order(PROVIDER_ORDER, b) || a.localeCompare(b));
   const out: UsageOverview = { providers: [], silent: [] };
@@ -95,9 +96,10 @@ export function usageOverview(rows: unknown, now: Date = new Date(), agentsAccou
     const mine = all.filter((r) => r.provider === id);
     const read = mine.filter((r) => isPct(r.used_pct));
     if (!read.length) {
-      out.silent.push({ id, name, reason: mine.find((r) => r.reason)?.reason || 'no usage reported' });
+      out.silent.push({ id, name, reason: mine.find((r) => r.reason)?.reason || 'no usage reported', pending: mine.some((r) => r.pending === true) });
       continue;
     }
+    const agentsAccount = agentsAccountIn ?? agentsAccountOf(read);
     const byAccount = new Map<string, UsageRow[]>();
     for (const r of read) { const k = r.account || agentsAccount; byAccount.set(k, [...(byAccount.get(k) ?? []), r]); }
     const accountIds = [...byAccount.keys()].sort((a, b) => (a === agentsAccount ? -1 : b === agentsAccount ? 1 : a.localeCompare(b)));

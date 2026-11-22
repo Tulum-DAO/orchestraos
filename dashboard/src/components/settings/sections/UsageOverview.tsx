@@ -117,8 +117,12 @@ export function UsageOverviewPanel({ accountAction }: { accountAction?: UsageAcc
   // A minute's tick keeps "Resets in 2 h 14 m" true between reads.
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 60_000); return () => window.clearInterval(t); }, []);
-  if (error instanceof UsageHidden) return null;
+  if (error instanceof UsageHidden) {
+    return <p className="panel-note" data-setting="usage" data-usage-admin-only>Only an admin of this install can see plan usage.</p>;
+  }
   const view = usageOverview(data, now);
+  const pending = view.silent.filter((x) => x.pending);
+  const silent = view.silent.filter((x) => !x.pending);
   return (
     <section className="settings-group" data-usage-overview>
       {isLoading && <p className="panel-note" data-setting="usage">Reading plan usage…</p>}
@@ -127,15 +131,53 @@ export function UsageOverviewPanel({ accountAction }: { accountAction?: UsageAcc
       <div className="grid gap-3">
         {view.providers.map((p) => <ProviderCard key={p.id} p={p} dark={dark} accountAction={accountAction} />)}
       </div>
-      {view.silent.length > 0 && (
+      {pending.map((x) => (
+        <section key={x.id} className="mt-3 rounded-xl border border-tone-800 bg-tone-900/40 px-4 py-3"
+                 data-setting={`usage:pending:${x.id}`} data-usage-pending={x.id}>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className="text-px15 font-semibold text-tone-100">{x.name}</span>
+            <span className="text-px13 text-tone-300">First reading in a moment</span>
+          </div>
+          <div className="mt-1 text-px12 text-tone-500" data-usage-off-switch>
+            Polling is on. To turn it off, set <code className="text-tone-300">[usage] poll = false</code> in orchestra.toml.
+          </div>
+        </section>
+      ))}
+      {silent.length > 0 && (
         <ul className="mt-3 grid gap-1 text-px12 text-tone-500" data-usage-silent>
-          {view.silent.map((x) => (
+          {silent.map((x) => (
             <li key={x.id} data-setting={`usage:silent:${x.id}`} data-usage-silent-provider={x.id}>
               <span className="text-tone-300">{x.name}</span>: No reading yet · {x.reason}
             </li>
           ))}
         </ul>
       )}
+      <TermsNote />
     </section>
+  );
+}
+
+const link = 'text-tone-300 underline underline-offset-2 hover:text-tone-100';
+
+/** Where the numbers come from, and what the providers' terms say about the poller (docs/USAGE.md "Terms"). */
+function TermsNote() {
+  return (
+    <div className="mt-4 text-px12 leading-relaxed text-tone-500" data-setting="usage:terms" data-usage-terms>
+      <p>
+        These numbers come from Claude Code's status line, Codex's own logs and a poller. Subscription plans have no
+        documented usage API. The poller calls the endpoint Claude Code's own <code>/usage</code> uses, with the login
+        Claude Code stores (and the Codex CLI's endpoint, with its login).
+      </p>
+      <p className="mt-1.5">
+        Anthropic's <a className={link} href="https://www.anthropic.com/legal/consumer-terms" target="_blank" rel="noreferrer">Consumer Terms</a> restrict
+        automated access outside an API key, and Anthropic says it may <a className={link} href="https://code.claude.com/docs/en/legal-and-compliance" target="_blank" rel="noreferrer">enforce
+        without prior notice</a>. OpenAI's <a className={link} href="https://openai.com/policies/row-terms-of-use/" target="_blank" rel="noreferrer">Terms of Use</a> forbid
+        programmatic extraction of data. Anthropic's <a className={link} href="https://platform.claude.com/docs/en/manage-claude/usage-cost-api" target="_blank" rel="noreferrer">usage API</a> covers
+        API-key organizations only, not Pro or Max plans.
+      </p>
+      <p className="mt-1.5">
+        To turn polling off, set <code className="text-tone-300">[usage] poll = false</code> in orchestra.toml. The page then reads local files only.
+      </p>
+    </div>
   );
 }

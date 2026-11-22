@@ -184,10 +184,15 @@ def test_a_second_run_while_the_lock_is_held_does_nothing(homes):
     assert out["outcomes"] == [{"key": "claude:default", "outcome": "locked"}] and http.calls == []
 
 
-def test_off_by_default_makes_no_call(homes):
+def test_on_by_default_and_off_with_one_line(homes):
+    """No [usage] section = on (the operator's default). poll = false is the one line that turns it off, and then
+    no call is made. A wrong type (poll = "yes") is off, never a guess."""
+    assert P.load_config({}) == {"poll": True, "poll_s": 300}
+    assert P.load_config({"usage": {}})["poll"] is True
     http = FakeHttp()
-    assert P.run(homes["data"], now=NOW, http_get=http, config=P.load_config({}),
-                 targets=_claude_target(homes))["ran"] is False
+    off = P.run(homes["data"], now=NOW, http_get=http, config=P.load_config({"usage": {"poll": False}}),
+                targets=_claude_target(homes))
+    assert off["ran"] is False and "poll = false" in off["reason"]
     assert http.calls == []
     assert P.load_config({"usage": {"poll": True, "poll_minutes": 7}}) == {"poll": True, "poll_s": 420}
     assert P.interval_s(420) == 390 and P.interval_s(300) == 270 and P.interval_s(60) == 60
@@ -404,13 +409,129 @@ def test_an_older_lower_block_never_overwrites_the_status_line_snapshot(homes):
           "as_of": NOW + 60, "version": None}
     assert UM.write_claude_record(lo, homes["data"], "default") is None
     p = homes["data"] / "state" / "usage" / "claude-default.json"
-    assert json.loads(p.read_text()) == hi
+    stamped = {"windows": {k: dict(w, as_of=NOW) for k, w in hi["windows"].items()}, "as_of": NOW, "version": None}
+    assert json.loads(p.read_text()) == stamped    # each window carries when it was read
     # a new window (another resets_at) is always written, even lower
     new = {"windows": {"five_hour": {"used_pct": 1.0, "resets_at": 999}, "seven_day": {"used_pct": 20.0, "resets_at": 222}},
            "as_of": NOW + 120, "version": None}
     UM.write_claude_record(new, homes["data"], "default")
     got = json.loads(p.read_text())
     assert got["windows"]["five_hour"]["used_pct"] == 1.0 and got["windows"]["seven_day"]["used_pct"] == 30.0
+    # the kept window keeps ITS time: never re-stamped as current alongside the fresh one
+    assert got["windows"]["seven_day"]["as_of"] == NOW and got["windows"]["five_hour"]["as_of"] == NOW + 120
+    assert got["as_of"] == NOW + 120
+
+
+def _rec(five, week, at, resets=(111, 222)):
+    return {"windows": {"five_hour": {"used_pct": five, "resets_at": resets[0]},
+                        "seven_day": {"used_pct": week, "resets_at": resets[1]}}, "as_of": at, "version": None}
+
+
+def test_a_real_drop_in_one_window_is_taken_after_the_grace(homes):
+    """A plan upgrade mid-week: weekly 80% -> 20% with the same reset. Refused only within DROP_GRACE_S of the
+    high reading; after that the lower reading is written (not held until the window ends)."""
+    d = homes["data"]
+    p = d / "state" / "usage" / "claude-default.json"
+    UM.write_claude_record(_rec(10.0, 80.0, NOW), d, "default")
+    # within the grace: refused, and the kept weekly still says it was read at NOW
+    UM.write_claude_record(_rec(12.0, 20.0, NOW + 60), d, "default")
+    got = json.loads(p.read_text())
+    assert got["windows"]["seven_day"]["used_pct"] == 80.0 and got["windows"]["seven_day"]["as_of"] == NOW
+    # past the grace: the drop is real
+    later = NOW + UM.DROP_GRACE_S + 60
+    UM.write_claude_record(_rec(14.0, 20.0, later), d, "default")
+    got = json.loads(p.read_text())
+    assert got["windows"]["seven_day"] == {"used_pct": 20.0, "resets_at": 222, "as_of": later}
+    rows = {r["window"]: r for r in UM.claude_rows(later + 5, d)}
+    assert rows["weekly"]["used_pct"] == 20.0 and rows["weekly"]["stale"] is False
+
+
+def test_a_kept_high_reading_is_shown_at_its_own_age_and_the_poller_wins(homes):
+    """The kept 80% is not re-stamped: once STALE_S old it greys out. The poller's newer lower reading (its own
+    file) beats it in the merge, so the drop shows at once when the poller is on."""
+    d = homes["data"]
+    UM.write_claude_record(_rec(10.0, 80.0, NOW), d, "default")
+    UM.write_claude_record(_rec(11.0, 20.0, NOW + 600), d, "default")      # 10 min later: within the grace
+    weekly = [r for r in UM.claude_rows(NOW + 601, d) if r["window"] == "weekly"][0]
+    assert weekly["used_pct"] == 80.0 and weekly["as_of"] == NOW
+    assert [r for r in UM.claude_rows(NOW + UM.STALE_S + 1, d) if r["window"] == "weekly"][0]["stale"] is True
+    UM._atomic_json(UM.api_snapshot_path(d, "claude", "default"),
+                    {"windows": {"weekly": {"used_pct": 20.0, "resets_at": 222}}, "as_of": NOW + 300})
+    rows = {r["window"]: r for r in UM.usage_rows(d, providers=["claude"], now=NOW + 601) if r["provider"] == "claude"}
+    assert rows["weekly"]["used_pct"] == 20.0 and rows["weekly"]["source"] == "claude-api"
+    assert rows["5h"]["used_pct"] == 11.0
+
+
+def test_concurrent_status_line_writes_are_serialised(homes):
+    """The read-modify-write runs under an exclusive flock: a write waits while another holds it."""
+    import fcntl
+    import threading
+    d = homes["data"]
+    out = UM.claude_usage_dir(d)
+    out.mkdir(parents=True, exist_ok=True)
+    done = threading.Event()
+    with open(out / ".claude-default.json.lock", "a") as lk:
+        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)
+        t = threading.Thread(target=lambda: (UM.write_claude_record(_rec(5.0, 6.0, NOW), d, "default"), done.set()))
+        t.start()
+        assert not done.wait(0.5), "the write went ahead while the lock was held"
+        assert not (out / "claude-default.json").exists()
+    t.join(5)
+    assert done.is_set() and (out / "claude-default.json").exists()
+
+
+def test_a_future_dated_reading_never_hides_a_fresh_one(homes):
+    """The review's demo: an api snapshot of 5% stamped a day ahead (a clock stepped back after it) next to a
+    status-line 80% from 5 s ago. The fresh 80% is shown; the future one only when nothing fresh exists."""
+    d = homes["data"]
+    UM._atomic_json(UM.api_snapshot_path(d, "claude", "default"),
+                    {"windows": {"5h": {"used_pct": 5.0, "resets_at": NOW + 3600}}, "as_of": NOW + 86400})
+    UM.write_claude_record({"windows": {"five_hour": {"used_pct": 80.0, "resets_at": NOW + 3600}}, "as_of": NOW - 5,
+                            "version": None}, d, "default")
+    rows = [r for r in UM.usage_rows(d, providers=["claude"], now=NOW) if r.get("window") == "5h"]
+    assert len(rows) == 1 and rows[0]["used_pct"] == 80.0 and rows[0]["stale"] is False
+    assert rows[0]["source"] == "claude-statusline"
+    # alone, the future-dated reading still shows, greyed
+    (d / "state" / "usage" / "claude-default.json").unlink()
+    alone = [r for r in UM.usage_rows(d, providers=["claude"], now=NOW) if r.get("window") == "5h"]
+    assert alone[0]["used_pct"] == 5.0 and alone[0]["stale"] is True
+
+
+def test_a_login_with_no_reading_for_14_days_leaves_the_view_but_its_file_stays(homes):
+    d = homes["data"]
+    old = NOW - UM.AGE_OUT_S - 60
+    UM._atomic_json(UM.api_snapshot_path(d, "claude", "work"),
+                    {"windows": {"weekly": {"used_pct": 50.0, "resets_at": NOW}}, "as_of": old})
+    UM.write_claude_record({"windows": {"seven_day": {"used_pct": 40.0, "resets_at": NOW}}, "as_of": old,
+                            "version": None}, d, "work")
+    UM.write_claude_record({"windows": {"seven_day": {"used_pct": 7.0, "resets_at": NOW}}, "as_of": NOW - 60,
+                            "version": None}, d, "default")
+    rows = [r for r in UM.usage_rows(d, providers=["claude"], now=NOW) if r.get("used_pct") is not None]
+    assert {r["account"] for r in rows} == {"default"}
+    assert UM.api_snapshot_path(d, "claude", "work").exists() and (d / "state" / "usage" / "claude-work.json").exists()
+
+
+def test_before_the_first_reading_a_polled_provider_says_first_reading_in_a_moment(homes):
+    d = homes["data"]
+    empty = homes["data"] / "no-codex-sessions"
+    on = UM.usage_rows(d, providers=["claude", "codex"], now=NOW, codex_sessions_dir=empty, polling=True)
+    assert [(r["provider"], r["pending"], r["reason"]) for r in on] == \
+        [("claude", True, UM.PENDING_REASON), ("codex", True, UM.PENDING_REASON)]
+    off = UM.usage_rows(d, providers=["claude", "codex"], now=NOW, codex_sessions_dir=empty)
+    assert all("pending" not in r and r["reason"] != UM.PENDING_REASON for r in off)
+
+
+def test_each_reading_says_whether_it_is_the_agents_login(homes, monkeypatch):
+    d = homes["data"]
+    for acct, pct in (("default", 7.0), ("work", 30.0)):
+        UM.write_claude_record({"windows": {"seven_day": {"used_pct": pct, "resets_at": NOW}}, "as_of": NOW - 60,
+                                "version": None}, d, acct)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    flags = {r["account"]: r["agents"] for r in UM.usage_rows(d, providers=["claude"], now=NOW)}
+    assert flags == {"default": True, "work": False}
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/srv/logins/.claude-work")      # this install runs Claude as "work"
+    flags = {r["account"]: r["agents"] for r in UM.usage_rows(d, providers=["claude"], now=NOW)}
+    assert flags == {"default": False, "work": True}
 
 
 def test_the_attempt_is_on_disk_before_the_request_goes_out(homes):

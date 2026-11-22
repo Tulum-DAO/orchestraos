@@ -219,3 +219,43 @@ def test_the_hook_records_usage_when_claude_code_runs_it(tmp_path):
                        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ORCHESTRA_DIR": str(tmp_path)})
     assert r.returncode == 0 and r.stdout.strip(), r.stderr
     assert (tmp_path / "state" / "usage" / "claude-default.json").is_file(), r.stderr
+
+
+# ---- the gateway runs the poller (on by default) when the dashboard asks for usage ----
+
+def _kick_env(monkeypatch, tmp_path, poll):
+    import scripts.usage_poll as P
+    calls = []
+    monkeypatch.setattr(P, "load_config", lambda raw=None: {"poll": poll, "poll_s": 300})
+    monkeypatch.setattr(P, "run", lambda data_dir, **k: calls.append(data_dir))
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "_usage_poll_thread", {"t": None})
+    monkeypatch.setattr(G, "_usage_cache", {"rows": [{"provider": "claude"}], "at": 1.0})
+    return calls
+
+
+def test_a_usage_read_starts_one_background_poll_and_drops_the_cache_after(monkeypatch, tmp_path):
+    calls = _kick_env(monkeypatch, tmp_path, True)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)   # the guard below, lifted for this one test
+    assert G._kick_usage_poll() is True
+    G._usage_poll_thread["t"].join(5)
+    assert calls == [tmp_path]
+    assert G._usage_cache["rows"] is None, "the next read shows the new reading"
+
+
+def test_no_poll_when_it_is_off_or_under_pytest(monkeypatch, tmp_path):
+    calls = _kick_env(monkeypatch, tmp_path, False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert G._kick_usage_poll() is False and G._usage_poll_thread["t"] is None
+    calls = _kick_env(monkeypatch, tmp_path, True)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "x")
+    assert G._kick_usage_poll() is True and G._usage_poll_thread["t"] is None and calls == []
+
+
+def test_rows_say_first_reading_in_a_moment_while_polling_is_on(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(G, "_usage_cache", {"rows": None, "at": 0.0})
+    monkeypatch.setattr(G, "_kick_usage_poll", lambda: True)
+    monkeypatch.setattr(U, "usage_rows", lambda d, providers=None, polling=False, **k: seen.setdefault("polling", polling) and [])
+    G._usage_rows_cached()
+    assert seen["polling"] is True

@@ -34,6 +34,9 @@ from pathlib import Path
 
 STALE_S = 30 * 60
 FUTURE_SKEW_S = 300                  # an as_of further ahead than this is a wrong clock: stale
+AGE_OUT_S = 14 * 24 * 3600           # a login with no reading for this long leaves the view (its file stays)
+DROP_GRACE_S = 15 * 60               # a lower reading for the same window is refused only this long
+PENDING_REASON = "first reading in a moment"
 CODEX_LOOKBACK_S = 8 * 24 * 3600     # a weekly window plus a day: older rollouts cannot be fresher
 CODEX_MAX_FILES = 12                 # the newest rollouts; the freshest event among them wins
 TAIL_BYTES = 262144
@@ -202,20 +205,32 @@ def claude_record_from_statusline(d: dict, now: float) -> dict | None:
             "version": d.get("version") if isinstance(d.get("version"), str) else None}
 
 
-def monotonic_record(old, new: dict) -> dict | None:
-    """The record to write over `old`: within one window (same resets_at) usage only rises, so a
-    LOWER used_pct for the same reset is an older block (an idle seat redrawing late) and the old
-    window is kept. None when every window of `new` is such a step back: nothing to write."""
+def monotonic_record(old, new: dict, grace_s: int = DROP_GRACE_S) -> dict | None:
+    """The record to write over `old`. Every window carries its own as_of (when it was read).
+
+    Within one window (same resets_at) usage normally only rises, so a LOWER used_pct for the same
+    reset is usually an older block (an idle seat redrawing late): the old window is kept, with its
+    OWN as_of, never re-stamped as current, so it greys out as stale on its own clock. A real drop
+    (a plan upgrade mid-window, a provider-side reset that keeps resets_at) is refused only while the
+    old reading is younger than grace_s; after that the lower reading is taken. None when every window
+    of `new` is such a step back: nothing to write."""
+    at = _ts(new.get("as_of")) if isinstance(new, dict) else None
+    windows = {k: (dict(w, as_of=at) if isinstance(w, dict) and at is not None else w)
+               for k, w in ((new.get("windows") or {}) if isinstance(new, dict) else {}).items()}
+    new = dict(new, windows=windows)
     if not isinstance(old, dict) or not isinstance(old.get("windows"), dict):
         return new
+    old_at = _ts(old.get("as_of"))
     out, fresh = {}, False
-    for key, w in (new.get("windows") or {}).items():
+    for key, w in windows.items():
         o = old["windows"].get(key)
+        o_at = (_ts(o.get("as_of")) or old_at) if isinstance(o, dict) else None
         if isinstance(o, dict) and isinstance(w, dict) and w.get("resets_at") is not None \
                 and o.get("resets_at") == w.get("resets_at") \
                 and _pct(o.get("used_pct")) is not None and _pct(w.get("used_pct")) is not None \
-                and _pct(o["used_pct"]) > _pct(w["used_pct"]):
-            out[key] = o
+                and _pct(o["used_pct"]) > _pct(w["used_pct"]) \
+                and o_at is not None and (at is None or at - o_at < grace_s):
+            out[key] = dict(o, as_of=o_at)
         else:
             out[key] = w
             fresh = True
@@ -225,29 +240,36 @@ def monotonic_record(old, new: dict) -> dict | None:
 
 
 def write_claude_record(record: dict, data_dir: Path, account: str) -> Path | None:
-    """Write the status-line record atomically; None when monotonic_record says it is a step back."""
+    """Write the status-line record atomically; None when monotonic_record says it is a step back.
+
+    Several status lines (one per session) write the same account's file: the read-modify-write runs
+    under an exclusive flock on a sidecar lock file (.claude-<account>.json.lock; the data file itself
+    is replaced by rename, so its inode cannot carry the lock)."""
+    import fcntl
     import tempfile
     out = claude_usage_dir(data_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"claude-{account}.json"
-    try:
-        old = json.loads(path.read_text())
-    except (OSError, ValueError):
-        old = None
-    record = monotonic_record(old, record)
-    if record is None:
-        return None
-    fd, tmp = tempfile.mkstemp(prefix=f".claude-{account}.", dir=str(out))
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(record, fh)
-        os.replace(tmp, path)
-    except BaseException:
+    with open(out / f".claude-{account}.json.lock", "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            old = json.loads(path.read_text())
+        except (OSError, ValueError):
+            old = None
+        record = monotonic_record(old, record)
+        if record is None:
+            return None
+        fd, tmp = tempfile.mkstemp(prefix=f".claude-{account}.", dir=str(out))
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(record, fh)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     return path
 
 
@@ -268,7 +290,10 @@ def claude_rows(now: float, data_dir: Path) -> list[dict]:
         for key, label in (("five_hour", "5h"), ("seven_day", "weekly")):
             w = windows.get(key)
             if isinstance(w, dict) and _pct(w.get("used_pct")) is not None:
-                rows.append(_row("claude", label, _pct(w["used_pct"]), _ts(w.get("resets_at")), at,
+                w_at = min(_ts(w.get("as_of")) or at, at)     # a window kept from an older block keeps its time
+                if now - w_at > AGE_OUT_S:
+                    continue
+                rows.append(_row("claude", label, _pct(w["used_pct"]), _ts(w.get("resets_at")), w_at,
                                  "claude-statusline", now, account=account))
     if not rows:
         return [_empty("claude", "Claude Code has not reported usage yet (it does after a reply, "
@@ -299,7 +324,7 @@ def api_rows(now: float, data_dir: Path, provider: str) -> list[dict]:
             continue
         at = _ts(rec.get("as_of")) if isinstance(rec, dict) else None
         windows = rec.get("windows") if isinstance(rec, dict) else None
-        if at is None or not isinstance(windows, dict):
+        if at is None or not isinstance(windows, dict) or now - at > AGE_OUT_S:
             continue
         for label in sorted(windows, key=_window_order):
             w = windows[label]
@@ -314,10 +339,12 @@ def _window_order(label) -> tuple:
 
 
 def _newest_per_window(*sources: list[dict]) -> list[dict]:
-    """Per account AND window, the row with the newest reading (as_of): a newer source that has only
-    some windows (a status line with just 5 h) never hides the others (the API's weekly rows). A row
-    with no number never hides one that has a number. Accounts keep first-seen order; windows run
-    5 h, weekly, then the rest."""
+    """Per account AND window, the row with the newest NON-stale reading (as_of); a stale one (too old,
+    or stamped in the future by a wrong clock) wins only when there is no fresh one. A newer source
+    that has only some windows (a status line with just 5 h) never hides the others (the API's weekly
+    rows). A row with no number never hides one that has a number. Accounts keep first-seen order;
+    windows run 5 h, weekly, then the rest."""
+    rank = lambda r: (not r.get("stale"), r.get("as_of") or 0)  # noqa: E731
     best: dict = {}
     order: list = []
     for rows in sources:
@@ -327,7 +354,7 @@ def _newest_per_window(*sources: list[dict]) -> list[dict]:
             k = (r.get("account"), r.get("window"))
             if r.get("account") not in order:
                 order.append(r.get("account"))
-            if k not in best or (r.get("as_of") or 0) > (best[k].get("as_of") or 0):
+            if k not in best or rank(r) > rank(best[k]):
                 best[k] = r
     out = []
     for acct in order:
@@ -338,8 +365,14 @@ def _newest_per_window(*sources: list[dict]) -> list[dict]:
 # ---- all ---------------------------------------------------------------------------------------
 
 def usage_rows(data_dir: Path, providers=None, now: float | None = None,
-               codex_sessions_dir: Path | None = None) -> list[dict]:
-    """Rows for the enabled providers (all four when None), in a stable order."""
+               codex_sessions_dir: Path | None = None, polling: bool = False,
+               agents_account: str | None = None) -> list[dict]:
+    """Rows for the enabled providers (all four when None), in a stable order.
+
+    polling: usage_poll is on, so a Claude/Codex row with no reading yet says PENDING_REASON
+    ("pending": true) in place of the local source's reason. Every row with a number says whether it is
+    the login the agents use ("agents"): for Claude agents_account, else this process's own login
+    (claude_account: $CLAUDE_CONFIG_DIR, else ~/.claude = "default"); for Codex "default" ($CODEX_HOME)."""
     now = time.time() if now is None else now
     wanted = [p for p in ("claude", "codex", "gemini", "grok") if providers is None or p in providers]
     rows = []
@@ -356,6 +389,12 @@ def usage_rows(data_dir: Path, providers=None, now: float | None = None,
             rows.append(_empty(p, NO_SOURCE[p], now))
             continue
         merged = _newest_per_window(api_rows(now, data_dir, p), local)
+        if merged:
+            agents = (agents_account or claude_account()) if p == "claude" else "default"
+            for r in merged:
+                r["agents"] = r.get("account") == agents
+        elif polling:
+            local = [dict(r, reason=PENDING_REASON, pending=True) for r in local]
         rows += merged or local
     return rows
 

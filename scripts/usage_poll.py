@@ -1,6 +1,7 @@
 """usage_poll.py: plan usage from the providers' own usage endpoints, cached and backed off.
 
-OFF unless [usage] poll = true in orchestra.toml. When on, one run (cron, every few minutes):
+ON unless orchestra.toml says [usage] poll = false. The gateway starts a run in the background when
+the dashboard asks for usage (scripts/watch_gateway.py), and a cron line can run it too. One run:
 
   * for this host's login of each provider (poll_targets):
       claude: GET https://api.anthropic.com/api/oauth/usage  with the Claude Code OAuth access
@@ -37,6 +38,12 @@ Call discipline (the whole host, every caller, every data dir):
 Credentials: the access token is read in-process, sent in one request header, and dropped. It is
 never logged, written, or put in an exception message; errors are recorded by class name and HTTP
 status only. Nothing here can refresh, renew or re-login.
+
+Terms (docs/USAGE.md "Terms" quotes and links them): subscription plans have no documented usage
+API. Anthropic's Consumer Terms forbid automated or scripted access except via an API key or where
+explicitly permitted, and say enforcement can come without notice; OpenAI's Terms of Use forbid
+automatically or programmatically extracting data. Anthropic's Admin usage API covers API-key
+organizations only. Off with one line: [usage] poll = false.
 
 Response shapes (no live call was made to derive them):
   * claude: Claude Code 2.1.x's own usage reader (binary strings: fetchUtilization -> GET
@@ -115,7 +122,8 @@ def urllib_get(url: str, headers: dict, timeout: float, _extra_handlers=()) -> H
 # ---- config ------------------------------------------------------------------------------------
 
 def load_config(raw: dict | None = None) -> dict:
-    """[usage] from orchestra.toml: poll (bool, default False), poll_minutes (default 5)."""
+    """[usage] from orchestra.toml: poll (default True: absent means on; only the boolean true is on
+    when the key is set, so poll = false or a wrong type is off), poll_minutes (default 5)."""
     if raw is None:
         try:
             sys.path.insert(0, os.path.dirname(_SCRIPTS)) if os.path.dirname(_SCRIPTS) not in sys.path else None
@@ -128,7 +136,7 @@ def load_config(raw: dict | None = None) -> dict:
     mins = sec.get("poll_minutes", POLL_MIN_S // 60)
     if isinstance(mins, bool) or not isinstance(mins, (int, float)) or mins < 1:
         mins = POLL_MIN_S // 60
-    return {"poll": sec.get("poll") is True, "poll_s": int(mins * 60)}
+    return {"poll": sec.get("poll", True) is True, "poll_s": int(mins * 60)}
 
 
 # ---- tokens (read in-process only) -------------------------------------------------------------
@@ -412,7 +420,7 @@ def run(data_dir: Path, now: float | None = None, http_get=urllib_get, config: d
     import fcntl
     cfg = config if config is not None else load_config()
     if not cfg.get("poll"):
-        return {"ran": False, "reason": "off ([usage] poll is not true)"}
+        return {"ran": False, "reason": "off ([usage] poll = false)"}
     now = time.time() if now is None else now
     locks = Path(locks) if locks is not None else lock_dir()
     locks.mkdir(parents=True, exist_ok=True, mode=0o700)

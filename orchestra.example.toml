@@ -224,12 +224,12 @@ repo = "Tulum-DAO/orchestraos"
 enabled = true
 interval_seconds = 300
 
-# Plan usage from the providers' usage endpoints (scripts/usage_poll.py). OFF by default: without
-# it the meter reads local files only (Claude Code's status line, Codex rollouts). When on, one
-# run (cron, e.g. every 5 minutes) makes at most one call per account per poll_minutes across the
-# whole host, under a file lock, backs off on 429 / Retry-After / 401 / timeouts, and never
-# refreshes a login. Snapshots: <data dir>/state/usage/ (labels and numbers, no token, no e-mail).
-# Read the provider terms note in docs/USAGE.md before turning it on.
+# Plan usage (Settings > Usage, the model picker's rings). ON by default: scripts/usage_poll.py reads
+# each provider's usage endpoint with the login its CLI already stores (Claude: the endpoint Claude
+# Code's own /usage calls). Subscription plans have no documented usage API, and the providers' terms
+# restrict automated or scripted access: read "Terms" in docs/USAGE.md. To turn it off: poll = false
+# (the view then reads local files only). At most one call per login per poll_minutes, host-wide;
+# backs off on 429 / Retry-After / 401 / timeouts; never refreshes a login; writes no token.
 [usage]
-poll = false
+poll = true
 poll_minutes = 5

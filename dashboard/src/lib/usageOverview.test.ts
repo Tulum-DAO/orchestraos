@@ -52,7 +52,7 @@ test('a stale reading says how old it is; garbage in is no providers, not a cras
 
 // ── the rendered page (components/settings/sections/UsageOverview.tsx), from a primed query cache: no browser ──
 
-async function renderPanel(rows: unknown, props: Record<string, unknown> = {}): Promise<string> {
+async function renderPanel(rows: unknown, props: Record<string, unknown> = {}, hidden = false): Promise<string> {
   const { register } = await import('node:module');
   // the panel takes ProviderMark from the model picker, whose module pulls in the whole app: a stand-in mark here
   register('data:text/javascript,' + encodeURIComponent(
@@ -67,7 +67,14 @@ async function renderPanel(rows: unknown, props: Record<string, unknown> = {}): 
   const { UsageOverviewPanel } = await import('../components/settings/sections/UsageOverview.tsx');
   const { USAGE_QUERY_KEY } = await import('./usageLine.ts');
   const qc = new QueryClient();
-  qc.setQueryData(USAGE_QUERY_KEY, rows);
+  if (hidden) {
+    // the 404 a non-admin gets: the query in its error state with UsageHidden
+    const { UsageHidden } = await import('./usageLine.ts');
+    qc.setQueryDefaults(USAGE_QUERY_KEY, { retryOnMount: false });   // keep the error on mount, as a settled 404 is
+    qc.getQueryCache().build(qc, { queryKey: USAGE_QUERY_KEY }).setState({ status: 'error', error: new UsageHidden(), fetchStatus: 'idle' });
+  } else {
+    qc.setQueryData(USAGE_QUERY_KEY, rows);
+  }
   return renderToStaticMarkup(React.createElement(QueryClientProvider, { client: qc }, React.createElement(UsageOverviewPanel, props)));
 }
 
@@ -124,4 +131,52 @@ test('a per-account action shows under each card only where there is a choice (m
   assert.doesNotMatch(await renderPanel(rows), /data-usage-account-action=/);
   // an action that returns nothing for a card leaves no empty slot
   assert.doesNotMatch(await renderPanel(rows, { accountAction: () => null }), /data-usage-account-action=/);
+});
+
+test('before the first reading, with polling on: each polled provider says "First reading in a moment" with the off switch beside it', async () => {
+  const html = await renderPanel([
+    { provider: 'claude', account: null, window: null, used_pct: null, reason: 'first reading in a moment', pending: true },
+    { provider: 'codex', account: null, window: null, used_pct: null, reason: 'first reading in a moment', pending: true },
+    { provider: 'gemini', reason: 'Gemini CLI reports no usage we can read' },
+  ]);
+  assert.match(html, /data-usage-pending="claude"[^]*First reading in a moment[^]*data-usage-off-switch[^>]*>[^]*\[usage\] poll = false/);
+  assert.match(html, /data-usage-pending="codex"/);
+  assert.match(html, /data-setting="usage:pending:claude"/);
+  assert.doesNotMatch(html, /role="progressbar"/);
+  // a provider the poller does not read keeps its plain line
+  assert.match(html, /data-usage-silent-provider="gemini"[^>]*>.*No reading yet · Gemini/);
+  assert.doesNotMatch(html, /data-usage-silent-provider="claude"/);
+});
+
+test('the terms note: no documented subscription API, the terms linked, the Admin API is API-key only, off in one line', async () => {
+  const html = await renderPanel(rows);
+  assert.match(html, /data-usage-terms/);
+  assert.match(html, /no\s+documented usage API/);
+  assert.match(html, /Claude Code&#x27;s own <code>\/usage<\/code>/);
+  for (const href of ['https://www.anthropic.com/legal/consumer-terms', 'https://code.claude.com/docs/en/legal-and-compliance',
+    'https://openai.com/policies/row-terms-of-use/', 'https://platform.claude.com/docs/en/manage-claude/usage-cost-api']) {
+    assert.ok(html.includes(`href="${href}"`), href);
+  }
+  assert.match(html, /without prior notice/);
+  assert.match(html, /API-key organizations only/);
+  assert.match(html, /\[usage\] poll = false/);
+});
+
+test('a non-admin (the API\'s 404) gets one sentence, never the numbers', async () => {
+  const html = await renderPanel(null, {}, true);
+  assert.match(html, /data-usage-admin-only[^>]*>Only an admin of this install can see plan usage\./);
+  assert.doesNotMatch(html, /data-usage-overview|data-usage-terms/);
+});
+
+test('the agents\' login is the one the rows mark, not the literal "default": first, badged, and the ring\'s', () => {
+  const marked = [
+    { provider: 'claude', account: 'personal', window: 'weekly', used_pct: 95, stale: false, agents: false },
+    { provider: 'claude', account: 'work', window: 'weekly', used_pct: 12, stale: false, agents: true },
+  ];
+  const [claude] = usageOverview(marked, NOW).providers;
+  assert.deepEqual(claude.accounts.map((a) => [a.id, a.agents]), [['work', true], ['personal', false]]);
+  assert.equal(claude.ring?.pct, 12, 'the agents\' login, not the fuller one');
+  // no row marked (an older server): the default login, as before
+  const [legacy] = usageOverview(rows, NOW).providers;
+  assert.equal(legacy.accounts[0].id, 'default');
 });

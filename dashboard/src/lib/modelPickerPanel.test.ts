@@ -1008,3 +1008,14 @@ test('the rail hover card names each login\'s windows (RailTip), fixed to the vi
   assert.match(src, /onMouseEnter=\{\(ev\) => showTip\(e, ev\.currentTarget\)\}/);
   assert.match(src, /\{tip && <RailTip /);
 });
+
+test('the ring follows the login the rows mark as the agents\' (agents: true), not the literal "default"', () => {
+  const rows = [
+    { provider: 'claude', account: 'personal', window: 'weekly', used_pct: 95, agents: false },
+    { provider: 'claude', account: 'work', window: 'weekly', used_pct: 12, agents: true },
+  ];
+  const u = usageFor(rows, 'claude')!;
+  assert.equal(u.pct, 12);
+  assert.match(u.accounts![0], /^work \(agents on it\): 12% of weekly$/);
+  assert.equal(railEntries(ROWS, rows, { kind: 'any' }).find((e) => e.id === 'claude')!.usage!.pct, 12);
+});

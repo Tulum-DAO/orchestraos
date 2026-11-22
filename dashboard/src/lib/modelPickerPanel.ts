@@ -82,8 +82,13 @@ export interface UsageSummary {
 
 const WINDOWS: Record<string, string> = { '5h': '5 h', weekly: 'weekly', 'weekly-opus': 'weekly Opus', 'weekly-sonnet': 'weekly Sonnet' };
 const isPct = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
-/** The login the agents run on: the default one (~/.claude, ~/.codex). */
+/** The default login's name (~/.claude, ~/.codex): the agents' login when no row says otherwise. */
 export const AGENTS_ACCOUNT = 'default';
+
+/** The login the agents use, as the rows say it (`agents: true`, scripts/usage_meter.py), else the default one. */
+export function agentsAccountOf(rows: UsageRow[]): string {
+  return rows.find((r) => r && r.agents && r.account)?.account || AGENTS_ACCOUNT;
+}
 const accountName = (a: string | null | undefined) => (!a || a === AGENTS_ACCOUNT ? 'Main login' : a);
 
 function summaryOf(rows: UsageRow[], now: Date): Omit<UsageSummary, 'accounts'> {
@@ -99,10 +104,11 @@ function summaryOf(rows: UsageRow[], now: Date): Omit<UsageSummary, 'accounts'> 
  *  its windows) on the login the AGENTS run on (another login's full week must not fill the ring while the agents' own
  *  login has room; no weighting across logins, plans give no token budget). With more than one login, `accounts`
  *  lists each one for the hover. Null when it reports no number: no ring, never a guess. */
-export function usageFor(rows: unknown, providerId: string, now: Date = new Date(), agentsAccount: string = AGENTS_ACCOUNT): UsageSummary | null {
+export function usageFor(rows: unknown, providerId: string, now: Date = new Date(), agentsAccountIn?: string): UsageSummary | null {
   if (!Array.isArray(rows)) return null;
   const mine = (rows as UsageRow[]).filter((r) => r && r.provider === providerId && isPct(r.used_pct));
   if (!mine.length) return null;
+  const agentsAccount = agentsAccountIn ?? agentsAccountOf(mine);
   const byAccount = new Map<string, UsageRow[]>();
   for (const r of mine) {
     const k = r.account || AGENTS_ACCOUNT;

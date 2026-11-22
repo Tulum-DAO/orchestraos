@@ -11,6 +11,10 @@ export interface UsageRow {
   as_of?: number | null;
   stale?: boolean | null;
   reason?: string | null;
+  /** No reading yet and the poller is on: the first one is on its way ("first reading in a moment"). */
+  pending?: boolean | null;
+  /** This is the login the agents use (the server's Claude config dir; Codex's default login). */
+  agents?: boolean | null;
 }
 
 export function clock(epochS: number, now: Date): string {
