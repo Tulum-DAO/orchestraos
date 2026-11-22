@@ -334,6 +334,41 @@ def gateway_env_file_mode_check(st: Settings) -> "Check | None":
     return Check("gateway:arms-file-mode", OK, f"{path} mode {mode & 0o777:04o}", required=False)
 
 
+#: The context views Arturo reads (services/arturo/context_files.FILES), one `context:<name>` row each.
+CONTEXT_VIEWS = ("operator", "now", "projects", "decisions", "recent")
+
+
+def context_view_checks(st: Settings, probes: DoctorProbes) -> list:
+    """Memory slice 1, step 5: one advisory row per rendered context view under <data dir>/state/context/
+    (present/fresh OK, stale WARN, malformed WARN, empty INFO). A missing file is INFO until ARTURO_CONTEXT_FILES=1
+    is set, then WARN: without the flag Arturo does not read them, so nothing is wrong yet. Never raises."""
+    rows: list = []
+    env_get = probes.env_get or os.environ.get
+    try:
+        import sys as _sys3
+        if str(st.repo_root) not in _sys3.path:
+            _sys3.path.insert(0, str(st.repo_root))
+        from services.arturo import context_files as _cf
+        flag_on = env_get(_cf.FLAG) == "1"
+        where = _cf.context_dir(st.data_dir)
+        for name, status, detail in _cf.doctor_rows(st.data_dir):
+            if status == _cf.FRESH:
+                level, remedy = OK, ""
+            elif status == _cf.EMPTY:
+                level, remedy = INFO, ""                 # nothing to say yet: not an alarm
+            elif status == _cf.MISSING:
+                level = WARN if flag_on else INFO
+                remedy = f"The collector (gm's context writer) renders {name}.md into {where}"
+            else:
+                level = WARN
+                remedy = (f"Wait for the next collector run; if it stays {status}, check the writer's log "
+                          f"(the file is replaced atomically: a bad one is the writer's, not a half write)")
+            rows.append(Check(f"context:{name}", level, detail, remedy, required=False))
+    except Exception as e:  # noqa: BLE001 -- a doctor row never crashes the doctor
+        rows.append(Check("context:views", WARN, f"status unavailable: {e}", required=False))
+    return rows
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -507,6 +542,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                                           else "log mode: unsigned pushes accepted (ARTURO_POSTCALL_AUTH=log)"))
         except Exception as e:  # noqa: BLE001 -- a doctor row never crashes the doctor
             checks.append(Check("arturo:post-call-secret", WARN, f"status unavailable: {e}", required=False))
+        checks.extend(context_view_checks(st, probes))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
                         RUNTIME_ANY_REMEDY, required=(login_row is None)))
@@ -819,7 +855,7 @@ def render_json(checks: list) -> str:
 #: `--share`: what may leave the box. Built by ALLOWLIST, never by redacting: a row gives its name,
 #: status and whether it is required; details and remedies (paths, users, hosts, ports, tokens) never
 #: appear, so a row added later cannot leak through a field nobody thought to redact.
-_SHARE_FAMILY = re.compile(r"^(port|runtime|cli|plugin|python|root|api|dashboard):(.+)$")
+_SHARE_FAMILY = re.compile(r"^(port|runtime|cli|plugin|python|root|api|dashboard|context):(.+)$")
 
 
 def _share_name(name: str) -> str:
@@ -839,7 +875,8 @@ def _share_name(name: str) -> str:
         known = suffix in ("node_modules", "build")
     else:
         known = suffix in {"port": {"gateway", "api", "dashboard", "arturo"}, "runtime": _share_runtimes(),
-                           "plugin": _share_plugins(), "python": {"flask", "openai", "aiohttp"}}.get(fam, set())
+                           "plugin": _share_plugins(), "python": {"flask", "openai", "aiohttp"},
+                           "context": set(CONTEXT_VIEWS)}.get(fam, set())
     return f"{fam}:{suffix if known else '(other)'}"
 
 
