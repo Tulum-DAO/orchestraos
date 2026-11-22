@@ -23,7 +23,7 @@ import { replyCopyText } from '../arturoCopy';
 import type { ChoiceCard } from '../arturo';
 import type { HydratedTurn } from '../arturoResume';
 import { markResults, type FinishedResult, type ResultView, type ResultNode } from './results';
-import { stampedImages, unresolvedImages, type ChatImage } from '../imageRefs';
+import { stampedImages, type ChatImage } from '../imageRefs';
 
 export type ThreadSource = 'agent' | 'arturo';
 export type ThreadRole = 'user' | 'assistant';
@@ -43,7 +43,7 @@ export interface ThreadMessage {
   /** What the message's Copy puts on the clipboard: the words as shown, no tool or call cards. */
   copyText: string;
   attachments?: Attachment[];
-  /** Images a reply referenced (lib/imageRefs): the server's stamped ids, or (Arturo) paths found here, resolved on draw. */
+  /** Images a reply referenced (lib/imageRefs): the server's stamped ids (an agent's transcript, or Arturo's thread as the API relays it). */
   images?: ChatImage[];
   /** A line the operator did not type: the server's machine tag (a decision answer, another agent's message, a job
    *  notice), or the session's own brief. */
@@ -183,8 +183,8 @@ export function arturoMessage(t: ArturoTurnLike, key: string): ThreadMessage {
   const role: ThreadRole = t.role === 'user' ? 'user' : 'assistant';
   const parts = role === 'assistant' ? messageParts(t.parts) : undefined;
   const attachments: Attachment[] = (t.images ?? []).map((url) => ({ kind: 'image', name: url.split('/').pop() || url, url }));
-  // Images his reply names: the gateway stores his turns, so no server stamp; found here, their ids asked for on draw.
-  const images = role === 'assistant' && !t.streaming && !t.pending ? unresolvedImages(t.text) : [];
+  // Images his reply names: the API stamps them on the thread as it relays it (routes/arturo.ts); a reply still streaming has none yet.
+  const images = role === 'assistant' ? stampedImages(t.imageRefs) ?? [] : [];
   return {
     kind: 'message', key, role, text: t.text, ...at(t.ts),
     ...(parts ? { parts } : {}),

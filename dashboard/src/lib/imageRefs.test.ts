@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findImagePaths, imageName, mediaUrl, stampedImages, unresolvedImages, MAX_IMAGES_PER_ITEM, THUMB } from './imageRefs';
+import { findImagePaths, imageName, mediaUrl, stampedImages, MAX_IMAGES_PER_ITEM, THUMB } from './imageRefs';
 
 const ID = 'ab'.repeat(16);
 
@@ -21,9 +21,7 @@ test('the detector matches the API\'s: absolute image paths, once, where a sente
   assert.equal(findImagePaths(Array.from({ length: 20 }, (_, i) => `/t/${i}.png`).join(' ')).length, MAX_IMAGES_PER_ITEM);
 });
 
-test('unresolved images (Arturo) have a path and a name and no id yet', () => {
-  assert.deepEqual(unresolvedImages('see /tmp/shots/a.png'), [{ id: '', path: '/tmp/shots/a.png', name: 'a.png' }]);
-  assert.deepEqual(unresolvedImages('nothing here'), []);
+test('the name is the basename', () => {
   assert.equal(imageName('/a/b/c.png'), 'c.png');
 });
 

@@ -4,48 +4,31 @@
  *   ImageStrip   the message's images as fixed-size thumbnails (lib/imageRefs THUMB): the box is
  *                sized before the bytes arrive and never changes, so the thread does not shift;
  *                the bytes load lazily; a refusal (404) is a small chip, never the browser's broken
- *                image glyph. An image the server did not stamp (Arturo) asks for its id first.
+ *                image glyph. Only images the server stamped are drawn: the client never sends a
+ *                path and never asks for an id.
  *   ImageOverlay a tap: the image front and centre over a frosted, blurred backdrop; top right
  *                Share (only when the browser offers the Web Share API), Download, Close. Escape
- *                closes, so does a click outside the image.
+ *                closes, so does a click outside the image. The page keeps its width while the
+ *                overlay is up (the scrollbar's width is held as padding, so nothing shifts).
  *
  * Every surface shares these: the agent chat in Bubbles and Modern (and Dev), Arturo's page and
- * his floating pane. Colours are the --bui-* tokens, set for light and dark.
+ * his floating pane. Colours are the --bui-* tokens, set for light and dark; `dark` forces the
+ * dark look (the pane is dark in either theme, and the overlay is drawn on the page's body).
  */
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, ImageOff, Share2, X } from 'lucide-react';
 import { mediaUrl, THUMB, type ChatImage } from '../../lib/imageRefs';
-import { resolveMediaId } from '../../lib/mediaResolve';
 import './chatImages.css';
 
-/** The id for an image: the server's, or asked for by (agent, path) when it came without one. */
-function useImageId(img: ChatImage, agent?: string): { id: string | null; pending: boolean } {
-  const need = !img.id && !!agent;
-  const key = `${agent ?? ''}\0${img.path}`;
-  const [res, setRes] = useState<{ key: string; id: string | null } | null>(null);
-  useEffect(() => {
-    if (!need) return;
-    let on = true;
-    void resolveMediaId(agent!, img.path).then((id) => { if (on) setRes({ key, id }); });
-    return () => { on = false; };
-  }, [need, agent, img.path, key]);
-  if (img.id) return { id: img.id, pending: false };
-  if (!agent) return { id: null, pending: false };
-  if (res && res.key === key) return { id: res.id, pending: false };
-  return { id: null, pending: true };
-}
-
-function Thumb({ img, agent, onOpen }: { img: ChatImage; agent?: string; onOpen: (img: ChatImage, id: string) => void }) {
-  const { id, pending } = useImageId(img, agent);
-  const url = id ? mediaUrl(id) : null;
+function Thumb({ img, onOpen }: { img: ChatImage; onOpen: (img: ChatImage) => void }) {
+  const url = mediaUrl(img.id);
   // Load state is kept per URL, so a new id starts over without an effect.
   const [loaded, setLoaded] = useState<string | null>(null);
   const [errored, setErrored] = useState<string | null>(null);
-  const state: 'loading' | 'ok' | 'error' = url && errored === url ? 'error' : url && loaded === url ? 'ok' : 'loading';
-  const failed = state === 'error' || (!pending && !url);
+  const state: 'loading' | 'ok' | 'error' = !url || errored === url ? 'error' : loaded === url ? 'ok' : 'loading';
   const box = { width: THUMB.width, height: THUMB.height };
-  if (failed) {
+  if (state === 'error') {
     return (
       <div className="chat-image chat-image-error" style={box} title={img.path} data-chat-image="error">
         <ImageOff size={14} aria-hidden />
@@ -56,27 +39,25 @@ function Thumb({ img, agent, onOpen }: { img: ChatImage; agent?: string; onOpen:
   }
   return (
     <button type="button" className={`chat-image${state === 'ok' ? ' is-loaded' : ''}`} style={box} title={img.name}
-            aria-label={`Open ${img.name}`} data-chat-image={state} disabled={!url}
-            onClick={() => { if (url && id) onOpen(img, id); }}>
-      {url && (
-        <img src={url} alt={img.name} loading="lazy" decoding="async" draggable={false}
-             onLoad={() => setLoaded(url)} onError={() => setErrored(url)} />
-      )}
+            aria-label={`Open ${img.name}`} data-chat-image={state} disabled={state !== 'ok'}
+            onClick={() => onOpen(img)}>
+      <img src={url!} alt={img.name} loading="lazy" decoding="async" draggable={false}
+           onLoad={() => setLoaded(url!)} onError={() => setErrored(url!)} />
       <span className="chat-image-caption">{img.name}</span>
     </button>
   );
 }
 
 /** The images under a message. Nothing to show, nothing drawn (no empty row). */
-export function ImageStrip({ images, agent, className = '' }: { images?: ChatImage[]; agent?: string; className?: string }) {
-  const [open, setOpen] = useState<{ img: ChatImage; id: string } | null>(null);
+export function ImageStrip({ images, dark = false, className = '' }: { images?: ChatImage[]; dark?: boolean; className?: string }) {
+  const [open, setOpen] = useState<ChatImage | null>(null);
   if (!images || images.length === 0) return null;
   return (
     <>
       <div className={`chat-images ${className}`.trim()} data-chat-images={images.length}>
-        {images.map((img) => <Thumb key={img.path} img={img} agent={agent} onOpen={(i, id) => setOpen({ img: i, id })} />)}
+        {images.map((img) => <Thumb key={img.id} img={img} onOpen={setOpen} />)}
       </div>
-      {open && <ImageOverlay img={open.img} id={open.id} onClose={() => setOpen(null)} />}
+      {open && <ImageOverlay img={open} dark={dark} onClose={() => setOpen(null)} />}
     </>
   );
 }
@@ -87,24 +68,32 @@ function canShare(nav: Pick<Navigator, 'share' | 'canShare'> | undefined = typeo
   try { return typeof nav.canShare !== 'function' || nav.canShare({ url: 'https://example.invalid/' }); } catch { return false; }
 }
 
-export function ImageOverlay({ img, id, onClose }: { img: ChatImage; id: string; onClose: () => void }) {
-  const url = mediaUrl(id)!;
+export function ImageOverlay({ img, dark = false, onClose }: { img: ChatImage; dark?: boolean; onClose: () => void }) {
+  const url = mediaUrl(img.id) ?? '';
   const closeRef = useRef<HTMLButtonElement>(null);
   const share = canShare();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
     document.addEventListener('keydown', onKey, true);
     closeRef.current?.focus();
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.removeEventListener('keydown', onKey, true); document.body.style.overflow = prev; };
+    // Hold the page still: the scrollbar's width becomes padding while scrolling is off.
+    const body = document.body;
+    const prev = { overflow: body.style.overflow, paddingRight: body.style.paddingRight };
+    const gutter = window.innerWidth - document.documentElement.clientWidth;
+    body.style.overflow = 'hidden';
+    if (gutter > 0) body.style.paddingRight = `${gutter}px`;
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      body.style.overflow = prev.overflow;
+      body.style.paddingRight = prev.paddingRight;
+    };
   }, [onClose]);
   const onBackdrop = (e: MouseEvent) => { if (e.target === e.currentTarget) onClose(); };
   const doShare = async () => {
     try { await navigator.share({ title: img.name, url: new URL(url, window.location.href).toString() }); } catch { /* the person closed the sheet */ }
   };
   return createPortal(
-    <div className="chat-image-overlay" role="dialog" aria-modal="true" aria-label={img.name} onClick={onBackdrop} data-chat-image-overlay>
+    <div className={`chat-image-overlay${dark ? ' dark' : ''}`} role="dialog" aria-modal="true" aria-label={img.name} onClick={onBackdrop} data-chat-image-overlay>
       <div className="chat-image-overlay-bar" onClick={(e) => e.stopPropagation()}>
         <span className="chat-image-overlay-title" title={img.path}>{img.name}</span>
         <span className="chat-image-overlay-tools">
@@ -113,7 +102,7 @@ export function ImageOverlay({ img, id, onClose }: { img: ChatImage; id: string;
               <Share2 size={18} />
             </button>
           )}
-          <a className="chat-image-overlay-btn" href={mediaUrl(id, true)!} download={img.name} aria-label="Download" title="Download">
+          <a className="chat-image-overlay-btn" href={mediaUrl(img.id, true) ?? '#'} download={img.name} aria-label="Download" title="Download">
             <Download size={18} />
           </a>
           <button ref={closeRef} type="button" className="chat-image-overlay-btn" onClick={onClose} aria-label="Close" title="Close (Esc)">

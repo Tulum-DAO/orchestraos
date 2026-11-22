@@ -1,14 +1,14 @@
 /**
  * Images ride from the transcript item to the row every surface draws: the render node
  * (lib/transcript.ts), the thread kit's message and tool run (lib/threadKit/thread.ts, Modern and
- * Bubbles alike), and Arturo's turns (found here, no id yet). The resolve cache asks once per path.
+ * Bubbles alike), and Arturo's turns (the API's image_refs on his thread, lib/arturoResume).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildRenderList, type ChatItem } from './transcript';
 import { agentItem, arturoMessage, threadFromTranscript } from './threadKit/thread';
 import { groupToolRuns } from './toolGroups';
-import { resolveMediaId, _resetMediaResolveCache } from './mediaResolve';
+import { hydrateTurns } from './arturoResume';
 
 const ID = 'cd'.repeat(16);
 const img = { id: ID, path: '/srv/p/shot.png', name: 'shot.png' };
@@ -56,25 +56,18 @@ test('the thread message of a stamped reply carries its images (Modern draws fro
   assert.equal('images' in bare, false);
 });
 
-test('Arturo\'s reply names an image: found here with no id; never while it streams; never on the operator\'s turn', () => {
-  const t = { role: 'assistant' as const, text: 'Made /tmp/out/plot.png for you', ts: 1 };
-  assert.deepEqual(arturoMessage(t, 'a').images, [{ id: '', path: '/tmp/out/plot.png', name: 'plot.png' }]);
-  assert.equal('images' in arturoMessage({ ...t, streaming: true }, 'a'), false);
-  assert.equal('images' in arturoMessage({ ...t, pending: true }, 'a'), false);
-  assert.equal('images' in arturoMessage({ role: 'user', text: 'look at /tmp/out/plot.png' }, 'a'), false);
-  assert.equal('images' in arturoMessage({ role: 'assistant', text: 'no images' }, 'a'), false);
-});
-
-test('the resolve cache asks once per (agent, path) and keeps a refusal', async () => {
-  _resetMediaResolveCache();
-  const asked: string[] = [];
-  const fetcher = async (a: string, p: string) => { asked.push(`${a}:${p}`); return p.endsWith('ok.png') ? ID : null; };
-  assert.equal(await resolveMediaId('arturo', '/tmp/ok.png', fetcher), ID);
-  assert.equal(await resolveMediaId('arturo', '/tmp/ok.png', fetcher), ID);
-  assert.equal(await resolveMediaId('arturo', '/tmp/no.png', fetcher), null);
-  assert.equal(await resolveMediaId('arturo', '/tmp/no.png', fetcher), null);
-  assert.equal(await resolveMediaId('gm', '/tmp/ok.png', fetcher), ID);
-  assert.deepEqual(asked, ['arturo:/tmp/ok.png', 'arturo:/tmp/no.png', 'gm:/tmp/ok.png']);
-  // A throwing fetcher is a refusal, not a crash.
-  assert.equal(await resolveMediaId('x', '/tmp/boom.png', async () => { throw new Error('down'); }), null);
+test('Arturo\'s turn carries the API\'s image_refs through hydration into the thread message; the client finds none itself', () => {
+  const turns = hydrateTurns([
+    { role: 'user', content: 'look at /tmp/out/plot.png', ts: 1 },
+    { role: 'assistant', content: 'Made /tmp/out/plot.png for you', ts: 2, image_refs: [{ id: ID, path: '/tmp/out/plot.png', name: 'plot.png' }] },
+    { role: 'assistant', content: 'Also /tmp/out/unstamped.png', ts: 3 },
+  ]);
+  assert.deepEqual(turns[1].imageRefs, [{ id: ID, path: '/tmp/out/plot.png', name: 'plot.png' }]);
+  assert.equal('imageRefs' in turns[0], false, 'the operator\'s turn never carries refs');
+  assert.equal('imageRefs' in turns[2], false, 'a path the server did not stamp is just words');
+  assert.deepEqual(arturoMessage(turns[1], 'a').images, [{ id: ID, path: '/tmp/out/plot.png', name: 'plot.png' }]);
+  assert.equal('images' in arturoMessage(turns[2], 'b'), false);
+  assert.equal('images' in arturoMessage({ role: 'arturo', text: 'streaming /tmp/out/plot.png', streaming: true }, 'c'), false);
+  // A ref whose id is not an id (a path smuggled in) is dropped on the client too.
+  assert.equal('images' in arturoMessage({ role: 'arturo', text: 'x', imageRefs: [{ id: '/tmp/out/plot.png', path: '/tmp/out/plot.png', name: 'plot.png' }] }, 'd'), false);
 });

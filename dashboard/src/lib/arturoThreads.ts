@@ -33,7 +33,10 @@ export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: str
   /** The card's answer as the server keeps it (the turn that answered it said so): picks and words, and when. */
   answer?: { picks?: string[]; words?: string; at?: number } }
 /** `seq`: the turn's number in its thread, present when the thread was read a page at a time (loadThreadPage). */
-export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta; seq?: number }
+/** `image_refs`: images in the chat (api routes/arturo.ts): the opaque ids of the image files one of his replies names, stamped by the
+ *  API as the thread is relayed; absent on a user turn and when none. */
+export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta; seq?: number;
+  image_refs?: import('./transcript.gen').ImageRef[] }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
 export interface LoadedThread { id: string; title: string; title_custom?: boolean; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 export interface ContextCard { kind: 'page-context'; label: string; context: ArturoContext }

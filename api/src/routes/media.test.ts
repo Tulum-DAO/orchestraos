@@ -1,13 +1,13 @@
 /**
- * GET /api/media/:id and POST /api/media/resolve (routes/media.ts), end to end over a listening
- * app: the bytes and headers of a served image, and a 404 for everything the allow-list, the
- * sniff, the scope rule, or the id table refuses. The URL never carries a path or a credential.
+ * GET /api/media/:id (routes/media.ts), end to end over a listening app: the bytes and headers of a
+ * served image, and a 404 for everything the allow-list, the sniff, the scope rule, or the id table
+ * refuses. The URL never carries a path or a credential, and there is no route that takes one.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testTmpDir } from '../lib/testTmp.js';
 import { MediaStore, MEDIA_ID } from '../lib/mediaStore.js';
@@ -49,7 +49,7 @@ function trusted() {
   };
 }
 
-test('a referenced image is served by id: its bytes, its sniffed type, private caching, nosniff', async () => {
+test('a referenced image is served by id: its bytes, its sniffed type, private caching, nosniff; HEAD answers the length', async () => {
   const f = fixture();
   const id = f.store.idFor('gm', join(f.project, 'shot.png'));
   assert.match(id, MEDIA_ID);
@@ -64,6 +64,12 @@ test('a referenced image is served by id: its bytes, its sniffed type, private c
     assert.deepEqual(Buffer.from(await r.arrayBuffer()), PNG);
     const d = await fetch(`${base}/api/media/${id}?download`);
     assert.match(d.headers.get('content-disposition') || '', /^attachment; filename="shot\.png"$/);
+    assert.deepEqual(Buffer.from(await d.arrayBuffer()), PNG);
+    const h = await fetch(`${base}/api/media/${id}`, { method: 'HEAD' });
+    assert.equal(h.status, 200);
+    assert.equal(h.headers.get('content-length'), String(PNG.length));
+    // Served twice more: the descriptor is closed each time (no leak that would show as EMFILE here).
+    for (let i = 0; i < 3; i++) assert.equal((await fetch(`${base}/api/media/${id}`)).status, 200);
   });
 });
 
@@ -97,6 +103,19 @@ test('SABOTAGE: an id minted for a path outside the roots, a symlink, traversal,
   });
 });
 
+test('SABOTAGE TOCTOU: the file behind a good id swapped for a link after it was served is 404 on the next request', async () => {
+  const f = fixture();
+  const target = join(f.project, 'shot.png');
+  const id = f.store.idFor('gm', target);
+  await withApp(f.router, async (base) => {
+    assert.equal((await fetch(`${base}/api/media/${id}`)).status, 200);
+    renameSync(target, join(f.project, 'moved.png'));
+    symlinkSync(join(f.outside, 'secret.png'), target);
+    const r = await fetch(`${base}/api/media/${id}`);
+    assert.equal(r.status, 404);
+  });
+});
+
 test('the chat\'s scope rule: a principal who cannot see the agent gets the unknown-id 404', async () => {
   const f = fixture();
   const id = f.store.idFor('gm', join(f.project, 'shot.png'));
@@ -107,57 +126,20 @@ test('the chat\'s scope rule: a principal who cannot see the agent gets the unkn
       const r = await fetch(`${base}/api/media/${id}`, { headers: scoped });
       assert.equal(r.status, 404);
       assert.deepEqual(await r.json(), { error: 'not found' });
-      // No identity at all under a trusted proxy: nothing.
       const anon = await fetch(`${base}/api/media/${id}`);
       assert.equal(anon.status, 404);
-      // The right client scope sees it.
       const ok = await fetch(`${base}/api/media/${id}`, { headers: { ...scoped, 'x-orchestra-client': 'acme' } });
       assert.equal(ok.status, 200);
     });
   } finally { restore(); }
 });
 
-test('resolve: the id for a path the agent wrote; a 404 for anything the route would not serve', async () => {
+test('there is no route that takes a path: /resolve is gone, and an unreferenced file has no id to be asked for', async () => {
   const f = fixture();
   await withApp(f.router, async (base) => {
-    const post = (body: unknown) => fetch(`${base}/api/media/resolve`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const ok = await post({ agent: 'gm', path: join(f.project, 'shot.png') });
-    assert.equal(ok.status, 200);
-    const { id } = await ok.json() as { id: string };
-    assert.match(id, MEDIA_ID);
-    assert.equal(f.store.lookup(id)?.path, join(f.project, 'shot.png'));
-    // Minting is idempotent: the same path gives the same id.
-    assert.deepEqual(await (await post({ agent: 'gm', path: join(f.project, 'shot.png') })).json(), { id });
-    for (const body of [
-      { agent: 'gm', path: join(f.outside, 'secret.png') },
-      { agent: 'gm', path: join(f.project, 'link.png') },
-      { agent: 'gm', path: join(f.project, 'page.png') },
-      { agent: 'gm', path: `${f.project}/../outside/secret.png` },
-      { agent: 'gm', path: 'shot.png' },
-      { agent: 'gm', path: join(f.project, 'notes.md') },
-      { agent: '../gm', path: join(f.project, 'shot.png') },
-      { agent: 'other', path: join(f.project, 'shot.png') },
-      { agent: 'gm' },
-      {},
-    ]) {
-      const r = await post(body);
-      assert.equal(r.status, 404, JSON.stringify(body));
-    }
+    const r = await fetch(`${base}/api/media/resolve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: 'gm', path: join(f.project, 'shot.png') }) });
+    assert.equal(r.status, 404);
+    assert.equal(f.store.has('gm', join(f.project, 'shot.png')), null, 'nothing was minted');
   });
-});
-
-test('resolve is scoped like the chat', async () => {
-  const f = fixture();
-  const restore = trusted();
-  try {
-    await withApp(f.router, async (base) => {
-      const r = await fetch(`${base}/api/media/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-orchestra-user': 'c', 'x-orchestra-role': 'viewer', 'x-orchestra-client': 'someone-else' },
-        body: JSON.stringify({ agent: 'gm', path: join(f.project, 'shot.png') }),
-      });
-      assert.equal(r.status, 404);
-    });
-  } finally { restore(); }
 });

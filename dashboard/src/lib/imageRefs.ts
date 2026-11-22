@@ -1,16 +1,16 @@
 /**
  * Images in the chat (the client half of api/src/lib/imageRefs.ts + routes/media.ts).
  *
- * An agent's item arrives with `images`: one opaque id per image file it referenced, minted by the
- * API. The thumbnail's URL is `/api/media/<id>`, nothing else: never the path, never a token. For a
- * surface whose messages the API does not build (Arturo's threads come from the gateway) the same
- * detector runs here and the ids are asked for one by one (lib/mediaResolve.ts). Pure, no DOM.
+ * An agent's item (and one of Arturo's turns, as the API relays his thread) arrives with `images`:
+ * one opaque id per image file it referenced, minted by the API for a file it checked. The
+ * thumbnail's URL is `/api/media/<id>`, nothing else: never the path, never a token; the client
+ * never sends a path. Pure, no DOM.
  */
 import type { ImageRef } from './transcript.gen';
 
 export type { ImageRef } from './transcript.gen';
 
-/** An image a message shows: stamped by the server (`id` set) or found here and not yet resolved (`id` empty). */
+/** An image a message shows, as the server stamped it. */
 export interface ChatImage { id: string; path: string; name: string }
 
 export const MEDIA_ID = /^[a-f0-9]{32}$/;
@@ -21,8 +21,8 @@ export function mediaUrl(id: string, download = false): string | null {
   return `/api/media/${id}${download ? '?download' : ''}`;
 }
 
-// The same grammar as the API's detector: an absolute POSIX path ending in an image extension,
-// ending where a sentence would.
+// The same grammar as the API's detector (kept in step by imageRefs.test.ts), for a surface that
+// wants to know whether a line names an image at all; ids never come from here.
 const PATH_RE = /(?<![\w./~-])\/(?:[\w.~+%@-]+\/)*[\w.~+%@-]+\.(?:png|jpe?g|gif|webp|bmp|avif)(?!\.?[\w/~+%@-])/gi;
 export const MAX_IMAGES_PER_ITEM = 8;
 
@@ -43,11 +43,6 @@ export function findImagePaths(text: string): string[] {
 
 export function imageName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
-}
-
-/** Images found in a reply the server did not stamp (Arturo): no id yet. */
-export function unresolvedImages(text: string): ChatImage[] {
-  return findImagePaths(text).map((path) => ({ id: '', path, name: imageName(path) }));
 }
 
 /** The server's stamped refs as the message's images; nothing when there are none. */

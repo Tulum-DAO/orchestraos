@@ -23,6 +23,8 @@ export function stripContextLine(text: string): string {
 }
 
 export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[];
+  /** Images in the chat: the server's refs for the image files his reply names (ThreadTurn.image_refs). */
+  imageRefs?: import('./transcript.gen').ImageRef[];
   /** The stored turn's number in its thread, when it was read a page at a time: its identity and paging cursor. */
   seq?: number;
   /** A finished background job (meta kind "job_result"): drawn as a result card (components/kit/ResultCard.tsx). */
@@ -53,6 +55,7 @@ export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
       return { role: x.role === 'user' ? 'user' as const : 'arturo' as const,
                text: sent ? sent.text : x.content, ...(parts ? { parts } : {}), ...(result ? { result } : {}),
                ...(sent?.images.length ? { images: sent.images } : {}),
+               ...(x.role !== 'user' && Array.isArray(x.image_refs) && x.image_refs.length ? { imageRefs: x.image_refs } : {}),
                ...(x.mode === 'voice' ? { voice: true } : {}),
                ...(x.meta?.kind === 'call_end' && x.meta.call_id ? { callEnd: x.meta.call_id } : {}),
                ...(x.role !== 'user' && x.meta?.kind === 'card' && x.meta.choices

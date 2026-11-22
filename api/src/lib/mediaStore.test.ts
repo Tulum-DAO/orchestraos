@@ -1,14 +1,17 @@
 /**
  * The id table and the allow-list behind GET /api/media/:id (lib/mediaStore.ts). Every refusal the
  * route relies on is proven here on real files: outside the roots, traversal, a symlinked file, a
- * symlinked directory, a non-image wearing .png, a file over the cap.
+ * symlinked directory, a hard link, a non-image wearing .png, a file over the cap, and the swap of
+ * a validated file for a link before the open (the open refuses it: there is no second lookup).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, linkSync, mkdirSync, readFileSync, readSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testTmpDir } from './testTmp.js';
-import { MEDIA_ID, MediaStore, resolveImageFile, sniffImage, underRoot, agentMediaRoots } from './mediaStore.js';
+import {
+  MEDIA_ID, MediaStore, agentMediaRoots, imageRefsFor, openImage, resolveImageFile, sniffImage, underRoot, _resetMisses,
+} from './mediaStore.js';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32, 0)]);
@@ -34,16 +37,32 @@ test('ids are opaque, stable per (agent, path), distinct across paths and agents
   const a = s.idFor('gm', '/tmp/a.png');
   assert.match(a, MEDIA_ID);
   assert.equal(s.idFor('gm', '/tmp/a.png'), a);
+  assert.equal(s.has('gm', '/tmp/a.png'), a);
+  assert.equal(s.has('gm', '/tmp/zzz.png'), null);
   assert.notEqual(s.idFor('gm', '/tmp/b.png'), a);
   assert.notEqual(s.idFor('other', '/tmp/a.png'), a);
   assert.ok(!a.includes('/'), 'an id is not a path');
-  // A fresh store over the same file knows the id.
+  // Minting does not write synchronously: the file appears after the save delay, or on flush.
+  assert.equal(existsSync(file), false);
+  s.flush();
   const again = new MediaStore(file);
   assert.deepEqual(again.lookup(a)?.path, '/tmp/a.png');
   assert.equal(again.lookup(a)?.agent, 'gm');
-  // The table never holds anything but ids and rows.
   const raw = JSON.parse(readFileSync(file, 'utf-8'));
   for (const k of Object.keys(raw)) assert.match(k, MEDIA_ID);
+});
+
+test('the table is bounded per agent: the oldest row goes, other agents keep theirs', () => {
+  const s = new MediaStore(join(testTmpDir('media-cap-'), 'ids.json'), 3);
+  const first = s.idFor('gm', '/p/1.png');
+  s.idFor('gm', '/p/2.png'); s.idFor('gm', '/p/3.png');
+  const other = s.idFor('pm', '/p/1.png');
+  s.idFor('gm', '/p/4.png');
+  assert.equal(s.countFor('gm'), 3);
+  assert.equal(s.lookup(first), null, 'the oldest row was dropped');
+  assert.equal(s.has('gm', '/p/1.png'), null);
+  assert.ok(s.lookup(other), 'another agent\'s row is untouched');
+  assert.ok(s.has('gm', '/p/4.png'));
 });
 
 test('lookup refuses a malformed id without reading the table', () => {
@@ -53,12 +72,16 @@ test('lookup refuses a malformed id without reading the table', () => {
   }
 });
 
-test('a real image under a root is served with the type its bytes say', () => {
+test('a real image under a root is served with the type its bytes say, from one open descriptor', () => {
   const f = fixture();
-  const r = resolveImageFile(join(f.project, 'shots', 'ok.png'), [f.data, f.project]);
+  const r = openImage(join(f.project, 'shots', 'ok.png'), [f.data, f.project]);
   assert.ok(r.ok);
   assert.equal(r.mime, 'image/png');
   assert.equal(r.size, PNG.length);
+  const buf = Buffer.alloc(PNG.length);
+  assert.equal(readSync(r.fd, buf, 0, PNG.length, 0), PNG.length);
+  assert.deepEqual(buf, PNG);
+  closeSync(r.fd);
   const j = resolveImageFile(join(f.data, 'state.jpg'), [f.data, f.project]);
   assert.ok(j.ok && j.mime === 'image/jpeg');
 });
@@ -68,28 +91,42 @@ test('outside the roots, relative, and the root itself are refused', () => {
   assert.deepEqual(resolveImageFile(join(f.outside, 'secret.png'), [f.data, f.project]), { ok: false, why: 'outside-roots' });
   assert.deepEqual(resolveImageFile('shots/ok.png', [f.project]), { ok: false, why: 'not-absolute' });
   assert.deepEqual(resolveImageFile(f.project, [f.project]), { ok: false, why: 'outside-roots' });
-  // A sibling whose name merely starts with the root's.
   assert.deepEqual(resolveImageFile(`${f.project}2/x.png`, [f.project]), { ok: false, why: 'outside-roots' });
   assert.deepEqual(resolveImageFile(join(f.outside, 'secret.png'), []), { ok: false, why: 'outside-roots' });
 });
 
 test('SABOTAGE traversal: .. never walks out of a root', () => {
   const f = fixture();
-  const r = resolveImageFile(`${f.project}/shots/../../outside/secret.png`, [f.data, f.project]);
-  assert.deepEqual(r, { ok: false, why: 'outside-roots' });
-  const r2 = resolveImageFile(`${f.project}/../outside/secret.png`, [f.project]);
-  assert.deepEqual(r2, { ok: false, why: 'outside-roots' });
+  assert.deepEqual(resolveImageFile(`${f.project}/shots/../../outside/secret.png`, [f.data, f.project]), { ok: false, why: 'outside-roots' });
+  assert.deepEqual(resolveImageFile(`${f.project}/../outside/secret.png`, [f.project]), { ok: false, why: 'outside-roots' });
 });
 
 test('SABOTAGE symlink: a linked file and a linked directory inside the root are both refused', () => {
   const f = fixture();
   symlinkSync(join(f.outside, 'secret.png'), join(f.project, 'shots', 'link.png'));
   symlinkSync(f.outside, join(f.project, 'linkdir'));
-  // ...and a link whose target is INSIDE the root: links are not served, full stop.
   symlinkSync(join(f.project, 'shots', 'ok.png'), join(f.project, 'inner.png'));
   assert.deepEqual(resolveImageFile(join(f.project, 'shots', 'link.png'), [f.project]), { ok: false, why: 'symlink' });
   assert.deepEqual(resolveImageFile(join(f.project, 'linkdir', 'secret.png'), [f.project]), { ok: false, why: 'symlink' });
   assert.deepEqual(resolveImageFile(join(f.project, 'inner.png'), [f.project]), { ok: false, why: 'symlink' });
+});
+
+test('SABOTAGE hard link: a second name for a file outside the root is refused', () => {
+  const f = fixture();
+  try { linkSync(join(f.outside, 'secret.png'), join(f.project, 'hard.png')); }
+  catch { return; }   // a filesystem that refuses the link cannot carry the attack
+  assert.deepEqual(resolveImageFile(join(f.project, 'hard.png'), [f.project]), { ok: false, why: 'hardlink' });
+});
+
+test('SABOTAGE TOCTOU: a file validated a moment ago, swapped for a link, is refused at the open', () => {
+  const f = fixture();
+  const target = join(f.project, 'shots', 'ok.png');
+  assert.ok(resolveImageFile(target, [f.project]).ok, 'validated');
+  // The swap, as an agent writing in its own project dir could do between validation and read.
+  renameSync(target, join(f.project, 'shots', 'moved.png'));
+  symlinkSync(join(f.outside, 'secret.png'), target);
+  const r = openImage(target, [f.project]);
+  assert.deepEqual(r, { ok: false, why: 'symlink' });
 });
 
 test('a root reached through a symlink still serves its own files (the link is above the root, not below)', () => {
@@ -134,12 +171,59 @@ test('underRoot is a string rule: under, never equal, never a sibling prefix', (
   assert.equal(underRoot('relative.png', '/a/b'), false);
 });
 
-test('an agent\'s roots: the data dir, plus its cwd when the state file names one', () => {
+test('an agent\'s roots: its cwd and its own folders under the data dir; never the data dir itself', () => {
   const data = testTmpDir('media-roots-');
   mkdirSync(join(data, 'state', 'agents'), { recursive: true });
   writeFileSync(join(data, 'state', 'agents', 'gm.json'), JSON.stringify({ cwd: '/srv/work/gm' }));
-  assert.deepEqual(agentMediaRoots(data, 'gm'), [data, '/srv/work/gm']);
-  assert.deepEqual(agentMediaRoots(data, 'unknown-seat'), [data]);
-  // A path-shaped id builds no path.
-  assert.deepEqual(agentMediaRoots(data, '../../etc'), [data]);
+  assert.deepEqual(agentMediaRoots(data, 'gm'), ['/srv/work/gm', join(data, 'state', 'shots', 'gm'), join(data, 'state', 'agents', 'gm')]);
+  assert.deepEqual(agentMediaRoots(data, 'unknown-seat'), [join(data, 'state', 'shots', 'unknown-seat'), join(data, 'state', 'agents', 'unknown-seat')]);
+  assert.deepEqual(agentMediaRoots(data, '../../etc'), []);
+  for (const r of agentMediaRoots(data, 'gm')) assert.notEqual(r, data);
+});
+
+test('cross-client on a real-shaped data dir: an agent naming another client\'s upload, or anything under state/uploads, gets no id', () => {
+  const data = testTmpDir('media-tree-');
+  for (const d of ['state/agents', 'state/uploads', 'state/shots/acme-dev', 'state/shots/globex-dev', 'state/clients/globex']) mkdirSync(join(data, d), { recursive: true });
+  writeFileSync(join(data, 'state', 'agents', 'acme-dev.json'), JSON.stringify({ cwd: join(data, 'work', 'acme') }));
+  mkdirSync(join(data, 'work', 'acme'), { recursive: true });
+  writeFileSync(join(data, 'work', 'acme', 'mine.png'), PNG);
+  writeFileSync(join(data, 'state', 'shots', 'acme-dev', 'shot.png'), PNG);
+  writeFileSync(join(data, 'state', 'shots', 'globex-dev', 'theirs.png'), PNG);
+  writeFileSync(join(data, 'state', 'uploads', '1792661089_gkjjha.png'), PNG);
+  writeFileSync(join(data, 'state', 'clients', 'globex', 'brand.png'), PNG);
+  const store = new MediaStore(join(data, 'state', 'media-ids.json'));
+  const deps = { store, roots: (a: string) => agentMediaRoots(data, a) };
+  const refs = imageRefsFor('acme-dev', [
+    join(data, 'work', 'acme', 'mine.png'),
+    join(data, 'state', 'shots', 'acme-dev', 'shot.png'),
+    join(data, 'state', 'shots', 'globex-dev', 'theirs.png'),
+    join(data, 'state', 'uploads', '1792661089_gkjjha.png'),
+    join(data, 'state', 'clients', 'globex', 'brand.png'),
+    join(data, 'state', 'agents', 'acme-dev.json'),
+  ], deps);
+  assert.deepEqual(refs.map((r) => r.name), ['mine.png', 'shot.png']);
+  for (const r of refs) assert.match(r.id, MEDIA_ID);
+  // And a row is never minted for the refused ones: nothing to serve later either.
+  assert.equal(store.has('acme-dev', join(data, 'state', 'uploads', '1792661089_gkjjha.png')), null);
+  assert.equal(store.has('acme-dev', join(data, 'state', 'shots', 'globex-dev', 'theirs.png')), null);
+});
+
+test('stamping mints only for a file that exists and passes; a miss is re-checked later, a hit never touches the disk again', () => {
+  _resetMisses();
+  const f = fixture();
+  const store = new MediaStore(join(f.base, 'ids.json'));
+  let t = 1_000_000;
+  const deps = { store, roots: () => [f.project], now: () => t };
+  const ok = join(f.project, 'shots', 'ok.png');
+  const later = join(f.project, 'shots', 'later.png');
+  assert.deepEqual(imageRefsFor('gm', [ok, later, join(f.project, 'fake.png'), join(f.outside, 'secret.png')], deps).map((r) => r.path), [ok]);
+  assert.equal(store.countFor('gm'), 1);
+  // The file arrives: inside the miss window nothing changes, after it the path is stamped.
+  writeFileSync(later, PNG);
+  assert.equal(imageRefsFor('gm', [later], deps).length, 0);
+  t += 6_000;
+  assert.equal(imageRefsFor('gm', [later], deps).length, 1);
+  // A minted path is answered from the table even once the file is gone (the route refuses it then).
+  renameSync(ok, join(f.project, 'shots', 'gone-away.png'));
+  assert.equal(imageRefsFor('gm', [ok], deps)[0]?.id, store.has('gm', ok));
 });

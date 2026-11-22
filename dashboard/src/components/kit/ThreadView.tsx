@@ -98,13 +98,15 @@ function NodeSlot({ children }: { children: ReactNode }) {
 }
 
 /** A reply's words when it has no ordered parts: an ended call's marker is its call card, never the raw marker. */
-function ReplyWords({ text, skin, reveal, images, mediaAgent }: { text: string; skin: Skin; reveal?: RevealAs; images?: ChatImage[]; mediaAgent?: string }) {
-  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} images={images} mediaAgent={mediaAgent} />;
+function ReplyWords({ text, skin, reveal, images }: { text: string; skin: Skin; reveal?: RevealAs; images?: ChatImage[] }) {
+  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} images={images} />;
   return (
     <div className={skin === 'modern' ? 'txt' : undefined}>
       {parseVoiceSegments(text).map((seg, i) => seg.kind === 'voicecall'
         ? <CallCard key={i} skin={skin} callId={seg.callId} />
         : isCallEndedLine(seg.text) ? null : <div key={i} className={skin === 'pane' ? 'bubble' : undefined}><Markdown text={seg.text} skin={skin} /></div>)}
+      {/* A reply with a call in it keeps its images too, after the words. */}
+      <ImageStrip images={images} dark={skin === 'pane'} />
     </div>
   );
 }
@@ -156,17 +158,17 @@ function LiveBlockRow({ id, text, done, skin, times, anchored }: { id: string; t
   return <div className="turn-assistant" data-live-text>{anchored ? <div className="relative">{words}</div> : words}{held}</div>;
 }
 
-function Reply({ m, skin, extras, choice, times, mediaAgent }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean; mediaAgent?: string }) {
+function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean }) {
   // Images under the words: inside the bubble when the reply is words alone; after its parts otherwise.
   const inWords = !m.pending && !m.streaming && !m.parts;
-  const after = !inWords && !m.pending && !m.streaming ? <ImageStrip images={m.images} agent={mediaAgent} /> : null;
+  const after = !inWords && !m.pending && !m.streaming ? <ImageStrip images={m.images} dark={skin === 'pane'} /> : null;
   if (skin === 'pane') {
     return (
       <div className="row arturo group" data-thread-key={m.key}>
         {m.pending ? <div className="bubble thinking">Thinking…</div>
           : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
           : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
-          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} mediaAgent={mediaAgent} />}
+          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} />}
         {after}
         {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="meta">ran {m.toolNames.join(', ')}</div>}
         {!m.pending && !m.streaming && m.copyText && <MessageActions copyText={m.copyText} skin={skin} />}
@@ -180,7 +182,7 @@ function Reply({ m, skin, extras, choice, times, mediaAgent }: { m: ThreadMessag
       {m.pending ? <span className="thinking" aria-label="thinking" />
         : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
         : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
-        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} mediaAgent={mediaAgent} /></ReactionAnchor>}
+        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} /></ReactionAnchor>}
       {after}
       {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="tools">ran {m.toolNames.join(', ')}</div>}
       {!m.pending && !m.streaming && (m.copyText || times) && (
@@ -293,11 +295,9 @@ function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin;
   );
 }
 
-export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, call, choice, extras, liveText, stick, renderNode, onDecisionAnswered, times, noteText, mediaAgent }: {
+export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, call, choice, extras, liveText, stick, renderNode, onDecisionAnswered, times, noteText }: {
   rows: ThreadRow[];
   skin?: Skin;
-  /** Whose images a reply shows when they came without ids (Arturo's threads): the agent POST /api/media/resolve is asked for. */
-  mediaAgent?: string;
   /** Who did the finished work, when a result does not say. */
   by?: string;
   /** The operator's latest turn (lib/threadKit/view lastUserKey): only it, or a failed one, shows its send state. */
@@ -363,7 +363,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
                 <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
                 {reactable(r, r.message.role === 'user'
                   ? <UserMessage m={r.message} skin={skin} latest={false} times={times} />
-                  : <Reply m={r.message} skin={skin} times={times} mediaAgent={mediaAgent} />)}
+                  : <Reply m={r.message} skin={skin} times={times} />)}
               </Fragment>
             );
           }
@@ -388,7 +388,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
           if (r.cardEcho && r.sendState !== 'failed') return null;
           return <UserMessage key={r.key} m={r} skin={skin} latest={r.key === lastUserKey} times={times} />;
         }
-        return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} mediaAgent={mediaAgent} />;
+        return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} />;
       })}
       {live?.parts?.length ? (
         <div className={skin === 'bubbles' ? 'flex justify-start' : skin === 'pane' ? 'row arturo' : 'turn-assistant'} data-live-text>
