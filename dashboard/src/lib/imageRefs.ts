@@ -1,8 +1,9 @@
 /**
- * Images in the chat (the client half of api/src/lib/imageRefs.ts + routes/media.ts).
+ * Images and video in the chat (the client half of api/src/lib/imageRefs.ts + routes/media.ts).
  *
  * An agent's item (and one of Arturo's turns, as the API relays his thread) arrives with `images`:
- * one opaque id per image file it referenced, minted by the API for a file it checked. The
+ * one opaque id per image or video file it referenced, minted by the API for a file it checked
+ * (`kind: 'video'` on a video, by its bytes; absent on an image). The
  * thumbnail's URL is `/api/media/<id>`, nothing else: never the path, never a token; the client
  * never sends a path. Pure, no DOM.
  */
@@ -10,8 +11,8 @@ import type { ImageRef } from './transcript.gen';
 
 export type { ImageRef } from './transcript.gen';
 
-/** An image a message shows, as the server stamped it. */
-export interface ChatImage { id: string; path: string; name: string }
+/** An image (or a video: `kind`) a message shows, as the server stamped it. */
+export interface ChatImage { id: string; path: string; name: string; kind?: 'video' }
 
 export const MEDIA_ID = /^[a-f0-9]{32}$/;
 
@@ -23,7 +24,7 @@ export function mediaUrl(id: string, download = false): string | null {
 
 // The same grammar as the API's detector (kept in step by imageRefs.test.ts), for a surface that
 // wants to know whether a line names an image at all; ids never come from here.
-const PATH_RE = /(?<![\w./~-])\/(?:[\w.~+%@-]+\/)*[\w.~+%@-]+\.(?:png|jpe?g|gif|webp|bmp|avif)(?!\.?[\w/~+%@-])/gi;
+const PATH_RE = /(?<![\w./~-])\/(?:[\w.~+%@-]+\/)*[\w.~+%@-]+\.(?:png|jpe?g|gif|webp|bmp|avif|mp4|m4v|mov|webm)(?!\.?[\w/~+%@-])/gi;
 export const MAX_IMAGES_PER_ITEM = 8;
 
 export function findImagePaths(text: string): string[] {
@@ -49,7 +50,9 @@ export function imageName(path: string): string {
 export function stampedImages(refs: ImageRef[] | undefined | null): ChatImage[] | undefined {
   if (!Array.isArray(refs) || refs.length === 0) return undefined;
   const out = refs.filter((r) => r && MEDIA_ID.test(String(r.id)) && typeof r.path === 'string')
-    .map((r) => ({ id: r.id, path: r.path, name: r.name || imageName(r.path) }));
+    .map((r): ChatImage => (r.kind === 'video'
+      ? { id: r.id, path: r.path, name: r.name || imageName(r.path), kind: 'video' }
+      : { id: r.id, path: r.path, name: r.name || imageName(r.path) }));
   return out.length ? out : undefined;
 }
 

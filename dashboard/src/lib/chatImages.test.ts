@@ -71,3 +71,16 @@ test('Arturo\'s turn carries the API\'s image_refs through hydration into the th
   // A ref whose id is not an id (a path smuggled in) is dropped on the client too.
   assert.equal('images' in arturoMessage({ role: 'arturo', text: 'x', imageRefs: [{ id: '/tmp/out/plot.png', path: '/tmp/out/plot.png', name: 'plot.png' }] }, 'd'), false);
 });
+
+test('a video ref (kind "video") rides the same way: the render node, the thread message, and Arturo\'s turn keep its kind', () => {
+  const vid = { id: ID, path: '/srv/p/demo.mp4', name: 'demo.mp4', kind: 'video' as const };
+  const nodes = buildRenderList([
+    { kind: 'text', role: 'user', text: 'record it', uuid: 'u1' },
+    { kind: 'text', role: 'assistant', text: 'Here: /srv/p/demo.mp4', uuid: 'u2', images: [vid] },
+  ] as ChatItem[]);
+  assert.deepEqual((nodes[1] as { images?: unknown }).images, [vid]);
+  const m = agentItem({ kind: 'assistant', text: 'Here: /srv/p/demo.mp4', key: 'k', images: [vid] })!;
+  assert.deepEqual((m as { images?: unknown }).images, [vid]);
+  const turns = hydrateTurns([{ role: 'assistant', content: 'Made /srv/p/demo.mp4', ts: 2, image_refs: [vid] }]);
+  assert.deepEqual(arturoMessage(turns[0], 'v').images, [vid]);
+});

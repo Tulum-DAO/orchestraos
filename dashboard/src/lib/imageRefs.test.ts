@@ -36,3 +36,14 @@ test('stamped refs pass through; a ref without a real id is dropped; none is und
 test('the thumbnail box is fixed, so the thread never shifts while bytes arrive', () => {
   assert.ok(THUMB.width > 0 && THUMB.height > 0);
 });
+
+test('video: the detector picks up mp4, m4v, mov and webm like the API\'s; a stamped video keeps kind "video", an image gets none', () => {
+  assert.deepEqual(findImagePaths('Recorded /tmp/out/demo.mp4, /srv/p/clip.MOV and (/x/rec.webm); also /x/a.m4v.'),
+    ['/tmp/out/demo.mp4', '/srv/p/clip.MOV', '/x/rec.webm', '/x/a.m4v']);
+  assert.deepEqual(findImagePaths('/tmp/film.mkv /tmp/a.avi /tmp/demo.mp4.zip out/demo.mp4'), []);
+  assert.deepEqual(stampedImages([{ id: ID, path: '/p/demo.mp4', name: 'demo.mp4', kind: 'video' }]), [{ id: ID, path: '/p/demo.mp4', name: 'demo.mp4', kind: 'video' }]);
+  const img = stampedImages([{ id: ID, path: '/p/a.png', name: 'a.png', kind: 'image' }])!;
+  assert.equal('kind' in img[0], false, 'only a video is marked');
+  // The video's URL is the same opaque route: no path, no token.
+  assert.equal(mediaUrl(ID), `/api/media/${ID}`);
+});
