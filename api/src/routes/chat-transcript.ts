@@ -34,7 +34,7 @@ import { getRegistry } from '../services/state-reader.js';
 import { principal } from '../lib/principal.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { findImagePaths, imagePathsInToolUse } from '../lib/imageRefs.js';
-import { defaultImageRefsFor, windowPaths, type RefsFor } from '../lib/mediaStore.js';
+import { defaultImageRefsFor, windowFor, type RefsFor } from '../lib/mediaStore.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -2153,8 +2153,10 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
  * image or a video by its bytes (lib/mediaStore.ts imageRefsFor) gets an opaque id and rides on the
  * item as `images` (ADDITIVE v2; a video with `kind: 'video'`). The poll route and the SSE tailer
  * both come through finishWindow, so both lanes carry it. The text is untouched, so the path stays
- * readable. The whole window is read first (windowPaths): the table keeps every id this window
- * shows, so ids stay the same from one stamp to the next however many images the window names.
+ * readable. The whole window is read first (stampWindow): the table keeps every id this window
+ * shows, so ids stay the same from one stamp to the next however many images the window names; only
+ * paths that can be shown count toward the cap, and each carries its item's time, so paging to an
+ * older window never takes the newest window's ids.
  * Fail-open: any trouble here leaves the items as they were.
  */
 export function stampImages(items: any[], agentId: string, refsFor: RefsFor = defaultImageRefsFor(ORCH_DIR)): any[] {
@@ -2165,8 +2167,8 @@ export function stampImages(items: any[], agentId: string, refsFor: RefsFor = de
     } catch { /* no paths */ }
     return [];
   });
-  let window: Set<string> | undefined;
-  try { window = windowPaths(perItem); } catch { window = undefined; }
+  let window: ReadonlySet<string> | undefined;
+  try { window = windowFor(refsFor, agentId, perItem, items.map((it) => it?.ts)); } catch { window = undefined; }
   const out: any[] = [];
   items.forEach((it, i) => {
     try {

@@ -11,15 +11,21 @@
  * AFTER a change, off the request, so a chat poll never waits on the disk. A row the window being
  * stamped still shows is never the one evicted: above the cap the oldest images of THAT window go
  * without a thumbnail (their path stays in the words), and every id already shown stays the same
- * on every poll (stampImages, windowPaths). Knowing an id grants nothing by itself: the
- * route re-checks the caller's agent scope AND the allow-list on every request.
+ * on every poll (stampImages, stampWindow). Only a path that can be shown counts toward the cap
+ * (one that is not there, or not under the agent's roots, takes no place). Each row remembers when
+ * the transcript last referenced its path (the item's time, `seen`): at the cap the row referenced
+ * longest ago goes, and a path referenced EARLIER than every row it could replace gets no row, so
+ * paging back through an older window never takes the newest window's ids. Knowing an id grants
+ * nothing by itself: the route re-checks the caller's agent scope AND the allow-list on every request.
  *
  * THE ALLOW-LIST, PER AGENT. A path is served only under one of the AGENT'S roots: its working
  * folder (state/agents/<id>.json cwd) and its own output folders under the data dir
  * (state/shots/<id>, state/agents/<id>/). Never the data dir itself: state/uploads holds every
  * client's uploads, and an agent naming one of them must not hand it to another client's viewer.
  * So a working folder that IS the data dir, or encloses it (a seat started in $HOME), is not a
- * root at all.
+ * root at all, and neither is one inside the data dir's state/ tree (state/uploads, state/shots,
+ * state/agents hold every client's and every agent's files; a seat's own folders there are roots
+ * by name, never through its cwd).
  * Resolution is by realpath, and a path with ANY symlink in it below the root is refused (a link
  * inside the project dir pointing at ~/.ssh is the attack). `..` never survives resolve(), and the
  * containment check is on the resolved form, so traversal is refused the same way. A hard link is
@@ -37,7 +43,7 @@
  * MAX_IMAGE_BYTES (25 MiB), video up to MAX_VIDEO_BYTES (256 MiB).
  */
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, renameSync, writeFile, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, renameSync, unlinkSync, writeFile, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { ImageRef } from './imageRefs.js';
 import { imageName } from './imageRefs.js';
@@ -54,14 +60,23 @@ export const MAX_ROWS_PER_AGENT = 500;
 const SAVE_DELAY_MS = 250;
 
 /** One id: the agent it was minted for and the file it serves. `kind` is set for a video (absent: an
- *  image). */
-export interface MediaRow { agent: string; path: string; at: string; kind?: 'video' }
+ *  image). `seen` is the time (ms) of the newest transcript item that referenced the path, when the
+ *  stamp knew it. */
+export interface MediaRow { agent: string; path: string; at: string; kind?: 'video'; seen?: number }
 
 export interface MintOpts {
   kind?: MediaKind;
-  /** The paths of the window being stamped: none of their rows is evicted
-   *  to make room. When every row of the agent is one of them, nothing is minted (null). */
+  /** The paths of the window being stamped: none of their rows is evicted to make room. When every
+   *  row of the agent is one of them, nothing is minted (null). */
   protect?: ReadonlySet<string>;
+  /** When the transcript referenced the path (ms, the item's time): at the cap, the row referenced longest
+   *  ago goes, and a path referenced before every row it could replace gets none (null). */
+  refAt?: number;
+}
+
+/** Rename the written temp file into place; when the rename fails, the temp file goes too (never left beside the table). */
+export function renameOrDrop(tmp: string, file: string): void {
+  try { renameSync(tmp, file); } catch (e) { try { unlinkSync(tmp); } catch { /* never there */ } throw e; }
 }
 
 /** The (agent, path) -> id table, persisted as one JSON file, bounded per agent. */
@@ -83,6 +98,7 @@ export class MediaStore {
         if (!MEDIA_ID.test(id) || !row || typeof row.path !== 'string' || typeof row.agent !== 'string') continue;
         const clean: MediaRow = { agent: row.agent, path: row.path, at: String(row.at ?? '') };
         if (row.kind === 'video') clean.kind = 'video';
+        if (typeof row.seen === 'number' && Number.isFinite(row.seen)) clean.seen = row.seen;
         if ((this.perAgent.get(clean.agent) ?? 0) >= this.cap && !this.evict(clean.agent)) continue;
         this.insert(id, clean);
       }
@@ -95,17 +111,26 @@ export class MediaStore {
     this.perAgent.set(row.agent, (this.perAgent.get(row.agent) ?? 0) + 1);
   }
 
-  /** Drop the agent's least recently used row that the window being stamped does not show. */
-  private evict(agent: string, protect?: ReadonlySet<string>): boolean {
+  /** Drop the agent's row the window being stamped does not show that the transcript referenced longest
+   *  ago (`seen`; a row with none counts as oldest; a tie goes to the least recently used). When `refAt`
+   *  is given and that row was referenced AFTER it, nothing goes (the newer row stays). */
+  private evict(agent: string, protect?: ReadonlySet<string>, refAt?: number): boolean {
+    let pick: string | null = null;
+    let pickSeen = Infinity;
     for (const [oldId, old] of this.rows) {
       if (old.agent !== agent) continue;
       if (protect && protect.has(old.path)) continue;
-      this.rows.delete(oldId);
-      this.byKey.delete(`${old.agent}\0${old.path}`);
-      this.perAgent.set(agent, (this.perAgent.get(agent) ?? 1) - 1);
-      return true;
+      const seen = old.seen ?? -Infinity;
+      if (pick === null || seen < pickSeen) { pick = oldId; pickSeen = seen; }
+      if (seen === -Infinity) break;
     }
-    return false;
+    if (pick === null) return false;
+    if (refAt !== undefined && pickSeen > refAt) return false;
+    const old = this.rows.get(pick)!;
+    this.rows.delete(pick);
+    this.byKey.delete(`${old.agent}\0${old.path}`);
+    this.perAgent.set(agent, (this.perAgent.get(agent) ?? 1) - 1);
+    return true;
   }
 
   /** A use: the row moves to the young end (LRU). In memory only; the next save keeps the order. */
@@ -126,7 +151,7 @@ export class MediaStore {
       mkdirSync(dirname(this.file), { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
       writeFileSync(tmp, this.serialize(), { mode: 0o600 });
-      renameSync(tmp, this.file);
+      renameOrDrop(tmp, this.file);
     } catch { /* the in-memory table still serves this process */ }
   }
 
@@ -138,17 +163,21 @@ export class MediaStore {
       const tmp = `${this.file}.${process.pid}.tmp`;
       writeFile(tmp, this.serialize(), { mode: 0o600 }, (err) => {
         if (err) return;
-        try { renameSync(tmp, this.file); } catch { /* best effort */ }
+        try { renameOrDrop(tmp, this.file); } catch { /* best effort */ }
       });
     }, SAVE_DELAY_MS);
     this.saveTimer.unref?.();
   }
 
-  /** The id already minted for this agent's reference to `path`, or null. No fs, no mint. A hit is a use (LRU). */
-  has(agent: string, path: string): string | null {
+  /** The id already minted for this agent's reference to `path`, or null. No fs, no mint. A hit is a use (LRU),
+   *  and a later `refAt` moves its `seen` on (the path was referenced again, more recently). */
+  has(agent: string, path: string, refAt?: number): string | null {
     this.load();
     const id = this.byKey.get(`${agent}\0${path}`) ?? null;
-    if (id) this.touch(id);
+    if (id) {
+      const row = this.touch(id);
+      if (row && refAt !== undefined && !(row.seen !== undefined && row.seen >= refAt)) { row.seen = refAt; this.scheduleSave(); }
+    }
     return id;
   }
 
@@ -161,13 +190,14 @@ export class MediaStore {
 
   /** idFor, keeping every row `opts.protect` shows: null when the agent's rows are all in it (at the cap). */
   mint(agent: string, path: string, opts: MintOpts = {}): string | null {
-    const have = this.has(agent, path);
+    const have = this.has(agent, path, opts.refAt);
     if (have) return have;
-    if ((this.perAgent.get(agent) ?? 0) >= this.cap && !this.evict(agent, opts.protect)) return null;
+    if ((this.perAgent.get(agent) ?? 0) >= this.cap && !this.evict(agent, opts.protect, opts.refAt)) return null;
     let id = randomBytes(16).toString('hex');
     while (this.rows.has(id)) id = randomBytes(16).toString('hex');
     const row: MediaRow = { agent, path, at: new Date().toISOString() };
     if (opts.kind === 'video') row.kind = 'video';
+    if (opts.refAt !== undefined && Number.isFinite(opts.refAt)) row.seen = opts.refAt;
     this.insert(id, row);
     this.scheduleSave();
     return id;
@@ -281,11 +311,22 @@ export function enclosesDataDir(dir: string, dataDir: string): boolean {
   return false;
 }
 
+/** Is `dir` inside the data dir's state/ tree (state itself or below it), by the path as written and by real path? */
+export function insideStateTree(dir: string, dataDir: string): boolean {
+  const within = (x: string, root: string) => x === root || x.startsWith(root.endsWith(sep) ? root : root + sep);
+  const state = join(resolve(dataDir), 'state');
+  if (within(resolve(dir), state)) return true;
+  try { if (within(realpathSync(dir), realpathSync(state))) return true; } catch { /* a folder that is not there holds nothing real */ }
+  return false;
+}
+
 /**
  * The directories ONE agent's media may come from: its working folder (state/agents/<id>.json
  * cwd, else state/agent-sessions.json) and its own output folders under the data dir,
  * state/shots/<id> and state/agents/<id>/. Never the data dir itself (state/uploads is every
- * client's): a working folder that is the data dir or encloses it is dropped. A path-shaped id builds no path; an unknown agent has only the data-dir folders named for it
+ * client's): a working folder that is the data dir or encloses it is dropped, and so is one inside
+ * the state/ tree (state, state/uploads, state/shots, another agent's state/agents/<x>: every one
+ * of them holds another client's or another agent's files). A path-shaped id builds no path; an unknown agent has only the data-dir folders named for it
  * (which do not exist, so nothing is served).
  */
 export function agentMediaRoots(dataDir: string, agentId: string): string[] {
@@ -293,7 +334,7 @@ export function agentMediaRoots(dataDir: string, agentId: string): string[] {
   const d = resolve(dataDir);
   const roots = [join(d, 'state', 'shots', agentId), join(d, 'state', 'agents', agentId)];
   const cwd = agentCwd(dataDir, agentId);
-  if (cwd && cwd.startsWith('/') && cwd !== '/' && !enclosesDataDir(cwd, d)) roots.unshift(resolve(cwd));
+  if (cwd && cwd.startsWith('/') && cwd !== '/' && !enclosesDataDir(cwd, d) && !insideStateTree(cwd, d)) roots.unshift(resolve(cwd));
   return roots;
 }
 
@@ -324,24 +365,26 @@ export interface RefsDeps {
 /** A path that failed the checks is not looked at again for this long (ms): a reply naming a file
  *  that is not there yet is re-checked on a later poll, not on every poll. */
 const MISS_TTL_MS = 5_000;
-/** The miss cache's bound: past it, expired keys go, then the oldest. */
+/** The miss cache's bound: past it, expired keys go, then the oldest, down to three quarters of it
+ *  (one sweep pays for a quarter of the bound's inserts, not one). */
 export const MAX_MISSES = 4096;
 const misses = new Map<string, number>();
+let fileChecks = 0;
 
 function rememberMiss(key: string, until: number, now: number): void {
   misses.delete(key);
   if (misses.size >= MAX_MISSES) {
     for (const [k, t] of misses) if (t <= now) misses.delete(k);
-    for (const k of misses.keys()) { if (misses.size < MAX_MISSES) break; misses.delete(k); }
+    const keep = Math.floor(MAX_MISSES * 0.75);
+    if (misses.size > keep) for (const k of misses.keys()) { if (misses.size <= keep) break; misses.delete(k); }
   }
   misses.set(key, until);
 }
 
 /**
  * The paths of a whole window that may carry media: the newest `cap` distinct ones, in the order
- * the window has them. A window that names more than an agent's rows hold shows the NEWEST: the
- * oldest go without a thumbnail (their path stays in the words), so no id the window shows is
- * ever evicted by another the same window shows, and every id is the same on the next stamp.
+ * the window has them, by the words alone (no fs). The install's stamper uses stampWindow, which
+ * counts only paths that can be shown; this is the fallback for an injected stamper.
  */
 export function windowPaths(perItem: readonly (readonly string[])[], cap = MAX_ROWS_PER_AGENT): Set<string> {
   const keep = new Set<string>();
@@ -352,34 +395,99 @@ export function windowPaths(perItem: readonly (readonly string[])[], cap = MAX_R
   return keep;
 }
 
+/** What one check of a path found: the id already held, or a file that passed every check now (its kind). */
+type Checked = { id: string; kind?: MediaKind } | { id: null; kind: MediaKind };
+
+/** A window (stampWindow): the paths the table keeps, when the transcript last referenced each (ms), and
+ *  what the one check of each found, so stamping its items touches the disk no more. */
+export class MediaWindow extends Set<string> {
+  readonly refAt = new Map<string, number>();
+  readonly checked = new Map<string, Checked>();
+}
+
+/** An item's time as ms (an ISO string, or a number in seconds or ms), or undefined. */
+export function itemTime(ts: unknown): number | undefined {
+  if (typeof ts === 'number' && Number.isFinite(ts)) return ts < 1e12 ? ts * 1000 : ts;
+  if (typeof ts === 'string' && ts) { const t = Date.parse(ts); return Number.isNaN(t) ? undefined : t; }
+  return undefined;
+}
+
+/** One check of a path: a recent miss is a miss with no fs; a held id needs no fs; else under the roots
+ *  and every check of the file now (one open). A refAt moves a held row's `seen` on. */
+function check(agentId: string, p: string, roots: readonly string[], deps: RefsDeps, now: number, refAt?: number): Checked | null {
+  const key = `${agentId}\0${p}`;
+  const until = misses.get(key);
+  if (until !== undefined && until > now) return null;
+  const have = deps.store.has(agentId, p, refAt);
+  if (have) return { id: have, kind: deps.store.lookup(have)?.kind };
+  if (until !== undefined) misses.delete(key);
+  if (!roots.some((r) => underRoot(p, r))) return null;
+  fileChecks++;
+  const r = resolveImageFile(p, roots);
+  if (!r.ok) { rememberMiss(key, now + MISS_TTL_MS, now); return null; }
+  return { id: null, kind: r.kind };
+}
+
+/** How many distinct paths one window looks at, newest first, at most (in units of the cap): a window
+ *  naming thousands of files that are not there costs a bounded walk (each a miss-cache hit after the
+ *  first poll), never a check of all of them. */
+const WINDOW_SCAN_FACTOR = 2;
+
+/**
+ * The window the table keeps for one agent, read newest first: the newest `cap` distinct paths that
+ * can be SHOWN (already held, or under the agent's roots and passing every check now). A path that is
+ * not there, or outside the roots, takes no place, so a run of missing files never crowds out real
+ * ones; the walk stops after WINDOW_SCAN_FACTOR x cap distinct paths. Each kept path carries the time
+ * of the newest item naming it (`times[i]`, itemTime) and what its one check found.
+ */
+export function stampWindow(agentId: string, perItem: readonly (readonly string[])[], deps: RefsDeps, times: readonly unknown[] = [], cap = MAX_ROWS_PER_AGENT): MediaWindow {
+  const keep = new MediaWindow();
+  const roots = deps.roots(agentId);
+  const now = deps.now ? deps.now() : Date.now();
+  const looked = new Set<string>();
+  const scan = cap * WINDOW_SCAN_FACTOR;
+  for (let i = perItem.length - 1; i >= 0 && keep.size < cap && looked.size < scan; i--) {
+    const ps = perItem[i];
+    const at = itemTime(times[i]);
+    for (let j = ps.length - 1; j >= 0 && keep.size < cap && looked.size < scan; j--) {
+      const p = ps[j];
+      if (looked.has(p)) continue;
+      looked.add(p);
+      const c = check(agentId, p, roots, deps, now, at);
+      if (!c) continue;
+      keep.add(p);
+      keep.checked.set(p, c);
+      if (at !== undefined) keep.refAt.set(p, at);
+    }
+  }
+  return keep;
+}
+
 /**
  * The refs to stamp for the paths an agent wrote: an id for each path that is under the agent's
  * roots AND passes every check right now (exists, a regular file, no links, an image or a video by
  * its bytes, under that kind's cap). An id already minted is reused without touching the disk.
- * Nothing else gets one. `window` (windowPaths of the whole window being stamped) is what the
- * table keeps: a path outside it is skipped, and no row a path inside it holds is evicted.
+ * Nothing else gets one. `window` (stampWindow, or windowPaths, of the whole window being stamped)
+ * is what the table keeps: a path outside it is skipped, and no row a path inside it holds is
+ * evicted. A MediaWindow already checked each of its paths (once per stamp) and says when each was
+ * referenced (MintOpts.refAt).
  */
 export function imageRefsFor(agentId: string, paths: readonly string[], deps: RefsDeps, window?: ReadonlySet<string>): ImageRef[] {
   const out: ImageRef[] = [];
   if (!paths.length) return out;
-  const roots = deps.roots(agentId);
+  const win = window instanceof MediaWindow ? window : null;
+  const roots = win ? [] : deps.roots(agentId);
   const now = deps.now ? deps.now() : Date.now();
   const ref = (id: string, p: string, kind?: MediaKind): ImageRef =>
     (kind === 'video' ? { id, path: p, name: imageName(p), kind: 'video' } : { id, path: p, name: imageName(p) });
   for (const p of paths) {
     if (window && !window.has(p)) continue;
-    const file = p;
-    const have = deps.store.has(agentId, file);
-    if (have) { out.push(ref(have, p, deps.store.lookup(have)?.kind)); continue; }
-    if (!roots.some((r) => underRoot(file, r))) continue;
-    const key = `${agentId}\0${file}`;
-    const until = misses.get(key);
-    if (until !== undefined && until > now) continue;
-    if (until !== undefined) misses.delete(key);
-    const r = resolveImageFile(file, roots);
-    if (!r.ok) { rememberMiss(key, now + MISS_TTL_MS, now); continue; }
-    const id = deps.store.mint(agentId, file, { kind: r.kind, protect: window });
-    if (id) out.push(ref(id, p, r.kind));
+    const refAt = win?.refAt.get(p);
+    const c = win ? win.checked.get(p) ?? null : check(agentId, p, roots, deps, now);
+    if (!c) continue;
+    if (c.id) { out.push(ref(c.id, p, c.kind)); continue; }
+    const id = deps.store.mint(agentId, p, { kind: c.kind, protect: window, refAt });
+    if (id) out.push(ref(id, p, c.kind));
   }
   return out;
 }
@@ -388,14 +496,29 @@ export function imageRefsFor(agentId: string, paths: readonly string[], deps: Re
 export function _resetMisses(): void { misses.clear(); }
 /** Tests only: how many keys the miss cache holds. */
 export function _missCount(): number { return misses.size; }
+/** Tests only: how many times a file has been opened and checked by the stamper (resolveImageFile), ever. */
+export function _fileChecks(): number { return fileChecks; }
 
-/** A stamper: the refs for one item's paths, inside the window being stamped (windowPaths). */
-export type RefsFor = (agentId: string, paths: string[], window?: ReadonlySet<string>) => ImageRef[];
+/** A stamper: the refs for one item's paths, inside the window being stamped. One that also has `window`
+ *  builds that window itself (stampWindow: only paths it can show count, with their times); else the
+ *  caller uses windowPaths. */
+export type RefsFor = ((agentId: string, paths: string[], window?: ReadonlySet<string>) => ImageRef[]) & {
+  window?: (agentId: string, perItem: readonly (readonly string[])[], times?: readonly unknown[]) => ReadonlySet<string>;
+};
+
+/** A stamper over these deps, window included. */
+export function stamperFor(deps: RefsDeps): RefsFor {
+  const f: RefsFor = (agentId, paths, window) => imageRefsFor(agentId, paths, deps, window);
+  f.window = (agentId, perItem, times) => stampWindow(agentId, perItem, deps, times);
+  return f;
+}
+
+/** The window for `perItem` from this stamper: its own when it has one, else windowPaths. */
+export function windowFor(refsFor: RefsFor, agentId: string, perItem: readonly (readonly string[])[], times?: readonly unknown[]): ReadonlySet<string> {
+  return refsFor.window ? refsFor.window(agentId, perItem, times) : windowPaths(perItem);
+}
 
 /** The install's stamper: its table and each agent's own roots. */
 export function defaultImageRefsFor(dataDir: string): RefsFor {
-  return (agentId, paths, window) => imageRefsFor(agentId, paths, {
-    store: mediaStore(dataDir),
-    roots: (a) => agentMediaRoots(dataDir, a),
-  }, window);
+  return stamperFor({ store: mediaStore(dataDir), roots: (a) => agentMediaRoots(dataDir, a) });
 }

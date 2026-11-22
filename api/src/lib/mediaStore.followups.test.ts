@@ -7,10 +7,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { testTmpDir } from './testTmp.js';
-import { MAX_MISSES, MediaStore, agentMediaRoots, enclosesDataDir, imageRefsFor, _missCount, _resetMisses } from './mediaStore.js';
+import { MAX_MISSES, MediaStore, agentMediaRoots, enclosesDataDir, imageRefsFor, insideStateTree, _missCount, _resetMisses } from './mediaStore.js';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
 
@@ -91,15 +91,64 @@ function chunk<T>(xs: T[], n: number): T[][] {
   return out;
 }
 
-test('the table\'s load keeps its bound and a video row\'s kind', () => {
+test('the table\'s load keeps its bound, a video row\'s kind and a row\'s reference time', () => {
   const file = join(testTmpDir('media-load-'), 'ids.json');
   const s = new MediaStore(file, 3);
-  const v = s.idFor('gm', '/d/copy.mp4', { kind: 'video' });
+  const v = s.idFor('gm', '/d/copy.mp4', { kind: 'video', refAt: 1_700_000_000_000 });
   for (const n of ['1', '2', '3', '4']) s.idFor('pm', `/p/${n}.png`);
   s.flush();
   const again = new MediaStore(file, 3);
-  assert.deepEqual({ ...again.lookup(v), at: '' }, { agent: 'gm', path: '/d/copy.mp4', at: '', kind: 'video' });
+  assert.deepEqual({ ...again.lookup(v), at: '' }, { agent: 'gm', path: '/d/copy.mp4', at: '', kind: 'video', seen: 1_700_000_000_000 });
   assert.equal(again.countFor('pm'), 3);
   const small = new MediaStore(file, 2);
   assert.equal(small.countFor('pm'), 2, 'a smaller cap holds on load');
+});
+
+// #601 review finding 3: F2 only refused a cwd that IS or encloses the data dir. One INSIDE its state/ tree still
+// reopened every client's uploads and every agent's screenshots. Each folder the reviewer probed, and its neighbours.
+test('SABOTAGE state tree: a cwd inside the data dir\'s state/ tree is not a root; another client\'s upload and another agent\'s shot get no id', () => {
+  const { home, data } = tree();
+  mkdirSync(join(data, 'state', 'shots', 'other-agent'), { recursive: true });
+  writeFileSync(join(data, 'state', 'shots', 'other-agent', 'theirs.png'), PNG);
+  mkdirSync(join(data, 'state', 'agents', 'other-agent'), { recursive: true });
+  writeFileSync(join(data, 'state', 'agents', 'other-agent', 'note.png'), PNG);
+  const own = [join(data, 'state', 'shots', 'home-seat'), join(data, 'state', 'agents', 'home-seat')];
+  const alias = join(testTmpDir('media-f3-alias-'), 'up');
+  symlinkSync(join(data, 'state', 'uploads'), alias);
+  const probed = [
+    join(data, 'state'), join(data, 'state', 'uploads'), join(data, 'state', 'shots'), join(data, 'state', 'agents'),
+    join(data, 'state', 'shots', 'other-agent'), join(data, 'state', 'agents', 'other-agent'), `${join(data, 'state')}/`, alias,
+  ];
+  const secrets = [
+    join(data, 'state', 'uploads', 'other-client.png'),
+    join(data, 'state', 'shots', 'other-agent', 'theirs.png'),
+    join(data, 'state', 'agents', 'other-agent', 'note.png'),
+    join(alias, 'other-client.png'),
+  ];
+  for (const cwd of probed) {
+    _resetMisses();
+    writeFileSync(join(data, 'state', 'agents', 'home-seat.json'), JSON.stringify({ cwd }));
+    assert.deepEqual(agentMediaRoots(data, 'home-seat'), own, cwd);
+    const store = new MediaStore(join(testTmpDir('media-f3-ids-'), 'ids.json'));
+    const refs = imageRefsFor('home-seat', [...secrets, join(data, 'state', 'shots', 'home-seat', 'mine.png')], { store, roots: (a) => agentMediaRoots(data, a) });
+    assert.deepEqual(refs.map((r) => r.name), ['mine.png'], `cwd ${cwd}: only its own shot`);
+    assert.equal(insideStateTree(cwd, data), true, cwd);
+  }
+  // Still roots: a folder in the data dir beside state/, and a project folder beside the data dir.
+  for (const cwd of [join(data, 'projects', 'p'), join(data, 'stateful'), join(home, 'proj')]) {
+    writeFileSync(join(data, 'state', 'agents', 'home-seat.json'), JSON.stringify({ cwd }));
+    assert.deepEqual(agentMediaRoots(data, 'home-seat'), [cwd, ...own], cwd);
+    assert.equal(insideStateTree(cwd, data), false, cwd);
+  }
+});
+
+test('SABOTAGE temp file: a table write whose rename fails leaves no temp file beside it', () => {
+  const dir = testTmpDir('media-tmp-');
+  const file = join(dir, 'ids.json');
+  mkdirSync(file);                      // the rename target is a folder: renaming the temp file onto it fails
+  const s = new MediaStore(file);
+  s.idFor('gm', '/p/a.png');
+  s.flush();
+  assert.deepEqual(readdirSync(dir), ['ids.json'], 'no .tmp left behind');
+  assert.equal(existsSync(`${file}.${process.pid}.tmp`), false);
 });
