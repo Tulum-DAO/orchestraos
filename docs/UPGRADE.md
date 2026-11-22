@@ -56,6 +56,9 @@ Then restart, so the running services use the new code:
 orchestra down && orchestra up --detach
 ```
 
+(By-hand installs only. If `systemctl is-enabled orchestra` says `enabled`, see
+"Restarting a systemd install" below.)
+
 **If you upgraded between #208 and #218 (2026-10-08):** back then `init` did not rebuild an
 existing API build, so your API may still lack the web terminal origin check from #208.
 Run `orchestra upgrade` once more (or `rm -rf api/dist && orchestra init --yes`, which removes only the API's build output inside
@@ -64,6 +67,44 @@ restart above. From #218 on, a plain upgrade rebuilds correctly.
 
 `orchestra upgrade` never restarts anything itself. Spawned seats keep the code they were
 spawned with until their next spawn or rotation.
+
+## Restarting a systemd install
+
+The restart above (`orchestra down && orchestra up --detach`) is for a checkout you run by hand.
+An install made by `install-client.sh`, or any box where you ran `orchestra install-unit --now`,
+runs the stack under systemd as `orchestra.service`. On such a box `orchestra up --detach` starts
+a **second** supervisor that systemd does not know about, and `orchestra down` leaves the unit
+stopped. Use systemd instead.
+
+Which kind of install you have:
+
+```bash
+systemctl is-enabled orchestra   # "enabled": a systemd install; "not-found" or "disabled": by hand
+```
+
+On a systemd install, as root (or with `sudo`):
+
+```bash
+systemctl restart orchestra      # the supervisor and its children (gateway, api, dashboard, beats)
+systemctl status orchestra       # active (running)
+```
+
+Restarting the unit does not stop your seats; they keep running in tmux as before.
+
+`install-client.sh` makes the checkout belong to a normal user (`orchestra` by default), not to
+root. When you are logged in as root, run the upgrade as that user, then restart the unit as root:
+
+```bash
+su - orchestra -c 'cd ~/orchestraos && ~/.local/bin/orchestra upgrade'   # replace "orchestra" with the user that owns the checkout
+systemctl restart orchestra
+```
+
+`orchestra` is on that user's `PATH` through `~/.local/bin`; the full path avoids depending on
+the login shell's profile.
+
+After either kind of restart, reload the dashboard once in the browser (a plain reload is enough).
+An open tab keeps the old page's code until it is reloaded, so the first request after a restart
+can show stale screens or fail against the new API.
 
 ## Doing it by hand
 
@@ -92,6 +133,8 @@ running was disturbed. To actually pick up the new code in a live process:
 ```bash
 orchestra down && orchestra up --detach   # restarts gateway/api/dashboard/beats
 ```
+
+On a systemd install, `systemctl restart orchestra` instead (see "Restarting a systemd install" above).
 
 Spawned seats (tmux sessions like `hello`) are **not** part of the supervisor
 and are not touched by `orchestra down`/`up` — they keep running the CLI
