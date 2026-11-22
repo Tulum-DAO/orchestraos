@@ -93,7 +93,7 @@ export function createMediaRouter(deps: MediaDeps): Router {
     const end = range ? range.end : r.size - 1;
     res.setHeader('Content-Type', r.mime);
     res.setHeader('Content-Length', String(end - start + 1));
-    res.setHeader('Content-Disposition', `${req.query.download !== undefined ? 'attachment' : 'inline'}; filename="${safeName(row.ref ?? row.path)}"`);
+    res.setHeader('Content-Disposition', `${req.query.download !== undefined ? 'attachment' : 'inline'}; filename="${safeName(row.path)}"`);
     if (range) { res.status(206); res.setHeader('Content-Range', `bytes ${start}-${end}/${r.size}`); }
     if (req.method === 'HEAD') { closeSync(r.fd); res.end(); return; }
     // The bytes come from the descriptor the checks ran on: no second lookup by path.

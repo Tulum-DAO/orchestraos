@@ -91,14 +91,14 @@ function chunk<T>(xs: T[], n: number): T[][] {
   return out;
 }
 
-test('the table\'s load keeps its bound, a video row\'s kind and a copy\'s ref', () => {
+test('the table\'s load keeps its bound and a video row\'s kind', () => {
   const file = join(testTmpDir('media-load-'), 'ids.json');
   const s = new MediaStore(file, 3);
-  const v = s.idFor('gm', '/d/copy.mp4', { kind: 'video', ref: '/remote/rec.mp4' });
+  const v = s.idFor('gm', '/d/copy.mp4', { kind: 'video' });
   for (const n of ['1', '2', '3', '4']) s.idFor('pm', `/p/${n}.png`);
   s.flush();
   const again = new MediaStore(file, 3);
-  assert.deepEqual({ ...again.lookup(v), at: '' }, { agent: 'gm', path: '/d/copy.mp4', at: '', kind: 'video', ref: '/remote/rec.mp4' });
+  assert.deepEqual({ ...again.lookup(v), at: '' }, { agent: 'gm', path: '/d/copy.mp4', at: '', kind: 'video' });
   assert.equal(again.countFor('pm'), 3);
   const small = new MediaStore(file, 2);
   assert.equal(small.countFor('pm'), 2, 'a smaller cap holds on load');

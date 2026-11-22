@@ -1,6 +1,6 @@
 /**
  * Media in the chat: what a file IS, by its first bytes (never by its name). The one rule for the
- * media route (lib/mediaStore.ts openMedia) and for a copy pulled from a device (lib/devicePull.ts).
+ * media route (lib/mediaStore.ts openMedia).
  *
  * Images: PNG, JPEG, GIF, WebP, BMP, AVIF. SVG is refused (active content).
  * Video: MP4 / M4V and QuickTime (an ISO-BMFF `ftyp` box with a known MAJOR brand), and WebM (an
@@ -16,7 +16,7 @@ export const SNIFF_BYTES = 64;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 /** The largest video served: a screen recording of a few minutes at 1080p. A longer film is not a
- *  chat attachment, and a pull from a device (lib/devicePull.ts) holds no more than this either. */
+ *  chat attachment. */
 export const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
 
 export type MediaKind = 'image' | 'video';

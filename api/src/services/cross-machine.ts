@@ -6,7 +6,6 @@ import { getTmuxSessionNames } from './tmux-monitor.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { dataDir } from '../lib/config.js';
 import { gatewayAgentMessage } from '../lib/gatewayMessage.js';
-import { isThisHost, machineFrom, sshArgs, type MachineConfig } from '../lib/machineTarget.js';
 
 const IS_VPS = !os.platform().includes('darwin');
 const ORCHESTRA = dataDir();
@@ -16,6 +15,14 @@ const CACHE_TTL = 30_000; // 30s
 // --- Machine Registry ---
 // Reads machines + agents from registry.json to resolve SSH details for ANY Tailscale machine
 
+interface MachineConfig {
+  hostname: string;
+  tailscale_ip: string;
+  ssh_user: string;
+  home: string;
+  tmux_path?: string;
+}
+
 function getRegistryMachines(): Record<string, MachineConfig> {
   try {
     const reg = JSON.parse(readFileSync(join(ORCHESTRA, 'registry.json'), 'utf-8'));
@@ -23,19 +30,55 @@ function getRegistryMachines(): Record<string, MachineConfig> {
   } catch { return {}; }
 }
 
-// Resolve machine config: registry machines first, then the agent's own ssh_host/ssh_user
-// (lib/machineTarget.ts, shared with lib/devicePull.ts). isThisHost lives there too.
-export { isThisHost };
+// Resolve machine config: check registry machines first, then agent-level ssh_user/ssh_host
+/**
+ * Is a seat with this machine label on THIS host? `orchestra` registers every seat as
+ * machine "local" (orchestra_cli/seats.py); the reference fleet calls its own host "vps".
+ * Both, and no label at all, mean here. Testing only 'vps' sent every public install's seats
+ * down the remote branches: never alive, spawn/kill/inject/capture failing with
+ * "Unknown machine: local" (operator report 2026-10-08, cross-machine.thishost.test.ts).
+ */
+export function isThisHost(machine?: string): boolean {
+  return !machine || machine === 'vps' || machine === 'local';
+}
 
 function resolveMachine(machineId: string, agentDef?: any): MachineConfig | null {
-  return machineFrom(getRegistryMachines(), machineId, agentDef);
+  const machines = getRegistryMachines();
+
+  // Direct match in machines section
+  if (machines[machineId]) return machines[machineId];
+
+  // Agent-level SSH config (for Kai's machines etc.)
+  if (agentDef?.ssh_host) {
+    return {
+      hostname: machineId,
+      tailscale_ip: agentDef.ssh_host,
+      ssh_user: agentDef.ssh_user || 'root',
+      home: agentDef.cwd || '/home/' + (agentDef.ssh_user || 'root'),
+      tmux_path: agentDef.tmux_path,
+    };
+  }
+
+  // No hardcoded machine convention — every cross-machine target must be
+  // declared under registry.json's "machines" section (see orchestra.example.toml
+  // for the single-machine default; multi-machine is a documented reference
+  // topology, not a built-in default).
+  return null;
 }
 
 // --- SSH Execution ---
 
 function sshExec(machine: MachineConfig, command: string, timeout = 8000): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {
-    execFile('ssh', sshArgs(machine, command, SSH_KEY), { timeout }, (err, stdout) => {
+    const sshArgs = [
+      '-o', 'ConnectTimeout=5',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'IdentitiesOnly=yes',
+      '-i', SSH_KEY,
+      `${machine.ssh_user}@${machine.tailscale_ip}`,
+      command,
+    ];
+    execFile('ssh', sshArgs, { timeout }, (err, stdout) => {
       resolve({ ok: !err, stdout: stdout?.trim() || '' });
     });
   });

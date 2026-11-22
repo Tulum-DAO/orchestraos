@@ -19,8 +19,7 @@
  * (state/shots/<id>, state/agents/<id>/). Never the data dir itself: state/uploads holds every
  * client's uploads, and an agent naming one of them must not hand it to another client's viewer.
  * So a working folder that IS the data dir, or encloses it (a seat started in $HOME), is not a
- * root at all. A seat on another machine (lib/devicePull.ts) has no local working folder: its
- * files are copied into state/agents/<id>/device/ first and served from there.
+ * root at all.
  * Resolution is by realpath, and a path with ANY symlink in it below the root is refused (a link
  * inside the project dir pointing at ~/.ssh is the attack). `..` never survives resolve(), and the
  * containment check is on the resolved form, so traversal is refused the same way. A hard link is
@@ -43,7 +42,6 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { ImageRef } from './imageRefs.js';
 import { imageName } from './imageRefs.js';
 import { SNIFF_BYTES, maxBytesFor, sniffMedia, type MediaKind } from './mediaSniff.js';
-import { devicePuller } from './devicePull.js';
 
 export { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, sniffImage, sniffVideo, sniffMedia } from './mediaSniff.js';
 
@@ -56,14 +54,12 @@ export const MAX_ROWS_PER_AGENT = 500;
 const SAVE_DELAY_MS = 250;
 
 /** One id: the agent it was minted for and the file it serves. `kind` is set for a video (absent: an
- *  image). `ref` is the path as the agent wrote it when the file served is a copy (a device's,
- *  lib/devicePull.ts); absent when they are the same. */
-export interface MediaRow { agent: string; path: string; at: string; kind?: 'video'; ref?: string }
+ *  image). */
+export interface MediaRow { agent: string; path: string; at: string; kind?: 'video' }
 
 export interface MintOpts {
   kind?: MediaKind;
-  ref?: string;
-  /** The paths (as the agent wrote them) of the window being stamped: none of their rows is evicted
+  /** The paths of the window being stamped: none of their rows is evicted
    *  to make room. When every row of the agent is one of them, nothing is minted (null). */
   protect?: ReadonlySet<string>;
 }
@@ -87,7 +83,6 @@ export class MediaStore {
         if (!MEDIA_ID.test(id) || !row || typeof row.path !== 'string' || typeof row.agent !== 'string') continue;
         const clean: MediaRow = { agent: row.agent, path: row.path, at: String(row.at ?? '') };
         if (row.kind === 'video') clean.kind = 'video';
-        if (typeof row.ref === 'string' && row.ref) clean.ref = row.ref;
         if ((this.perAgent.get(clean.agent) ?? 0) >= this.cap && !this.evict(clean.agent)) continue;
         this.insert(id, clean);
       }
@@ -104,7 +99,7 @@ export class MediaStore {
   private evict(agent: string, protect?: ReadonlySet<string>): boolean {
     for (const [oldId, old] of this.rows) {
       if (old.agent !== agent) continue;
-      if (protect && protect.has(old.ref ?? old.path)) continue;
+      if (protect && protect.has(old.path)) continue;
       this.rows.delete(oldId);
       this.byKey.delete(`${old.agent}\0${old.path}`);
       this.perAgent.set(agent, (this.perAgent.get(agent) ?? 1) - 1);
@@ -173,7 +168,6 @@ export class MediaStore {
     while (this.rows.has(id)) id = randomBytes(16).toString('hex');
     const row: MediaRow = { agent, path, at: new Date().toISOString() };
     if (opts.kind === 'video') row.kind = 'video';
-    if (opts.ref && opts.ref !== path) row.ref = opts.ref;
     this.insert(id, row);
     this.scheduleSave();
     return id;
@@ -291,17 +285,13 @@ export function enclosesDataDir(dir: string, dataDir: string): boolean {
  * The directories ONE agent's media may come from: its working folder (state/agents/<id>.json
  * cwd, else state/agent-sessions.json) and its own output folders under the data dir,
  * state/shots/<id> and state/agents/<id>/. Never the data dir itself (state/uploads is every
- * client's): a working folder that is the data dir or encloses it is dropped. A seat on another
- * machine (lib/devicePull.ts) has no working folder HERE: its cwd names a folder over there, so
- * only its own data-dir folders are roots (its copies land in state/agents/<id>/device/). A
- * path-shaped id builds no path; an unknown agent has only the data-dir folders named for it
+ * client's): a working folder that is the data dir or encloses it is dropped. A path-shaped id builds no path; an unknown agent has only the data-dir folders named for it
  * (which do not exist, so nothing is served).
  */
 export function agentMediaRoots(dataDir: string, agentId: string): string[] {
   if (!SAFE_ID.test(agentId)) return [];
   const d = resolve(dataDir);
   const roots = [join(d, 'state', 'shots', agentId), join(d, 'state', 'agents', agentId)];
-  if (devicePuller(d).isDevice(agentId)) return roots;
   const cwd = agentCwd(dataDir, agentId);
   if (cwd && cwd.startsWith('/') && cwd !== '/' && !enclosesDataDir(cwd, d)) roots.unshift(resolve(cwd));
   return roots;
@@ -329,9 +319,6 @@ export interface RefsDeps {
   store: MediaStore;
   roots: (agentId: string) => string[];
   now?: () => number;
-  /** The file to check and serve for a path the agent wrote: the path itself, or for a seat on another
-   *  machine the local copy (lib/devicePull.ts served), null while there is none yet. Absent: the path. */
-  serve?: (agentId: string, path: string) => string | null;
 }
 
 /** A path that failed the checks is not looked at again for this long (ms): a reply naming a file
@@ -381,8 +368,7 @@ export function imageRefsFor(agentId: string, paths: readonly string[], deps: Re
     (kind === 'video' ? { id, path: p, name: imageName(p), kind: 'video' } : { id, path: p, name: imageName(p) });
   for (const p of paths) {
     if (window && !window.has(p)) continue;
-    const file = deps.serve ? deps.serve(agentId, p) : p;
-    if (!file) continue;
+    const file = p;
     const have = deps.store.has(agentId, file);
     if (have) { out.push(ref(have, p, deps.store.lookup(have)?.kind)); continue; }
     if (!roots.some((r) => underRoot(file, r))) continue;
@@ -392,7 +378,7 @@ export function imageRefsFor(agentId: string, paths: readonly string[], deps: Re
     if (until !== undefined) misses.delete(key);
     const r = resolveImageFile(file, roots);
     if (!r.ok) { rememberMiss(key, now + MISS_TTL_MS, now); continue; }
-    const id = deps.store.mint(agentId, file, { kind: r.kind, ref: p, protect: window });
+    const id = deps.store.mint(agentId, file, { kind: r.kind, protect: window });
     if (id) out.push(ref(id, p, r.kind));
   }
   return out;
@@ -406,11 +392,10 @@ export function _missCount(): number { return misses.size; }
 /** A stamper: the refs for one item's paths, inside the window being stamped (windowPaths). */
 export type RefsFor = (agentId: string, paths: string[], window?: ReadonlySet<string>) => ImageRef[];
 
-/** The install's stamper: its table, each agent's own roots, and a device seat's copies (lib/devicePull.ts). */
+/** The install's stamper: its table and each agent's own roots. */
 export function defaultImageRefsFor(dataDir: string): RefsFor {
   return (agentId, paths, window) => imageRefsFor(agentId, paths, {
     store: mediaStore(dataDir),
     roots: (a) => agentMediaRoots(dataDir, a),
-    serve: (a, p) => devicePuller(dataDir).served(a, p),
   }, window);
 }
