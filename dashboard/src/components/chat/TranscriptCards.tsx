@@ -35,6 +35,8 @@ import CallCard from '../kit/CallCard';
 import CompactionRow from '../kit/CompactionRow';
 import { pendingLabel } from '../../lib/pendingSends';
 import { type ToolDensity } from '../../lib/toolCardDetail';
+import { ImageStrip } from '../kit/ChatImages';
+import { stampedImages } from '../../lib/imageRefs';
 
 /**
  * The disclosure control for every expandable card here.
@@ -361,8 +363,10 @@ export function ToolCard({ block, density, look = 'card' }: { block: ToolBlock; 
   if (asked) return asked;
   // The kit's one tool card (components/kit/ToolCard.tsx), shared with Arturo's page.
   return (
-    <div className="flex justify-start">
+    <div className="flex flex-col items-start">
       <ToolCalls calls={[fromBlock(block)]} density={density} look={look} />
+      {/* The image a Write made: its thumbnail under the call (components/kit/ChatImages.tsx). */}
+      <ImageStrip images={stampedImages(block.images)} />
     </div>
   );
 }
@@ -380,11 +384,13 @@ export function ToolGroupCard({ group, interrupted = false, density, look = 'car
     ? { kind: 'call', call: fromBlock(c) }
     : { kind: 'note', key: c.key, node: <RenderNodeView node={c} density={density} look={look} /> });
   const calls = entries.flatMap((e) => (e.kind === 'call' ? [e.call] : []));
+  const images = stampedImages(children.flatMap((c) => (c.kind === 'tool' && c.images ? c.images : [])));
   return (
     <>
       {calls.length > 0 && (
-        <div className="flex justify-start">
+        <div className="flex flex-col items-start">
           <ToolCalls calls={calls} entries={entries} interrupted={interrupted} density={density} look={look} />
+          <ImageStrip images={images} />
         </div>
       )}
       {asked}
@@ -443,7 +449,7 @@ export function RenderNodeView({ node, density, look = 'card' }: { node: RenderN
         ? <MessageGroup text={node.text} sender="assistant" />
         // The kit's reply: the time, and a copy button (the words, as written) that shows on hover, or always on touch.
         // A reply streamed here a moment ago carries on its reveal (found by its key; an old one never animates).
-        : <Message text={node.text} skin="bubbles" meta={<MessageTime ts={node.ts} />} revealKey={node.key} />;
+        : <Message text={node.text} skin="bubbles" meta={<MessageTime ts={node.ts} />} revealKey={node.key} images={stampedImages(node.images)} />;
     case 'thinking':
       return <ThinkingCard text={node.text} />;
     case 'tool':

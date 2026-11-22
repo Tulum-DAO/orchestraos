@@ -1,0 +1,148 @@
+/* Images in the chat (components/kit/ChatImages.tsx). Colours are the --bui-* tokens (index.css), light and dark. */
+
+.chat-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+/* Arturo's pane is dark in either theme: the kit's `.dark` scope handles the tokens there. */
+
+.chat-image {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--bui-line-strong);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, var(--bui-inset), var(--bui-field));
+  box-shadow: var(--bui-shadow-hairline);
+  overflow: hidden;
+  cursor: zoom-in;
+  color: var(--bui-ink-3);
+  font: inherit;
+  text-align: center;
+}
+.chat-image:disabled { cursor: default; }
+.chat-image:focus-visible { outline: 2px solid var(--bui-accent); outline-offset: 2px; }
+.chat-image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity .25s ease;
+  background: var(--bui-inset);
+}
+.chat-image.is-loaded img { opacity: 1; }
+.chat-image-caption {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 10px 8px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #fff;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: linear-gradient(to top, rgba(0, 0, 0, .55), rgba(0, 0, 0, 0));
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.chat-image.is-loaded:hover .chat-image-caption,
+.chat-image.is-loaded:focus-visible .chat-image-caption { opacity: 1; }
+@media (hover: none) { .chat-image.is-loaded .chat-image-caption { opacity: 1; } }
+
+/* The chip for an image that would not load: the same box, so nothing moves. */
+.chat-image-error {
+  cursor: default;
+  border-style: dashed;
+  background: var(--bui-inset);
+}
+.chat-image-error .chat-image-name {
+  max-width: 90%;
+  font-size: 11px;
+  color: var(--bui-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-image-error .chat-image-note { font-size: 10px; color: var(--bui-ink-3); }
+
+/* The full-screen view. */
+.chat-image-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, .72);
+  -webkit-backdrop-filter: blur(22px) saturate(1.2);
+  backdrop-filter: blur(22px) saturate(1.2);
+  animation: chat-image-overlay-in .16s ease-out;
+}
+.dark .chat-image-overlay { background: rgba(10, 10, 12, .78); }
+@keyframes chat-image-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .chat-image-overlay { animation: none; } }
+
+.chat-image-overlay-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+}
+.chat-image-overlay-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--bui-ink-2);
+}
+.chat-image-overlay-tools { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.chat-image-overlay-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--bui-line-strong);
+  background: var(--bui-surface);
+  color: var(--bui-ink);
+  box-shadow: var(--bui-shadow-btn);
+  cursor: pointer;
+  text-decoration: none;
+}
+.chat-image-overlay-btn:hover { background: var(--bui-hover-2); }
+.chat-image-overlay-btn:focus-visible { outline: 2px solid var(--bui-accent); outline-offset: 2px; }
+
+.chat-image-overlay-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+.chat-image-overlay-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: var(--bui-shadow-overlay);
+  background: var(--bui-surface);
+  cursor: default;
+}

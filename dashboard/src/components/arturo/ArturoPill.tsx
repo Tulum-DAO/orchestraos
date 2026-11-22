@@ -475,7 +475,7 @@ export function ArturoPill() {
               captions, his choice cards, the pane's status notes. */}
           <div ref={olderRef} data-anchor-skip data-older-sentinel aria-hidden style={{ height: 0, flexShrink: 0 }} />
           <OlderPagesNote show={paged.loading} />
-          <ThreadView rows={rows} skin="pane" by={aname} lastUserKey={lastUserKey(keyed)} stick={stick}
+          <ThreadView rows={rows} skin="pane" by={aname} lastUserKey={lastUserKey(keyed)} stick={stick} mediaAgent="arturo"
             call={{ liveSince: callSince, liveUser, liveArturo, connecting: callState === 'connecting', engine: call.engine }}
             noteText={(m) => (m.text === STARTING_TEXT ? m.text : `I can't do that yet — ${m.text}.`)}
             choice={{

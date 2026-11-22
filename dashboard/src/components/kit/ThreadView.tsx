@@ -70,6 +70,8 @@ import type { LiveBlock } from '../../lib/threadKit/liveBlocks';
 import type { MessagePart, ThreadMessage } from '../../lib/threadKit/thread';
 import { revealReady } from '../../lib/threadKit/streamMarkdown';
 import { aliasReveal, findReveal, revealEntry } from '../../lib/revealStore';
+import { ImageStrip } from './ChatImages';
+import type { ChatImage } from '../../lib/imageRefs';
 
 export interface ThreadViewCall {
   /** When this page's live call started (ms), for the running clock. */
@@ -96,8 +98,8 @@ function NodeSlot({ children }: { children: ReactNode }) {
 }
 
 /** A reply's words when it has no ordered parts: an ended call's marker is its call card, never the raw marker. */
-function ReplyWords({ text, skin, reveal }: { text: string; skin: Skin; reveal?: RevealAs }) {
-  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} />;
+function ReplyWords({ text, skin, reveal, images, mediaAgent }: { text: string; skin: Skin; reveal?: RevealAs; images?: ChatImage[]; mediaAgent?: string }) {
+  if (!hasVoiceCallMarker(text)) return <MessageText text={text} skin={skin} reveal={reveal} images={images} mediaAgent={mediaAgent} />;
   return (
     <div className={skin === 'modern' ? 'txt' : undefined}>
       {parseVoiceSegments(text).map((seg, i) => seg.kind === 'voicecall'
@@ -154,14 +156,18 @@ function LiveBlockRow({ id, text, done, skin, times, anchored }: { id: string; t
   return <div className="turn-assistant" data-live-text>{anchored ? <div className="relative">{words}</div> : words}{held}</div>;
 }
 
-function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean }) {
+function Reply({ m, skin, extras, choice, times, mediaAgent }: { m: ThreadMessage; skin: Skin; extras?: (m: ThreadMessage) => ReactNode; choice?: ThreadViewChoice; times?: boolean; mediaAgent?: string }) {
+  // Images under the words: inside the bubble when the reply is words alone; after its parts otherwise.
+  const inWords = !m.pending && !m.streaming && !m.parts;
+  const after = !inWords && !m.pending && !m.streaming ? <ImageStrip images={m.images} agent={mediaAgent} /> : null;
   if (skin === 'pane') {
     return (
       <div className="row arturo group" data-thread-key={m.key}>
         {m.pending ? <div className="bubble thinking">Thinking…</div>
           : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
           : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
-          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} />}
+          : <ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} mediaAgent={mediaAgent} />}
+        {after}
         {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="meta">ran {m.toolNames.join(', ')}</div>}
         {!m.pending && !m.streaming && m.copyText && <MessageActions copyText={m.copyText} skin={skin} />}
         {extras?.(m)}
@@ -174,7 +180,8 @@ function Reply({ m, skin, extras, choice, times }: { m: ThreadMessage; skin: Ski
       {m.pending ? <span className="thinking" aria-label="thinking" />
         : m.parts ? <Parts parts={m.parts} skin={skin} revealKey={m.key} streaming={!!m.streaming} />
         : m.streaming ? (revealReady(m.text) && <MessageText text={m.text} skin={skin} reveal={{ key: m.key, done: false, live: true }} />)
-        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} /></ReactionAnchor>}
+        : <ReactionAnchor><ReplyWords text={m.text} skin={skin} reveal={finishedReveal(m)} images={m.images} mediaAgent={mediaAgent} /></ReactionAnchor>}
+      {after}
       {!m.parts && m.toolNames && m.toolNames.length > 0 && <div className="tools">ran {m.toolNames.join(', ')}</div>}
       {!m.pending && !m.streaming && (m.copyText || times) && (
         <MessageActions copyText={m.copyText} skin={skin} meta={times ? <MessageTime ts={m.at} /> : undefined} />
@@ -286,9 +293,11 @@ function UserMessage({ m, skin, latest, times }: { m: ThreadMessage; skin: Skin;
   );
 }
 
-export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, call, choice, extras, liveText, stick, renderNode, onDecisionAnswered, times, noteText }: {
+export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, call, choice, extras, liveText, stick, renderNode, onDecisionAnswered, times, noteText, mediaAgent }: {
   rows: ThreadRow[];
   skin?: Skin;
+  /** Whose images a reply shows when they came without ids (Arturo's threads): the agent POST /api/media/resolve is asked for. */
+  mediaAgent?: string;
   /** Who did the finished work, when a result does not say. */
   by?: string;
   /** The operator's latest turn (lib/threadKit/view lastUserKey): only it, or a failed one, shows its send state. */
@@ -354,7 +363,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
                 <span data-row-key={r.key} data-anchor-skip aria-hidden className="block h-0 !m-0" />
                 {reactable(r, r.message.role === 'user'
                   ? <UserMessage m={r.message} skin={skin} latest={false} times={times} />
-                  : <Reply m={r.message} skin={skin} times={times} />)}
+                  : <Reply m={r.message} skin={skin} times={times} mediaAgent={mediaAgent} />)}
               </Fragment>
             );
           }
@@ -379,7 +388,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
           if (r.cardEcho && r.sendState !== 'failed') return null;
           return <UserMessage key={r.key} m={r} skin={skin} latest={r.key === lastUserKey} times={times} />;
         }
-        return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} />;
+        return <Reply key={r.key} m={r} skin={skin} extras={extras} choice={choice} times={times} mediaAgent={mediaAgent} />;
       })}
       {live?.parts?.length ? (
         <div className={skin === 'bubbles' ? 'flex justify-start' : skin === 'pane' ? 'row arturo' : 'turn-assistant'} data-live-text>
