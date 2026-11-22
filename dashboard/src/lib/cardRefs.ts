@@ -17,6 +17,7 @@
 import type { Decision } from './decisions.ts';
 import type { BatchRecord, MenuPart } from './multiPart.ts';
 import { batchAnswerLines } from './drawerHistory.ts';
+import { taskVerbWord } from './cardVerbs.ts';
 
 /** What a reference can point at. Only cards today; the rest are the kinds the chip is shaped for. */
 export type RefType = 'card' | 'agent' | 'file' | 'job' | 'message';
@@ -103,7 +104,7 @@ function decisionAnswerText(d: Pick<Decision, 'answer' | 'answer_text' | 'option
   const a = (d.answer || '').toLowerCase();
   const words = (d.answer_text || '').trim();
   if (kind === 'approval') {
-    const verb = a === 'approve' || a === 'accept' ? 'Approved' : a === 'deny' || a === 'reject' ? 'Denied' : '';
+    const verb = a === 'approve' || a === 'accept' ? 'Approved' : a === 'deny' || a === 'reject' ? 'Denied' : taskVerbWord(a) ?? '';
     if (verb) return words ? `${verb} — ${words}` : verb;
   }
   const opt = d.option_n ? (d.menu?.options || []).find((o) => o.n === d.option_n) : undefined;

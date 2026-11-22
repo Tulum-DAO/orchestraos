@@ -181,6 +181,8 @@ export interface UnifiedApproval {
   agent_id?: string | null;
   /** The row's dedup key (canonical rows): a terminal menu bridged into a card has `menu:<session>:…`. */
   op_key?: string | null;
+  /** A snoozed task for you (kind 'human_task'): when it comes back (ISO); null otherwise. */
+  snoozed_until?: string | null;
 }
 
 function normalizeProposal(p: any): UnifiedApproval {
@@ -300,6 +302,8 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
     agent_id: r.from_agent || null,
     // A terminal menu bridged into a card has a `menu:<session>:…` key: the dashboard keeps it to a pick OR words.
     op_key: r.op_key ?? null,
+    // A snoozed task for you: when it comes back, so the dashboard can say so and draw it last (as the phone does).
+    snoozed_until: r.snoozed_until ?? null,
   };
 }
 
@@ -693,11 +697,13 @@ router.get('/:id/card', async (req: Request, res: Response) => {
   try {
     // Loaded here, not at the top: lib/db opens tasks.db on import, and this router is imported by tests.
     const { queryDb: tasksDb } = await import('../lib/db.js');
-    const { cardLookup } = await import('./agents.js');
+    const { cardLookup, snoozedUntilSelect } = await import('./agents.js');
+    // A snoozed task opened from a reference must say so (and offer no second Snooze), as in the chat.
+    const snoozed = snoozedUntilSelect(tasksDb);
     const rows = tasksDb(
       `SELECT id, from_agent, kind, status, question, summary, options, menu, risk_level, reversibility, answer,
               answer_text, option_n, answered_by, answer_surface, answer_device, created_at, answered_at,
-              expires_at, retired_at, superseded_by, resumed_at, op_key, origin
+              expires_at, retired_at, superseded_by, resumed_at, op_key, origin${snoozed}
          FROM approval_requests WHERE id = ? LIMIT 1`, [id]) as any[];
     if (!rows.length) { res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` }); return; }
     res.json({ card: cardLookup(rows[0]) });
@@ -732,12 +738,30 @@ export function gateOptionRefusal(
   return isUnscopedAdmin(p) && role === 'admin' ? null : { error: 'all_agents_needs_admin' };
 }
 
+/** A task for you's verbs (kind 'human_task', `approval.py human-task`): the only answers the gateway takes on such a
+ *  card, and only on such a card (watch_gateway.apply_answer). */
+export const TASK_VERBS = ['done', 'cant', 'snooze'] as const;
+
+/** A task verb from the answer body ({ answer: 'done' | 'cant' | 'snooze', answer_text? }), or null for any other body
+ *  (an option / free-text answer). Pure, for the route and its tests. */
+export function taskVerbOf(body: unknown): { verb: (typeof TASK_VERBS)[number]; text?: string } | null {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const verb = typeof b.answer === 'string' ? b.answer.trim().toLowerCase() : '';
+  if (!(TASK_VERBS as readonly string[]).includes(verb)) return null;
+  const text = typeof b.answer_text === 'string' && b.answer_text.trim() ? b.answer_text.trim() : undefined;
+  return { verb: verb as (typeof TASK_VERBS)[number], ...(text ? { text } : {}) };
+}
+
 router.post('/:id/answer', (req: Request, res: Response) => {
   const id = String(req.params.id);
-  const optionN = req.body?.option_n != null ? String(req.body.option_n) : undefined;
+  // A task for you answers with its own verb (Done / Can't / Snooze), its words as the note: { answer, answer_text? }.
+  // It carries no option, so the admin check below never applies to it. The gateway refuses these verbs on any other
+  // card, and every other answer on a task, so no card check is repeated here.
+  const task = taskVerbOf(req.body);
+  const optionN = !task && req.body?.option_n != null ? String(req.body.option_n) : undefined;
   const answerText = typeof req.body?.answer_text === 'string' ? req.body.answer_text : undefined;
 
-  if (!optionN && !answerText) {
+  if (!task && !optionN && !answerText) {
     res.status(400).json({ error: 'option_n or answer_text is required' }); // A1
     return;
   }
@@ -755,9 +779,17 @@ router.post('/:id/answer', (req: Request, res: Response) => {
     if (refusal) { res.status(403).json(refusal); return; }
   }
 
-  const result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface, peer: answerPeer(req) });
+  let result: ReturnType<typeof canonicalAnswer>;
+  if (task) result = canonicalAnswer(id, task.verb, task.text, undefined, { surface: req.body?.surface, peer: answerPeer(req) });
+  else result = canonicalAnswer(id, 'option', undefined, { optionN, answerText }, { surface: req.body?.surface, peer: answerPeer(req) });
+  // A snooze records nothing (applied false) and the task stays waiting: it is not "not found".
+  if (task && result.ok && result.snoozed) {
+    res.json({ status: 'snoozed', type: 'agent', id });
+    return;
+  }
   if (result.ok && result.applied) {
-    res.json({ status: 'answered', type: 'agent', id, option_n: optionN, answer_text: answerText });
+    res.json(task ? { status: 'answered', type: 'agent', id, answer: task.verb }
+      : { status: 'answered', type: 'agent', id, option_n: optionN, answer_text: answerText });
     return;
   }
   if (result.ok && result.applied === false) {
