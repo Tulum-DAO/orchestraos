@@ -139,6 +139,8 @@ export default function ArturoHome() {
   const dismissLookCard = () => { writeDismissed(lsStore(), ARTURO_ID); setLookDismissed(true); };
   const gearRef = useRef<HTMLButtonElement>(null);
   const [modelOpen, setModelOpen] = useState(false);
+  // The brain chip in the composer: the model picker floats directly above it (as it does over an agent's pill).
+  const brainChipRef = useRef<HTMLButtonElement>(null);
   const brainChoice = useArturoBrain((s) => s.choice);
   const chooseBrain = useArturoBrain((s) => s.choose);
   // The onboarding terminal. A first-time installer has NO CLI yet, so this is where they
@@ -709,7 +711,7 @@ export default function ArturoHome() {
           <div className="cluster">
             <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
                     onClick={() => fileInput.current?.click()} disabled={uploading || arturoDisabled}><Plus size={18} /></button>
-            <button className="model-chip" onClick={() => setModelOpen(true)} aria-label={`Brain: ${model}. Change`} title={`Answering on ${model}`}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
+            <button ref={brainChipRef} className="model-chip" onClick={() => setModelOpen(true)} aria-label={`Brain: ${model}. Change`} title={`Answering on ${model}`}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
           </div>
           <div className="cluster">
             {call.inCall ? (
@@ -740,8 +742,9 @@ export default function ArturoHome() {
 
       <LookPickerPopover agentId={ARTURO_ID} open={pickerOpen} onClose={() => setPickerOpen(false)} canSave={canSaveLook} />
       <ArturoPanel open={panelOpen} onClose={() => setPanelOpen(false)} returnFocusTo={gearRef} brain={eff ? `${model} ${eff}` : model} />
-      {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}). */}
-      <ModelPicker chooser="arturo" trigger={false} open={modelOpen} onOpenChange={setModelOpen}
+      {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}): it floats directly
+          above the brain chip (anchorRef), never mid-screen. */}
+      <ModelPicker chooser="arturo" trigger={false} anchorRef={brainChipRef} placement="above" open={modelOpen} onOpenChange={setModelOpen}
         value={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
         onValueChange={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
         onPickDefault={() => chooseBrain(null)} />

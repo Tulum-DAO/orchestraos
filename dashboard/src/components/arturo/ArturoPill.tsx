@@ -132,6 +132,8 @@ export function ArturoPill() {
   const brainChoice = useArturoBrain((s) => s.choice);
   const chooseBrain = useArturoBrain((s) => s.choose);
   const [modelOpen, setModelOpen] = useState(false);
+  // The brain chip in the composer: the model picker floats directly above it (as it does over an agent's pill).
+  const brainChipRef = useRef<HTMLButtonElement>(null);
   // Whether this server can start Live voice mode (GEMINI_API_KEY; /health.live): the button is gated the same
   // way as on the home page. Read on mount and again on every open, retried until a call is possible, so one
   // failed read (a proxy 502, Arturo still starting) never leaves the call unavailable while the pane is up.
@@ -543,7 +545,7 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
-            <button className="circle-btn arturo-brain-logo" onClick={() => setModelOpen(true)}
+            <button ref={brainChipRef} className="circle-btn arturo-brain-logo" onClick={() => setModelOpen(true)}
                     title={`Answering on ${brainName}`} aria-label={`Brain: ${brainName}. Change`}>
               {brainLogo
                 // logo_svg is a static, build-time mark from config/providers.json (never user input).
@@ -574,8 +576,9 @@ export function ArturoPill() {
           </div>
         </div>
       </div>
-      {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}). */}
-      <ModelPicker chooser="arturo" trigger={false} open={open && modelOpen} onOpenChange={setModelOpen}
+      {/* The kit's model picker, opened by the brain chip; no chip of its own (trigger={false}): it floats directly
+          above the brain chip (anchorRef), never mid-screen. */}
+      <ModelPicker chooser="arturo" trigger={false} anchorRef={brainChipRef} placement="above" open={open && modelOpen} onOpenChange={setModelOpen}
         value={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
         onValueChange={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
         onPickDefault={() => chooseBrain(null)} />
