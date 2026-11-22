@@ -177,5 +177,6 @@
 }
 .chat-video-open:hover { background: rgba(0, 0, 0, .75); }
 .chat-video-open:focus-visible { outline: 2px solid var(--bui-accent); outline-offset: 2px; }
-.chat-image-overlay-video { background: #000; }
+/* A video plays large: the stage's width (up to 1280px), letterboxed, never taller than the stage. */
+.chat-image-overlay-video { width: 100%; max-width: 1280px; height: auto; max-height: 100%; background: #000; }
 .chat-image-overlay-btn:disabled { opacity: .6; cursor: progress; }
