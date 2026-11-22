@@ -6,7 +6,7 @@ import {
 } from './settingsRoute.ts';
 
 test('shows General, Display, Voice, Agents, Notifications, then Permissions and Timeout rules, then the install\'s Voice & calls, Safety gate and Time zone last; the later categories are listed but hidden', () => {
-  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Permissions', 'Timeout rules', 'Voice & calls', 'Safety gate', 'Time zone']);
+  assert.deepEqual(visibleSections().map((s) => s.label), ['General', 'Display', 'Voice', 'Agents', 'Notifications', 'Permissions', 'Timeout rules', 'Usage', 'Voice & calls', 'Safety gate', 'Time zone']);
   assert.deepEqual(SETTINGS_SECTIONS.filter((s) => !s.visible).map((s) => s.id), ['models', 'keys', 'people', 'system']);
 });
 

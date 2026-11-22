@@ -4,7 +4,7 @@
  * (settingsBg) and every section opened adds one entry (settingsDepth), so browser Back steps back through sections
  * and then closes Settings; Esc / X / Done go back past them all at once.
  */
-export type SectionId = 'general' | 'display' | 'voice' | 'agents' | 'models' | 'keys' | 'notifications' | 'permissions' | 'rules' | 'people' | 'system' | 'server-voice' | 'server-gate' | 'server';
+export type SectionId = 'general' | 'display' | 'voice' | 'agents' | 'models' | 'keys' | 'notifications' | 'permissions' | 'rules' | 'people' | 'system' | 'server-voice' | 'server-gate' | 'server' | 'usage';
 /** `group`: listed under a small label at the bottom of the list (the install's own settings, admin). */
 export interface SettingsSection { id: SectionId; label: string; visible: boolean; group?: 'server' }
 
@@ -26,6 +26,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'system', label: 'System', visible: false },
   // The install's own categories, until a Server settings window exists: last, under the install's name. Its voice
   // provider, default voice, new agents take calls and daily limit (Everyone, admin); then its time zone.
+  // Each Claude / Codex login's plan windows (admin): its own category, so it is found where it is looked for.
+  { id: 'usage', label: 'Usage', visible: true, group: 'server' },
   { id: 'server-voice', label: 'Voice & calls', visible: true, group: 'server' },
   // The Claude Code safety gate: Off / Observe only / On, and which agents it covers (admin).
   { id: 'server-gate', label: 'Safety gate', visible: true, group: 'server' },

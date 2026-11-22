@@ -3658,9 +3658,63 @@ def _usage_rows_cached():
         enabled = load_settings().runtimes_enabled
     except Exception:  # noqa: BLE001 — an unreadable toml is doctor's to report; show every provider
         enabled = None
-    rows = usage_meter.usage_rows(ORCH_DIR, providers=enabled)
+    polling = _kick_usage_poll()
+    rows = usage_meter.usage_rows(ORCH_DIR, providers=enabled, polling=polling)
     _usage_cache["rows"], _usage_cache["at"] = rows, _time.time()
     return rows
+
+
+_usage_poll_thread = {"t": None, "at": 0.0}
+USAGE_POLL_DEADLINE_S = 60           # a run past this is abandoned (its thread is a daemon; the next kick may start anew)
+
+
+def _kick_usage_poll() -> bool:
+    """Start one scripts/usage_poll.py run in the background; returns whether polling is on ([usage]
+    poll, default true; an unreadable toml is off). Single-flight and rate-limited: no new run while one
+    is alive and within its deadline, and none within the poll interval of the last kick (the poller
+    itself could not call anyone sooner: its per-login slot is that same interval). The cached rows are
+    dropped only when a run wrote a snapshot ("ok"), so a read that finds nothing new keeps the cache.
+    Never under pytest (a test must not send a real login anywhere)."""
+    import threading
+    import time as _time
+    from scripts import usage_poll
+    cfg = usage_poll.load_config()
+    on = bool(cfg.get("poll"))
+    if not on or os.environ.get("PYTEST_CURRENT_TEST"):
+        return on
+    now = _time.monotonic()
+    t = _usage_poll_thread["t"]
+    if t is not None and t.is_alive() and now - _usage_poll_thread["at"] < USAGE_POLL_DEADLINE_S:
+        return on
+    if now - _usage_poll_thread["at"] < usage_poll.interval_s(cfg.get("poll_s", usage_poll.POLL_MIN_S)):
+        return on
+
+    def _run():
+        try:
+            out = usage_poll.run(Path(ORCH_DIR))
+        except Exception as e:  # noqa: BLE001 — a failed poll leaves the local sources
+            print(f"[usage] poll failed: {type(e).__name__}", flush=True)
+            return
+        if any(o.get("outcome") == "ok" for o in (out or {}).get("outcomes") or []):
+            _usage_cache["rows"] = None             # the next read shows the new reading
+    _usage_poll_thread["t"] = threading.Thread(target=_run, name="usage-poll", daemon=True)
+    _usage_poll_thread["at"] = now
+    _usage_poll_thread["t"].start()
+    return on
+    t = _usage_poll_thread["t"]
+    if t is not None and t.is_alive():
+        return on
+
+    def _run():
+        try:
+            usage_poll.run(Path(ORCH_DIR))
+        except Exception as e:  # noqa: BLE001 — a failed poll leaves the local sources
+            print(f"[usage] poll failed: {type(e).__name__}", flush=True)
+        finally:
+            _usage_cache["rows"] = None
+    _usage_poll_thread["t"] = threading.Thread(target=_run, name="usage-poll", daemon=True)
+    _usage_poll_thread["t"].start()
+    return on
 
 
 def _may_see_usage(request) -> bool:

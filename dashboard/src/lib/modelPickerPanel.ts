@@ -76,23 +76,58 @@ export interface UsageSummary {
   text: string;
   stale: boolean;
   high: boolean;
+  /** One line per login when the provider has more than one: "Main login (agents on it): 7% of 5 h · 2% of weekly". */
+  accounts?: string[];
 }
 
-const WINDOWS: Record<string, string> = { '5h': '5 h', weekly: 'weekly' };
+const WINDOWS: Record<string, string> = { '5h': '5 h', weekly: 'weekly', 'weekly-opus': 'weekly Opus', 'weekly-sonnet': 'weekly Sonnet' };
 const isPct = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
+/** The default login's name (~/.claude, ~/.codex): the agents' login when no row says otherwise. */
+export const AGENTS_ACCOUNT = 'default';
 
-/** A provider's usage from GET /api/usage's rows: the limit nearest to running out (the highest share used across
- *  its windows and logins). Null when it reports no number: no ring, never a guess. */
-export function usageFor(rows: unknown, providerId: string, now: Date = new Date()): UsageSummary | null {
-  if (!Array.isArray(rows)) return null;
-  const mine = (rows as UsageRow[]).filter((r) => r && r.provider === providerId && isPct(r.used_pct));
-  if (!mine.length) return null;
-  const top = mine.reduce((a, b) => ((b.used_pct as number) > (a.used_pct as number) ? b : a));
+/** The login the agents use, as the rows say it (`agents: true`, scripts/usage_meter.py), else the default one. */
+export function agentsAccountOf(rows: UsageRow[]): string {
+  return rows.find((r) => r && r.agents && r.account)?.account || AGENTS_ACCOUNT;
+}
+const accountName = (a: string | null | undefined) => (!a || a === AGENTS_ACCOUNT ? 'Main login' : a);
+
+function summaryOf(rows: UsageRow[], now: Date): Omit<UsageSummary, 'accounts'> {
+  const top = rows.reduce((a, b) => ((b.used_pct as number) > (a.used_pct as number) ? b : a));
   const pct = Math.round(top.used_pct as number);
   const win = (top.window && WINDOWS[top.window]) || top.window || 'its limit';
   const stale = !!top.stale;
   const asOf = stale && typeof top.as_of === 'number' ? ` (as of ${clock(top.as_of, now)})` : '';
   return { pct, text: `${pct}% of ${win} used${asOf}`, stale, high: pct >= 80 };
+}
+
+/** A provider's usage from GET /api/usage's rows: the limit nearest to running out (the highest share used across
+ *  its windows) on the login the AGENTS run on (another login's full week must not fill the ring while the agents' own
+ *  login has room; no weighting across logins, plans give no token budget). With more than one login, `accounts`
+ *  lists each one for the hover. Null when it reports no number: no ring, never a guess. */
+export function usageFor(rows: unknown, providerId: string, now: Date = new Date(), agentsAccountIn?: string): UsageSummary | null {
+  if (!Array.isArray(rows)) return null;
+  const mine = (rows as UsageRow[]).filter((r) => r && r.provider === providerId && isPct(r.used_pct));
+  if (!mine.length) return null;
+  const agentsAccount = agentsAccountIn ?? agentsAccountOf(mine);
+  const byAccount = new Map<string, UsageRow[]>();
+  for (const r of mine) {
+    const k = r.account || AGENTS_ACCOUNT;
+    byAccount.set(k, [...(byAccount.get(k) ?? []), r]);
+  }
+  const own = byAccount.get(agentsAccount) ?? (byAccount.size === 1 ? mine : null);
+  if (!own) return null;
+  const out: UsageSummary = summaryOf(own, now);
+  if (byAccount.size > 1) {
+    const order = [agentsAccount, ...[...byAccount.keys()].filter((k) => k !== agentsAccount).sort()];
+    out.accounts = order.filter((k) => byAccount.has(k)).map((k) => {
+      const ws = byAccount.get(k)!.map((r) => {
+        const resets = (r.used_pct as number) >= 100 && typeof r.resets_at === 'number' ? `, resets ${clock(r.resets_at, now)}` : '';
+        return `${Math.round(r.used_pct as number)}% of ${(r.window && WINDOWS[r.window]) || r.window}${resets}${r.stale ? ' (old)' : ''}`;
+      });
+      return `${accountName(k)}${k === agentsAccount ? ' (agents on it)' : ''}: ${ws.join(' · ')}`;
+    });
+  }
+  return out;
 }
 
 /** The usage ring's stroke: a circle of radius `r` drawn `pct`% of the way round. */

@@ -599,7 +599,9 @@ test('declutter 1: the header is the provider name only; status, usage (with "as
   assert.match(railLabel(claude), /^Claude: signed in, 50% of weekly used \(as of .+\), CLI v2\.1\.295$/);
   const at = render({ entries: [claude, ...railEntries(ROWS, [], ANY).slice(1)] });
   assert.match(at, /data-rail="claude"/);
-  assert.match(at, /title="Claude: signed in, 50% of weekly used \(as of [^"]+\), CLI v2\.1\.295"/);
+  // No native browser tooltip: the words are the aria-label and the custom hover card (RailTip).
+  assert.match(at, /aria-label="Claude: signed in, 50% of weekly used \(as of [^"]+\), CLI v2\.1\.295"/);
+  assert.doesNotMatch(at.slice(at.indexOf('data-rail="claude"') - 400, at.indexOf('data-rail="claude"')), /title="Claude/);
   assert.equal(railLabel(railEntries(ROWS, [], ANY)[1]), 'Codex: not signed in');
   // A provider that needs action keeps its banner.
   assert.match(render({ tab: 'codex', onSignIn: () => {} }), /data-model-picker-banner="codex"/);
@@ -974,4 +976,46 @@ test("picker height: the popover hugs its content, capped with the list scrollin
   // The phone sheet and the inline (Settings) picker are unchanged: the sheet hugs up to 85dvh, inline lets the page scroll.
   assert.ok(cls(render({ layout: "sheet" })).includes("max-h-[85dvh]"));
   assert.match(render({ layout: "inline" }), /role="tabpanel"[^>]*class="flex-1 min-h-0 overflow-y-auto"/);
+});
+
+test('the ring is the agents\' own login: another login\'s full week does not fill it', () => {
+  const rows = [
+    { provider: 'claude', account: 'default', window: '5h', used_pct: 7 },
+    { provider: 'claude', account: 'default', window: 'weekly', used_pct: 2 },
+    { provider: 'claude', account: 'work', window: '5h', used_pct: 14 },
+    { provider: 'claude', account: 'work', window: 'weekly', used_pct: 100, resets_at: 1_795_514_399 },
+  ];
+  const u = usageFor(rows, 'claude', new Date(1_795_215_000_000))!;
+  assert.equal(u.pct, 7);
+  assert.equal(u.high, false);
+  assert.equal(u.accounts!.length, 2);
+  assert.match(u.accounts![0], /^Main login \(agents on it\): 7% of 5 h · 2% of weekly$/);
+  assert.match(u.accounts![1], /^work: 14% of 5 h · 100% of weekly, resets /);
+});
+
+test('one login: unchanged (no account lines); agents\' login with no reading: no ring, never another login\'s number', () => {
+  const one = usageFor([{ provider: 'claude', account: 'default', window: 'weekly', used_pct: 50 }], 'claude')!;
+  assert.equal(one.pct, 50);
+  assert.equal(one.accounts, undefined);
+  assert.equal(usageFor([{ provider: 'claude', account: 'other', window: 'weekly', used_pct: 50 },
+                          { provider: 'claude', account: 'third', window: 'weekly', used_pct: 10 }], 'claude'), null);
+});
+
+test('the rail hover card names each login\'s windows (RailTip), fixed to the viewport, not a native title', () => {
+  const src = readFileSync(new URL('../components/kit/ModelPickerPanel.tsx', import.meta.url), 'utf8');
+  assert.match(src, /function RailTip\(/);
+  assert.match(src, /u\.accounts\?\.length\s*\? u\.accounts\.map/);
+  assert.match(src, /onMouseEnter=\{\(ev\) => showTip\(e, ev\.currentTarget\)\}/);
+  assert.match(src, /\{tip && <RailTip /);
+});
+
+test('the ring follows the login the rows mark as the agents\' (agents: true), not the literal "default"', () => {
+  const rows = [
+    { provider: 'claude', account: 'personal', window: 'weekly', used_pct: 95, agents: false },
+    { provider: 'claude', account: 'work', window: 'weekly', used_pct: 12, agents: true },
+  ];
+  const u = usageFor(rows, 'claude')!;
+  assert.equal(u.pct, 12);
+  assert.match(u.accounts![0], /^work \(agents on it\): 12% of weekly$/);
+  assert.equal(railEntries(ROWS, rows, { kind: 'any' }).find((e) => e.id === 'claude')!.usage!.pct, 12);
 });
