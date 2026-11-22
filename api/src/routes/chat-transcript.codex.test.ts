@@ -365,3 +365,177 @@ test('a thinking item with no timestamp omits ts', () => {
   assert.equal(items.length, 1);
   assert.ok(!('ts' in items[0]));
 });
+
+// ------------------------------------------------------------ resolution: the three tiers
+//
+// RED first — the operator saw blank chats on codex-gm and codex-arturo. The rotation engine briefs
+// every generation as "You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md ...", and the
+// whole-name lookahead above rejected the seat's OWN alias as if it were "gm-watcher". The index
+// query was also LIMIT 500 of 570 user threads. Tier 1 (registry canonical sid -> threads.id)
+// needs no text at all; tier 2 accepts -gN / -genN; tier 3 is the dropped LIMIT.
+
+/** A fixture identity store: one or more canonical heads, each with a session id. */
+function fixtureRegistry(heads: { root: string; sid: string | null }[]): string {
+  const orch = testTmpDir('codexreg-');
+  mkdirSync(join(orch, 'state'), { recursive: true });
+  const db = new Database(join(orch, 'state', 'orchestra-registry.db'));
+  db.exec(`CREATE TABLE lineages (root TEXT PRIMARY KEY, tier TEXT, runtime TEXT, reports_to TEXT,
+             always_on INTEGER, purpose TEXT, machine TEXT, cwd TEXT);
+           CREATE TABLE generations (id INTEGER PRIMARY KEY, root TEXT, generation INTEGER, session_id TEXT,
+             conversation_path TEXT, model TEXT, spawned_at TEXT, spawned_by TEXT, promoted_at TEXT,
+             promoted_by TEXT, retired_at TEXT, resume_command TEXT, note TEXT);
+           CREATE TABLE canonical (root TEXT PRIMARY KEY, generation_id INTEGER, tmux_session TEXT, status TEXT);`);
+  heads.forEach((h, i) => {
+    db.prepare('INSERT INTO lineages (root, tier, runtime, cwd) VALUES (?, ?, ?, ?)').run(h.root, 'T1', 'codex', '/repo');
+    db.prepare('INSERT INTO generations (id, root, generation, session_id, model, promoted_at) VALUES (?,?,?,?,?,?)')
+      .run(i + 1, h.root, 11, h.sid, 'gpt-5', '2026-11-01T00:00:00Z');
+    db.prepare("INSERT INTO canonical VALUES (?, ?, ?, 'online')").run(h.root, i + 1, h.root);
+  });
+  db.close();
+  return orch;
+}
+
+/** An orchestra dir with NO identity store: tier 1 has nothing to say. */
+function noRegistry(): string { return testTmpDir('codexnoreg-'); }
+
+const GM_SID = '00000000-0000-4000-8000-000000000011';
+const GM_ROLLOUT = '/home/operator/.codex/sessions/2026/11/02/rollout-gm-g11.jsonl';
+
+test('TIER 1: the canonical generation sid resolves the seat with no text match at all', () => {
+  const orch = fixtureRegistry([{ root: 'codex-gm', sid: GM_SID }]);
+  const db = fixtureDb([
+    // The brief does not even say "You are": tier 2 could never find this row.
+    { id: GM_SID, rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
+      first_user_message: 'Read /tmp/agent-init-codex-gm-g11.md and follow all instructions in it.', updated_at_ms: 5 },
+  ]);
+  const got = findCodexByDeclaration('codex-gm', db, orch);
+  assert.equal(got?.sid, GM_SID);
+  assert.equal(got?.path, GM_ROLLOUT);
+  assert.equal(got?.tier, 'canonical');
+});
+
+test('TIER 1 wins over a NEWER declaration thread: the registry, not recency, names the head', () => {
+  const orch = fixtureRegistry([{ root: 'codex-gm', sid: GM_SID }]);
+  const db = fixtureDb([
+    { id: GM_SID, rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md', updated_at_ms: 5 },
+    { id: 'stray', rollout_path: '/x/stray.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-g12. Read /tmp/agent-init-codex-gm-g12.md', updated_at_ms: 99 },
+  ]);
+  const got = findCodexByDeclaration('codex-gm', db, orch);
+  assert.equal(got?.sid, GM_SID, 'a pre-allocated or stray g12 thread must not displace the canonical head');
+  assert.equal(got?.tier, 'canonical');
+});
+
+test('TIER 1: a seat id that is its own canonical root reads its own sid, not its base lineage', () => {
+  // Live registry has BOTH codex-arturo (g7) and codex-arturo-g8 as roots.
+  const orch = fixtureRegistry([{ root: 'codex-arturo', sid: 'sid-g7' }, { root: 'codex-arturo-g8', sid: 'sid-g8' }]);
+  const db = fixtureDb([
+    { id: 'sid-g7', rollout_path: '/x/g7.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g7. Read /tmp/agent-init-codex-arturo-g7.md', updated_at_ms: 99 },
+    { id: 'sid-g8', rollout_path: '/x/g8.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g8. Read /tmp/agent-init-codex-arturo-g8.md', updated_at_ms: 5 },
+  ]);
+  assert.equal(findCodexByDeclaration('codex-arturo-g8', db, orch)?.sid, 'sid-g8');
+  assert.equal(findCodexByDeclaration('codex-arturo', db, orch)?.sid, 'sid-g7');
+});
+
+test('TIER 1 fence: a seat that is its own root with a pruned sid NEVER gets its base root\'s rollout', () => {
+  // Reviewer fixture: both codex-arturo (g7) and codex-arturo-g8 are roots; g8's rollout is pruned
+  // from the thread index. Tier 1 must not continue to the base root (that is g7's conversation);
+  // tier 2's exact-id regex picks g8's own brief instead.
+  const orch = fixtureRegistry([{ root: 'codex-arturo', sid: 'sid-g7' }, { root: 'codex-arturo-g8', sid: 'sid-g8-pruned' }]);
+  const db = fixtureDb([
+    { id: 'sid-g7', rollout_path: '/x/g7.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g7. Read /tmp/agent-init-codex-arturo-g7.md', updated_at_ms: 99 },
+    { id: 'g8-brief', rollout_path: '/x/g8.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g8. Read /tmp/agent-init-codex-arturo-g8.md', updated_at_ms: 5 },
+  ]);
+  const got = findCodexByDeclaration('codex-arturo-g8', db, orch);
+  assert.notEqual(got?.sid, 'sid-g7', 'g8 was handed g7\'s rollout as canonical');
+  assert.equal(got?.sid, 'g8-brief');
+  assert.equal(got?.tier, 'declaration');
+});
+
+test('TIER 1 -> 2: a canonical sid the thread index does not know falls through to the declaration', () => {
+  const orch = fixtureRegistry([{ root: 'codex-gm', sid: 'pruned-sid' }]);
+  const db = fixtureDb([
+    { id: 's1', rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md', updated_at_ms: 5 },
+  ]);
+  const got = findCodexByDeclaration('codex-gm', db, orch);
+  assert.equal(got?.sid, 's1');
+  assert.equal(got?.tier, 'declaration');
+});
+
+test('TIER 1 fence: the registry never hands a seat ANOTHER root\'s sid', () => {
+  const orch = fixtureRegistry([{ root: 'codex-gm-watcher', sid: 'watcher-sid' }]);
+  const db = fixtureDb([
+    { id: 'watcher-sid', rollout_path: '/x/watcher.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-watcher. Read /tmp/agent-init-codex-gm-watcher.md', updated_at_ms: 9 },
+  ]);
+  assert.equal(findCodexByDeclaration('codex-gm', db, orch), null);
+});
+
+test('TIER 2: the rotation engine\'s -gN brief IS the seat\'s own declaration', () => {
+  const db = fixtureDb([
+    { id: 's1', rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md and follow all instructions in it.', updated_at_ms: 5 },
+  ]);
+  const got = findCodexByDeclaration('codex-gm', db, noRegistry());
+  assert.equal(got?.sid, 's1', 'the seat\'s own generation alias was rejected as if it were another seat');
+  assert.equal(got?.tier, 'declaration');
+});
+
+test('TIER 2: the -genN spelling is the same alias', () => {
+  const db = fixtureDb([
+    { id: 's1', rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-gen7. Read /tmp/agent-init-codex-arturo-gen7.md', updated_at_ms: 5 },
+  ]);
+  assert.equal(findCodexByDeclaration('codex-arturo', db, noRegistry())?.sid, 's1');
+});
+
+test('TIER 2 fence: "codex-gm" never matches "codex-gm-watcher", nor "codex-gm-g11-watcher"', () => {
+  const db = fixtureDb([
+    { id: 'w', rollout_path: '/x/w.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-watcher. Read /tmp/agent-init-codex-gm-watcher.md', updated_at_ms: 9 },
+    { id: 'gw', rollout_path: '/x/gw.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-g11-watcher. Read /tmp/agent-init-codex-gm-g11-watcher.md', updated_at_ms: 8 },
+    { id: 'gx', rollout_path: '/x/gx.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-gm-g11x. Read /tmp/agent-init-codex-gm-g11x.md', updated_at_ms: 7 },
+  ]);
+  assert.equal(findCodexByDeclaration('codex-gm', db, noRegistry()), null);
+});
+
+test('TIER 2: a suffixed seat id prefers the brief that names it exactly over a newer sibling', () => {
+  const db = fixtureDb([
+    { id: 'g7', rollout_path: '/x/g7.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g7. Read /tmp/agent-init-codex-arturo-g7.md', updated_at_ms: 99 },
+    { id: 'g8', rollout_path: '/x/g8.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g8. Read /tmp/agent-init-codex-arturo-g8.md', updated_at_ms: 5 },
+  ]);
+  assert.equal(findCodexByDeclaration('codex-arturo-g8', db, noRegistry())?.sid, 'g8');
+  assert.equal(findCodexByDeclaration('codex-arturo', db, noRegistry())?.sid, 'g7', 'a bare base id takes the newest alias');
+});
+
+test('TIER 3: a seat whose brief sits past the 500th newest thread still resolves (no LIMIT)', () => {
+  // The 600 newer rows all PASS the LIKE prefilter ("You are codex-gm-watcher" contains
+  // "You are codex-gm") and are rejected by the regex, so only the dropped LIMIT reaches row 601.
+  const rows: any[] = [];
+  for (let i = 0; i < 600; i++) {
+    rows.push({ id: `other-${i}`, rollout_path: `/x/other-${i}.jsonl`, cwd: '/repo', thread_source: 'user',
+      first_user_message: `You are codex-gm-watcher. Read /tmp/agent-init-codex-gm-watcher-${i}.md`, updated_at_ms: 10_000 + i });
+  }
+  rows.push({ id: 'deep', rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
+    first_user_message: 'You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md', updated_at_ms: 1 });
+  const db = fixtureDb(rows);
+  assert.equal(findCodexByDeclaration('codex-gm', db, noRegistry())?.sid, 'deep');
+});
+
+test('TIER 3: a LIKE prefilter still lets the regex decide — "You are" mid-text is not a declaration', () => {
+  const db = fixtureDb([
+    { id: 'mid', rollout_path: '/x/mid.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'tell me why You are codex-gm shows up in the chat', updated_at_ms: 5 },
+  ]);
+  assert.equal(findCodexByDeclaration('codex-gm', db, noRegistry()), null);
+});

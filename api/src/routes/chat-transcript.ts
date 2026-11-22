@@ -25,7 +25,7 @@ import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
-import { sessionOwners, predecessorOf, lineageChainOf } from '../services/identity-store-reader.js';
+import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents } from '../services/identity-store-reader.js';
 import { cachedLog } from '../services/transcript-log-cache.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
@@ -120,8 +120,10 @@ function findGeminiByDeclaration(agentId: string): { path: string; sid: string }
 // them in ~/.codex/state_5.sqlite table `threads` (id, rollout_path, cwd, thread_source,
 // first_user_message, updated_at_ms).
 //
-// Resolution is a POSITIVE seat-name declaration join on first_user_message — the same shape as
-// findGeminiByDeclaration above — and NEVER a cwd match. Congruence DEC-1790239929422621: every
+// Resolution is TIERED and NEVER a cwd match. Tier 1 is the identity store: the canonical
+// generation's session_id (services/identity-store-reader.ts) is the thread id spawn launched,
+// joined to threads.id. Tier 2 is a POSITIVE seat-name declaration join on first_user_message —
+// the same shape as findGeminiByDeclaration above — accepting the seat's own -gN alias. Congruence DEC-1790239929422621: every
 // seat shares repo_root by construction (orchestra_cli/seats.py register_seat does
 // setdefault("cwd", str(st.repo_root))), so cwd cannot identify a seat, and a cwd/recency fallback
 // would render ANOTHER project's conversation as this seat's on a shared box. A blank pane is
@@ -138,29 +140,72 @@ function findGeminiByDeclaration(agentId: string): { path: string; sid: string }
 // while silently always falling through to the join below.
 const CODEX_STATE_DB = join(HOME, '.codex', 'state_5.sqlite');
 
-export function findCodexByDeclaration(agentId: string, dbPath = CODEX_STATE_DB):
-  { path: string; sid: string } | null {
+/** How a codex seat was bound to its rollout: 'canonical' = the registry's canonical generation
+ *  session_id joined to threads.id (the seat's own declaration, as spawn wrote it); 'declaration'
+ *  = the first_user_message "You are <seat>" join. */
+export type CodexTier = 'canonical' | 'declaration';
+
+// Tier 1. The registry names the seat's live head: canonical.generation_id -> generations.session_id
+// IS the codex thread id (spawn-agent.sh stamps the sid it launched with). That row needs no
+// text match at all, so it is immune to how the rotation engine phrases the brief. A seat whose
+// id is itself a canonical root (codex-arturo-g8 is one, beside codex-arturo) is read under its
+// own id ONLY: its base lineage is another root, and falling back to it would hand g8 the g7
+// rollout as 'canonical'. A sid the thread index does not know (rollout pruned) falls through to
+// tier 2, where the exact-id regex still prefers the seat's own brief.
+function findCodexByCanonical(agentId: string, baseId: string, db: any, orch?: string):
+  { path: string; sid: string; tier: CodexTier } | null {
+  const canon = getCanonicalAgents(orch);
+  if (!canon) return null;
+  const bySid = db.prepare('SELECT id, rollout_path FROM threads WHERE id = ? AND rollout_path IS NOT NULL');
+  const root = canon[agentId] ? agentId : baseId;
+  const sid = canon[root]?.session_id;
+  if (!sid) return null;
+  const r = bySid.get(sid) as { id: string; rollout_path: string } | undefined;
+  return r?.rollout_path ? { path: r.rollout_path, sid: r.id, tier: 'canonical' } : null;
+}
+
+export function findCodexByDeclaration(agentId: string, dbPath = CODEX_STATE_DB, orch?: string):
+  { path: string; sid: string; tier: CodexTier } | null {
   if (!existsSync(dbPath)) return null;
   const baseId = agentId.replace(/-(?:gen\d+|g\d+|next|\d+)$/, '');
   let db: any = null;
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const canonical = findCodexByCanonical(agentId, baseId, db, orch);
+    if (canonical) return canonical;
+
+    // Tier 2: the declaration join. SQL prefilters on the seat's base name (LIKE is a prefilter
+    // only; the regex below is the match) and there is NO LIMIT: the live index holds 570 user
+    // threads and a seat whose brief sat past row 500 was unreachable.
     const rows = db.prepare(
       "SELECT id, rollout_path, first_user_message FROM threads "
       + "WHERE thread_source = 'user' AND first_user_message IS NOT NULL "
-      + 'ORDER BY updated_at_ms DESC LIMIT 500',
-    ).all() as { id: string; rollout_path: string; first_user_message: string }[];
+      + 'AND first_user_message LIKE ? '
+      + 'ORDER BY updated_at_ms DESC',
+    ).all(`%You are ${baseId}%`) as { id: string; rollout_path: string; first_user_message: string }[];
     // Whole-name match. \b is NOT enough: a hyphen is a non-word char, so /you are gm\b/ happily
     // matches "You are gm-watcher" and would hand this seat another seat's conversation. The
-    // lookahead denies a following word char OR hyphen.
+    // lookahead denies a following word char OR hyphen. The one hyphenated form that IS this seat
+    // is its own generation alias: the rotation engine briefs every generation as
+    // "You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md", so -gN / -genN is accepted
+    // before the lookahead. "codex-gm-watcher" is still another seat and still rejected.
     const esc = baseId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const declares = new RegExp(`^\\s*you are ${esc}(?![\\w-])`, 'i');
+    const declares = new RegExp(`^\\s*you are ${esc}(?:-(?:g|gen)\\d+)?(?![\\w-])`, 'i');
+    // A seat id that carries its own suffix ("codex-arturo-g8") prefers the brief that names it
+    // exactly over a sibling generation's brief; a bare base id takes the newest alias.
+    const escFull = agentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const declaresExact = agentId === baseId ? null : new RegExp(`^\\s*you are ${escFull}(?![\\w-])`, 'i');
+    let alias: { path: string; sid: string; tier: CodexTier } | null = null;
     for (const r of rows) {
-      if (r.rollout_path && declares.test(String(r.first_user_message))) {
-        return { path: r.rollout_path, sid: r.id };
+      if (!r.rollout_path) continue;
+      const msg = String(r.first_user_message);
+      if (declaresExact?.test(msg)) return { path: r.rollout_path, sid: r.id, tier: 'declaration' };
+      if (!alias && declares.test(msg)) {
+        alias = { path: r.rollout_path, sid: r.id, tier: 'declaration' };
+        if (!declaresExact) return alias;
       }
     }
-    return null;
+    return alias;
   } catch {
     return null;            // missing table, corrupt file, locked db — a blank pane, never a 500
   } finally {
@@ -494,7 +539,8 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     forgetPane(tmuxSession);
   }
 
-  // 0c. Codex: the seat's own declaration in ~/.codex/state_5.sqlite. Checked before the Claude
+  // 0c. Codex: the registry's canonical sid, else the seat's own declaration, in
+  // ~/.codex/state_5.sqlite (findCodexByDeclaration, two tiers). Checked before the Claude
   // paths because a codex seat has no Claude hook sid and no ~/.claude/projects dir to fall into.
   // A miss falls through and ultimately returns {null,null} — never a cwd guess (see the header
   // comment on findCodexByDeclaration).
