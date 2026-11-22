@@ -20,6 +20,7 @@ import { focusDecision } from '../../lib/decisions';
 import { useAgents } from '../../hooks/useAgents';
 import { groupForRail, providersVary, contextLabel, contextHigh, showsContext, sectionItems, rowLabel, PROVIDER_ABBR, PROVIDER_LABEL, type RailAgent, type RailGroups, type RailItem } from '../../lib/agentRail';
 import { usePins, loadPinsOnce, togglePin, renameAgent, longPress } from '../../lib/railAgents';
+import { renameAction, type RenameEvent } from '../../lib/railRename';
 import { agentRowsFrom } from '../../lib/api';
 import { chipStateFor } from '../RecentAgentChips';
 import { AgentAvatar } from '../avatar/AgentAvatar';
@@ -176,28 +177,44 @@ function RowMenu({ pinnedNow, onPin, onRename, onClose }: { pinnedNow: boolean; 
   );
 }
 
-/** Rename in place: Enter saves, Escape (or leaving the field) cancels; a refusal shows its reason under the row. */
+/** Rename in place: Enter saves, and so does leaving the field (a click elsewhere, Tab); Escape cancels. An empty or
+ *  unchanged name just closes (lib/railRename.ts). A refusal shows its reason under the row and keeps the field open. */
 function RenameField({ agent, active, initial, onDone, onError }: { agent: RailAgent; active: boolean; initial: string; onDone: (ok: boolean) => void; onError: (e: string | null) => void }) {
   const face = useTextAvatar(32);
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const save = async () => {
-    const next = text.trim();
-    if (!next || next === initial) { onDone(false); return; }
+  const input = useRef<HTMLInputElement>(null);
+  // Set once the field has acted (a save on its way, or a cancel): the blur that follows (the field closing, or going
+  // disabled while it saves) must not act again.
+  const settled = useRef(false);
+  const act = (event: RenameEvent) => {
+    const what = renameAction(event, text, initial, settled.current);
+    if (what === 'none') return;
+    settled.current = true;
+    if (what === 'cancel') { onError(null); onDone(false); return; }
+    void save(text.trim(), event);
+  };
+  const save = async (next: string, event: RenameEvent) => {
     setBusy(true);
     const r = await renameAgent(agent.id, next);
     setBusy(false);
-    if (r.ok) { onError(null); onDone(true); } else onError(r.error);
+    if (r.ok) { onError(null); onDone(true); return; }
+    onError(r.error);
+    settled.current = false;                                         // fix the name and try again
+    if (event === 'enter') window.setTimeout(() => input.current?.focus(), 0);   // it lost focus while disabled
   };
   return (
     <div className={clsx('w-full flex items-center gap-2 px-2 py-1 rounded', active && 'bg-neutral-200 dark:bg-neutral-800')} onClick={(e) => e.stopPropagation()}>
       <span className={clsx('-my-1 shrink-0', active ? 'la-on-selected' : 'la-on-sidebar')}>
         <AgentAvatar agentId={agent.id} role="sidebar" size={face} selected={active} label={initial} />
       </span>
-      <input autoFocus value={text} disabled={busy} maxLength={40} aria-label={`New name for ${agent.full_name || initial}`} data-rail-rename
+      <input ref={input} autoFocus value={text} disabled={busy} maxLength={40} aria-label={`New name for ${agent.full_name || initial}`} data-rail-rename
              onChange={(e) => { setText(e.target.value); onError(null); }}
-             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void save(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onError(null); onDone(false); } }}
-             onBlur={() => { if (!busy) { onError(null); onDone(false); } }}
+             onKeyDown={(e) => {
+               if (e.key === 'Enter') { e.preventDefault(); act('enter'); }
+               else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); act('escape'); }
+             }}
+             onBlur={() => act('blur')}
              className="flex-1 min-w-0 text-sm px-1.5 py-0.5 rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 outline-none focus:border-neutral-500" />
     </div>
   );
