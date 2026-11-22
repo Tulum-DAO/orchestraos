@@ -23,6 +23,7 @@ import { callLevels, useCallStore, type CallLevels } from '../../stores/callStor
 import { useCallParty } from './useCallParty';
 import { styleBeforeDev, useChatStyle } from '../../lib/agentPrefs';
 import { turnSkinOf } from '../../lib/chatSkin';
+import { useBubbleColour } from '../chat/useBubbleColour';
 import CallWaveform from './CallWaveform';
 
 const PHASE_WORDS = { connecting: 'Connecting…', listening: 'Listening', thinking: 'Thinking', talking: 'Talking', ended: 'Call ended' } as const;
@@ -59,6 +60,8 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
   const chatStyle = useChatStyle(agentId);
   const turnSkin = call?.party === 'agent' ? turnSkinOf(chatStyle, styleBeforeDev(agentId)) : undefined;
   const rec = party.rec;
+  // Your words in the transcript, in Bubbles: the bubble in the colour of whoever answers (useBubbleColour).
+  const bubbleColour = useBubbleColour(party.id);
   const name = call?.party === 'agent' ? seatName : party.name;
   const dark = useSyncExternalStore(subscribeDark, isDark, () => false);
   const [open, setOpenState] = useState(false);
@@ -86,7 +89,7 @@ export default function CallBar({ agentId, name: seatName, onSettings, onExpand,
   );
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-2" data-call-bar={call.phase}>
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-2" data-call-bar={call.phase} style={bubbleColour}>
       <div className="pointer-events-auto mx-auto w-full max-w-[420px] rounded-2xl border border-border bg-card/95 shadow-lg backdrop-blur-md">
         <div className="flex items-center gap-2.5 px-2.5 pt-2 pb-1">
           <div className="flex shrink-0 flex-col items-center">

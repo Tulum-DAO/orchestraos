@@ -480,6 +480,14 @@ main {
   .fleet-dot-down, .fleet-dot-up { top: 50%; }
 }
 
+/* Bubbles: the person's bubble in the colour of the agent it was sent to. The thread sets the two variables
+   (lib/bubbleColour.ts: the agent's look, flipped to the theme's ink where it would vanish into the page, with
+   black or white text at WCAG AA); where none is set, the old blue with white text. Modern never reads them. */
+.bubble-user-colour {
+  background-color: var(--bubble-user-bg, oklch(54.6% 0.245 262.881 / 0.9));
+  color: var(--bubble-user-fg, #fff);
+}
+
 /* Living avatars: the surface behind each avatar, so the cut-out ring around its status dot and provider
    badge matches what is really there (avatarCanvas.ts reads --la-surface). The sidebar is the page
    background; a selected row is neutral-200, neutral-800 in dark. */
