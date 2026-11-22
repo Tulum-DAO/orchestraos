@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { testTmpDir } from './testTmp.js';
-import { MAX_MISSES, MediaStore, agentMediaRoots, enclosesDataDir, imageRefsFor, _missCount, _resetMisses } from './mediaStore.js';
+import { MAX_MISSES, MediaStore, agentMediaRoots, enclosesDataDir, imageRefsFor, insideStateTree, _missCount, _resetMisses } from './mediaStore.js';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
 
@@ -102,4 +102,42 @@ test('the table\'s load keeps its bound, a video row\'s kind and a copy\'s ref',
   assert.equal(again.countFor('pm'), 3);
   const small = new MediaStore(file, 2);
   assert.equal(small.countFor('pm'), 2, 'a smaller cap holds on load');
+});
+
+// #601 review finding 3: F2 only refused a cwd that IS or encloses the data dir. One INSIDE its state/ tree still
+// reopened every client's uploads and every agent's screenshots. Each folder the reviewer probed, and its neighbours.
+test('SABOTAGE finding 3: a cwd inside the data dir\'s state/ tree is not a root; another client\'s upload and another agent\'s shot get no id', () => {
+  const { home, data } = tree();
+  mkdirSync(join(data, 'state', 'shots', 'other-agent'), { recursive: true });
+  writeFileSync(join(data, 'state', 'shots', 'other-agent', 'theirs.png'), PNG);
+  mkdirSync(join(data, 'state', 'agents', 'other-agent'), { recursive: true });
+  writeFileSync(join(data, 'state', 'agents', 'other-agent', 'note.png'), PNG);
+  const own = [join(data, 'state', 'shots', 'home-seat'), join(data, 'state', 'agents', 'home-seat')];
+  const alias = join(testTmpDir('media-f3-alias-'), 'up');
+  symlinkSync(join(data, 'state', 'uploads'), alias);
+  const probed = [
+    join(data, 'state'), join(data, 'state', 'uploads'), join(data, 'state', 'shots'), join(data, 'state', 'agents'),
+    join(data, 'state', 'shots', 'other-agent'), join(data, 'state', 'agents', 'other-agent'), `${join(data, 'state')}/`, alias,
+  ];
+  const secrets = [
+    join(data, 'state', 'uploads', 'other-client.png'),
+    join(data, 'state', 'shots', 'other-agent', 'theirs.png'),
+    join(data, 'state', 'agents', 'other-agent', 'note.png'),
+    join(alias, 'other-client.png'),
+  ];
+  for (const cwd of probed) {
+    _resetMisses();
+    writeFileSync(join(data, 'state', 'agents', 'home-seat.json'), JSON.stringify({ cwd }));
+    assert.deepEqual(agentMediaRoots(data, 'home-seat'), own, cwd);
+    const store = new MediaStore(join(testTmpDir('media-f3-ids-'), 'ids.json'));
+    const refs = imageRefsFor('home-seat', [...secrets, join(data, 'state', 'shots', 'home-seat', 'mine.png')], { store, roots: (a) => agentMediaRoots(data, a) });
+    assert.deepEqual(refs.map((r) => r.name), ['mine.png'], `cwd ${cwd}: only its own shot`);
+    assert.equal(insideStateTree(cwd, data), true, cwd);
+  }
+  // Still roots: a folder in the data dir beside state/, and a project folder beside the data dir.
+  for (const cwd of [join(data, 'projects', 'p'), join(data, 'stateful'), join(home, 'proj')]) {
+    writeFileSync(join(data, 'state', 'agents', 'home-seat.json'), JSON.stringify({ cwd }));
+    assert.deepEqual(agentMediaRoots(data, 'home-seat'), [cwd, ...own], cwd);
+    assert.equal(insideStateTree(cwd, data), false, cwd);
+  }
 });

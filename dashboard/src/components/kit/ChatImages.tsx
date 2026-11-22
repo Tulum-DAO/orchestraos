@@ -4,9 +4,11 @@
  *   ImageStrip   the message's media as fixed-size tiles (lib/imageRefs THUMB): the box is sized
  *                before the bytes arrive and never changes, so the thread does not shift; the
  *                bytes load lazily; a refusal (404) is a small chip, never the browser's broken
- *                image glyph. A video is a poster-less <video controls preload="metadata"
- *                playsinline muted> in the same box (it plays right there; the corner button opens
- *                it large). Only media the server stamped is drawn: the client never sends a path
+ *                image glyph. A video is a poster-less <video controls playsinline muted> in the
+ *                same box (it plays right there; the corner button opens it large), never autoplay.
+ *                It is lazy: no source and preload="none" until the tile comes within
+ *                VIDEO_NEAR_PX of the viewport (IntersectionObserver), then preload="metadata", so
+ *                a window full of videos fetches nothing for the ones off screen. Only media the server stamped is drawn: the client never sends a path
  *                and never asks for an id.
  *   ImageOverlay a tap: the image (or the video, playing) front and centre over a frosted, blurred
  *                backdrop; top right Share, Download, Close. Share sends the FILE through the Web
@@ -37,16 +39,32 @@ function ErrorChip({ img, box }: { img: ChatImage; box: { width: number; height:
   );
 }
 
-/** A video in the thread: it plays in its tile (muted until the person turns the sound on); the corner opens it large. */
-function VideoThumb({ img, onOpen }: { img: ChatImage; onOpen: (img: ChatImage) => void }) {
+/** How close to the viewport (px) a video tile starts fetching its metadata. */
+const VIDEO_NEAR_PX = 400;
+
+/** A video in the thread: it plays in its tile (muted until the person turns the sound on, never by itself); the
+ *  corner opens it large. Nothing is fetched until the tile is near the viewport. Where the browser has no
+ *  IntersectionObserver it loads at once (metadata only), as it did before. */
+export function VideoThumb({ img, onOpen }: { img: ChatImage; onOpen: (img: ChatImage) => void }) {
   const url = mediaUrl(img.id);
   const ref = useRef<HTMLVideoElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const [errored, setErrored] = useState<string | null>(null);
+  const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined');
+  useEffect(() => {
+    const el = boxRef.current;
+    if (near || !el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setNear(true); io.disconnect(); }
+    }, { rootMargin: `${VIDEO_NEAR_PX}px` });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [near]);
   const box = { width: THUMB.width, height: THUMB.height };
   if (!url || errored === url) return <ErrorChip img={img} box={box} />;
   return (
-    <div className="chat-image chat-video is-loaded" style={box} title={img.name} data-chat-image="video">
-      <video ref={ref} src={url} controls preload="metadata" playsInline muted aria-label={img.name}
+    <div ref={boxRef} className="chat-image chat-video is-loaded" style={box} title={img.name} data-chat-image="video" data-near={near ? 'yes' : 'no'}>
+      <video ref={ref} src={near ? url : undefined} controls preload={near ? 'metadata' : 'none'} playsInline muted aria-label={img.name}
              onError={() => setErrored(url)} />
       <button type="button" className="chat-video-open" aria-label={`Open ${img.name}`} title="Open large"
               onClick={() => { ref.current?.pause(); onOpen(img); }}>

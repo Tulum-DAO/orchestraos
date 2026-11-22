@@ -7,10 +7,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testTmpDir } from '../lib/testTmp.js';
-import { MEDIA_ID, MediaStore, imageRefsFor, _resetMisses } from '../lib/mediaStore.js';
+import { MEDIA_ID, MediaStore, agentMediaRoots, defaultImageRefsFor, imageRefsFor, stamperFor, _resetMisses } from '../lib/mediaStore.js';
+import { devicePuller } from '../lib/devicePull.js';
 
 // The data dir (and so the id table and the agent's roots) is read at import, so it is set first.
 const DATA = testTmpDir('images-data-');
@@ -20,8 +21,17 @@ mkdirSync(join(DATA, 'state', 'shots', 'gm'), { recursive: true });
 mkdirSync(join(DATA, 'state', 'uploads'), { recursive: true });
 mkdirSync(join(PROJECT, 'shots'), { recursive: true });
 writeFileSync(join(DATA, 'state', 'agents', 'gm.json'), JSON.stringify({ cwd: PROJECT }));
+// Two seats labelled with a machine this host reaches (finding 1): written before anything reads the registry.
+const LAB_CWD = join(DATA, 'work', 'lab');
+writeFileSync(join(DATA, 'registry.json'), JSON.stringify({
+  machines: { studio: { hostname: 'studio', tailscale_ip: '100.64.0.9', ssh_user: 'dev', home: '/home/dev' } },
+  agents: { 'lab-seat': { machine: 'studio', cwd: LAB_CWD }, 'far-seat': { machine: 'studio', cwd: '/Users/dev/far' } },
+}));
 process.env.ORCHESTRA_DIR = DATA;
-const { normalizeTranscript, stampImages, buildRenderItems } = await import('./chat-transcript.js');
+// tmux is asked which sessions are live (the device rule): a private, empty socket dir, never the host's server.
+process.env.TMUX_TMPDIR = testTmpDir('images-tmux-');
+delete process.env.TMUX; delete process.env.TMUX_PANE;
+const { normalizeTranscript, stampImages, buildRenderItems, seatRunsHere } = await import('./chat-transcript.js');
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 7)]);
 const claude = (role: 'user' | 'assistant', content: unknown, ts = '2026-11-22T05:00:00Z') =>
@@ -164,4 +174,80 @@ test('F1: below the cap nothing changes; at the cap a mint that would evict a ro
   assert.ok(tiny.mint('gm', '/p/z.png', { protect: new Set(['/p/z.png']) }));
   assert.equal(tiny.lookup(y), null);
   assert.ok(tiny.lookup(x));
+});
+
+// #601 review finding 4: the cap counted paths that can never be shown, and paging replaced the newest window's ids.
+test('SABOTAGE finding 4: 504 newer paths that are not there do not crowd out 8 real images (only showable paths count)', () => {
+  _resetMisses();
+  const dir = join(PROJECT, 'f4-crowd');
+  mkdirSync(dir, { recursive: true });
+  const store = new MediaStore(join(testTmpDir('images-f4a-'), 'ids.json'), 500);
+  const refsFor = stamperFor({ store, roots: () => [PROJECT] });
+  const real = bigWindow(dir, 8);
+  const missing = Array.from({ length: 504 }, (_, i) => ({ kind: 'text', role: 'assistant', text: `gone ${join(dir, `gone-${i}.png`)}`, uuid: `g${i}` }));
+  const out = idsOf(stampImages([...real, ...missing], 'gm', refsFor));
+  assert.equal(out.slice(0, 8).filter(Boolean).length, 8, 'the 8 real images carry ids');
+  assert.equal(out.slice(8).filter(Boolean).length, 0);
+  assert.deepEqual(idsOf(stampImages([...real, ...missing], 'gm', refsFor)), out, 'and keep them');
+});
+
+function timedWindow(dir: string, tag: string, n: number, t0: number) {
+  return bigWindow(dir, n).map((it, i) => ({ ...it, text: it.text.replace('step-', `${tag}-`), ts: new Date(t0 + i * 1000).toISOString() }));
+}
+
+test('SABOTAGE finding 4: paging to an older full window and back keeps every id of the newest window', () => {
+  _resetMisses();
+  const dir = join(PROJECT, 'f4-page');
+  mkdirSync(dir, { recursive: true });
+  const store = new MediaStore(join(testTmpDir('images-f4b-'), 'ids.json'), 500);
+  const refsFor = stamperFor({ store, roots: () => [PROJECT] });
+  const T = Date.parse('2026-11-22T00:00:00Z');
+  const older = timedWindow(dir, 'old', 500, T);
+  const newest = timedWindow(dir, 'new', 500, T + 3_600_000);
+  for (const it of older) writeFileSync(it.text.slice(it.text.indexOf('/')), PNG);
+  for (const it of newest) writeFileSync(it.text.slice(it.text.indexOf('/')), PNG);
+  const live = idsOf(stampImages(newest, 'gm', refsFor));
+  assert.equal(live.filter(Boolean).length, 500);
+  const page = idsOf(stampImages(older, 'gm', refsFor));
+  assert.equal(page.filter(Boolean).length, 0, 'the table is full of rows referenced later: the older page takes none of them');
+  assert.deepEqual(idsOf(stampImages(newest, 'gm', refsFor)), live, 'back at the live end: 500/500 of the newest ids kept');
+  assert.equal(store.countFor('gm'), 500);
+  // When the live end moves on, the rows referenced longest ago are the ones that go.
+  const next = timedWindow(dir, 'next', 10, T + 7_200_000);
+  for (const it of next) writeFileSync(it.text.slice(it.text.indexOf('/')), PNG);
+  const moved = idsOf(stampImages([...newest.slice(10), ...next], 'gm', refsFor));
+  assert.deepEqual(moved.slice(0, 490), live.slice(10));
+  assert.equal(moved.slice(490).filter(Boolean).length, 10);
+});
+
+// #601 review finding 1, end to end through the evidence this route registers (seatRunsHere).
+test('SABOTAGE finding 1: a seat labelled with a reachable machine whose transcript is HERE is a seat of this host; nothing is pulled', async () => {
+  _resetMisses();
+  const cwd = LAB_CWD;
+  mkdirSync(join(cwd, 'out'), { recursive: true });
+  writeFileSync(join(cwd, 'out', 'lab.png'), PNG);
+  const convo = join(cwd, 'convo.jsonl');
+  writeFileSync(convo, claude('assistant', 'hello') + '\n');
+  const sid = '11111111-2222-4333-8444-555555555555';
+  writeFileSync(join(DATA, 'state', 'agent-sessions.json'), JSON.stringify({ 'lab-seat': { session_id: sid, conversation_path: convo, cwd } }));
+  writeFileSync(join(DATA, 'state', 'agents', 'lab-seat.json'), JSON.stringify({ cwd }));
+  const bin = testTmpDir('images-ssh-');
+  const log = join(bin, 'ssh.log');
+  writeFileSync(log, '');
+  writeFileSync(join(bin, 'ssh'), `#!/bin/sh\necho "$@" >> '${log}'\nexit 255\n`);
+  chmodSync(join(bin, 'ssh'), 0o755);
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${bin}:${prevPath}`;
+  try {
+    assert.equal(seatRunsHere('lab-seat', { machine: 'studio' }), true, 'its transcript is on this host');
+    assert.equal(seatRunsHere('far-seat', { machine: 'studio' }), false, 'no session and no transcript here');
+    assert.equal(devicePuller(DATA).isDevice('lab-seat'), false);
+    assert.equal(devicePuller(DATA).isDevice('far-seat'), true, 'positive evidence is still a device');
+    assert.deepEqual(agentMediaRoots(DATA, 'lab-seat')[0], cwd, 'its cwd stays a root');
+    const shot = join(cwd, 'out', 'lab.png');
+    const out = stampImages([{ kind: 'text', role: 'assistant', text: `see ${shot}`, uuid: 'lab1' }], 'lab-seat', defaultImageRefsFor(DATA));
+    assert.deepEqual(out[0].images?.map((i: any) => i.name), ['lab.png'], 'the image it showed is still shown');
+    await devicePuller(DATA).idle();
+    assert.equal(readFileSync(log, 'utf-8'), '', 'no ssh was run');
+  } finally { process.env.PATH = prevPath; }
 });

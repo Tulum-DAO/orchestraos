@@ -8,7 +8,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, openSync, closeSync, ftruncateSync, writeFileSync, writeSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, closeSync, ftruncateSync, readdirSync, writeFileSync, writeSync } from 'node:fs';
+import http from 'node:http';
 import { join } from 'node:path';
 import { testTmpDir } from '../lib/testTmp.js';
 import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, MediaStore, imageRefsFor, openMedia, resolveImageFile, sniffMedia, sniffVideo, _resetMisses } from '../lib/mediaStore.js';
@@ -197,5 +198,47 @@ test('SABOTAGE: a video id whose file became a non-video, or another container, 
       assert.equal(r.status, 404, String(range));
       await r.arrayBuffer();
     }
+  });
+});
+
+// #601 review finding 5 (mutants M2, M21): both fd releases were unguarded. The process's open descriptors are
+// counted (/proc/self/fd) before and after N viewers that drop a stream mid-read and N answers of 416, on a file far
+// bigger than one chunk, so a stream left paused would hold its descriptor.
+const fdCount = () => readdirSync('/proc/self/fd').length;
+
+/** One request with its own socket (no keep-alive pool holding a descriptor); `drop` ends it after the first chunk. */
+function rawGet(base: string, path: string, headers: Record<string, string>, drop: boolean): Promise<number> {
+  return new Promise((done, fail) => {
+    const req = http.get(`${base}${path}`, { headers, agent: false }, (res) => {
+      if (drop) { res.once('data', () => { req.destroy(); done(res.statusCode ?? 0); }); return; }
+      res.resume();
+      res.on('end', () => done(res.statusCode ?? 0));
+    });
+    req.on('error', (e) => (drop ? undefined : fail(e)));
+  });
+}
+
+async function settle(target: number, ms = 3000): Promise<number> {
+  const until = Date.now() + ms;
+  let n = fdCount();
+  while (n > target && Date.now() < until) { await new Promise((r) => setTimeout(r, 25)); n = fdCount(); }
+  return n;
+}
+
+test('SABOTAGE finding 5: a viewer dropping a stream mid-read, and a 416, each release the file descriptor', { skip: !existsSync('/proc/self/fd') }, async () => {
+  const f = fixture();
+  const big = join(f.project, 'long.mp4');
+  sparse(big, MP4.subarray(0, 64), 64 * 1024 * 1024);
+  const id = f.store.idFor('gm', big, { kind: 'video' });
+  await withApp(f.router, async (base) => {
+    // Warm up (lazy module loads, the listening socket), then the baseline.
+    assert.equal(await rawGet(base, `/api/media/${id}`, { Range: 'bytes=0-9' }, false), 206);
+    const before = await settle(0, 200);
+    for (let i = 0; i < 20; i++) assert.equal(await rawGet(base, `/api/media/${id}`, { Range: `bytes=${i}-` }, true), 206);
+    const afterDrops = await settle(before);
+    assert.ok(afterDrops <= before, `dropped streams released their descriptors: ${before} -> ${afterDrops}`);
+    for (let i = 0; i < 20; i++) assert.equal(await rawGet(base, `/api/media/${id}`, { Range: `bytes=${64 * 1024 * 1024 + i}-` }, false), 416);
+    const after416 = await settle(before);
+    assert.ok(after416 <= before, `416 answers released their descriptors: ${before} -> ${after416}`);
   });
 });

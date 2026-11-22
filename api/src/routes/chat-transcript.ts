@@ -34,7 +34,10 @@ import { getRegistry } from '../services/state-reader.js';
 import { principal } from '../lib/principal.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { findImagePaths, imagePathsInToolUse } from '../lib/imageRefs.js';
-import { defaultImageRefsFor, windowPaths, type RefsFor } from '../lib/mediaStore.js';
+import { defaultImageRefsFor, windowFor, type RefsFor } from '../lib/mediaStore.js';
+import { setLocalSeatEvidence } from '../lib/devicePull.js';
+import { resolveMachineAndLiveness } from './agents-identity.js';
+import { getTmuxSessionNames } from '../services/tmux-monitor.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -2148,13 +2151,30 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
 }
 
 /**
+ * Whether THIS host has evidence that a seat runs here, for lib/devicePull.ts (which seat's paths name
+ * files on another machine). The label is a label, not evidence: a live tmux session of the seat's own
+ * here (the liveness rule, agents-identity.ts resolveMachineAndLiveness), or a transcript of its own here
+ * (resolveTranscriptPath, the file this route would read), makes it a seat of this host whatever its
+ * registry `machine` says. Asked only for a seat labelled with a machine this host reaches.
+ */
+export function seatRunsHere(agentId: string, def: Record<string, unknown>): boolean {
+  const session = typeof def?.tmux_session === 'string' && def.tmux_session ? def.tmux_session : (seatTmuxSession(agentId) ?? agentId);
+  if (resolveMachineAndLiveness(def?.machine as string | undefined, session, getTmuxSessionNames()).alive) return true;
+  const t = resolveTranscriptPath(agentId);
+  return !!t.path && existsSync(t.path);
+}
+setLocalSeatEvidence(seatRunsHere);
+
+/**
  * Images in the chat: every image or video the agent REFERENCED (lib/imageRefs.ts: an absolute path
  * in its reply, the target of a Write) that is really there, under the agent's own roots and an
  * image or a video by its bytes (lib/mediaStore.ts imageRefsFor) gets an opaque id and rides on the
  * item as `images` (ADDITIVE v2; a video with `kind: 'video'`). The poll route and the SSE tailer
  * both come through finishWindow, so both lanes carry it. The text is untouched, so the path stays
- * readable. The whole window is read first (windowPaths): the table keeps every id this window
- * shows, so ids stay the same from one stamp to the next however many images the window names.
+ * readable. The whole window is read first (stampWindow): the table keeps every id this window
+ * shows, so ids stay the same from one stamp to the next however many images the window names; only
+ * paths that can be shown count toward the cap, and each carries its item's time, so paging to an
+ * older window never takes the newest window's ids.
  * Fail-open: any trouble here leaves the items as they were.
  */
 export function stampImages(items: any[], agentId: string, refsFor: RefsFor = defaultImageRefsFor(ORCH_DIR)): any[] {
@@ -2165,8 +2185,8 @@ export function stampImages(items: any[], agentId: string, refsFor: RefsFor = de
     } catch { /* no paths */ }
     return [];
   });
-  let window: Set<string> | undefined;
-  try { window = windowPaths(perItem); } catch { window = undefined; }
+  let window: ReadonlySet<string> | undefined;
+  try { window = windowFor(refsFor, agentId, perItem, items.map((it) => it?.ts)); } catch { window = undefined; }
   const out: any[] = [];
   items.forEach((it, i) => {
     try {

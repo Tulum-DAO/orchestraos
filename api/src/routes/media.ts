@@ -37,7 +37,6 @@ export interface MediaDeps {
 
 const notFound = (res: Response) => { res.status(404).json({ error: 'not found' }); };
 
-/** The basename for Content-Disposition: ASCII, no quotes or control characters, never a path. */
 /** One byte range of a `size`-byte file from a Range header: the range, 'unsatisfiable' (416), or
  *  null (serve the whole file: no header, several ranges, another unit, or a malformed one). */
 export function parseRange(header: unknown, size: number): { start: number; end: number } | 'unsatisfiable' | null {
@@ -60,6 +59,7 @@ export function parseRange(header: unknown, size: number): { start: number; end:
   return { start, end: Math.min(last, size - 1) };
 }
 
+/** The basename for Content-Disposition: ASCII, no quotes or control characters, never a path. */
 function safeName(path: string): string {
   const base = path.slice(path.lastIndexOf('/') + 1);
   // eslint-disable-next-line no-control-regex
