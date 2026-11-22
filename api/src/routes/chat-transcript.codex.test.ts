@@ -440,6 +440,23 @@ test('TIER 1: a seat id that is its own canonical root reads its own sid, not it
   assert.equal(findCodexByDeclaration('codex-arturo', db, orch)?.sid, 'sid-g7');
 });
 
+test('TIER 1 fence: a seat that is its own root with a pruned sid NEVER gets its base root\'s rollout', () => {
+  // Reviewer fixture: both codex-arturo (g7) and codex-arturo-g8 are roots; g8's rollout is pruned
+  // from the thread index. Tier 1 must not continue to the base root (that is g7's conversation);
+  // tier 2's exact-id regex picks g8's own brief instead.
+  const orch = fixtureRegistry([{ root: 'codex-arturo', sid: 'sid-g7' }, { root: 'codex-arturo-g8', sid: 'sid-g8-pruned' }]);
+  const db = fixtureDb([
+    { id: 'sid-g7', rollout_path: '/x/g7.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g7. Read /tmp/agent-init-codex-arturo-g7.md', updated_at_ms: 99 },
+    { id: 'g8-brief', rollout_path: '/x/g8.jsonl', cwd: '/repo', thread_source: 'user',
+      first_user_message: 'You are codex-arturo-g8. Read /tmp/agent-init-codex-arturo-g8.md', updated_at_ms: 5 },
+  ]);
+  const got = findCodexByDeclaration('codex-arturo-g8', db, orch);
+  assert.notEqual(got?.sid, 'sid-g7', 'g8 was handed g7\'s rollout as canonical');
+  assert.equal(got?.sid, 'g8-brief');
+  assert.equal(got?.tier, 'declaration');
+});
+
 test('TIER 1 -> 2: a canonical sid the thread index does not know falls through to the declaration', () => {
   const orch = fixtureRegistry([{ root: 'codex-gm', sid: 'pruned-sid' }]);
   const db = fixtureDb([
@@ -502,10 +519,12 @@ test('TIER 2: a suffixed seat id prefers the brief that names it exactly over a 
 });
 
 test('TIER 3: a seat whose brief sits past the 500th newest thread still resolves (no LIMIT)', () => {
+  // The 600 newer rows all PASS the LIKE prefilter ("You are codex-gm-watcher" contains
+  // "You are codex-gm") and are rejected by the regex, so only the dropped LIMIT reaches row 601.
   const rows: any[] = [];
   for (let i = 0; i < 600; i++) {
     rows.push({ id: `other-${i}`, rollout_path: `/x/other-${i}.jsonl`, cwd: '/repo', thread_source: 'user',
-      first_user_message: `You are dev-${i}. Read /tmp/agent-init-dev-${i}.md`, updated_at_ms: 10_000 + i });
+      first_user_message: `You are codex-gm-watcher. Read /tmp/agent-init-codex-gm-watcher-${i}.md`, updated_at_ms: 10_000 + i });
   }
   rows.push({ id: 'deep', rollout_path: GM_ROLLOUT, cwd: '/repo', thread_source: 'user',
     first_user_message: 'You are codex-gm-g11. Read /tmp/agent-init-codex-gm-g11.md', updated_at_ms: 1 });

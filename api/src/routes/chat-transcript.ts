@@ -149,19 +149,19 @@ export type CodexTier = 'canonical' | 'declaration';
 // IS the codex thread id (spawn-agent.sh stamps the sid it launched with). That row needs no
 // text match at all, so it is immune to how the rotation engine phrases the brief. A seat whose
 // id is itself a canonical root (codex-arturo-g8 is one, beside codex-arturo) is read under its
-// own id first, then its base; a sid the thread index does not know (rollout pruned) falls through.
+// own id ONLY: its base lineage is another root, and falling back to it would hand g8 the g7
+// rollout as 'canonical'. A sid the thread index does not know (rollout pruned) falls through to
+// tier 2, where the exact-id regex still prefers the seat's own brief.
 function findCodexByCanonical(agentId: string, baseId: string, db: any, orch?: string):
   { path: string; sid: string; tier: CodexTier } | null {
   const canon = getCanonicalAgents(orch);
   if (!canon) return null;
   const bySid = db.prepare('SELECT id, rollout_path FROM threads WHERE id = ? AND rollout_path IS NOT NULL');
-  for (const root of agentId === baseId ? [agentId] : [agentId, baseId]) {
-    const sid = canon[root]?.session_id;
-    if (!sid) continue;
-    const r = bySid.get(sid) as { id: string; rollout_path: string } | undefined;
-    if (r?.rollout_path) return { path: r.rollout_path, sid: r.id, tier: 'canonical' };
-  }
-  return null;
+  const root = canon[agentId] ? agentId : baseId;
+  const sid = canon[root]?.session_id;
+  if (!sid) return null;
+  const r = bySid.get(sid) as { id: string; rollout_path: string } | undefined;
+  return r?.rollout_path ? { path: r.rollout_path, sid: r.id, tier: 'canonical' } : null;
 }
 
 export function findCodexByDeclaration(agentId: string, dbPath = CODEX_STATE_DB, orch?: string):
