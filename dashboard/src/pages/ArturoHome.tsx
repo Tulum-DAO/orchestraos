@@ -43,6 +43,7 @@ import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoiceDecisionCard from '../components/chat/ChoiceCard';
 import ThreadView from '../components/kit/ThreadView';
+import { useBubbleColour } from '../components/chat/useBubbleColour';
 import { ThreadHeaderMenu } from '../components/arturo/ThreadActions';
 import { loadPrefs, useChatStyle } from '../lib/agentPrefs';
 import { arturoRows, lastUserKey } from '../lib/threadKit/view';
@@ -270,6 +271,7 @@ export default function ArturoHome() {
   // How you see him (lib/agentPrefs.ts): Modern, his own look, or Bubbles, the agent chat's. Switching it in his panel
   // only re-draws the thread: the conversation, the draft and any send in flight are untouched.
   const threadSkin = useChatStyle(ARTURO_ID) === 'bubbles' ? 'bubbles' : 'modern';
+  const bubbleColour = useBubbleColour(ARTURO_ID);
   useEffect(() => { void loadPrefs(ARTURO_ID); }, []);
 
   const say = (text: string, extra: Partial<Turn> = {}) => {
@@ -596,7 +598,8 @@ export default function ArturoHome() {
       </header>
 
       <div className="arturo-glow" />
-      <div className="arturo-feed" ref={feedRef} onScroll={stick.onScroll}>
+      {/* In Bubbles your bubbles take his look's colour (useBubbleColour); Modern never reads it. */}
+      <div className="arturo-feed" ref={feedRef} onScroll={stick.onScroll} style={bubbleColour}>
         {empty ? (
           <div className="arturo-hero">
             {/* Arturo's own face, not the brand mark: its saved look, a pop-in and one wink hello, then calm idle

@@ -54,6 +54,7 @@ import { stableLiveBlocks } from '../../lib/threadKit/liveBlocks';
 import { findReveal } from '../../lib/revealStore';
 import { motionReduced } from '../../lib/motion';
 import { useChatStyle } from '../../lib/agentPrefs';
+import { useBubbleColour } from './useBubbleColour';
 
 const NO_PENDING: PendingSend[] = [];
 
@@ -300,6 +301,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // thread; the session, the draft and pending sends are untouched. The compact card (a dark box) stays Bubbles.
   const chatStyle = useChatStyle(agentId);
   const modern = !compact && chatStyle === 'modern';
+  const bubbleColour = useBubbleColour(agentId);
   // Its calls' transcripts are drawn in this chat's skin, so a call reads like the chat around it.
   // Its background jobs (polled by the agent page): the launching tool card shows each one's live status.
   const agentJobs = useAgentJobs(fixtureItems ? undefined : agentId);
@@ -377,7 +379,8 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     <BatchRecordsContext.Provider value={batchesQ.data}>
     <CallAgentContext.Provider value={callAgentInSkin}>
     <LiveJobsContext.Provider value={liveJobs}>
-    <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
+    {/* In Bubbles the person's bubbles take this agent's look colour (useBubbleColour); Modern never reads it. */}
+    <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'} style={bubbleColour}>
       <div
         ref={scrollRef}
         onScroll={stick.onScroll}

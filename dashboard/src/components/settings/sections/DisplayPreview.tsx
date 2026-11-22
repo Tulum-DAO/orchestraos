@@ -11,6 +11,7 @@ import { AgentAvatar } from '../../avatar/AgentAvatar';
 import { ARTURO_ID } from '../../avatar/agentState';
 import ThreadView from '../../kit/ThreadView';
 import { GroupedNodeView } from '../../chat/TranscriptCards';
+import { useBubbleColour } from '../../chat/useBubbleColour';
 import { useDeviceSetting, useTextAvatar } from '../../../lib/deviceSettings';
 import { previewRows, previewSkin } from '../../../lib/settingsPreview';
 import { useServerSettings } from '../../../stores/serverSettings';
@@ -21,10 +22,13 @@ export function DisplayPreview() {
   const rows = useMemo(() => previewRows(skin), [skin]);
   const rowFace = useTextAvatar(32);
   const modern = skin === 'modern';
+  // In Bubbles your bubble takes the colour of the agent it goes to, as in a real chat: here the agent of the sidebar
+  // row below (Arturo, in his look).
+  const bubbleColour = useBubbleColour(ARTURO_ID);
   return (
     <div className="settings-preview" aria-label="Preview" data-display-preview data-preview-skin={skin} data-preview-steps={steps} inert>
       {/* The agent chat column's own classes: the row gap, and Modern's colour variables. */}
-      <div key={`${skin}:${steps}`} className={`ui-feed-gap${modern ? ' kit-modern' : ''}`} data-preview-thread>
+      <div key={`${skin}:${steps}`} className={`ui-feed-gap${modern ? ' kit-modern' : ''}`} data-preview-thread style={bubbleColour}>
         <ThreadView rows={rows} skin={skin} times={modern}
           renderNode={(node, interrupted) => <GroupedNodeView node={node} interrupted={interrupted} look="lines" />} />
       </div>

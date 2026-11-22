@@ -3,7 +3,8 @@
  * (components/kit/ThreadView.tsx, TranscriptCards) and an agent's call transcripts (components/kit/CallCard.tsx, the
  * call bar's live transcript) draw them the same and cannot drift.
  *
- *   bubbles  the blue bubble on the right at 13px; the agent's reply in a bordered card bubble on the left at 13px
+ *   bubbles  the person's bubble on the right at 13px, in the agent's colour (lib/bubbleColour.ts); the agent's reply
+ *            in a bordered card bubble on the left at 13px
  *   modern   Arturo's look: the grey .bubble-user, the flat .txt reply at 16px (arturo.css, variables from kit-modern.css)
  */
 /** Bubbles: how wide a bubble (the person's or the agent's) may grow: 85% of the column, at most --ui-msg-width (Settings › Display › Message width; 560px by default) on a wide
@@ -18,8 +19,9 @@ export function bubbleWidthOf(text: string): string {
   return /^ {0,3}(```|~~~|\|)/m.test(text) ? BUBBLES_WIDE : BUBBLES_WIDTH;
 }
 
-/** Bubbles: the person's bubble. */
-export const BUBBLES_USER = `${BUBBLES_WIDTH} rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-px13 leading-relaxed text-white whitespace-pre-wrap break-words`;
+/** Bubbles: the person's bubble, in the colour of the agent it was sent to (index.css .bubble-user-colour, set by
+ *  lib/bubbleColour.ts on the thread; the old blue where nothing sets it). */
+export const BUBBLES_USER = `${BUBBLES_WIDTH} rounded-2xl rounded-br-sm bubble-user-colour px-3.5 py-2 text-px13 leading-relaxed whitespace-pre-wrap break-words`;
 /** Bubbles: the agent's reply bubble (as before release 4e.6), as wide as its words up to bubbleWidthOf; one per text
  *  part of a turn (components/kit/Message.tsx MessageText). */
 export const BUBBLES_AGENT = 'w-fit min-w-0 rounded-2xl rounded-tl-sm border border-border bg-card text-card-foreground px-3.5 py-2 text-px13 leading-relaxed break-words';

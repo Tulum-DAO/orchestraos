@@ -240,15 +240,17 @@ export function SystemMessageCard({ msg, raw }: { msg: SystemMessage; raw: strin
   );
 }
 
-/** A just-sent message, until its own transcript row replaces it (lib/pendingSends). Faded while
- *  the agent has it but has not logged it; a "queued" chip when it landed mid-turn and waits in the
- *  agent's input queue; a dimmer blue when the server holds or stores it for later delivery. */
+/** A just-sent message, until its own transcript row replaces it (lib/pendingSends): the person's bubble in the
+ *  agent's colour (.bubble-user-colour), its background faded toward the page while the agent has it but has not
+ *  logged it (.is-sent); a "queued" chip when it landed mid-turn and waits in the agent's input queue; fainter still
+ *  when the server holds or stores it for later delivery (.is-held). Only the background fades: the words keep AA
+ *  contrast (lib/bubbleColour.ts). */
 export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'queuedInTurn' | 'held' | 'queued' }) {
   const waiting = kind === 'held' || kind === 'queued';
   return (
     <div className="flex flex-col items-end" data-testid="pending-bubble" data-pending-kind={kind}>
-      <div className={clsx(BUBBLES_WIDTH, 'rounded-2xl rounded-br-sm px-3.5 py-2 text-px13 leading-relaxed whitespace-pre-wrap break-words',
-        waiting ? 'bg-blue-600/25 text-white/70' : 'bg-blue-600/50 text-white/85')}>
+      <div className={clsx(BUBBLES_WIDTH, 'rounded-2xl rounded-br-sm bubble-user-colour px-3.5 py-2 text-px13 leading-relaxed whitespace-pre-wrap break-words',
+        waiting ? 'is-held' : 'is-sent')}>
         {withRefs(text)}
       </div>
       {pendingLabel(kind) && (
