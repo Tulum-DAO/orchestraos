@@ -59,14 +59,14 @@ def _default_log(rec):
 
 
 def focus_entity(spoken_ref, gw_get, get_output=None, focused_agent=None, named_agents=None,
-                 now=None, focus_path=None, observe=True, log=None):
+                 now=None, focus_path=None, observe=True, log=None, names=None):
     """Resolve a spoken reference over the live candidate union and act on it (spec §3.4).
     Returns a SPOKEN-ready string. `gw_get`/`get_output` are injected callables (unit-testable);
     `focus_path` is state/arturo/focus.json. When `observe` is True, focus is NOT switched — the
     call only resolves + logs (thresholds-tuning rollout, §6)."""
     now = now if now is not None else _time.time()
     candidates = gather_candidates(gw_get, get_output=get_output, focused_agent=focused_agent,
-                                   named_agents=named_agents, now=now)
+                                   named_agents=named_agents, now=now, names=names)
     res = resolve(spoken_ref, candidates, now)
     _record(log, spoken_ref, res, observe)
 

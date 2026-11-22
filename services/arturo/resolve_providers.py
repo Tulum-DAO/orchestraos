@@ -63,14 +63,17 @@ def approval_entity(row):
     }
 
 
-def agent_entity(row):
+def agent_entity(row, seat_name=None):
     """A live `/agents` row → Entity{kind:"agent"}. recency = last_used_ts (a live ranking signal
-    Arturo owns — NOT the registry's verified_at). pending = has_pending_menu."""
+    Arturo owns — NOT the registry's verified_at). pending = has_pending_menu. `seat_name`: the agent's
+    current name (the dashboard's Rename, seat_names), an exact alias."""
     sess = row.get("tmux_session") or row.get("session") or row.get("id")
     name = row.get("id") or sess
     aliases = []
     if name and name != sess:
         aliases.append({"alias": name, "confidence": "curated"})
+    if seat_name and seat_name not in (name, sess):
+        aliases.append({"alias": seat_name, "confidence": "exact"})
     return {
         "kind": "agent", "id": f"agent:{sess}", "label": sess,
         "aliases": aliases,
@@ -101,7 +104,7 @@ def content_entity(agent, text, now, capture_ts=None):
 # ---------------------------------------------------------------------------
 
 def gather_candidates(gw_get, get_output=None, focused_agent=None, named_agents=None,
-                      now=None, include_content=True):
+                      now=None, include_content=True, names=None):
     """Union of live approvals + live agents + bounded content. `gw_get(path)->json|None` and
     `get_output(session)->str` are injected. CONTENT is scanned ONLY for the focused agent plus any
     agents the operator named in the same breath (never a full-fleet output scan — spec §3.1 bounded)."""
@@ -123,7 +126,7 @@ def gather_candidates(gw_get, get_output=None, focused_agent=None, named_agents=
         ag = gw_get("/agents")
         for row in (ag.get("agents") if isinstance(ag, dict) else None) or []:
             if isinstance(row, dict) and (row.get("tmux_session") or row.get("id")):
-                cands.append(agent_entity(row))
+                cands.append(agent_entity(row, (names or {}).get(row.get("id") or row.get("tmux_session"))))
     except Exception:
         pass
 

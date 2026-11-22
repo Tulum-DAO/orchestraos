@@ -206,3 +206,16 @@ def test_load_directory_gives_each_agent_its_project_and_full_name(tmp_path):
     assert d["dev-demo"]["project"] == {"slug": "demo", "label": "Demo"} and d["dev-demo"]["full_name"] == "Demo · dev"
     assert d["pm-demo"]["project"]["slug"] == "demo" and d["pm-demo"]["full_name"] == "pm-demo"   # never renamed: its id
     assert d["gm"]["project"] is None and d["loner"]["project"] is None
+
+
+def test_an_id_written_as_it_is_wins_over_another_agents_name_with_the_same_letters():
+    """pm-demo renamed "Ops", then a seat with the id "ops" made later: "ops" is that seat, for everyone. "Ops" is
+    the name to an agent (ids are exact for them) and still one of two agents to a person."""
+    dir_ = DIR + [{"id": "ops", "name": "ops", "aliases": [], "alive": True}]
+    dir_ = [dict(s, name="Ops") if s["id"] == "pm-demo" else s for s in dir_]
+    for caller in (AGENT, PERSON):
+        r = resolve("ops", dir_, caller)
+        assert r["kind"] == "deliver" and r["seat"]["id"] == "ops"
+    assert resolve("Ops", dir_, PERSON)["kind"] == "choose"
+    r = resolve("Ops", dir_, AGENT)
+    assert r["kind"] == "deliver" and r["seat"]["id"] == "pm-demo"

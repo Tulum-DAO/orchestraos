@@ -115,3 +115,64 @@ def test_no_identity_store_falls_back_to_the_registry(mod, tmp_path, monkeypatch
     assert AC.display_name("gm", tmp_path) == "Boss"
     assert mod._asked_parent("gm", "dev-new", {"agents": {"gm": {}}}) == "gm"
     assert mod._seat_names() == {}
+
+
+def test_list_agents_shows_names_without_scanning_every_pane(mod, install, monkeypatch):
+    """The names come from seat_names alone: list_agents never loads the directory (a pane check per live seat,
+    about 9 s on a fleet of 78 live seats) just to read them."""
+    import sys
+    import types
+
+    def no_scan(*a, **k):
+        raise AssertionError("list_agents loaded the whole agent directory to read names")
+    monkeypatch.setattr(sr, "load_directory", no_scan)
+    monkeypatch.setattr(mod, "_seat_directory", no_scan)
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=5: (True, "\n".join(sorted(LIVE))))
+    monkeypatch.setattr(mod, "_detector_state", lambda n: "idle")
+    fake = types.ModuleType("msg_store")
+    fake.MessageStore = lambda: types.SimpleNamespace(hierarchy_list=lambda tenant_id=None: [])
+    monkeypatch.setitem(sys.modules, "msg_store", fake)
+    out = mod._execute_tool_raw("list_agents", {})
+    assert "gm (Front Desk): T0" in out and "  dev-demo: T2" in out
+
+
+def test_an_exact_id_wins_over_another_agents_name_with_the_same_letters(run, mod, install):
+    """pm-demo was renamed "Ops"; a seat with the id "ops" was made later (creation never checks names). The card
+    says "ops", so answer_menu(session="ops") is the seat ops, not "could mean more than one"."""
+    c = odb.get_connection(sn.db_path_for(install))
+    sn.set_name(c, "pm-demo", "Ops", by="dashboard")
+    c.execute("INSERT INTO lineages (root, tier, runtime) VALUES ('ops', 'T2', 'claude')")
+    c.close()
+    reg = json.loads((install / "registry.json").read_text())
+    reg["agents"]["ops"] = {"tier": "T2"}
+    (install / "registry.json").write_text(json.dumps(reg))
+    LIVE.add("ops")
+    try:
+        out, args = run("answer_menu", session="ops", option="1")
+        assert args is not None and args["session"] == "ops", out
+        out, args = run("agent_message", to_agent="Ops", subject="x")     # not the id as written: still asked
+        assert out.startswith("NOT RUN: 'Ops' could mean more than one agent")
+        assert mod._asked_parent("ops", "dev-new") == "ops"
+    finally:
+        LIVE.discard("ops")
+
+
+def test_reports_to_takes_only_an_exact_name_of_a_registered_seat(mod, install):
+    assert mod._asked_parent("Front Dsk", "dev-new").startswith("NOT RUN")       # a close guess is never a parent
+    c = odb.get_connection(sn.db_path_for(install))
+    c.execute("INSERT INTO lineages (root, tier, runtime) VALUES ('scout', 'T2', 'claude')")
+    sn.set_name(c, "scout", "Scout Lead", by="dashboard")
+    c.close()
+    assert mod._seat_names()["scout"] == "Scout Lead"
+    assert mod._asked_parent("Scout Lead", "dev-new").startswith("NOT RUN")      # known, but not a registered seat
+    assert mod._asked_parent("operator", "dev-new").startswith("NOT RUN")        # a built-in mailbox
+
+
+def test_focus_entity_finds_a_renamed_agent_by_its_name():
+    from services.arturo import focus_tool
+    rows = {"/agents": {"agents": [{"id": "gm", "tmux_session": "gm"}, {"id": "pm-demo", "tmux_session": "pm-demo"}]},
+            "/pending-approvals": {"pending": []}}
+    said = focus_tool.focus_entity("front desk", rows.get, names={"gm": "Front Desk"}, observe=True, log=lambda r: None)
+    assert said.startswith("[observe] I'd focus") and "gm" in said, said
+    plain = focus_tool.focus_entity("front desk", rows.get, observe=True, log=lambda r: None)
+    assert not plain.startswith("[observe] I'd focus"), plain

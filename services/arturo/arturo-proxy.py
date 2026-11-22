@@ -2224,7 +2224,7 @@ def _asked_parent(value, session, registry=None, directory=None):
     hit = hit or next((n for n in names if n == value), None) or next(
         (n for n in names if _name_tokens(n) == _name_tokens(value, spoken=True)), None)
     if not hit or hit == session or hit.lower().startswith("arturo"):
-        shown = _seat_names(directory)
+        shown = _seat_names()
         listed = ", ".join(f"{n} ({shown[n]})" if shown.get(n) else n for n in sorted(names))
         return (f"NOT RUN: '{value}' is not a registered seat to report to. Registered: {listed}. "
                 f"Ask the operator which one, or leave reports_to out.")
@@ -3987,15 +3987,20 @@ def _find_seat(text, directory=None):
     return {**seat, "exact": res["kind"] in ("deliver", "dead")} if seat else None
 
 
-def _seat_names(directory=None):
-    """{id: current name} for every agent renamed away from its id (the same directory the lookups read); {} when
-    it can't be read."""
+def _seat_names():
+    """{id: current name} for every agent renamed away from its id: the seat_names table alone (read-only, no
+    liveness check), the same names the directory carries. {} when it can't be read."""
     try:
-        directory = _seat_directory() if directory is None else directory
-    except Exception:  # noqa: BLE001
+        if str(_REPO_ROOT) not in _sys.path:
+            _sys.path.insert(0, str(_REPO_ROOT))
+        from scripts.identity_store import seat_names as _sn
+        from orchestra_cli.settings import data_dir as _dd
+        rows = _sn.all_names_ro(_dd())
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"seat names unreadable: {e!r}")
         return {}
-    return {d["id"]: d["name"] for d in directory
-            if not d.get("builtin") and d.get("name") and d["name"] != d["id"]}
+    return {root: rec["name"] for root, rec in rows.items()
+            if root not in _sn.BUILTIN_IDS and rec.get("name") and rec["name"] != root}
 
 
 def _resolve_agent_arg(name, args):
@@ -4259,7 +4264,7 @@ def _execute_tool_raw(name, args, user_turns=None):
             observe = os.environ.get("ARTURO_RESOLVE_OBSERVE", "1") != "0"
             return _focus_entity(
                 spoken_ref, _gw_get_fast, get_output=_get_output,
-                focused_agent=focused_agent, named_agents=named,
+                focused_agent=focused_agent, named_agents=named, names=_seat_names(),
                 focus_path=ARTURO_STATE / "focus.json", observe=observe)
         except Exception as e:
             return f"Couldn't resolve what you're referring to: {e}"
