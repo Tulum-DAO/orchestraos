@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import PendingApprovalCard, { type UnifiedApproval } from '../components/chat/PendingApprovalCard';
 import { CardSurface } from '../lib/threadKit/useScreenCard';
+import { snoozedLast } from '../lib/cardVerbs';
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -96,7 +97,8 @@ export default function Approvals() {
     return items.filter((i: UnifiedApproval) => i.type === tab);
   }, [items, tab]);
 
-  const pending = filtered.filter((i: UnifiedApproval) => i.status === 'pending');
+  // A snoozed task goes last, as the phone sinks it (lib/cardVerbs snoozedLast).
+  const pending = snoozedLast(filtered.filter((i: UnifiedApproval) => i.status === 'pending'));
   const resolved = filtered.filter((i: UnifiedApproval) => i.status !== 'pending');
   const pendingCount = items.filter((i: UnifiedApproval) => i.status === 'pending').length;
 

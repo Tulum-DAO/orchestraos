@@ -10,6 +10,7 @@
 import type { GroupedNode } from './toolGroups';
 import type { MenuOption } from './menuAnswer';
 import { operatorUserId } from './runtimeConfig.ts';
+import { snoozedLast, taskVerbWord } from './cardVerbs.ts';
 
 export type DecisionState = 'pending' | 'answered' | 'expired' | 'withdrawn' | 'dismissed' | 'superseded' | string;
 
@@ -37,6 +38,8 @@ export interface Decision {
   resumed_at?: string | null;
   /** answered cards: 'held' while the answer waits for its agent, 'delivered' once it is in the pane. */
   delivery?: 'held' | 'delivered' | null;
+  /** A snoozed task for you: when it comes back (ISO). Absent where the server has no such column. */
+  snoozed_until?: string | null;
 }
 
 export async function fetchDecisions(agentId: string): Promise<Decision[]> {
@@ -72,6 +75,9 @@ export function chosenText(d: Decision): string {
   const opt = d.option_n ? (d.menu?.options || []).find((o) => o.n === d.option_n) : undefined;
   const label = opt && !/write-in|other/i.test(opt.label) ? opt.label : '';
   const text = (d.answer_text || '').trim();
+  // A task for you: which verb, then its note ("Can't — no cable"), never the note alone or the bare word "cant".
+  const task = taskVerbWord(d.answer);
+  if (task) return text ? `${task} — ${text}` : task;
   // Typed words are shown as plain text, never in quotes.
   if (label && text) return `${label} — ${text}`;
   if (label) return label;
@@ -116,7 +122,7 @@ export function decisionTone(d: Decision): DecisionTone {
   if (d.delivery === 'held') return 'held';
   const a = (d.answer || '').toLowerCase();
   if (a === 'approve' || a === 'accept') return 'approved';
-  if (a === 'deny' || a === 'reject') return 'denied';
+  if (a === 'deny' || a === 'reject' || a === 'cant') return 'denied';   // a task you can't do: as a deny
   return 'answered';
 }
 
@@ -228,7 +234,8 @@ export function takeFocusRequest(agentId: string, now = Date.now()): FocusReques
 
 /** Which decision a focus request shows: the named one, else the first open one. */
 export function focusTarget(ds: Decision[], decisionId?: string): Decision | undefined {
-  return decisionId ? ds.find((d) => d.id === decisionId) : ds.find((d) => d.state === 'pending');
+  // A snoozed task is the last one shown, as the phone sinks it.
+  return decisionId ? ds.find((d) => d.id === decisionId) : snoozedLast(ds.filter((d) => d.state === 'pending'))[0];
 }
 
 export interface PendingCard { id: string; agent_id?: string | null; created_at?: string; status?: string }

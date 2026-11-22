@@ -181,6 +181,8 @@ export interface UnifiedApproval {
   agent_id?: string | null;
   /** The row's dedup key (canonical rows): a terminal menu bridged into a card has `menu:<session>:…`. */
   op_key?: string | null;
+  /** A snoozed task for you (kind 'human_task'): when it comes back (ISO); null otherwise. */
+  snoozed_until?: string | null;
 }
 
 function normalizeProposal(p: any): UnifiedApproval {
@@ -300,6 +302,8 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
     agent_id: r.from_agent || null,
     // A terminal menu bridged into a card has a `menu:<session>:…` key: the dashboard keeps it to a pick OR words.
     op_key: r.op_key ?? null,
+    // A snoozed task for you: when it comes back, so the dashboard can say so and draw it last (as the phone does).
+    snoozed_until: r.snoozed_until ?? null,
   };
 }
 

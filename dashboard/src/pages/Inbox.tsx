@@ -16,6 +16,7 @@ import { isTerminalMenu } from '../lib/decisionCard';
 import DecisionCard, { CardVerbsAnswer } from '../components/chat/DecisionCard';
 import ApprovalExtras from '../components/chat/ApprovalExtras';
 import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
+import { snoozedUntil } from '../lib/cardVerbs';
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -51,6 +52,8 @@ interface UnifiedApproval {
   agent_id?: string | null;
   /** The row's dedup key: a terminal menu's is `menu:<session>:…` (lib/decisionCard isTerminalMenu). */
   op_key?: string | null;
+  /** A snoozed task for you (kind 'human_task'): when it comes back (ISO). */
+  snoozed_until?: string | null;
 }
 
 interface Questionnaire {
@@ -138,7 +141,10 @@ export default function Inbox() {
       items.push({ kind: 'questionnaire', data: q, ts: new Date(q.created_at || 0).getTime() });
     }
 
-    return items.sort((a, b) => b.ts - a.ts);
+    // Newest first; a snoozed task goes last, as the phone sinks it (lib/cardVerbs snoozedLast).
+    const sunk = (i: InboxItem) => i.kind === 'approval' && snoozedUntil(i.data) !== null;
+    items.sort((a, b) => b.ts - a.ts);
+    return [...items.filter((i) => !sunk(i)), ...items.filter(sunk)];
   }, [pendingApprovals, pendingQuestionnaires]);
 
   const filtered = useMemo(() => {

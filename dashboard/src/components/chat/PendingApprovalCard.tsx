@@ -44,6 +44,8 @@ export interface UnifiedApproval {
   agent_id?: string | null;
   /** The row's dedup key: a terminal menu's is `menu:<session>:…` (lib/decisionCard isTerminalMenu). */
   op_key?: string | null;
+  /** A snoozed task for you (kind 'human_task'): when it comes back (ISO). */
+  snoozed_until?: string | null;
 }
 
 export default function PendingApprovalCard({ item, highlighted, onChanged, id, expanded: shownExpanded, onToggle }: {

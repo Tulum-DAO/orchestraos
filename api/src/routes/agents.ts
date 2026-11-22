@@ -1414,6 +1414,13 @@ export function decisionDelivery(row: { status?: string | null; resumed_at?: str
   return null;
 }
 
+/** ", snoozed_until" when approval_requests has that column (it comes with the human_task columns, which an install
+ *  arms separately), else "". queryDb answers a SELECT naming a missing column with no rows at all, which would
+ *  empty the whole chat's cards, so the column is named only when it exists. Pure over the column names. */
+export function snoozedUntilColumn(columns: Iterable<string>): string {
+  return new Set(columns).has('snoozed_until') ? ', snoozed_until' : '';
+}
+
 router.get('/:id/decisions', async (req: Request, res: Response) => {
   // Loaded here, not at the top: lib/db opens tasks.db on import, and this router is imported by tests.
   const { queryDb } = await import('../lib/db.js');
@@ -1422,10 +1429,11 @@ router.get('/:id/decisions', async (req: Request, res: Response) => {
   const registry = getRegistry() as any;
   const seat = registry?.agents?.[id] ? id : id.replace(/^unregistered:/, '');
   try {
+    const snoozed = snoozedUntilColumn((queryDb(`SELECT name FROM pragma_table_info('approval_requests')`) as { name: string }[]).map((c) => c.name));
     const rows = queryDb(
       `SELECT id, from_agent, kind, status, question, summary, options, menu, risk_level, reversibility, answer,
               answer_text, option_n, answered_by, answer_surface, answer_device, created_at, answered_at,
-              expires_at, retired_at, superseded_by, resumed_at, resume_acked_at
+              expires_at, retired_at, superseded_by, resumed_at, resume_acked_at${snoozed}
          FROM approval_requests
         WHERE from_agent = ? AND (op_key IS NULL OR op_key NOT LIKE 'menu:%') AND COALESCE(origin, '') != 'menu_bridge'
           AND created_at >= ?

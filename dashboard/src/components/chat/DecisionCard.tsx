@@ -28,7 +28,7 @@ import type { ScreenAnswer } from '../../lib/screenCards';
 import type { RefCardState } from '../../lib/cardRefs';
 import { useScreenCard } from '../../lib/threadKit/useScreenCard';
 import { post } from '../../lib/api';
-import { cardVerbs, sendErrorText, verbFromPick, verbRequest, type CardVerb, type VerbCard, type VerbSet } from '../../lib/cardVerbs';
+import { cardVerbs, sendErrorText, snoozeLine, verbFromPick, verbRequest, type CardVerb, type VerbCard, type VerbSet } from '../../lib/cardVerbs';
 
 /** The answer area inside a card says how an answer Arturo hands back is applied (ApprovalAnswer's Approve/Deny,
  *  TaskAnswer's Done / Can't / Snooze). */
@@ -284,21 +284,64 @@ export function ApprovalAnswer({ onApprove, onDeny, sending, error }: {
 
 /** The answer area of a card that is not a question: the card's OWN verbs (lib/cardVerbs.ts), sent where each one
  *  goes. Approve / Deny on an approval; Done / Can't / Snooze on a task for you, which the server refuses Approve on.
+ *  A snoozed task says so ("Snoozed until 14:05") and keeps Done / Can't behind "Answer now": no second Snooze.
  *  The agent's chat, the Approvals page and the Inbox all draw this one, so a card answers the same everywhere. */
 export function CardVerbsAnswer({ card, onAnswered }: { card: VerbCard & { id: string }; onAnswered: () => void }) {
-  const set = cardVerbs(card);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A Snooze that just went through: the card's snoozed_until arrives with the next read of the list.
+  const [justSnoozed, setJustSnoozed] = useState(false);
+  const [answerNow, setAnswerNow] = useState(false);
+  const set = cardVerbs(card, Date.now(), justSnoozed);
   const send = async (verb: string, words = '') => {
     const req = verbRequest(card.id, verb, words);
     if ('error' in req) { setError(req.error); return; }
     setSending(true); setError(null);
-    try { await post(req.path, req.body); onAnswered(); }
+    try {
+      await post(req.path, req.body);
+      if (verb === 'snooze') { setJustSnoozed(true); setAnswerNow(false); }
+      onAnswered();
+    }
     catch (e) { setError(sendErrorText(e)); }
     finally { setSending(false); }
   };
+  if (set.mode === 'task' && set.snoozed && !answerNow) {
+    return <SnoozedTask set={set} until={set.snoozed.until} onAnswerNow={() => setAnswerNow(true)} sending={sending}
+      onVerb={(v, w) => void send(v, w)} />;
+  }
   if (set.mode === 'task') return <TaskAnswer set={set} sending={sending} error={error} onVerb={(v, w) => void send(v, w)} />;
   return <ApprovalAnswer sending={sending} error={error} onApprove={() => void send('approve')} onDeny={(reason) => void send('deny', reason)} />;
+}
+
+/** An answer Arturo hands back presses a task's verbs, its words as the note (TaskAnswer, and a snoozed task too). */
+function useVerbSlot(set: VerbSet, sending: boolean | undefined, onVerb: (verb: string, words: string) => void) {
+  const slot = useContext(AnswerSlot);
+  const latest = useRef({ sending, onVerb, set });
+  useEffect(() => { latest.current = { sending, onVerb, set }; });
+  useEffect(() => {
+    if (!slot) return;
+    slot((ans) => {
+      const v = verbFromPick(latest.current.set, ans.picks[0] || '');
+      if (!v) return `${latest.current.set.verbs.map((x) => x.label).join(', ')}: those are the only answers this card takes.`;
+      if (latest.current.sending) return 'That card is already being answered.';
+      latest.current.onVerb(v.verb, ans.words ?? '');
+      return null;
+    });
+    return () => slot(null);
+  }, [slot]);
+}
+
+/** A snoozed task's answer area: when it comes back, and "Answer now" to open Done / Can't. */
+function SnoozedTask({ set, until, onAnswerNow, sending, onVerb }: {
+  set: VerbSet; until: number | null; onAnswerNow: () => void; sending: boolean; onVerb: (verb: string, words: string) => void;
+}) {
+  useVerbSlot(set, sending, onVerb);
+  return (
+    <div className="touch-compact border-t border-border px-4 py-3 flex items-center justify-between gap-2" data-card-snoozed>
+      <span className="text-xs text-muted-foreground">{snoozeLine(until)}</span>
+      <button type="button" onClick={onAnswerNow} data-card-answer-now className={PILL_QUIET}>Answer now</button>
+    </div>
+  );
 }
 
 const GRID_COLS: Record<number, string> = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3' };
@@ -315,34 +358,22 @@ export function TaskAnswer({ set, onVerb, sending, error }: {
   set: VerbSet; onVerb: (verb: string, words: string) => void; sending?: boolean; error?: string | null;
 }) {
   const [text, setText] = useState('');
-  // An answer Arturo hands back presses the same buttons, its words as the note.
-  const slot = useContext(AnswerSlot);
-  const latest = useRef({ sending, onVerb, set });
-  useEffect(() => { latest.current = { sending, onVerb, set }; });
-  useEffect(() => {
-    if (!slot) return;
-    slot((ans) => {
-      const v = verbFromPick(latest.current.set, ans.picks[0] || '');
-      if (!v) return `${latest.current.set.verbs.map((x) => x.label).join(', ')}: those are the only answers this card takes.`;
-      if (latest.current.sending) return 'That card is already being answered.';
-      latest.current.onVerb(v.verb, ans.words ?? '');
-      return null;
-    });
-    return () => slot(null);
-  }, [slot]);
+  const [pressed, setPressed] = useState<string | null>(null);
+  const press = (v: CardVerb) => { setPressed(v.verb); onVerb(v.verb, v.takesWords ? text : ''); };
+  useVerbSlot(set, sending, onVerb);
   return (
     <div className="border-t border-border px-4 py-3 space-y-2.5">
       <div className={clsx('grid gap-2', GRID_COLS[set.verbs.length] ?? 'grid-cols-3')}>
-        {set.verbs.map((v, i) => (
+        {set.verbs.map((v) => (
           <button key={v.verb} type="button" disabled={sending} data-card-verb={v.verb}
-                  onClick={() => onVerb(v.verb, v.takesWords ? text : '')}
+                  onClick={() => press(v)}
                   className={clsx('flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-semibold disabled:opacity-50', VERB_CLASS[v.tone])}>
-            {sending && i === 0 && <Loader2 size={14} className="animate-spin" />}{v.label}
+            {sending && pressed === v.verb && <Loader2 size={14} className="animate-spin" />}{v.label}
           </button>
         ))}
       </div>
       <input value={text} disabled={sending} onChange={(e) => setText(e.target.value)}
-             placeholder="A note, if you want (the agent sees it)"
+             placeholder={set.verbs.some((v) => v.verb === 'snooze') ? 'A note with Done or Can\'t (the agent sees it)' : 'A note, if you want (the agent sees it)'}
              className="w-full rounded-xl border border-border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-info" />
       {error && <div className="text-px11 text-warning">{error}</div>}
     </div>

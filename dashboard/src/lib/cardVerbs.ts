@@ -6,6 +6,8 @@
  *   Snooze. They go to /approvals/unified/:id/answer as { answer: verb }; words typed on the card ride along as a note.
  *   The server takes only these three on such a card (watch_gateway.apply_answer: "human_task verbs are
  *   done|cant|snooze"), and Approve on one is refused with a 400.
+ *   A snoozed task (snoozed_until still ahead) says so and offers Done / Can't behind "Answer now": no second Snooze,
+ *   which would only push it back again. Lists draw it last, as the phone does.
  * - Every other card that is not a question is an approval: Approve, and Deny with a reason the agent sees.
  *
  * Questions (kind 'menu') are not answered here: they are the one question card (DecisionQuestion / MultiPartAnswer).
@@ -24,12 +26,16 @@ export interface CardVerb {
   takesWords?: boolean;
 }
 
-export type VerbSet = { mode: 'approval'; verbs: CardVerb[] } | { mode: 'task'; verbs: CardVerb[] };
+export type VerbSet = { mode: 'approval'; verbs: CardVerb[] }
+  /** `snoozed`: the task is snoozed; `until` is when it comes back (ms), null when not known yet (just snoozed here). */
+  | { mode: 'task'; verbs: CardVerb[]; snoozed?: { until: number | null } };
 
 /** The two shapes a card reaches the dashboard in (a chat Decision, an Approvals-page UnifiedApproval) share these. */
 export interface VerbCard {
   kind?: string | null;
   options?: readonly unknown[] | null;
+  /** A snoozed task: when it comes back (ISO), from the server. */
+  snoozed_until?: string | null;
 }
 
 const APPROVAL_VERBS: CardVerb[] = [
@@ -48,14 +54,43 @@ const isTaskVerb = (v: string): v is (typeof TASK_VERBS)[number] => (TASK_VERBS 
 
 /** The verbs a card takes. A task's come from its own options (only the three the server takes, in its order;
  *  all three when it carries none); anything else that is not a question is Approve / Deny. */
-export function cardVerbs(card: VerbCard): VerbSet {
+export function cardVerbs(card: VerbCard, now = Date.now(), justSnoozed = false): VerbSet {
   if (card.kind === 'human_task') {
     const own = (Array.isArray(card.options) ? card.options : [])
       .map((o) => String(o ?? '').trim().toLowerCase()).filter(isTaskVerb);
     const keys = own.length ? [...new Set(own)] : [...TASK_VERBS];
+    const until = snoozedUntil(card, now);
+    // Snoozed: the other verbs only. Another Snooze would quietly push it back again.
+    if (until !== null || justSnoozed) {
+      return { mode: 'task', verbs: keys.filter((k) => k !== 'snooze').map((k) => TASK_VERB[k]), snoozed: { until } };
+    }
     return { mode: 'task', verbs: keys.map((k) => TASK_VERB[k]) };
   }
   return { mode: 'approval', verbs: APPROVAL_VERBS };
+}
+
+/** When a snoozed task comes back (ms), or null: not a task, never snoozed, or the snooze is over. */
+export function snoozedUntil(card: VerbCard, now = Date.now()): number | null {
+  if (card.kind !== 'human_task' || !card.snoozed_until) return null;
+  const t = Date.parse(card.snoozed_until);
+  return Number.isFinite(t) && t > now ? t : null;
+}
+
+/** "Snoozed until 14:05"; "Snoozed" while the time is not known yet. */
+export function snoozeLine(until: number | null): string {
+  return until === null ? 'Snoozed' : `Snoozed until ${new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+/** A list with its snoozed tasks moved to the end, every other card where it was (the phone's snooze floor). */
+export function snoozedLast<T extends VerbCard>(items: readonly T[], now = Date.now()): T[] {
+  const snoozed = (c: T) => snoozedUntil(c, now) !== null;
+  return [...items.filter((c) => !snoozed(c)), ...items.filter(snoozed)];
+}
+
+/** An answered task's verb in words: "Done", "Can't", "Snoozed"; null for any other answer. */
+export function taskVerbWord(answer: string | null | undefined): string | null {
+  const a = String(answer || '').trim().toLowerCase();
+  return a === 'done' ? 'Done' : a === 'cant' ? "Can't" : a === 'snooze' ? 'Snoozed' : null;
 }
 
 /** The lines a card reports to the cards-on-screen context (lib/screenCards.ts) as its options: "A. Approve". */

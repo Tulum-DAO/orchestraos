@@ -48,6 +48,9 @@ export interface CanonicalRow {
   // for non-menu rows / legacy rows. Additive — every field above is
   // unchanged.
   menu?: { options?: Array<{ n: string; label: string; input_kind?: string; detail?: string }>; [k: string]: any } | null;
+  /** A task for you that was snoozed: when it comes back (ISO). Null / absent otherwise, and on an install whose
+   *  human_task columns are not armed. */
+  snoozed_until?: string | null;
 }
 
 export interface AnswerResult {
@@ -152,9 +155,11 @@ export function canonicalAnswerArgv(
   // never set these; this bridge is the trusted origin). Provenance only; never gates an authz call.
   const args = [APPROVAL_CLI, 'answer', '--id', id, '--answer', answer,
                 '--surface', answerSurface(opts?.surface), '--answered-by', 'operator'];
-  if (text) args.push('--text', text);
+  // Words go in the --flag=value form: a note or reason that starts with "-" ("--help", "-nope") is then a value,
+  // never read by argparse as a flag of its own (which refused the answer and printed the help).
+  if (text) args.push(`--text=${text}`);
   if (extra?.optionN) args.push('--option-n', extra.optionN);
-  if (extra?.answerText) args.push('--answer-text', extra.answerText);
+  if (extra?.answerText) args.push(`--answer-text=${extra.answerText}`);
   // Task 7a: who is calling. Always a peer flag (a missing socket reads as unknown, never as a person).
   const peer = opts?.peer;
   args.push('--peer', peer?.peer || 'unknown');
@@ -189,11 +194,22 @@ export function canonicalAnswer(
     const out = execFileSync('python3', args, { timeout: 15000, encoding: 'utf-8' });
     return JSON.parse(out.trim());
   } catch (err: any) {
-    const stdout = (err?.stdout ?? '').toString();
-    try {
-      return JSON.parse(stdout.trim());
-    } catch {
-      return { ok: false, error: err?.message || 'canonical answer failed', id };
-    }
+    return answerFailure(err, id);
   }
+}
+
+/**
+ * A failed `approval.py answer` as the answer's result. A refusal prints its JSON verdict to stdout and exits
+ * non-zero: that verdict is the result. Anything else (a crash, a timeout, a parse error) is a plain reason. The
+ * thrown error's message holds the whole python command line (the server's path, the caller's peer, the card id),
+ * which goes to the server log and never into a response.
+ */
+export function answerFailure(err: any, id: string): AnswerResult {
+  const stdout = (err?.stdout ?? '').toString();
+  try {
+    const verdict = JSON.parse(stdout.trim());
+    if (verdict && typeof verdict === 'object' && !Array.isArray(verdict)) return verdict;
+  } catch { /* not a verdict */ }
+  console.error(`[approvals] answer for ${id} failed: ${err?.message || err}`);
+  return { ok: false, error: 'the answer could not be recorded', id };
 }
