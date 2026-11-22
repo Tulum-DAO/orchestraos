@@ -16,7 +16,8 @@
  *
  * The container (ModelPicker.tsx) owns the state and the keyboard; the rules are lib/modelPickerPanel.ts.
  */
-import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
+import { useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronRight, Plus, Search, X } from 'lucide-react';
 import { isCurrent, type PickerModel, type PickerValue } from '../../lib/modelPicker';
 import { modelPurpose } from '../../lib/modelPurpose';
@@ -108,7 +109,30 @@ export function RailMark({ entry, size, renderMark }: { entry: RailEntry; size: 
   );
 }
 
+/** The rail mark's hover card (was the browser's native title): the provider, its status, and its usage, one line per
+ *  login when there is more than one. Fixed to the viewport so the picker's edges never clip it. */
+function RailTip({ entry, rect, below }: { entry: RailEntry; rect: DOMRect; below: boolean }) {
+  const style: CSSProperties = below
+    ? { position: 'fixed', left: Math.max(8, rect.left), top: rect.bottom + 6 }
+    : { position: 'fixed', left: rect.right + 8, top: rect.top + rect.height / 2, transform: 'translateY(-50%)' };
+  const u = entry.usage;
+  return createPortal(
+    <div role="tooltip" style={style} data-rail-tip={entry.id}
+         className="z-[200] pointer-events-none max-w-[340px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg px-2.5 py-1.5 text-px12 leading-snug">
+      <div className="font-medium text-tone-100">{entry.label} <span className="font-normal text-tone-400">· {entry.statusText}</span></div>
+      {u && (u.accounts?.length
+        ? u.accounts.map((line) => <div key={line} className="text-tone-300">{line}</div>)
+        : <div className="text-tone-300">{u.text}</div>)}
+      {entry.version && <div className="text-tone-500">CLI v{entry.version}</div>}
+    </div>,
+    document.body,
+  );
+}
+
 export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPickerPanelProps) {
+  const [tip, setTip] = useState<{ entry: RailEntry; rect: DOMRect } | null>(null);
+  const showTip = (e: RailEntry, el: HTMLElement) => setTip({ entry: e, rect: el.getBoundingClientRect() });
+  const hideTip = () => setTip(null);
   const sheet = p.layout === 'sheet';
   const labelOf = (id: string) => p.entries.find((e) => e.id === id)?.label ?? id;
   const entry = p.entries.find((e) => e.id === p.tab) ?? null;
@@ -126,7 +150,9 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
         const on = e.id === p.tab && !searching;
         return (
           <button key={e.id} type="button" role="tab" id={`${p.idBase}-tab-${e.id}`} aria-selected={on} aria-controls={tabPanelId}
-                  tabIndex={e.id === p.tab ? 0 : -1} title={railLabel(e)} aria-label={railLabel(e)} data-rail={e.id}
+                  tabIndex={e.id === p.tab ? 0 : -1} aria-label={railLabel(e)} data-rail={e.id}
+                  onMouseEnter={(ev) => showTip(e, ev.currentTarget)} onMouseLeave={hideTip}
+                  onFocus={(ev) => showTip(e, ev.currentTarget)} onBlur={hideTip}
                   onClick={() => p.onTab(e.id)}
                   className={`${sheet ? 'min-w-[44px] min-h-[44px] px-1.5 gap-1.5' : 'w-11 h-11'} inline-flex items-center justify-center rounded-lg shrink-0 ${on ? 'bg-tone-800' : 'hover:bg-tone-800/60'}${e.usable ? '' : ' opacity-60'}`}>
             <RailMark entry={e} size={18} renderMark={p.renderMark} />
@@ -140,6 +166,7 @@ export default function ModelPickerPanel({ inputRef, panelRef, ...p }: ModelPick
           <Plus size={16} />
         </button>
       )}
+      {tip && <RailTip entry={tip.entry} rect={tip.rect} below={sheet} />}
     </div>
   );
 

@@ -82,7 +82,8 @@ def write_usage(d: dict, now: float | None = None) -> str | None:
     if root not in sys.path:
         sys.path.insert(0, root)
     from orchestra_cli.settings import data_dir
-    return str(usage_meter.write_claude_record(rec, data_dir(), usage_meter.claude_account()))
+    path = usage_meter.write_claude_record(rec, data_dir(), usage_meter.claude_account())
+    return str(path) if path is not None else None       # None: an older block, not written
 
 
 def render_minimal(d: dict) -> str:

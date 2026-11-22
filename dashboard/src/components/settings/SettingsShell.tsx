@@ -17,6 +17,7 @@ import { ServerVoiceSection } from './sections/ServerVoiceSection';
 import { AgentsSection } from './sections/AgentsSection';
 import { NotificationsSection } from './sections/NotificationsSection';
 import { ServerSection } from './sections/ServerSection';
+import { UsageSection } from './sections/UsageSection';
 import { PermissionsSection } from './sections/PermissionsSection';
 import { RulesSection } from './sections/RulesSection';
 import { GateSection } from './sections/GateSection';
@@ -42,6 +43,7 @@ function view(id: SectionId, desktop: boolean): ReactNode {
     case 'server-voice': return <ServerVoiceSection />;
     case 'server-gate': return <GateSection />;
     case 'server': return <ServerSection />;
+    case 'usage': return <UsageSection />;
     default: return null;
   }
 }

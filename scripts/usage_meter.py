@@ -3,7 +3,12 @@
 One row per provider and window:
     {provider, account, window, used_pct, resets_at, as_of, stale, source, reason}
 
-Sources (never a vendor API call, never a login token, never a guessed number):
+This module never makes a vendor API call and never reads a login token. scripts/usage_poll.py
+does the (opt-in, cached, backed-off) calls and leaves api-<provider>-<account>.json snapshots in
+<data dir>/state/usage/; this module reads them like any other local file. Per provider, account
+and WINDOW the newest reading wins, so the local sources below stay the zero-call fallback.
+
+Sources (never a guessed number):
   * codex : the newest `token_count` event that carries `rate_limits` in any recent rollout under
             ~/.codex/sessions. Limits belong to the account, so the freshest event from any thread is
             the reading. primary = the 5 h window, secondary = the weekly one.
@@ -12,6 +17,8 @@ Sources (never a vendor API call, never a login token, never a guessed number):
             records it in <data dir>/state/usage/claude-<account>.json; this module only reads it.
             The first redraw of a session carries no block, so an absent block is "unknown",
             never 0.
+  * api    : api-claude-<account>.json / api-codex-<account>.json from usage_poll (source
+            "claude-api" / "codex-api"), already in window labels ("5h", "weekly").
   * gemini, grok: no local source yet. A row with used_pct None and a plain reason.
 
 A reading older than STALE_S is marked stale: shown greyed with "as of <time>", never as current.
@@ -26,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 STALE_S = 30 * 60
+FUTURE_SKEW_S = 300                  # an as_of further ahead than this is a wrong clock: stale
 CODEX_LOOKBACK_S = 8 * 24 * 3600     # a weekly window plus a day: older rollouts cannot be fresher
 CODEX_MAX_FILES = 12                 # the newest rollouts; the freshest event among them wins
 TAIL_BYTES = 262144
@@ -39,17 +47,19 @@ _ACCOUNT_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 def _pct(v) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v) if 0 <= v <= 100 else None
+    return float(v) if 0 <= v <= 100 else None          # NaN and +-Infinity fail the range
 
 
 def _ts(v) -> int | None:
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+    """A positive finite epoch, else None (json reads Infinity and 1e400 as inf: int() would raise)."""
+    import math
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
         return None
     return int(v)
 
 
 def _row(provider, window, used_pct, resets_at, as_of, source, now, account=None, reason=None):
-    stale = as_of is None or now - as_of > STALE_S
+    stale = as_of is None or now - as_of > STALE_S or as_of - now > FUTURE_SKEW_S
     return {"provider": provider, "account": account, "window": window,
             "used_pct": used_pct, "resets_at": resets_at, "as_of": as_of,
             "stale": bool(stale) if used_pct is not None else None,
@@ -158,15 +168,21 @@ def claude_usage_dir(data_dir: Path) -> Path:
     return Path(data_dir) / "state" / "usage"
 
 
-def claude_account() -> str:
-    """A plain-words label for this Claude login, never a path: the config dir's name without its
-    dots and "claude" ("~/.claude-work" -> "work"); "default" for the usual ~/.claude."""
-    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").rstrip("/")
+def account_label(config_dir: str | None) -> str:
+    """A plain-words label for a Claude login, never a path: the config dir's name without its
+    dots and "claude" ("~/.claude-work" -> "work"); "default" for the usual ~/.claude. usage_poll
+    labels its snapshots the same way, so the status line and the API name one login alike."""
+    cfg = (config_dir or "").rstrip("/")
     name = os.path.basename(cfg).lstrip(".") if cfg else ""
     if name.lower().startswith("claude"):
         name = name[len("claude"):]
     name = name.strip("-_. ")
     return name if name and _ACCOUNT_RE.match(name) else "default"
+
+
+def claude_account() -> str:
+    """This process's Claude login label: account_label($CLAUDE_CONFIG_DIR)."""
+    return account_label(os.environ.get("CLAUDE_CONFIG_DIR", ""))
 
 
 def claude_record_from_statusline(d: dict, now: float) -> dict | None:
@@ -186,11 +202,41 @@ def claude_record_from_statusline(d: dict, now: float) -> dict | None:
             "version": d.get("version") if isinstance(d.get("version"), str) else None}
 
 
-def write_claude_record(record: dict, data_dir: Path, account: str) -> Path:
+def monotonic_record(old, new: dict) -> dict | None:
+    """The record to write over `old`: within one window (same resets_at) usage only rises, so a
+    LOWER used_pct for the same reset is an older block (an idle seat redrawing late) and the old
+    window is kept. None when every window of `new` is such a step back: nothing to write."""
+    if not isinstance(old, dict) or not isinstance(old.get("windows"), dict):
+        return new
+    out, fresh = {}, False
+    for key, w in (new.get("windows") or {}).items():
+        o = old["windows"].get(key)
+        if isinstance(o, dict) and isinstance(w, dict) and w.get("resets_at") is not None \
+                and o.get("resets_at") == w.get("resets_at") \
+                and _pct(o.get("used_pct")) is not None and _pct(w.get("used_pct")) is not None \
+                and _pct(o["used_pct"]) > _pct(w["used_pct"]):
+            out[key] = o
+        else:
+            out[key] = w
+            fresh = True
+    if not fresh:
+        return None
+    return dict(new, windows=out)
+
+
+def write_claude_record(record: dict, data_dir: Path, account: str) -> Path | None:
+    """Write the status-line record atomically; None when monotonic_record says it is a step back."""
     import tempfile
     out = claude_usage_dir(data_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"claude-{account}.json"
+    try:
+        old = json.loads(path.read_text())
+    except (OSError, ValueError):
+        old = None
+    record = monotonic_record(old, record)
+    if record is None:
+        return None
     fd, tmp = tempfile.mkstemp(prefix=f".claude-{account}.", dir=str(out))
     try:
         with os.fdopen(fd, "w") as fh:
@@ -230,6 +276,65 @@ def claude_rows(now: float, data_dir: Path) -> list[dict]:
     return rows
 
 
+# ---- api snapshots (written by usage_poll) -----------------------------------------------------
+
+API_PROVIDERS = ("claude", "codex")
+
+
+def api_snapshot_path(data_dir: Path, provider: str, account: str) -> Path:
+    return claude_usage_dir(data_dir) / f"api-{provider}-{account}.json"
+
+
+def api_rows(now: float, data_dir: Path, provider: str) -> list[dict]:
+    """Rows from usage_poll's snapshots for one provider: {windows: {label: {used_pct, resets_at}},
+    as_of}. A malformed file or window is skipped, never read as 0."""
+    rows = []
+    for p in sorted(claude_usage_dir(data_dir).glob(f"api-{provider}-*.json")):
+        account = p.stem[len(f"api-{provider}-"):]
+        if not _ACCOUNT_RE.match(account):
+            continue
+        try:
+            rec = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        at = _ts(rec.get("as_of")) if isinstance(rec, dict) else None
+        windows = rec.get("windows") if isinstance(rec, dict) else None
+        if at is None or not isinstance(windows, dict):
+            continue
+        for label in sorted(windows, key=_window_order):
+            w = windows[label]
+            if isinstance(label, str) and isinstance(w, dict) and _pct(w.get("used_pct")) is not None:
+                rows.append(_row(provider, label, _pct(w["used_pct"]), _ts(w.get("resets_at")), at,
+                                 f"{provider}-api", now, account=account))
+    return rows
+
+
+def _window_order(label) -> tuple:
+    return ({"5h": 0, "weekly": 1}.get(label, 2), str(label))
+
+
+def _newest_per_window(*sources: list[dict]) -> list[dict]:
+    """Per account AND window, the row with the newest reading (as_of): a newer source that has only
+    some windows (a status line with just 5 h) never hides the others (the API's weekly rows). A row
+    with no number never hides one that has a number. Accounts keep first-seen order; windows run
+    5 h, weekly, then the rest."""
+    best: dict = {}
+    order: list = []
+    for rows in sources:
+        for r in rows:
+            if r.get("used_pct") is None:
+                continue
+            k = (r.get("account"), r.get("window"))
+            if r.get("account") not in order:
+                order.append(r.get("account"))
+            if k not in best or (r.get("as_of") or 0) > (best[k].get("as_of") or 0):
+                best[k] = r
+    out = []
+    for acct in order:
+        out += sorted((r for (a, _w), r in best.items() if a == acct), key=lambda r: _window_order(r.get("window")))
+    return out
+
+
 # ---- all ---------------------------------------------------------------------------------------
 
 def usage_rows(data_dir: Path, providers=None, now: float | None = None,
@@ -240,12 +345,44 @@ def usage_rows(data_dir: Path, providers=None, now: float | None = None,
     rows = []
     for p in wanted:
         if p == "claude":
-            rows += claude_rows(now, data_dir)
+            local = claude_rows(now, data_dir)
         elif p == "codex":
-            rows += codex_rows(now, codex_sessions_dir)
+            local = codex_rows(now, codex_sessions_dir)
+            # the rollout reading carries no account; it is the default login's (~/.codex)
+            for r in local:
+                if r.get("used_pct") is not None and r.get("account") is None:
+                    r["account"] = "default"
         else:
             rows.append(_empty(p, NO_SOURCE[p], now))
+            continue
+        merged = _newest_per_window(api_rows(now, data_dir, p), local)
+        rows += merged or local
     return rows
+
+
+def write_combined(data_dir: Path, rows: list[dict], now: float | None = None) -> Path:
+    """<data dir>/state/usage/usage.json: every row, one file, written atomically. Rows hold labels
+    and numbers only (no token, no e-mail): that is all usage_rows ever produces."""
+    return _atomic_json(claude_usage_dir(data_dir) / "usage.json",
+                        {"as_of": int(time.time() if now is None else now), "rows": rows})
+
+
+def _atomic_json(path: Path, obj) -> Path:
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(obj, fh)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 if __name__ == "__main__":
