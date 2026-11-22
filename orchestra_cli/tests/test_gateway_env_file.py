@@ -245,3 +245,84 @@ def test_run_doctor_includes_the_row(tmp_path):
     _env_file(st)
     names = [c.name for c in D.run_doctor(st, _probes(st, environ={}))]
     assert "gateway:arms" in names
+
+
+# --- the four properties the public PR promises (added on top of orchestra-builder's branch) ---------
+
+class _FakeProc:
+    pid = 4242
+
+    def poll(self):
+        return None
+
+
+def _supervise_logged(st, seen, log):
+    def spawn(entry, env, log_path):
+        seen[entry.name] = env
+        return _FakeProc()
+    table = [e for e in PT.build_process_table(st) if e.name == "gateway"]
+    return SV.Supervisor(table, data_dir=Path(st.data_dir), base_env={"PATH": "/usr/bin"}, spawn=spawn, log=log)
+
+def test_the_env_file_is_read_and_reaches_the_gateway(tmp_path):
+    """An env file is read: every KEY=VALUE line is in the spawned gateway's environment."""
+    st = _settings(tmp_path)
+    _env_file(st, "MENU_SUBMIT_ARMED=1\nEXPIRE_PENDING=0\n")
+    seen = {}
+    _supervise(st, seen).tick()
+    assert seen["gateway"]["MENU_SUBMIT_ARMED"] == "1"
+    assert seen["gateway"]["EXPIRE_PENDING"] == "0"
+
+
+def test_a_missing_env_file_is_fine_and_warns_about_nothing(tmp_path):
+    """No file: the gateway starts with the supervisor's environment and nothing is logged about the file."""
+    st = _settings(tmp_path)
+    assert not (Path(st.data_dir) / "config" / "watch-gateway.env").exists()
+    lines = []
+    seen = {}
+    _supervise_logged(st, seen, lines.append).tick()
+    assert "gateway" in seen
+    assert not any("watch-gateway.env" in l for l in lines)
+
+
+def test_a_malformed_line_is_skipped_with_a_warning_that_names_the_line_not_its_text(tmp_path):
+    """A line that is not KEY=VALUE is skipped; the warning says which line, never what it said."""
+    p = tmp_path / "x.env"
+    p.write_text("MENU_SUBMIT_ARMED=1\nthis is not a pair sk-SECRET-TEXT\n9BAD=hunter2\nEXPIRE_PENDING=0\n")
+    warnings = []
+    status, env = PT.load_env_file(p, warn=warnings.append)
+    assert status == "ok"
+    assert env == {"MENU_SUBMIT_ARMED": "1", "EXPIRE_PENDING": "0"}
+    assert len(warnings) == 2, warnings
+    assert any("line 2" in w for w in warnings) and any("line 3" in w for w in warnings)
+    for w in warnings:
+        assert "sk-SECRET-TEXT" not in w and "hunter2" not in w and "9BAD" not in w
+
+
+def test_the_supervisor_logs_the_malformed_line_warning_once_per_start(tmp_path):
+    st = _settings(tmp_path)
+    _env_file(st, "MENU_SUBMIT_ARMED=1\nnot a pair\n")
+    lines = []
+    seen = {}
+    _supervise_logged(st, seen, lines.append).tick()
+    assert seen["gateway"]["MENU_SUBMIT_ARMED"] == "1"
+    warned = [l for l in lines if "watch-gateway.env" in l and "line 2" in l]
+    assert len(warned) == 1, lines
+
+
+def test_no_value_from_the_env_file_is_ever_logged(tmp_path):
+    """The supervisor log (and the spawn-fallback line) carries key names at most, never a value."""
+    st = _settings(tmp_path)
+    marker = "value-that-must-never-be-logged-4242"
+    _env_file(st, f"MENU_SUBMIT_ARMED=1\nPRIVATE_FLAG={marker}\nbroken line {marker}\n")
+    lines = []
+
+    def spawn(entry, env, log_path):
+        if "PRIVATE_FLAG" in env:
+            raise OSError(7, "Argument list too long")
+        return _FakeProc()
+    sup = SV.Supervisor(PT.build_process_table(st), data_dir=Path(st.data_dir),
+                        base_env={"PATH": "/usr/bin"}, spawn=spawn, log=lines.append)
+    sup.tick()
+    assert any("made the spawn fail" in l for l in lines)
+    assert lines, "the supervisor logged nothing"
+    assert not any(marker in l for l in lines), lines

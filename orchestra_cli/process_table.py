@@ -34,11 +34,13 @@ def gateway_env_path(st: Settings) -> Path:
     return Path(st.data_dir) / "config" / "watch-gateway.env"
 
 
-def load_env_file(path) -> tuple:
+def load_env_file(path, warn=None) -> tuple:
     """(status, {KEY: VALUE}): status "absent" | "unreadable" | "empty" (no valid KEY=VALUE line) | "ok".
     KEY=VALUE lines (# comments, blank lines and an `export ` prefix allowed; one pair of matching quotes
     around a value is removed). A line with a NUL byte is dropped: an environment cannot carry one, and
-    passing it on would stop the gateway from starting."""
+    passing it on would stop the gateway from starting. A line that is not KEY=VALUE is skipped and `warn`
+    (a callable taking one string) is told its line NUMBER only: the file may hold a value that must never
+    reach a log, so no warning repeats any of the line's text."""
     try:
         text = Path(path).read_text()
     except FileNotFoundError:
@@ -46,15 +48,21 @@ def load_env_file(path) -> tuple:
     except (OSError, UnicodeDecodeError):
         return "unreadable", {}
     out = {}
-    for raw in text.splitlines():
+    for n, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
-        if not line or line.startswith("#") or "\0" in line:
+        if not line or line.startswith("#"):
+            continue
+        if "\0" in line:
+            if warn:
+                warn(f"{path} line {n}: carries a NUL byte, skipped")
             continue
         if line.startswith("export "):
             line = line[len("export "):].strip()
         key, sep, val = line.partition("=")
         key, val = key.strip(), val.strip()
         if not sep or not _ENV_KEY.fullmatch(key):
+            if warn:
+                warn(f"{path} line {n}: not a KEY=VALUE line, skipped")
             continue
         if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
             val = val[1:-1]
@@ -62,9 +70,10 @@ def load_env_file(path) -> tuple:
     return ("ok" if out else "empty"), out
 
 
-def read_env_file(path) -> dict:
-    """The KEY=VALUE pairs of load_env_file; {} for a missing, unreadable or empty file (doctor says which)."""
-    return load_env_file(path)[1]
+def read_env_file(path, warn=None) -> dict:
+    """The KEY=VALUE pairs of load_env_file; {} for a missing, unreadable or empty file (doctor says which).
+    `warn` receives one line per skipped line (its number, never its text)."""
+    return load_env_file(path, warn)[1]
 
 
 def build_process_table(st: Settings) -> list:

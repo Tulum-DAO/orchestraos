@@ -89,7 +89,8 @@ class Supervisor:
         env = dict(self.base_env)
         env.update(c.entry.env)
         # read now, not when the table was built: an edit to the file reaches the next restart
-        file_env = read_env_file(c.entry.env_file) if c.entry.env_file else {}
+        # (a skipped line is logged by number only: the file may hold a value that must not be logged)
+        file_env = read_env_file(c.entry.env_file, warn=self._log) if c.entry.env_file else {}
         log_path = str(self.data_dir / "logs" / f"{c.entry.name}.log")
         try:
             c.proc = self.spawn(c.entry, {**env, **file_env}, log_path)
