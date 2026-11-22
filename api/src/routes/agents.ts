@@ -1421,6 +1421,13 @@ export function snoozedUntilColumn(columns: Iterable<string>): string {
   return new Set(columns).has('snoozed_until') ? ', snoozed_until' : '';
 }
 
+/** The probe itself: snoozedUntilColumn over approval_requests' columns as they are now (an arm adds them at runtime,
+ *  so this is read per request, not cached). A failed probe reads as no column, so the cards still show. Used by the
+ *  chat's /decisions and by /approvals/unified/:id/card (a card opened from a reference). */
+export function snoozedUntilSelect(query: (sql: string) => unknown[]): string {
+  return snoozedUntilColumn((query(`SELECT name FROM pragma_table_info('approval_requests')`) as { name: string }[]).map((c) => c.name));
+}
+
 router.get('/:id/decisions', async (req: Request, res: Response) => {
   // Loaded here, not at the top: lib/db opens tasks.db on import, and this router is imported by tests.
   const { queryDb } = await import('../lib/db.js');
@@ -1429,7 +1436,7 @@ router.get('/:id/decisions', async (req: Request, res: Response) => {
   const registry = getRegistry() as any;
   const seat = registry?.agents?.[id] ? id : id.replace(/^unregistered:/, '');
   try {
-    const snoozed = snoozedUntilColumn((queryDb(`SELECT name FROM pragma_table_info('approval_requests')`) as { name: string }[]).map((c) => c.name));
+    const snoozed = snoozedUntilSelect(queryDb);
     const rows = queryDb(
       `SELECT id, from_agent, kind, status, question, summary, options, menu, risk_level, reversibility, answer,
               answer_text, option_n, answered_by, answer_surface, answer_device, created_at, answered_at,

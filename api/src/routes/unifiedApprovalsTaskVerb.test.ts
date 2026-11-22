@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { testTmpDir } from '../lib/testTmp.js';
-import { canonicalAnswerArgv, answerFailure, type CanonicalRow } from './_canonical-approvals.js';
+import { canonicalAnswerArgv, answerFailure, answerRefusalStatus, type CanonicalRow } from './_canonical-approvals.js';
 import { TASK_VERBS, taskVerbOf, normalizeCanonical } from './unified-approvals.js';
 import { snoozedUntilColumn } from './agents.js';
 
@@ -118,4 +118,23 @@ test('a snoozed task carries snoozed_until to the dashboard (Approvals feed and 
   // would come back empty: queryDb swallows the error).
   assert.equal(snoozedUntilColumn(['id', 'kind', 'snoozed_until']), ', snoozed_until');
   assert.equal(snoozedUntilColumn(['id', 'kind']), '');
+});
+
+test('a timeout is a 504 "could not be confirmed" (the answer may be saved), never a 400 refusal', () => {
+  // approval.py saves the answer, then fires the resume in the same call: a slow resume can run past the 15 s limit
+  // after the save. execFileSync then throws with code ETIMEDOUT and nothing on stdout.
+  const timedOut = Object.assign(new Error('spawnSync python3 ETIMEDOUT'), { code: 'ETIMEDOUT', signal: 'SIGTERM', stdout: '' });
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const r = answerFailure(timedOut, 'apr_1');
+    assert.deepEqual(r, { ok: false, unconfirmed: true, error: 'the answer could not be confirmed: check the card before answering again', id: 'apr_1' });
+    assert.equal(answerRefusalStatus(r), 504);
+    // A crash that is not a timeout stays a plain 400.
+    const crash = answerFailure(Object.assign(new Error('Command failed'), { code: 1, stdout: '' }), 'apr_1');
+    assert.equal(answerRefusalStatus(crash), 400);
+  } finally { console.error = orig; }
+  // A real refusal keeps its 400, a gate refusal its 403.
+  assert.equal(answerRefusalStatus({ ok: false, error: 'human_task verbs are done|cant|snooze', id: 'apr_1' }), 400);
+  assert.equal(answerRefusalStatus({ ok: false, error: 'agent_cannot_answer_gate_card', id: 'apr_1' }), 403);
 });

@@ -62,7 +62,9 @@ export interface AnswerResult {
   id: string;
   status?: number;
   /** A task for you that was snoozed: answered ok, nothing recorded, still waiting (watch_gateway.apply_answer). */
-  snoozed?: boolean;
+  snoozed?: boolean;  /** approval.py ran past its time: the answer may or may not be saved (the resume runs after the save, inside the
+   *  same call). A 504, never "refused". */
+  unconfirmed?: boolean;
 }
 
 /** Who is on the other end of an answer request, for approval.py's caller check (plan Task 7a). */
@@ -104,6 +106,7 @@ export function answerPeer(req: {
 
 /** HTTP status for a refused canonical answer: a gate card refusing an agent is 403, anything else 400. */
 export function answerRefusalStatus(result: AnswerResult): number {
+  if (result.unconfirmed) return 504;   // timed out: the answer may well be saved (answerFailure)
   return result.error === 'agent_cannot_answer_gate_card' ? 403 : 400;
 }
 
@@ -200,9 +203,10 @@ export function canonicalAnswer(
 
 /**
  * A failed `approval.py answer` as the answer's result. A refusal prints its JSON verdict to stdout and exits
- * non-zero: that verdict is the result. Anything else (a crash, a timeout, a parse error) is a plain reason. The
- * thrown error's message holds the whole python command line (the server's path, the caller's peer, the card id),
- * which goes to the server log and never into a response.
+ * non-zero: that verdict is the result (a 400 / 403). A timeout is not a refusal: the answer is saved before the
+ * resume fires inside the same call, so it may well be saved; it is a 504 that says to check the card first. Anything
+ * else (a crash, a parse error) is a plain reason. The thrown error's message holds the whole python command line
+ * (the server's path, the caller's peer, the card id), which goes to the server log and never into a response.
  */
 export function answerFailure(err: any, id: string): AnswerResult {
   const stdout = (err?.stdout ?? '').toString();
@@ -211,5 +215,8 @@ export function answerFailure(err: any, id: string): AnswerResult {
     if (verdict && typeof verdict === 'object' && !Array.isArray(verdict)) return verdict;
   } catch { /* not a verdict */ }
   console.error(`[approvals] answer for ${id} failed: ${err?.message || err}`);
+  if (err?.code === 'ETIMEDOUT') {
+    return { ok: false, unconfirmed: true, error: 'the answer could not be confirmed: check the card before answering again', id };
+  }
   return { ok: false, error: 'the answer could not be recorded', id };
 }

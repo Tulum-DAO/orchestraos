@@ -697,11 +697,13 @@ router.get('/:id/card', async (req: Request, res: Response) => {
   try {
     // Loaded here, not at the top: lib/db opens tasks.db on import, and this router is imported by tests.
     const { queryDb: tasksDb } = await import('../lib/db.js');
-    const { cardLookup } = await import('./agents.js');
+    const { cardLookup, snoozedUntilSelect } = await import('./agents.js');
+    // A snoozed task opened from a reference must say so (and offer no second Snooze), as in the chat.
+    const snoozed = snoozedUntilSelect(tasksDb);
     const rows = tasksDb(
       `SELECT id, from_agent, kind, status, question, summary, options, menu, risk_level, reversibility, answer,
               answer_text, option_n, answered_by, answer_surface, answer_device, created_at, answered_at,
-              expires_at, retired_at, superseded_by, resumed_at, op_key, origin
+              expires_at, retired_at, superseded_by, resumed_at, op_key, origin${snoozed}
          FROM approval_requests WHERE id = ? LIMIT 1`, [id]) as any[];
     if (!rows.length) { res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` }); return; }
     res.json({ card: cardLookup(rows[0]) });
