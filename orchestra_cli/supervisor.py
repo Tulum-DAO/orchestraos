@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from .process_table import ProcEntry
+from .process_table import ProcEntry, read_env_file
 
 BACKOFF_BASE_S = 2.0
 BACKOFF_MAX_S = 300.0
@@ -88,8 +88,18 @@ class Supervisor:
     def _start(self, c: _Child, now: float):
         env = dict(self.base_env)
         env.update(c.entry.env)
+        # read now, not when the table was built: an edit to the file reaches the next restart
+        file_env = read_env_file(c.entry.env_file) if c.entry.env_file else {}
         log_path = str(self.data_dir / "logs" / f"{c.entry.name}.log")
-        c.proc = self.spawn(c.entry, env, log_path)
+        try:
+            c.proc = self.spawn(c.entry, {**env, **file_env}, log_path)
+        except (OSError, ValueError) as e:
+            if not file_env:
+                raise
+            # a bad value in the file (too long for the kernel, say) must never keep the service down
+            self._log(f"start {c.entry.name}: {c.entry.env_file} made the spawn fail "
+                      f"({type(e).__name__}: {e}); starting it without that file")
+            c.proc = self.spawn(c.entry, env, log_path)
         c.started_at = now
         c.status = "running"
         self._log(f"start {c.entry.name} pid={c.proc.pid}")

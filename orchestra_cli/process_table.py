@@ -1,7 +1,9 @@
 """The supervisor's process table, built from Settings. Nothing here spawns."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from .settings import Settings
@@ -18,6 +20,51 @@ class ProcEntry:
     interval: Optional[int] = None
     enabled: bool = True
     note: str = ""
+    env_file: Optional[str] = None   # KEY=VALUE file read at EVERY start (edits apply on the next restart)
+
+
+_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def gateway_env_path(st: Settings) -> Path:
+    """<data dir>/config/watch-gateway.env: the gateway's own environment (its arm flags), KEY=VALUE lines.
+    The supervisor reads it and hands it to the gateway at every start, so a relaunch can never drop them (gm
+    msg_6d923726: the 11-14 cutover relaunched the gateway without MENU_SUBMIT_ARMED and single-option card
+    answers ran dry). No file = the gateway's code defaults. See docs/INSTALL.md "Gateway arm flags"."""
+    return Path(st.data_dir) / "config" / "watch-gateway.env"
+
+
+def load_env_file(path) -> tuple:
+    """(status, {KEY: VALUE}): status "absent" | "unreadable" | "empty" (no valid KEY=VALUE line) | "ok".
+    KEY=VALUE lines (# comments, blank lines and an `export ` prefix allowed; one pair of matching quotes
+    around a value is removed). A line with a NUL byte is dropped: an environment cannot carry one, and
+    passing it on would stop the gateway from starting."""
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError:
+        return "absent", {}
+    except (OSError, UnicodeDecodeError):
+        return "unreadable", {}
+    out = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "\0" in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, sep, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        if not sep or not _ENV_KEY.fullmatch(key):
+            continue
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+            val = val[1:-1]
+        out[key] = val
+    return ("ok" if out else "empty"), out
+
+
+def read_env_file(path) -> dict:
+    """The KEY=VALUE pairs of load_env_file; {} for a missing, unreadable or empty file (doctor says which)."""
+    return load_env_file(path)[1]
 
 
 def build_process_table(st: Settings) -> list:
@@ -27,6 +74,7 @@ def build_process_table(st: Settings) -> list:
     beat_on = st.beat_enabled
     return [
         ProcEntry("gateway", "service", [py, str(root / "scripts" / "watch_gateway.py")], cwd,
+                  env_file=str(gateway_env_path(st)),
                   port=st.gateway_port, note="approvals/inject gateway (scripts/watch_gateway.py)"),
         ProcEntry("api", "service", ["node", str(root / "api" / "dist" / "server.js")], cwd,
                   port=st.api_port, note="express API (api/dist/server.js)"),
