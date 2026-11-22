@@ -46,7 +46,7 @@
   position: absolute;
   left: 0; right: 0; bottom: 0;
   padding: 10px 8px 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-text-scale, 1));
   line-height: 1.2;
   color: #fff;
   text-align: left;
@@ -70,13 +70,13 @@
 }
 .chat-image-error .chat-image-name {
   max-width: 90%;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-text-scale, 1));
   color: var(--bui-ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chat-image-error .chat-image-note { font-size: 10px; color: var(--bui-ink-3); }
+.chat-image-error .chat-image-note { font-size: calc(10px * var(--ui-text-scale, 1)); color: var(--bui-ink-3); }
 
 /* The full-screen view. */
 .chat-image-overlay {
@@ -106,7 +106,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-text-scale, 1));
   color: var(--bui-ink-2);
 }
 .chat-image-overlay-tools { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }

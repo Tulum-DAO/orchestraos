@@ -41,7 +41,7 @@ test('every bubble of the agent chat carries the slot: the person\'s (both skins
   assert.match(src('components/chat/TranscriptCards.tsx'), /<div className=\{BUBBLES_USER\} \{\.\.\.anchorProps\(slot, 'user'\)\}>/);
   // the agent's reply carries the slot on its own bubble (MessageText `reactions`), not on a wrapper round its words
   const msg = src('components/kit/Message.tsx');
-  assert.match(msg, /<MessageText text=\{text\} skin="bubbles" reactions reveal=\{reveal\} \/>/);
+  assert.match(msg, /<MessageText text=\{text\} skin="bubbles" reactions reveal=\{reveal\}[^>]*\/>/);   // the images strip rides along
   assert.doesNotMatch(msg, /<ReactionAnchor>/);
   assert.match(msg, /\{\.\.\.anchorProps\(s, 'agent'\)\} data-rx-bubble=\{s \? '' : undefined\}/);
   assert.match(msg, /\{s && <><SlotBar side="agent" \/><SlotBadges side="agent" \/><\/>\}/);
