@@ -33,6 +33,8 @@ import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdow
 import { getRegistry } from '../services/state-reader.js';
 import { principal } from '../lib/principal.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
+import { findImagePaths, imageName, imagePathsInToolUse, type ImageRef } from '../lib/imageRefs.js';
+import { agentMediaRoots, mediaStore, underRoot } from '../lib/mediaStore.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -1641,6 +1643,7 @@ export function buildRenderItems(items: any[]): any[] {
         nodes.push(withAudience(node, it));
       } else {
         const node: any = { kind: 'assistant', text };
+        if (Array.isArray(it.images) && it.images.length) node.images = it.images;   // images in the chat (additive)
         if (it.ts !== undefined) node.ts = it.ts;
         node.key = key;
         nodes.push(withAudience(node, it));
@@ -1690,6 +1693,7 @@ export function buildRenderItems(items: any[]): any[] {
       const paired = it.id ? resultById.get(it.id) : undefined;
       const node: any = { kind: 'tool', tool: it.tool || '', summary: it.summary ?? '', input: it.input || {} };
       if (it.input_full !== undefined) node.input_full = it.input_full;
+      if (Array.isArray(it.images) && it.images.length) node.images = it.images;   // the image a Write made (additive)
       if (paired) { node.result = paired.text; node.is_error = paired.is_error; }
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = key;
@@ -2093,8 +2097,34 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
     // A headless seat's cut turns, shown where they happened (poll only, like the merges above).
     windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
-  windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
+  windowed = stampImages(tagSynthetics(settleIngestedQueuedCommands(windowed)), agentId);
   return { items: windowed, render_items: buildRenderItems(windowed) };
+}
+
+/**
+ * Images in the chat: every image the agent REFERENCED (lib/imageRefs.ts: an absolute path in its
+ * reply, the target of a Write) gets an opaque id (lib/mediaStore.ts) and rides on the item as
+ * `images` (ADDITIVE v2). Only a path under the agent's allowed roots is stamped: a path the media
+ * route could never serve gets no id. The text is untouched, so the path stays readable. Fail-open:
+ * any trouble here leaves the items as they were.
+ */
+export function stampImages(items: any[], agentId: string, deps: { roots: string[]; idFor: (agent: string, path: string) => string } | null = null): any[] {
+  let d = deps;
+  const out: any[] = [];
+  for (const it of items) {
+    try {
+      let paths: string[] = [];
+      if (it?.kind === 'text' && it.role === 'assistant') paths = findImagePaths(String(it.text || ''));
+      else if (it?.kind === 'tool_use') paths = imagePathsInToolUse(String(it.tool || ''), it.input);
+      if (!paths.length) { out.push(it); continue; }
+      if (!d) d = { roots: agentMediaRoots(ORCH_DIR, agentId), idFor: (a, p) => mediaStore(ORCH_DIR).idFor(a, p) };
+      const roots = d.roots;
+      const images: ImageRef[] = paths.filter((p) => roots.some((r) => underRoot(p, r)))
+        .map((p) => ({ id: d!.idFor(agentId, p), path: p, name: imageName(p) }));
+      out.push(images.length ? { ...it, images } : it);
+    } catch { out.push(it); }
+  }
+  return out;
 }
 
 /** On an older page: a still-pending turn is the live end's, and a batch placed after the page's

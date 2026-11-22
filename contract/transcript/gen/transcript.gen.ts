@@ -25,6 +25,7 @@ export interface TextItem {
   queued?: boolean;
   mid_turn?: boolean;
   machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
+  images?: ImageRef[];
   model?: string;
   usage?: TokenUsage;
   ts?: string;
@@ -52,6 +53,7 @@ export interface ToolUseItem {
   input: Record<string, unknown>;
   summary: string;
   input_full?: string;
+  images?: ImageRef[];
   id?: string;
   model?: string;
   usage?: TokenUsage;
@@ -69,6 +71,12 @@ export interface ToolResultItem {
   is_error?: boolean;
   ts?: string;
   uuid?: string;
+}
+
+export interface ImageRef {
+  id: string;
+  path: string;
+  name: string;
 }
 
 export interface TokenUsage {
@@ -160,6 +168,7 @@ export interface RenderAssistant {
   exchange?: string;
   kind: 'assistant';
   text: string;
+  images?: ImageRef[];
   ts?: string;
   key: string;
 }
@@ -182,6 +191,7 @@ export interface RenderTool {
   input: Record<string, unknown>;
   input_full?: string;
   result?: string;
+  images?: ImageRef[];
   is_error?: boolean;
   ts?: string;
   key: string;

@@ -59,6 +59,7 @@
         },
         "mid_turn": { "type": "boolean", "description": "ADDITIVE v2: true on a machine `task` line (<task-notification>) that arrived while the agent was mid-turn (Claude Code logs it as a queued_command attachment). It sits inside the turn it landed in and never opens one; clients draw it as a finished-work card. Absent on the same notice when it arrived at an idle prompt. Older clients ignore it." },
         "machine": { "enum": ["decision", "questionnaire", "approval", "human_task", "relay", "task", "system"], "description": "ADDITIVE v2: set by the server on a user-role line a MACHINE wrote into the pane, never the operator: decision = [DECISION ANSWERED], questionnaire = [MULTI-PART DECISION ANSWERED] / [questionnaire-answers|-discarded], approval = [APPROVAL RESOLVED], human_task = [HUMAN-TASK], relay = [MSG from <agent> | <priority>] (another agent's message), task = <task-notification>, system = any other harness line. Absent = the operator's own words. Clients draw a tagged line as a machine card, never as the operator's bubble. Older clients ignore it." },
+        "images": { "type": "array", "items": { "$ref": "#/$defs/ImageRef" }, "description": "ADDITIVE v2 (images in the chat): the image files this item REFERENCED (an absolute path in the reply, or the target of a Write), each with the opaque id GET /api/media/<id> serves it under. Only paths under the agent's allowed roots are listed; the text is untouched. Absent when none. Older clients ignore it." },
         "model": { "type": "string", "description": "ADDITIVE v2 (#458): the model that wrote this agent item (Claude: the entry's message.model, never \"<synthetic>\"; Codex: the model of the turn_context it ran under). Absent on user items and when unknown. Clients mark where it changes." },
         "usage": { "$ref": "#/$defs/TokenUsage", "description": "ADDITIVE v2: tokens the model call that wrote this item spent, named and meant as in the OpenTelemetry GenAI semantic conventions (gen_ai.usage.*). Once per model call: Claude on the first drawn item of each reply (Claude Code repeats a reply's usage on every one of its lines), Codex on the last agent item before its token_count. Summing it over items gives the true total. Absent when the source has no count (never guessed). A model call that drew nothing carries its tokens to the next agent item. Codex's arrives with its token_count after the response; the SSE tailer re-sends a snapshot when it lands on an item already sent." },
         "ts": { "type": "string", "description": "ISO-8601 timestamp (both runtimes emit ISO strings)." },
@@ -101,6 +102,7 @@
           "type": "string",
           "description": "ADDITIVE v2: full multi-line text of the tool args (the code/diff a user sees on expand). Present ONLY when input was truncated. Format: per key in arg order, single-line values as 'key: value', multi-line values as '── key ──\\n<value>', joined by newlines."
         },
+        "images": { "type": "array", "items": { "$ref": "#/$defs/ImageRef" }, "description": "ADDITIVE v2 (images in the chat): the image files this item REFERENCED (an absolute path in the reply, or the target of a Write), each with the opaque id GET /api/media/<id> serves it under. Only paths under the agent's allowed roots are listed; the text is untouched. Absent when none. Older clients ignore it." },
         "id": { "type": "string" },
         "model": { "type": "string", "description": "ADDITIVE v2 (#458): the model that wrote this agent item (Claude: the entry's message.model, never \"<synthetic>\"; Codex: the model of the turn_context it ran under). Absent on user items and when unknown. Clients mark where it changes." },
         "usage": { "$ref": "#/$defs/TokenUsage", "description": "ADDITIVE v2: tokens the model call that wrote this item spent, named and meant as in the OpenTelemetry GenAI semantic conventions (gen_ai.usage.*). Once per model call: Claude on the first drawn item of each reply (Claude Code repeats a reply's usage on every one of its lines), Codex on the last agent item before its token_count. Summing it over items gives the true total. Absent when the source has no count (never guessed). A model call that drew nothing carries its tokens to the next agent item. Codex's arrives with its token_count after the response; the SSE tailer re-sends a snapshot when it lands on an item already sent." },
@@ -121,6 +123,16 @@
         "is_error": { "type": "boolean" },
         "ts": { "type": "string" },
         "uuid": { "type": "string" }
+      }
+    },
+    "ImageRef": {
+      "type": "object",
+      "description": "ADDITIVE v2 (images in the chat): one image an agent referenced. `id` is opaque (32 hex chars), minted per (agent, path) by the API and served by GET /api/media/<id> under the chat's own scope; the URL never carries the path. `path` is the path as the agent wrote it (Dev mode shows it); `name` its basename.",
+      "required": ["id", "path", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "path": { "type": "string" },
+        "name": { "type": "string" }
       }
     },
     "TokenUsage": {
@@ -253,6 +265,7 @@
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "assistant" },
         "text": { "type": "string" },
+        "images": { "type": "array", "items": { "$ref": "#/$defs/ImageRef" }, "description": "ADDITIVE v2 (images in the chat): the image files this item REFERENCED (an absolute path in the reply, or the target of a Write), each with the opaque id GET /api/media/<id> serves it under. Only paths under the agent's allowed roots are listed; the text is untouched. Absent when none. Older clients ignore it." },
         "ts": { "type": "string" },
         "key": { "type": "string" }
       }
@@ -281,6 +294,7 @@
         "input": { "type": "object", "description": "Size-capped structured args (same capping as ToolUseItem.input)." },
         "input_full": { "type": "string" },
         "result": { "type": "string", "description": "Paired tool_result text. Absent when the call has no result yet (in-flight or orphaned)." },
+        "images": { "type": "array", "items": { "$ref": "#/$defs/ImageRef" }, "description": "ADDITIVE v2 (images in the chat): the image files this item REFERENCED (an absolute path in the reply, or the target of a Write), each with the opaque id GET /api/media/<id> serves it under. Only paths under the agent's allowed roots are listed; the text is untouched. Absent when none. Older clients ignore it." },
         "is_error": { "type": "boolean" },
         "ts": { "type": "string" },
         "key": { "type": "string" }
