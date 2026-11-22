@@ -229,6 +229,7 @@ interval_seconds = 300
 # run (cron, e.g. every 5 minutes) makes at most one call per account per poll_minutes across the
 # whole host, under a file lock, backs off on 429 / Retry-After / 401 / timeouts, and never
 # refreshes a login. Snapshots: <data dir>/state/usage/ (labels and numbers, no token, no e-mail).
+# Read the provider terms note in docs/USAGE.md before turning it on.
 [usage]
 poll = false
 poll_minutes = 5

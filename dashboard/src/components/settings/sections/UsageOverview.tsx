@@ -1,12 +1,17 @@
 /** Settings › (Server) Usage, as providers (lib/usageOverview.ts): a card per provider with its mark and the rail's ring,
  *  then each login with a bar per window and when it resets. Read through GET /api/usage (admin-only: anyone else gets
  *  its 404 and this renders nothing). Every card and line carries data-setting: settings.css hides a group without one.
- *  A provider with no reading yet is one muted line with the reason, never a bar at 0%. Read-only: nothing here changes
- *  which login the agents use. */
-import { useEffect, useState } from 'react';
+ *  A provider with no reading yet is one muted line with the reason, never a bar at 0%.
+ *
+ *  With more than one account for a provider (hasAccountChoice), each account is its own card, and a card can carry a
+ *  per-account action under its bars (the `accountAction` prop). This build passes none: the view is read-only and
+ *  nothing here changes which login the agents use. */
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchUsage, USAGE_QUERY_KEY, UsageHidden } from '../../../lib/usageLine';
-import { usageOverview, type UsageProviderView, type UsageTone, type UsageWindowView } from '../../../lib/usageOverview';
+import {
+  hasAccountChoice, usageOverview, type UsageAccountView, type UsageProviderView, type UsageTone, type UsageWindowView,
+} from '../../../lib/usageOverview';
 import { ringDash } from '../../../lib/modelPickerPanel';
 import { ProviderMark } from '../../kit/ModelPicker';
 
@@ -63,8 +68,29 @@ function WindowBar({ w }: { w: UsageWindowView }) {
   );
 }
 
-function ProviderCard({ p, dark }: { p: UsageProviderView; dark: boolean }) {
-  const many = p.accounts.length > 1;
+/** An action shown under one account's bars. Asked only where hasAccountChoice(p) (more than one account); null or
+ *  undefined shows nothing. */
+export type UsageAccountAction = (p: UsageProviderView, a: UsageAccountView) => ReactNode;
+
+/** One account: its name and the agents badge (only when there are several), a bar per window, then its action. */
+function AccountCard({ a, many, action }: { a: UsageAccountView; many: boolean; action?: ReactNode }) {
+  return (
+    <div className={many ? 'rounded-lg bg-tone-900/60 border border-tone-800/70 px-3 py-2' : ''} data-usage-account={a.id}>
+      {many && (
+        <div className="flex items-center justify-between gap-2 mb-0.5">
+          <span className="min-w-0 block text-px13 font-medium text-tone-100 truncate">{a.label}</span>
+          {a.agents && <span className="text-px10 uppercase tracking-wide px-1.5 py-[1px] rounded-full border border-emerald-500/40 text-emerald-400" data-agents-badge>Agents use this</span>}
+        </div>
+      )}
+      {a.windows.map((w) => <WindowBar key={w.key} w={w} />)}
+      {!a.windows.length && <div className="py-1.5 text-px12 text-tone-500">No reading yet.</div>}
+      {action != null && action !== false && <div className="mt-1.5" data-usage-account-action={a.id}>{action}</div>}
+    </div>
+  );
+}
+
+function ProviderCard({ p, dark, accountAction }: { p: UsageProviderView; dark: boolean; accountAction?: UsageAccountAction }) {
+  const many = hasAccountChoice(p);
   return (
     <section className="rounded-xl border border-tone-800 bg-tone-900/40 px-4 py-3" data-setting={`usage:${p.id}`} data-usage-provider={p.id}>
       <header className="flex items-center gap-3">
@@ -76,23 +102,14 @@ function ProviderCard({ p, dark }: { p: UsageProviderView; dark: boolean }) {
       </header>
       <div className={many ? 'mt-3 grid gap-3 sm:grid-cols-2' : 'mt-2'}>
         {p.accounts.map((a) => (
-          <div key={a.id} className={many ? 'rounded-lg bg-tone-900/60 border border-tone-800/70 px-3 py-2' : ''} data-usage-account={a.id}>
-            {many && (
-              <div className="flex items-center justify-between gap-2 mb-0.5">
-                <span className="min-w-0 block text-px13 font-medium text-tone-100 truncate">{a.label}</span>
-                {a.agents && <span className="text-px10 uppercase tracking-wide px-1.5 py-[1px] rounded-full border border-emerald-500/40 text-emerald-400" data-agents-badge>Agents use this</span>}
-              </div>
-            )}
-            {a.windows.map((w) => <WindowBar key={w.key} w={w} />)}
-            {!a.windows.length && <div className="py-1.5 text-px12 text-tone-500">No reading yet.</div>}
-          </div>
+          <AccountCard key={a.id} a={a} many={many} action={many && accountAction ? accountAction(p, a) : null} />
         ))}
       </div>
     </section>
   );
 }
 
-export function UsageOverviewPanel() {
+export function UsageOverviewPanel({ accountAction }: { accountAction?: UsageAccountAction } = {}) {
   const dark = useDark();
   const { data, error, isLoading } = useQuery({
     queryKey: USAGE_QUERY_KEY, queryFn: fetchUsage, staleTime: 55_000, refetchInterval: 60_000, retry: false,
@@ -108,7 +125,7 @@ export function UsageOverviewPanel() {
       {error && !isLoading && <p className="panel-note" data-setting="usage" data-plan-usage-error>Plan usage is unavailable right now.</p>}
       {!isLoading && !error && !view.providers.length && !view.silent.length && <p className="panel-note" data-setting="usage">No provider reports plan usage.</p>}
       <div className="grid gap-3">
-        {view.providers.map((p) => <ProviderCard key={p.id} p={p} dark={dark} />)}
+        {view.providers.map((p) => <ProviderCard key={p.id} p={p} dark={dark} accountAction={accountAction} />)}
       </div>
       {view.silent.length > 0 && (
         <ul className="mt-3 grid gap-1 text-px12 text-tone-500" data-usage-silent>

@@ -78,6 +78,12 @@ export function resetsText(resetsAt: number, now: Date): string {
   return `Resets ${d.toLocaleDateString([], { weekday: 'short' })} ${time(d)}`;
 }
 
+/** More than one account for this provider: each gets its own card, and a per-account action (none in this build) has
+ *  a choice to offer. One account: one card, nothing to choose. */
+export function hasAccountChoice(p: Pick<UsageProviderView, 'accounts'>): boolean {
+  return p.accounts.length > 1;
+}
+
 const order = (list: readonly string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
 
 export function usageOverview(rows: unknown, now: Date = new Date(), agentsAccount: string = AGENTS_ACCOUNT): UsageOverview {

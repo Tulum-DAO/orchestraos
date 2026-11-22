@@ -99,6 +99,7 @@ and `orchestra-recovery.service` resumes your seats from their saved sessions af
 - [docs/PROMPTS.md](docs/PROMPTS.md) — copy-paste prompts for the same seven steps, plus the tracks.
 - [docs/UPGRADE.md](docs/UPGRADE.md) — **updating:** `orchestra upgrade` pulls the newest release, re-runs `init`, re-checks `doctor` (it rebuilds what changed); then `orchestra down && orchestra up --detach`; running seats keep their code until their next spawn or rotation. `orchestra doctor` and `orchestra up` tell you when a newer release exists.
 - [docs/COSTS.md](docs/COSTS.md) — what a VPS and a CLI plan actually cost, and the zero-key path.
+- [docs/USAGE.md](docs/USAGE.md) — plan usage in Settings > Usage and the model picker: where the numbers come from, and how to turn on the optional poller (off by default).
 - [docs/tracks/README.md](docs/tracks/README.md) — the thirteen hackathon tracks, one doc each.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the map. Read before touching rotation or approvals.
 - [docs/MEMORY.md](docs/MEMORY.md) — per-seat memory (index + one-fact files + baton) and the facts store Arturo recalls from; the copy-paste prompt for gate step 7.
