@@ -1246,6 +1246,29 @@ What happens next, and how to see it:
 A card requested from an ambient shell behaves exactly like one a seat requested for
 itself: the seat named in `--from` is the one that receives the answer.
 
+### Gateway arm flags
+
+Some gateway behaviour is switched by environment flags. The supervisor gives the gateway every
+`KEY=VALUE` line of `<data dir>/config/watch-gateway.env` (default `~/.orchestra/config/watch-gateway.env`)
+each time it starts it, so a restart keeps them. No file means the gateway's built-in defaults.
+
+| Flag | Built-in default | What it does |
+|---|---|---|
+| `MENU_SUBMIT_ARMED` | off | `1` = a single-option answer to an in-agent menu card is typed into the seat's pane. Off, the card records the answer but the pane keeps its menu. |
+| `MENU_MULTIPART_SUBMIT_ARMED` | on | `0` = multi-part menu answers are recorded but not typed into the pane. |
+| `MENU_MULTIPART_TEXT_ARMED` | on | `0` = typed (own words) parts of a multi-part answer are refused; option picks still go through. |
+| `EXPIRE_PENDING` | off | `1` = pending cards expire on their own; `0` (or unset) = they never do. |
+
+```bash
+mkdir -p ~/.orchestra/config && chmod 700 ~/.orchestra/config
+printf 'MENU_SUBMIT_ARMED=1\n' > ~/.orchestra/config/watch-gateway.env
+```
+
+Edit the file, then restart the gateway: the supervisor reads the file each time it starts the
+gateway, so no other restart is needed. The
+`gateway:arms` row of `orchestra doctor` reads the running gateway's own environment and warns when
+it lacks a flag from the file or carries a different value.
+
 ## 6. Rotate a seat (manual, lossless)
 
 A seat near its context ceiling banks a handoff (its prompt knows the format:

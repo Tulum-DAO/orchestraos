@@ -274,6 +274,66 @@ def tailscale_users_check(probes: DoctorProbes, data_dir: Path) -> "Check":
     return Check("terminal:tailscale-users", WARN, detail, fix, required=False)
 
 
+def gateway_arms_check(st: Settings, probes: DoctorProbes) -> "Check":
+    """The running gateway carries <data dir>/config/watch-gateway.env (its arm flags)? Read from the gateway
+    process's own /proc/<pid>/environ, so a relaunch that dropped them shows (gm msg_6d923726: the 11-14
+    cutover relaunched it without MENU_SUBMIT_ARMED; single-option card answers ran dry for days)."""
+    from . import process_table as PT
+    path = PT.gateway_env_path(st)
+    status, want = PT.load_env_file(path)
+    if status == "absent":
+        return Check("gateway:arms", INFO, f"no {path}: the gateway gets no flags from a file (its code defaults, "
+                     "plus whatever its supervisor's own environment carries)",
+                     "To pin the arm flags (MENU_SUBMIT_ARMED=1 ...), write them there; docs/INSTALL.md", required=False)
+    if status == "unreadable":
+        return Check("gateway:arms", WARN, f"{path} cannot be read: the gateway starts without the file's flags",
+                     "Fix the file's permissions/encoding (plain text, readable by the orchestra user)", required=False)
+    if status == "empty":
+        return Check("gateway:arms", WARN, f"{path} has no KEY=VALUE line: the gateway starts without the file's flags",
+                     "Write one flag per line, e.g. MENU_SUBMIT_ARMED=1; docs/INSTALL.md", required=False)
+    pid = probes.port_owner(st.gateway_port)
+    if pid is None:
+        return Check("gateway:arms", INFO, f"{len(want)} flag(s) in {path}; no running gateway to verify "
+                     "(the supervisor gives them to it at its next start)", required=False)
+    if not pid:
+        return Check("gateway:arms", WARN, f":{st.gateway_port} owner unknown: cannot read the gateway's environment",
+                     "Run doctor as the user that runs the gateway", required=False)
+    try:
+        raw = probes.read_file(f"/proc/{pid}/environ")
+    except OSError as e:
+        return Check("gateway:arms", WARN, f"cannot read /proc/{pid}/environ ({type(e).__name__})",
+                     "Run doctor as the user that runs the gateway", required=False)
+    have = dict(kv.split("=", 1) for kv in raw.split("\0") if "=" in kv)
+    # key names only, never values: the file may hold something that must not be printed
+    off = [f"{k} ({'different value' if k in have else 'missing'})"
+           for k, v in sorted(want.items()) if have.get(k) != v]
+    if off:
+        return Check("gateway:arms", WARN, f"running gateway pid {pid} lacks {path}: " + "; ".join(off),
+                     "Restart the gateway; its supervisor reads the file at each start (a supervisor started before "
+                     "this check existed must itself be restarted once: `orchestra up`)", required=False)
+    return Check("gateway:arms", OK, f"running gateway pid {pid} carries all {len(want)} flag(s) from {path}",
+                 required=False)
+
+
+def gateway_env_file_mode_check(st: Settings) -> "Check | None":
+    """WARN when <data dir>/config/watch-gateway.env is readable by group or other (same shape as the
+    reporter-token row). The file is still loaded: refusing it would recreate the dry-run outage the
+    file exists to prevent. None when there is no file (the arms row already says so)."""
+    from . import process_table as PT
+    path = PT.gateway_env_path(st)
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return Check("gateway:arms-file-mode", WARN, f"cannot stat {path} ({type(e).__name__})",
+                     "Fix the file's permissions (plain text, readable by the orchestra user only)", required=False)
+    if mode & 0o044:
+        return Check("gateway:arms-file-mode", WARN, f"{path} is readable by group/other (mode {mode & 0o777:04o})",
+                     f"chmod 0600 {path} (and chmod 700 its directory)", required=False)
+    return Check("gateway:arms-file-mode", OK, f"{path} mode {mode & 0o777:04o}", required=False)
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -319,6 +379,16 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks.append(Check("gateway:token", OK if tok_ok else MISSING, str(st.token_file),
                         "Run `orchestra init` (writes it) — the gateway refuses to start without a bearer"))
     checks.append(tailscale_users_check(probes, st.data_dir))
+    try:
+        checks.append(gateway_arms_check(st, probes))
+    except Exception as e:  # noqa: BLE001 — one row must never sink the doctor
+        checks.append(Check("gateway:arms", WARN, f"check unavailable: {e}", required=False))
+    try:
+        mode_row = gateway_env_file_mode_check(st)
+        if mode_row is not None:
+            checks.append(mode_row)
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("gateway:arms-file-mode", WARN, f"check unavailable: {e}", required=False))
 
     # -- runtimes (the SAME probe definitions the API serves at /api/runtimes/available)
     providers_path = root / "config" / "providers.json"
