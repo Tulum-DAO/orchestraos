@@ -249,6 +249,31 @@ def grok_path_check(which, home) -> "Check | None":
                  required=False)
 
 
+def tailscale_users_check(probes: DoctorProbes, data_dir: Path) -> "Check":
+    """WARN when no Tailscale login is let in: the web terminal and the voice call then refuse everyone
+    (no install issues a session cookie). Not required: the rest of the stack runs without it."""
+    from . import tailscale_users as TU
+    path = TU.users_path(data_dir)
+    try:
+        raw = probes.read_file(str(path))
+    except (FileNotFoundError, OSError):
+        raw = None
+    ok, detail, kind = TU.status_of(raw, (probes.env_get or os.environ.get)(TU.ENV), path)
+    if ok:
+        return Check("terminal:tailscale-users", OK, detail, required=False)
+    if kind == "env-empty":
+        fix = f"put a login in {TU.ENV} (login [admin|member], comma-separated), or unset it so {path} applies"
+    elif kind == "absent":
+        fix = "orchestra tailscale-users --seed  (writes this machine's own Tailscale login as admin)"
+    else:
+        try:
+            login, _ = TU.self_login(probes.run_cmd(["tailscale", "status", "--json"]))
+        except Exception:  # noqa: BLE001 — no login to offer: the placeholder says what to write
+            login = None
+        fix = TU.hand_fix(path, login)
+    return Check("terminal:tailscale-users", WARN, detail, fix, required=False)
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -293,6 +318,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     tok_ok = st.token_file.exists() and bool(st.token_file.read_text().strip())
     checks.append(Check("gateway:token", OK if tok_ok else MISSING, str(st.token_file),
                         "Run `orchestra init` (writes it) — the gateway refuses to start without a bearer"))
+    checks.append(tailscale_users_check(probes, st.data_dir))
 
     # -- runtimes (the SAME probe definitions the API serves at /api/runtimes/available)
     providers_path = root / "config" / "providers.json"

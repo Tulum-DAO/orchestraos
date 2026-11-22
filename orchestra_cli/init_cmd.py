@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -388,6 +389,17 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         tok.write_text(secrets.token_urlsafe(32))
         os.chmod(tok, 0o600)
         report.append(Step("gateway-token", True, f"wrote {tok} (chmod 600)"))
+
+    # 5a. who the web terminal and the voice call let in: no install issues a session cookie, so with no
+    # state/tailscale-users nobody got in, the owner included. Absent -> this machine's own Tailscale
+    # login, as admin. A present file (even an empty one) is never touched; no login -> a hint, never a failure.
+    try:
+        from . import tailscale_users as TU
+        ts = TU.seed(data_dir)
+        report.append(Step("tailscale-users", ts.did, ts.detail))
+    except Exception as e:  # noqa: BLE001 — seed() never raises; this keeps init (and upgrade) going if it ever does
+        report.append(Step("tailscale-users", False, f"not written ({type(e).__name__}); add your login by hand: "
+                                                     f"echo 'you@example.com admin' >> {shlex.quote(str(data_dir / 'state' / 'tailscale-users'))}"))
 
     # 5b. tasks.db schema — msg_store.py, scripts/message-router.py and the rotation beat
     # open <data>/state/tasks.db expecting messages + conversations; only the api created

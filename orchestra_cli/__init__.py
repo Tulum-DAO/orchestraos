@@ -5,6 +5,7 @@
     orchestra up       run gateway + api + dashboard + arturo + the beats under one supervisor
     orchestra down     stop a running supervisor
     orchestra status   show what the supervisor is running
+    orchestra tailscale-users  who the web terminal and voice call let in (--seed: this machine's own login, if absent)
     orchestra install-unit  install systemd units so the stack (and its seats) come back after a reboot
     orchestra starter  the default first-install team: gm (T0) -> a project manager (T1) -> a worker (T2)
     orchestra spawn    register + launch a seat in tmux (--gm = the General Manager)

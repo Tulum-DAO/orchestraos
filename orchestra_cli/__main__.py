@@ -104,6 +104,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                     help="which minter's children to revoke (default: legacy-fleet-token)")
     rt.add_argument("--revoke-only", dest="revoke_only", action="store_true",
                     help="revoke the minted tokens but do NOT rotate the bearer itself")
+    tsu = sub.add_parser("tailscale-users", help="who the web terminal and the voice call let in (state/tailscale-users)")
+    tsu.add_argument("--seed", action="store_true",
+                     help="when the file is absent, write this machine's own Tailscale login as admin (never overwrites)")
     sub.add_parser("down", help="stop the running supervisor and its children")
     ug = sub.add_parser("upgrade", help="git pull --ff-only + orchestra init --yes + orchestra doctor; seats untouched")
     ug.add_argument("--dry-run", action="store_true", help="show the incoming commits and contract-bearing paths, pull nothing")
@@ -281,12 +284,14 @@ def main(argv=None) -> int:
     from .react_cmd import cmd_react
     from .update_cmd import cmd_update
     from .gate_cmd import cmd_gate, cmd_grant
+    from .tailscale_users import cmd_tailscale_users
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "retire": cmd_retire, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
             "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit,
             "identity": cmd_identity, "memory": cmd_memory, "react": cmd_react,
-            "update": cmd_update, "grant": cmd_grant, "gate": cmd_gate}[ns.command](ns)
+            "update": cmd_update, "grant": cmd_grant, "gate": cmd_gate,
+            "tailscale-users": cmd_tailscale_users}[ns.command](ns)
 
 
 if __name__ == "__main__":
