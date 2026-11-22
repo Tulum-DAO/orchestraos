@@ -27,7 +27,7 @@
  *
  * `variant="inline"` draws the same panel in place, always open (a settings page), with no pill.
  */
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -47,6 +47,7 @@ import {
 import { effortLabel, effortLevels as runtimeEffortLevels, type EffortLevel } from '../../lib/modelEffort';
 import { fetchUsage, USAGE_QUERY_KEY, UsageHidden } from '../../lib/usageLine';
 import { newAgentHref } from '../../lib/newAgent';
+import { placePopover, type Placement, type PopoverPlace } from '../../lib/popoverPlace';
 import ModelPickerPanel from './ModelPickerPanel';
 
 export interface ModelPick { providerId: string; modelId: string; modelLabel: string; capabilities: ProviderCapabilities }
@@ -89,6 +90,11 @@ export interface ModelPickerProps {
   onBeforeNewAgent?: () => void;
   /** Where focus goes on close when the pill is not shown (below 480px the composer's overflow menu button). */
   returnFocus?: () => HTMLElement | null;
+  /** With no pill (trigger={false}): the control that opens it (Arturo's brain chip in his composer). The popover
+   *  floats next to it, as it does next to the pill, and focus goes back to it on close. */
+  anchorRef?: RefObject<HTMLElement | null>;
+  /** 'above': directly above the pill or anchor (a composer at the bottom); 'auto' (default): under it when it fits. */
+  placement?: Placement;
 }
 
 interface RuntimesAvailableResponse { providers: ProviderAvailability[] }
@@ -97,6 +103,7 @@ const DEFAULT_KEY = '__default__';
 // Above the Arturo pane (z 76), as the old sheet was; the connect modal sits above this (z 85).
 const Z = 80;
 const POPOVER_W = 440;
+const POPOVER_H = 460;
 
 /** The page's theme as drawn (the `dark` class on <html>), followed live. */
 function useDarkMode(): boolean {
@@ -218,7 +225,7 @@ function AddProviderPanel({ rows, onInstalled, onSignIn, canInstall }: {
 export default function ModelPicker({
   value, onValueChange, agentModels, onPickDefault, chooser = 'agent', variant = 'popover', open: openProp, onOpenChange, trigger = true, label,
   triggerClassName, effort = null, onEffortChange, effortLevels: agentLevels = null, effortClearable = false, note = null, onTabChange,
-  onBeforeNewAgent, returnFocus,
+  onBeforeNewAgent, returnFocus, anchorRef, placement = 'auto',
 }: ModelPickerProps) {
   const inline = variant === 'inline';
   const [openState, setOpenState] = useState(false);
@@ -241,7 +248,7 @@ export default function ModelPicker({
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const idBase = useId().replace(/:/g, '');
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
+  const [pos, setPos] = useState<PopoverPlace | null>(null);
 
   const probe = useCallback(async (fresh = false) => {
     setLoading(true); setError(null);
@@ -300,27 +307,31 @@ export default function ModelPicker({
     return () => clearTimeout(t);
   }, [open, inline]);
 
-  // Desktop: under the pill (above it when there is no room below); with no pill, near the top, centred.
+  // Desktop: next to the pill, or with no pill next to the control that opened it (`anchorRef`), by lib/popoverPlace.ts;
+  // with neither, near the top, centred. Placed again when the window changes size.
   useLayoutEffect(() => {
     if (!open || inline || phone) { setPos(null); return; }
-    const r = triggerRef.current?.getBoundingClientRect();
-    const w = Math.min(POPOVER_W, window.innerWidth - 16);
-    if (!r) { setPos({ left: Math.max(8, (window.innerWidth - w) / 2), top: Math.round(window.innerHeight * 0.12) }); return; }
-    const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
-    const below = window.innerHeight - r.bottom;
-    setPos(below >= 460 || below >= r.top ? { left, top: r.bottom + 6 } : { left, bottom: window.innerHeight - r.top + 6 });
-  }, [open, inline, phone]);
+    const place = () => {
+      const el = triggerRef.current ?? anchorRef?.current ?? null;
+      const r = el && el.getClientRects().length > 0 ? el.getBoundingClientRect() : null;
+      const height = Math.min(POPOVER_H, Math.round(window.innerHeight * 0.8));
+      setPos(placePopover(r, { width: window.innerWidth, height: window.innerHeight }, { width: POPOVER_W, height, placement }));
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open, inline, phone, anchorRef, placement]);
 
   const close = useCallback(() => {
     if (inline) return;
     setOpen(false);
     // Back to the pill, or, when the pill is hidden (display: none below 480px) or absent, to where it was opened from.
     setTimeout(() => {
-      const t = triggerRef.current;
+      const t = triggerRef.current ?? anchorRef?.current ?? null;
       if (t && t.getClientRects().length > 0) t.focus();
       else returnFocus?.()?.focus();
     }, 0);
-  }, [inline, setOpen, returnFocus]);
+  }, [inline, setOpen, returnFocus, anchorRef]);
 
   /** Sign in: the picker closes first, then the Connect sheet opens as the top layer (never under the picker). */
   const connect = useCallback((row: ProviderRow) => {
@@ -333,12 +344,12 @@ export default function ModelPicker({
     if (!open || inline || phone || connectRow) return;
     const down = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (panelRef.current?.contains(t) || triggerRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t) || triggerRef.current?.contains(t) || anchorRef?.current?.contains(t)) return;
       setOpen(false);
     };
     document.addEventListener('mousedown', down);
     return () => document.removeEventListener('mousedown', down);
-  }, [open, inline, phone, connectRow, setOpen]);
+  }, [open, inline, phone, connectRow, setOpen, anchorRef]);
 
   // The add-a-provider view replaces the list: keep focus inside, where Esc and Tab work.
   const backRef = useRef<HTMLButtonElement>(null);
