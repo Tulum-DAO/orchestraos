@@ -164,12 +164,113 @@ def test_unreadable_evidence_is_undecided_writes_nothing_and_onboarding_runs(dir
         (state / "operator.json").write_text("not json")
     if which == "progress":
         (state / prog.FILENAME).write_text("not json")
-        _registry(data, {"gm": {"tier": "T0"}})
     out = prog.ensure_onboarded(state, data)
     assert out["onboarded"] is False and out["how"] == "undecided" and out["unreadable"]
     assert not (state / "onboarding.json").exists()
     if which != "progress":
         assert not (state / prog.FILENAME).exists()              # not marked fresh: the next call looks again
+    else:
+        assert (state / prog.FILENAME).read_text() == "not json"  # never rewritten over the operator's file
+
+
+def test_a_corrupt_progress_file_does_not_hide_a_team_the_upgrade_is_still_inferred(dirs):
+    """#603 review F6: evidence from another source wins over an unreadable onboarding-progress.json."""
+    data, state = dirs
+    (state / prog.FILENAME).write_text("not json")
+    _registry(data, {"gm": {"tier": "T0"}})
+    out = prog.ensure_onboarded(state, data)
+    assert out["how"] == "inferred" and out["unreadable"] == [prog.FILENAME]
+    assert _flag(state)["reason"] == "upgrade-inferred"
+    assert (state / prog.FILENAME).read_text() == "not json"
+
+
+# ---- #603 review F2: the exact shape of the evidence -------------------------------------------
+
+def test_gm_must_be_a_t0_seat_a_t1_gm_is_not_evidence(dirs):
+    data, state = dirs
+    _registry(data, {"gm": {"tier": "T1"}, "helper": {"tier": "T2"}})
+    out = prog.ensure_onboarded(state, data)
+    assert out["how"] == "fresh" and not (state / "onboarding.json").exists()
+
+
+@pytest.mark.parametrize("name", [{"value": ""}, {"value": "   "}, {"source": "brain"}, "Ada"])
+def test_a_blank_or_malformed_operator_name_is_not_evidence(dirs, name):
+    data, state = dirs
+    (state / "operator.json").write_text(json.dumps({"facts": {"name": name}}))
+    out = prog.ensure_onboarded(state, data)
+    assert out["how"] == "fresh" and not (state / "onboarding.json").exists()
+
+
+def test_a_failed_flag_write_still_decides_inferred_never_undecided(dirs, monkeypatch):
+    data, state = dirs
+    _registry(data, {"gm": {"tier": "T0"}})
+
+    def boom(*_a, **_k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(prog, "write_flag", boom)
+    out = prog.ensure_onboarded(state, data)
+    assert out["onboarded"] is True and out["how"] == "inferred"
+    assert not (state / "onboarding.json").exists() and not (state / prog.FILENAME).exists()
+
+
+# ---- #603 review F1: a filesystem without hard links ---------------------------------------------
+
+def _no_links(monkeypatch):
+    import errno
+
+    def link(_src, _dst):
+        raise OSError(errno.EOPNOTSUPP, "Operation not supported")
+    monkeypatch.setattr(prog.os, "link", link)
+
+
+def test_write_flag_falls_back_to_create_exclusive_where_hard_links_are_unsupported(dirs, monkeypatch):
+    _data, state = dirs
+    _no_links(monkeypatch)
+    assert prog.write_flag(state, {"finished_at": 1.0}) is True
+    assert _flag(state) == {"finished_at": 1.0}
+    assert prog.write_flag(state, {"reason": "upgrade-inferred"}) is False     # still never overwrites
+    assert _flag(state) == {"finished_at": 1.0}
+    _no_leftovers(state)
+
+
+def test_finish_onboarding_finishes_where_hard_links_are_unsupported(P, monkeypatch):
+    _no_links(monkeypatch)
+    P.text_turn(OPENER, "web_onb", principal="fleet")
+    tok = P._TEAM_TURN.set({"onboarding": True, "conversation_id": "web_onb", "principal": "fleet"})
+    try:
+        out = P.finish_onboarding()
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert out.startswith("Onboarding finished") and "finished_at" in _flag(P.ARTURO_STATE)
+
+
+# ---- #603 review F3: the progress file's read-modify-write is locked across processes ---------------
+
+def test_progress_writes_wait_for_another_process_holding_the_lock(dirs):
+    import subprocess
+    import sys
+    import threading
+    import time
+    _data, state = dirs
+    lock = str(state / prog.FILENAME) + ".lock"
+    holder = subprocess.Popen([sys.executable, "-c",
+                               "import fcntl,sys,time; f=open(sys.argv[1],'a'); fcntl.flock(f, fcntl.LOCK_EX); "
+                               "print('held', flush=True); time.sleep(1.5)", lock], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        t0 = time.monotonic()
+        done = {}
+
+        def pin():
+            done["id"] = prog.pin_conversation(state, "web_onb")
+            done["t"] = time.monotonic() - t0
+        th = threading.Thread(target=pin)
+        th.start()
+        th.join(10)
+        assert not th.is_alive() and done["id"] == "web_onb"
+        assert done["t"] >= 1.0, done["t"]                           # it waited for the other process
+    finally:
+        holder.wait(10)
 
 
 def test_once_the_unreadable_registry_is_repaired_the_upgrade_is_inferred(dirs):

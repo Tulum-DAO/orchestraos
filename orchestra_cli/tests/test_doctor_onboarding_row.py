@@ -126,3 +126,27 @@ def test_init_with_an_unreadable_registry_decides_nothing_and_does_not_fail(tmp_
     step = _init(tmp_path, data)["arturo-onboarding"]
     assert step.did is False and step.detail.startswith("undecided:") and step not in I.failed_steps([step])
     assert not (_state(data) / "onboarding.json").exists() and not (_state(data) / "onboarding-progress.json").exists()
+
+
+def test_init_decides_before_demo_seats_are_seeded(tmp_path, monkeypatch):
+    """#603 review F2 (M8): the order the code promises, pinned. Demo seats are T1/T2 today, so only
+    the order itself shows whether the decision came first."""
+    from orchestra_cli import init_cmd as I
+    seen = {}
+    real = I.seed_demo_registry
+
+    def seed(path):
+        seen["fresh_at_before_demo"] = "fresh_at" in json.loads(
+            (path.parent / "state" / "arturo" / "onboarding-progress.json").read_text())
+        return real(path)
+    monkeypatch.setattr(I, "seed_demo_registry", seed)
+    _init(tmp_path, tmp_path / "data", demo=True)
+    assert seen == {"fresh_at_before_demo": True}
+
+
+def test_corrupt_progress_with_evidence_warns_and_names_the_file_and_the_inference(data):
+    """#603 review F6: the WARN still names the corrupt file; the row also says the flag is coming."""
+    (_state(data) / "onboarding-progress.json").write_text("not json")
+    (data / "registry.json").write_text(json.dumps({"agents": {"gm": {"tier": "T0"}}}))
+    c = D.onboarding_check(data)
+    assert c.status == D.WARN and "onboarding-progress.json" in c.detail and "upgrade-inferred" in c.detail

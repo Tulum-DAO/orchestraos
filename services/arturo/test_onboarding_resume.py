@@ -316,7 +316,8 @@ def test_two_openers_at_once_agree_on_one_pinned_thread(tmp_path):
     for t in ts:
         t.join()
     assert len(set(got)) == 1 and prog.conversation(tmp_path) == got[0]
-    assert [p.name for p in tmp_path.iterdir()] == [prog.FILENAME]     # no stray temp files
+    # no stray temp files (the .lock beside it is the cross-process write lock, #603 F3)
+    assert [p.name for p in tmp_path.iterdir() if not p.name.endswith(".lock")] == [prog.FILENAME]
 
 
 def test_an_unwritable_pin_never_turns_a_recorded_turn_into_an_error(P, monkeypatch):

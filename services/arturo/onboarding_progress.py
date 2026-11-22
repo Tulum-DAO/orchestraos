@@ -15,6 +15,7 @@ written only by server code, never by the brain:
   rerun                     set by hand to run onboarding again on an install that is not fresh.
 
 Which devices are paired is read from the device store (Arturo's own codes), never stored here.
+Writes hold <file>.lock (flock) so `orchestra init` and a running proxy never lose each other's key.
 Reset: delete this file together with onboarding.json (docs/ARTURO.md).
 
 Onboarding is finished when <ARTURO_STATE>/onboarding.json exists. That flag arrived with the
@@ -28,14 +29,30 @@ from __future__ import annotations
 
 import json
 import os
+import contextlib
+import fcntl
 import tempfile
 import threading
 import time
 from pathlib import Path
 
 # Every write is read-modify-write: one at a time, or two openers (or an opener and a decline) lose an
-# update or both "win" the pin.
+# update or both "win" the pin. The thread lock covers one process; the flock (<file>.lock) covers
+# `orchestra init` deciding while a proxy pins (#603 review F3: losing fresh_at is a one-way door).
 _LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _locked(state_dir):
+    with _LOCK:
+        p = _path(state_dir)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(p) + ".lock", "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
 FILENAME = "onboarding-progress.json"
 PAIR_MINTER = "arturo-onboarding"          # arturo-proxy.py _PAIR_MINTER
@@ -69,7 +86,7 @@ def _write(state_dir, rec):
 def pin_conversation(state_dir, conversation_id) -> str:
     """The onboarding thread is the first one an opener ran in; later calls keep it. Returns the
     pinned id (which may be another browser's, when two opened at once)."""
-    with _LOCK:
+    with _locked(state_dir):
         rec = read(state_dir)
         if not rec.get("onboarding_conversation") and conversation_id:
             rec["onboarding_conversation"] = str(conversation_id)
@@ -82,14 +99,14 @@ def conversation(state_dir) -> str:
 
 
 def set_team_declined(state_dir, when=None):
-    with _LOCK:
+    with _locked(state_dir):
         rec = read(state_dir)
         rec["team_declined_at"] = float(when if when is not None else time.time())
         _write(state_dir, rec)
 
 
 def clear_team_declined(state_dir):
-    with _LOCK:
+    with _locked(state_dir):
         rec = read(state_dir)
         if rec.pop("team_declined_at", None) is not None:
             _write(state_dir, rec)
@@ -141,8 +158,21 @@ def write_flag(state_dir, rec) -> bool:
             os.fsync(fh.fileno())
         try:
             os.link(tmp, p)
+            return True
         except FileExistsError:
             return False
+        except OSError:
+            # No hard links on this filesystem (exFAT, SMB, some FUSE): create-exclusive still refuses
+            # an existing flag, and the record is small enough to land in one write (#603 review F1).
+            data = open(tmp).read()
+        try:
+            fd2 = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd2, "w") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
         return True
     finally:
         Path(tmp).unlink(missing_ok=True)
@@ -208,12 +238,12 @@ def ensure_onboarded(state_dir, orchestra_dir, now=None) -> dict:
     if flag_path(state_dir).exists():
         return {**out, "onboarded": True, "how": "flag"}
     pstatus, rec = _progress_status(state_dir)
-    if pstatus == "unreadable":
-        return {**out, "how": "undecided", "unreadable": [FILENAME]}
-    if rec.get("fresh_at") is not None or rec.get("rerun"):
+    if pstatus != "unreadable" and (rec.get("fresh_at") is not None or rec.get("rerun")):
         return out
     evidence, unreadable = upgrade_evidence(orchestra_dir, state_dir,
                                             str(rec.get("onboarding_conversation") or ""))
+    if pstatus == "unreadable":
+        unreadable = [FILENAME] + unreadable      # evidence from another source still wins (F6)
     if evidence:
         when = float(now if now is not None else time.time())
         try:
@@ -224,12 +254,11 @@ def ensure_onboarded(state_dir, orchestra_dir, now=None) -> dict:
     if unreadable:
         return {**out, "how": "undecided", "unreadable": unreadable}
     try:
-        with _LOCK:
+        with _locked(state_dir):
             pstatus, rec = _progress_status(state_dir)
-            if pstatus == "ok" or pstatus == "absent":
-                if rec.get("fresh_at") is None:
-                    rec["fresh_at"] = float(now if now is not None else time.time())
-                    _write(state_dir, rec)
+            if pstatus in ("ok", "absent") and rec.get("fresh_at") is None:
+                rec["fresh_at"] = float(now if now is not None else time.time())
+                _write(state_dir, rec)
     except OSError:
         pass                         # unmarked: the next call decides again, the same way
     return out
@@ -247,7 +276,10 @@ def describe(state_dir, orchestra_dir) -> tuple:
         return "present", f"{flag_path(state_dir)}: onboarding finished"
     pstatus, rec = _progress_status(state_dir)
     if pstatus == "unreadable":
-        return "undecided", f"no {FLAG}; {_path(state_dir)} is unreadable, so onboarding runs"
+        evidence, _ = upgrade_evidence(orchestra_dir, state_dir)
+        return "undecided", (f"no {FLAG}; {_path(state_dir)} is unreadable" +
+                             (f"; Arturo still writes the flag ({UPGRADE_REASON}) on its next read: " + "; ".join(evidence)
+                              if evidence else ", so onboarding runs"))
     if rec.get("rerun"):
         return "fresh-not-onboarded", f"no {FLAG}; onboarding re-run requested ({FILENAME} rerun)"
     if rec.get("fresh_at") is not None:
