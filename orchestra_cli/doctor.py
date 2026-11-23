@@ -274,6 +274,30 @@ def tailscale_users_check(probes: DoctorProbes, data_dir: Path) -> "Check":
     return Check("terminal:tailscale-users", WARN, detail, fix, required=False)
 
 
+def arturo_source_checks(st: Settings) -> list:
+    """One advisory row per prompt source Arturo reads (services/arturo/source_health.SOURCES):
+    fresh OK, stale WARN (age + window), missing INFO (a clean install has none of these; Arturo
+    injects nothing from it), unreadable WARN. Read-only, never required, never raises."""
+    rows: list = []
+    try:
+        if str(st.repo_root) not in sys.path:
+            sys.path.insert(0, str(st.repo_root))
+        from services.arturo import source_health as _sh
+        for name, state, detail in _sh.doctor_rows(st.data_dir):
+            if state == _sh.FRESH:
+                level, remedy = OK, ""
+            elif state == _sh.MISSING:
+                level, remedy = INFO, ""                  # nothing is injected from it: not an alarm
+            elif state == _sh.STALE:
+                level, remedy = WARN, "Its writer has gone quiet; Arturo skips it (learning.db: injected with an as-of date)"
+            else:
+                level, remedy = WARN, "Check the file's permissions; Arturo injects nothing from it"
+            rows.append(Check(f"arturo:source:{name}", level, detail, remedy, required=False))
+    except Exception as e:  # noqa: BLE001 -- a doctor row never crashes the doctor
+        rows.append(Check("arturo:source:any", WARN, f"status unavailable: {e}", required=False))
+    return rows
+
+
 def gateway_arms_check(st: Settings, probes: DoctorProbes) -> "Check":
     """The running gateway carries <data dir>/config/watch-gateway.env (its arm flags)? Read from the gateway
     process's own /proc/<pid>/environ, so a relaunch that dropped them shows (gm msg_6d923726: the 11-14
@@ -510,6 +534,8 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
                         RUNTIME_ANY_REMEDY, required=(login_row is None)))
+    if st.arturo_enabled:
+        checks.extend(arturo_source_checks(st))          # the prompt sources Arturo reads, one row each
 
     # -- ports
     sup = probes.supervisor_state(st.data_dir) or {}

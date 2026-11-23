@@ -53,6 +53,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
 from services.arturo import secrets_vault as _secrets_vault
+from services.arturo import source_health as _source_health   # fresh/stale/missing gate on prompt sources
 # Keys Arturo uses but never sees or says: loaded into the commands it runs, blanked in all that comes back.
 _VAULT = _secrets_vault.Vault(Path(ORCHESTRA_DIR) / ".env.secrets")
 # The Telegram notifier is CODE, so it lives in the repo; ORCHESTRA_DIR is the DATA dir in an install
@@ -1483,6 +1484,11 @@ def _knowledge_lookup(query, category=None):
             pass
 
     if not results:
+        # No curated hit and no facts store on this install: say so plainly (never a traceback).
+        _facts = _source_health.source_status(_source_health.source_path(ORCHESTRA_DIR, "facts"))
+        if not _facts.readable:
+            return (f"No knowledge source for '{query}': the facts store (facts/facts_db.json) is {_facts.state}. "
+                    "This may require a deeper investigation — consider using gm_command or read_file.")
         return f"No knowledge found for '{query}'. This may require a deeper investigation — consider using gm_command or read_file."
     return "\n\n".join(results)
 
@@ -5316,7 +5322,7 @@ After spawning, the session name is auto-texted to Telegram.""")
 
     # Implicit memory — auto-extracted facts from conversations
     implicit_profile = ORCHESTRA_DIR / "state" / "users" / "operator" / "profile.json"
-    if implicit_profile.exists():
+    if _source_health.usable(implicit_profile, _source_health.PROFILE_MAX_AGE):   # missing/stale: no block
         try:
             profile = json.loads(implicit_profile.read_text())
             facts = profile.get("implicit_facts", [])
@@ -5362,7 +5368,7 @@ After spawning, the session name is auto-texted to Telegram.""")
 
     # Recent Telegram context — so Jarvis knows what was sent/received on Telegram
     tg_log = ORCHESTRA_DIR / "state" / "telegram-outbound.jsonl"
-    if tg_log.exists():
+    if _source_health.usable(tg_log, _source_health.TELEGRAM_MAX_AGE):   # "RECENT" means within the window
         try:
             recent_tg = tg_log.read_text().strip().split("\n")[-5:]
             if recent_tg:
@@ -5379,14 +5385,16 @@ After spawning, the session name is auto-texted to Telegram.""")
     try:
         import sqlite3
         _learn_db = str(ORCHESTRA_DIR / "state" / "learning.db")
-        if os.path.exists(_learn_db):
+        _learn_status = _source_health.source_status(_learn_db, _source_health.LEARNING_MAX_AGE)
+        if _learn_status.readable:   # stale is still injected, dated: gm's design may replace this store
             _lconn = sqlite3.connect(_learn_db, timeout=2)
             _rules = _lconn.execute(
                 "SELECT rule_text FROM rules WHERE status IN ('active', 'probationary')"
             ).fetchall()
             _lconn.close()
             if _rules:
-                parts.append("\nLEARNED RULES (from past interactions — follow these):")
+                parts.append("\nLEARNED RULES (from past interactions — follow these)"
+                             + _source_health.as_of_suffix(_learn_status) + ":")
                 for r in _rules:
                     parts.append(f"  - {r[0]}")
     except Exception:
