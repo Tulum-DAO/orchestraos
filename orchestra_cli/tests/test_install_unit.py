@@ -42,6 +42,8 @@ def _plan(tmp_path, sets=None, telemetry=True, runtimes=("claude",), **kw):
     kw.setdefault("npm_bin", "")
     kw.setdefault("python", "/usr/bin/python3")
     kw.setdefault("which", lambda c, path=None: f"/x/{c}")
+    # the test sandbox sets CLAUDE_CONFIG_DIR; the login-dir warning (test_login_guard) must not fire here
+    kw.setdefault("env", {})
     return IU.build_plan(st, sets or ["stack"], **kw)
 
 
@@ -197,9 +199,10 @@ def test_installs_with_sudo_when_dest_is_not_writable(tmp_path):
     rc = IU.execute(plan, euid=1000, interactive=False, runner=lambda c: ran.append(c) or 0,
                     sudo_usable=lambda i: True, out=lambda s: None)
     assert rc == 0
-    assert [c[:3] for c in ran] == [["sudo", "install", "-m"], ["sudo", "systemctl", "daemon-reload"],
-                                     ["sudo", "systemctl", "enable"]]
-    assert ran[2][3:] == ["orchestra.service", "orchestra-recovery.service", "orchestra-reconciler.timer"]
+    # the two login-dir drop-ins (orchestra.service.d, orchestra-recovery.service.d) ride between the units and daemon-reload
+    assert [c[:3] for c in ran] == [["sudo", "install", "-m"], ["sudo", "install", "-D"], ["sudo", "install", "-D"],
+                                     ["sudo", "systemctl", "daemon-reload"], ["sudo", "systemctl", "enable"]]
+    assert ran[-1][3:] == ["orchestra.service", "orchestra-recovery.service", "orchestra-reconciler.timer"]
     assert (plan.staging / "orchestra.service").read_text() == plan.rendered["orchestra.service"]
 
 
@@ -237,7 +240,7 @@ def test_a_failing_step_stops_the_install(tmp_path):
     ran = []
     rc = IU.execute(plan, euid=1000, interactive=True, sudo_usable=lambda i: True,
                     runner=lambda c: ran.append(c) or (1 if "daemon-reload" in c else 0), out=lambda s: None)
-    assert rc == 1 and len(ran) == 2
+    assert rc == 1 and len(ran) == 4          # units, two login-dir drop-ins, then the failing daemon-reload
 
 
 def test_cli_print_renders_without_writing(tmp_path, capsys, monkeypatch):

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .settings import _get, DEFAULT_DATA_DIR, read_toml, resolve_data_dir
+from . import login_guard as LG
 
 DATA_SUBDIRS = ("state", "logs", "queue", "state/event-stream", "state/uploads",
                 "state/arturo", "logs/arturo", "state/agent-handoffs",
@@ -24,6 +25,25 @@ class Step:
     step: str
     did: bool
     detail: str
+
+
+LOGINS_STEP = "logins"
+
+
+class GuardedReport(list):
+    """The init report: after EVERY step it re-fingerprints the provider login files (login_guard) and,
+    when a step harmed one, appends a failed `logins` step naming the file and that step. It never
+    repairs a login file: a Claude login that is copied or rewritten is a logout (refresh-token rotation)."""
+
+    def __init__(self, guard: "LG.LoginGuard"):
+        super().__init__()
+        self.guard = guard
+
+    def append(self, step: "Step") -> None:
+        super().append(step)
+        for f in self.guard.after(step.step):
+            print(f.line(), file=sys.stderr, flush=True)
+            super().append(Step(LOGINS_STEP, False, f"failed: {f.line()}"))
 
 
 def grok_link_step(home: Path, which: Callable[[str], Optional[str]] = None) -> Optional[Step]:
@@ -311,7 +331,9 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
     detect a TTY; False: never prompt (a non-interactive run without --yes SKIPS the hooks)."""
     repo_root = Path(repo_root)
     config_path = Path(config_path or os.environ.get("ORCHESTRA_CONFIG") or repo_root / "orchestra.toml")
-    report: list[Step] = []
+    # 0. fingerprint every provider login file BEFORE the first step; every append re-checks them.
+    guard = LG.LoginGuard().begin()
+    report: list[Step] = GuardedReport(guard)
     yes = yes or os.environ.get("ORCHESTRA_YES", "").strip() not in ("", "0")
 
     # 1. resolve the data dir: flag > $ORCHESTRA_DIR > existing config > default (settings.resolve_data_dir)
@@ -322,6 +344,11 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         except Exception:  # noqa: BLE001
             raw = {}
     data_dir = resolve_data_dir(raw, data_dir).resolve()
+    # A login dir an `orchestra install-unit` baked into the units must still hold its login (else the seats the
+    # units start are signed out): a loud failed `logins` step, never a silent fall-through to the default dir.
+    for f in guard.load_baked(LG.stamp_path_for(data_dir), step="baked-login-dirs"):
+        print(f.line(), file=sys.stderr, flush=True)
+        report.append(Step(LOGINS_STEP, False, f"failed: {f.line()}"))
 
     # 2. config file (never overwritten)
     if config_path.exists():
@@ -662,7 +689,18 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         report.append(_statusline_step(repo_root, data_dir, yes=yes, confirm=confirm_statusline,
                                        interactive=interactive))
 
-    return report
+    # 11. the login guard's verdict: a step that harmed a login has already appended a failed `logins`
+    # row; otherwise record the fingerprints (hashes only, 0600) for `orchestra doctor` to compare.
+    if not guard.fatal:
+        guard.stamp_path = LG.stamp_path_for(data_dir)
+        try:
+            guard.seal("init")
+            where = f"; stamp {guard.stamp_path}"
+        except OSError as e:
+            where = f"; stamp not written ({e})"
+        # did=False: a check, not an action (a second init does nothing, and this row must not say it did).
+        report.append(Step(LOGINS_STEP, False, f"preserved: {guard.summary()}{where}"))
+    return list(report)
 
 
 def _statusline_step(repo_root: Path, data_dir: Path, *, yes: bool, confirm, interactive) -> "Step":

@@ -44,6 +44,14 @@ Ask only what you cannot decide from your task, the code, or a sensible default.
 
 ## Messages in your chat
 
+**Acknowledge first.** When the operator's message needs more than a few seconds of work, or an answer
+longer than about five lines, your first message is one or two lines in your own words (what you understood
+and what you are doing now, or a question if it is unclear), and its last line is exactly `⤷ continuing`,
+alone. End your turn there: the system answers "continue" and you do the work in your next turn. A progress
+message may end with that line too. Use it ONLY when you are about to keep working: never on a greeting, a
+startup readback ("ready", "guidance loaded"), a complete answer or a short answer you already know. Never explain
+the line; the dashboard hides it.
+
 Your chat reads like a text thread. Text you write before and after a tool call arrives as separate
 messages, and your tool calls collapse between them. Give each message one job, and send it only
 when it says something new.

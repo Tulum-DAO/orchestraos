@@ -73,6 +73,33 @@ restart above. From #218 on, a plain upgrade rebuilds correctly.
 `orchestra upgrade` never restarts anything itself. Spawned seats keep the code they were
 spawned with until their next spawn or rotation.
 
+### Your provider logins are never touched
+
+An upgrade never logs you out of Claude, Codex, Gemini or Grok. Nothing in OrchestraOS writes,
+copies, moves, deletes or chmods a provider login file (`$CLAUDE_CONFIG_DIR`/`~/.claude/.credentials.json`
+and `~/.claude.json`, `$CODEX_HOME`/`~/.codex/auth.json`, `~/.gemini/oauth_creds.json` and the
+Antigravity token, `$GROK_HOME`/`~/.grok/auth.json`); a test over the whole tree keeps it that way, and
+copying a login is treated as a logout too (Claude rotates its refresh token, so a copy kills one holder).
+`orchestra upgrade`, `orchestra init` and `orchestra install-unit` also prove it on every run: before their
+first step they fingerprint every login file that exists for your user (path, size, mode, hash of the
+account field; never a token), re-check after every step, and if a login vanished, was emptied, now names a
+different account or had its mode opened, the command stops with a `LOGIN LOST: <provider> login <file> ...
+during step <step>` line and exit 3 (`init`: a failed `logins` step). It never writes a login file back.
+A token your CLI refreshed on its own while the upgrade ran is reported as a note, not a failure. The
+fingerprints are kept in `<data>/state/login-guard.json` (mode 0600, hashes only); `orchestra doctor` shows
+`logins:<provider>` as `intact since <stamp>`, `CHANGED since <stamp>: <file> <why>`, or `no <provider>
+login found`. Seats get your shell's `HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` and
+`GEMINI_CLI_HOME` unchanged. On a systemd install, `orchestra install-unit` bakes the login dirs set in
+your shell (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `GEMINI_CLI_HOME`) into the units that start
+seats (`orchestra.service`, `orchestra-recovery.service`) as a drop-in `<unit>.d/10-login-dirs.conf`
+(0600, paths only, never a token): only a variable that is set AND has a login under its dir is baked
+(a set variable with nothing signed in under it is warned about, not baked; unset means the default
+dirs). Re-running `install-unit` replaces the drop-in, so a changed or unset variable never leaves an
+old one behind. `orchestra doctor`'s `logins:<provider>` rows name the dir in use and whether it is baked
+or default, and if a baked dir later has no login, `init`, `upgrade` and `install-unit` stop loudly
+(exit 3) instead of falling through to the default dir; `orchestra install-unit --forget-login-dirs` is
+the explicit way to drop a dir that is gone.
+
 ## Restarting a systemd install
 
 The restart above (`orchestra down && orchestra up --detach`) is for a checkout you run by hand.

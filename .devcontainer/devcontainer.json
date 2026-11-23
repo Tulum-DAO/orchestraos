@@ -10,8 +10,9 @@
     "8888": { "label": "api" },
     "8890": { "label": "gateway" }
   },
+  "_comment_mounts": "The container has its OWN Claude login (a named volume, signed in once inside, kept across rebuilds). Never bind-mount or copy the host's ~/.claude: host and container would refresh one OAuth token and the loser is logged out (refresh-token rotation).",
   "mounts": [
-    "source=${localEnv:HOME}/.claude,target=/home/orchestra/.claude,type=bind,consistency=cached",
+    "source=orchestraos-claude,target=/home/orchestra/.claude,type=volume",
     "source=orchestraos-data,target=/home/orchestra/.orchestra,type=volume"
   ],
   "postCreateCommand": "orchestra init --yes && (orchestra doctor || true)",

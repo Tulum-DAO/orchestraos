@@ -358,6 +358,18 @@ def gateway_env_file_mode_check(st: Settings) -> "Check | None":
     return Check("gateway:arms-file-mode", OK, f"{path} mode {mode & 0o777:04o}", required=False)
 
 
+def logins_checks(st: Settings, probes: DoctorProbes) -> list:
+    """`logins:<provider>`: intact since the login guard's last stamp, CHANGED since it (which file, why),
+    or no login found. Advisory: a WARN here never blocks `orchestra up`, it tells you to log in again."""
+    from . import login_guard as LG
+    env_get = probes.env_get or os.environ.get
+    env = {k: env_get(k) for k in LG.LOGIN_ENV if env_get(k)}
+    rows = []
+    for name, level, detail, remedy in LG.doctor_rows(st.data_dir, env=env, home=env.get("HOME")):
+        rows.append(Check(name, {"OK": OK, "WARN": WARN, "INFO": INFO}.get(level, WARN), detail, remedy, required=False))
+    return rows
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -484,6 +496,11 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         checks.append(statusline_check(_hooks, settings_path))
     except Exception as e:  # noqa: BLE001
         checks.append(Check("statusline:claude", WARN, f"status line status unavailable: {e}", required=False))
+    # Provider logins since the last upgrade / init / install-unit (login_guard stamp: hashes only).
+    try:
+        checks.extend(logins_checks(st, probes))
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("logins:preserved", WARN, f"check unavailable: {e}", required=False))
     checks.extend(hook_layer_checks(probes, set(st.runtimes_enabled or ())))
     # Channel plugins (plugins/): each reports its own row; disabled = INFO, never a failure.
     try:

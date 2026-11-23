@@ -7,8 +7,9 @@
 #
 # The CLI LOGIN STAYS YOURS: nothing here copies or mounts credentials. Log in once inside
 # the container (`claude`, `codex login`, `agy`) or mount your own config dir at run time
-# (see docs/INSTALL.md "Dev container / Docker" — .devcontainer/devcontainer.json does the
-# read-write mount of ~/.claude for you so the login persists between rebuilds).
+# in a NAMED VOLUME (.devcontainer/devcontainer.json does that: the container's own login, kept
+# between rebuilds). Never bind-mount or copy the host's ~/.claude: two CLIs refreshing one OAuth
+# token log the second one out (refresh-token rotation), so a copied login is a logout.
 #
 #   docker build -t orchestraos .
 #   docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
