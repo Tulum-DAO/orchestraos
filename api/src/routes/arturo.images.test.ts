@@ -105,3 +105,27 @@ test('F3 with the real rule: a client-scoped viewer (arturo is not tagged for th
     else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = prev;
   }
 });
+
+test('a thread read hands the stamper every turn\'s time with its paths, so the window knows when each was referenced', async () => {
+  const windows: Array<{ agent: string; perItem: readonly (readonly string[])[]; times: readonly unknown[] | undefined }> = [];
+  const asked: string[][] = [];
+  const d = deps([
+    { role: 'user', content: 'show /srv/arturo/out/u.png', ts: 1_763_769_600 },
+    { role: 'assistant', content: 'one /srv/arturo/out/a.png', ts: 1_763_769_601 },
+    { role: 'assistant', content: 'none' },
+    { role: 'assistant', content: 'two /srv/arturo/out/b.png /srv/arturo/out/c.png', ts: 1_763_769_603 },
+  ], asked);
+  const refs = d.imageRefs as unknown as ((agent: string, paths: string[], window?: ReadonlySet<string>) => unknown) & { window?: unknown };
+  refs.window = (agent: string, perItem: readonly (readonly string[])[], times?: readonly unknown[]) => {
+    windows.push({ agent, perItem, times });
+    return new Set(perItem.flat());
+  };
+  const r = await get(d, '/api/arturo/threads/c1');
+  assert.equal(r.status, 200);
+  assert.deepEqual(windows, [{
+    agent: 'arturo',
+    perItem: [[], ['/srv/arturo/out/a.png'], [], ['/srv/arturo/out/b.png', '/srv/arturo/out/c.png']],
+    times: [1_763_769_600, 1_763_769_601, undefined, 1_763_769_603],
+  }]);
+  assert.equal(r.json.turns[3].image_refs.length, 2);
+});

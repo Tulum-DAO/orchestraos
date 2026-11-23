@@ -79,11 +79,60 @@ export function renameOrDrop(tmp: string, file: string): void {
   try { renameSync(tmp, file); } catch (e) { try { unlinkSync(tmp); } catch { /* never there */ } throw e; }
 }
 
+/** One row's place in its agent's eviction order: `seen` first (none is -Infinity), then the use it was made on. */
+interface Slot { id: string; seen: number; seq: number }
+
+const before = (a: Slot, b: Slot): boolean => a.seen < b.seen || (a.seen === b.seen && a.seq < b.seq);
+
+function heapPush(h: Slot[], s: Slot): void {
+  h.push(s);
+  for (let i = h.length - 1; i > 0;) {
+    const p = (i - 1) >> 1;
+    if (!before(h[i], h[p])) break;
+    [h[i], h[p]] = [h[p], h[i]];
+    i = p;
+  }
+}
+
+function heapPop(h: Slot[]): Slot {
+  const top = h[0];
+  const last = h.pop()!;
+  if (h.length) {
+    h[0] = last;
+    for (let i = 0; ;) {
+      const l = 2 * i + 1;
+      const r = l + 1;
+      let m = i;
+      if (l < h.length && before(h[l], h[m])) m = l;
+      if (r < h.length && before(h[r], h[m])) m = r;
+      if (m === i) break;
+      [h[i], h[m]] = [h[m], h[i]];
+      i = m;
+    }
+  }
+  return top;
+}
+
+function heapify(xs: Slot[]): Slot[] {
+  const h: Slot[] = [];
+  for (const s of xs) heapPush(h, s);
+  return h;
+}
+
 /** The (agent, path) -> id table, persisted as one JSON file, bounded per agent. */
 export class MediaStore {
   private rows = new Map<string, MediaRow>();          // insertion order = least recently used first
   private byKey = new Map<string, string>();
   private perAgent = new Map<string, number>();
+  /** Per agent, its rows as a min-heap by (`seen`, use order): the top is the row to evict. A slot is
+   *  live only while `live` still points at it (a use or a newer `seen` pushes a fresh slot; the old one
+   *  is dropped when it surfaces), so a pick is O(log n) however many agents share the table. */
+  private heaps = new Map<string, Slot[]>();
+  private live = new Map<string, Slot>();
+  private useSeq = 0;
+  /** The window evict last found no room for, per agent: the same window asks again at no cost until a row
+   *  of that agent comes or goes. */
+  private noRoom = new Map<string, ReadonlySet<string>>();
   private loaded = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -109,28 +158,51 @@ export class MediaStore {
     this.rows.set(id, row);
     this.byKey.set(`${row.agent}\0${row.path}`, id);
     this.perAgent.set(row.agent, (this.perAgent.get(row.agent) ?? 0) + 1);
+    this.noRoom.delete(row.agent);
+    this.slot(id, row);
+  }
+
+  /** A fresh heap slot for the row as it is now (its `seen`, this use): the one evict honours from here on. */
+  private slot(id: string, row: MediaRow): void {
+    const s: Slot = { id, seen: row.seen ?? -Infinity, seq: ++this.useSeq };
+    this.live.set(id, s);
+    let heap = this.heaps.get(row.agent);
+    if (!heap) { heap = []; this.heaps.set(row.agent, heap); }
+    heapPush(heap, s);
+    // Stale slots pile up with every use; past twice the rows, keep only the live ones.
+    if (heap.length > 2 * (this.perAgent.get(row.agent) ?? 0) + 32) this.heaps.set(row.agent, heapify(heap.filter((x) => this.live.get(x.id) === x)));
   }
 
   /** Drop the agent's row the window being stamped does not show that the transcript referenced longest
    *  ago (`seen`; a row with none counts as oldest; a tie goes to the least recently used). When `refAt`
    *  is given and that row was referenced AFTER it, nothing goes (the newer row stays). */
   private evict(agent: string, protect?: ReadonlySet<string>, refAt?: number): boolean {
-    let pick: string | null = null;
-    let pickSeen = Infinity;
-    for (const [oldId, old] of this.rows) {
-      if (old.agent !== agent) continue;
-      if (protect && protect.has(old.path)) continue;
-      const seen = old.seen ?? -Infinity;
-      if (pick === null || seen < pickSeen) { pick = oldId; pickSeen = seen; }
-      if (seen === -Infinity) break;
+    if (protect && this.noRoom.get(agent) === protect) return false;
+    const heap = this.heaps.get(agent);
+    if (!heap) return false;
+    const held: Slot[] = [];
+    let pick: Slot | null = null;
+    while (heap.length) {
+      const top = heap[0];
+      if (this.live.get(top.id) !== top) { heapPop(heap); continue; }
+      if (protect && protect.has(this.rows.get(top.id)!.path)) { held.push(heapPop(heap)); continue; }
+      pick = top;
+      break;
     }
-    if (pick === null) return false;
-    if (refAt !== undefined && pickSeen > refAt) return false;
-    const old = this.rows.get(pick)!;
-    this.rows.delete(pick);
-    this.byKey.delete(`${old.agent}\0${old.path}`);
-    this.perAgent.set(agent, (this.perAgent.get(agent) ?? 1) - 1);
-    return true;
+    const go = pick !== null && !(refAt !== undefined && pick.seen > refAt);
+    if (go) {
+      heapPop(heap);
+      const old = this.rows.get(pick!.id)!;
+      this.live.delete(pick!.id);
+      this.rows.delete(pick!.id);
+      this.byKey.delete(`${old.agent}\0${old.path}`);
+      this.perAgent.set(agent, (this.perAgent.get(agent) ?? 1) - 1);
+      this.noRoom.delete(agent);
+    } else if (protect && pick === null) {
+      this.noRoom.set(agent, protect);
+    }
+    for (const s of held) heapPush(heap, s);
+    return go;
   }
 
   /** A use: the row moves to the young end (LRU). In memory only; the next save keeps the order. */
@@ -139,6 +211,7 @@ export class MediaStore {
     if (!row) return null;
     this.rows.delete(id);
     this.rows.set(id, row);
+    this.slot(id, row);
     return row;
   }
 
@@ -176,7 +249,7 @@ export class MediaStore {
     const id = this.byKey.get(`${agent}\0${path}`) ?? null;
     if (id) {
       const row = this.touch(id);
-      if (row && refAt !== undefined && !(row.seen !== undefined && row.seen >= refAt)) { row.seen = refAt; this.scheduleSave(); }
+      if (row && refAt !== undefined && !(row.seen !== undefined && row.seen >= refAt)) { row.seen = refAt; this.slot(id, row); this.scheduleSave(); }
     }
     return id;
   }
@@ -412,14 +485,15 @@ export function itemTime(ts: unknown): number | undefined {
   return undefined;
 }
 
-/** One check of a path: a recent miss is a miss with no fs; a held id needs no fs; else under the roots
- *  and every check of the file now (one open). A refAt moves a held row's `seen` on. */
-function check(agentId: string, p: string, roots: readonly string[], deps: RefsDeps, now: number, refAt?: number): Checked | null {
+/** One check of a path: a recent miss is a miss with no fs; a held id needs no fs; else (when `fs` allows)
+ *  under the roots and every check of the file now (one open). A refAt moves a held row's `seen` on. */
+function check(agentId: string, p: string, roots: readonly string[], deps: RefsDeps, now: number, refAt?: number, fs = true): Checked | null {
   const key = `${agentId}\0${p}`;
   const until = misses.get(key);
   if (until !== undefined && until > now) return null;
   const have = deps.store.has(agentId, p, refAt);
   if (have) return { id: have, kind: deps.store.lookup(have)?.kind };
+  if (!fs) return null;
   if (until !== undefined) misses.delete(key);
   if (!roots.some((r) => underRoot(p, r))) return null;
   fileChecks++;
@@ -428,32 +502,39 @@ function check(agentId: string, p: string, roots: readonly string[], deps: RefsD
   return { id: null, kind: r.kind };
 }
 
-/** How many distinct paths one window looks at, newest first, at most (in units of the cap): a window
- *  naming thousands of files that are not there costs a bounded walk (each a miss-cache hit after the
- *  first poll), never a check of all of them. */
+/** How many distinct paths under the roots one window checks on disk, newest first, at most (in units of
+ *  the cap): a window naming thousands of files that are not there costs a bounded walk (each a miss-cache
+ *  hit after the first poll), never a check of all of them. A path outside the roots, or one the table
+ *  already holds, is answered without the disk and takes none of this budget. */
 const WINDOW_SCAN_FACTOR = 2;
 
 /**
  * The window the table keeps for one agent, read newest first: the newest `cap` distinct paths that
  * can be SHOWN (already held, or under the agent's roots and passing every check now). A path that is
  * not there, or outside the roots, takes no place, so a run of missing files never crowds out real
- * ones; the walk stops after WINDOW_SCAN_FACTOR x cap distinct paths. Each kept path carries the time
- * of the newest item naming it (`times[i]`, itemTime) and what its one check found.
+ * ones. The disk is asked about at most WINDOW_SCAN_FACTOR x cap distinct paths under the roots (a
+ * path outside them is never a file check, so a thousand of them in prose cost no budget); past that,
+ * a path the table already holds an id for is still kept (an image once shown never loses its thumbnail
+ * to newer paths that cannot be shown), and a new one waits for a later window. Each kept path carries
+ * the time of the newest item naming it (`times[i]`, itemTime) and what its one check found.
  */
 export function stampWindow(agentId: string, perItem: readonly (readonly string[])[], deps: RefsDeps, times: readonly unknown[] = [], cap = MAX_ROWS_PER_AGENT): MediaWindow {
   const keep = new MediaWindow();
   const roots = deps.roots(agentId);
   const now = deps.now ? deps.now() : Date.now();
-  const looked = new Set<string>();
+  const seen = new Set<string>();
   const scan = cap * WINDOW_SCAN_FACTOR;
-  for (let i = perItem.length - 1; i >= 0 && keep.size < cap && looked.size < scan; i--) {
+  let looked = 0;
+  for (let i = perItem.length - 1; i >= 0 && keep.size < cap; i--) {
     const ps = perItem[i];
     const at = itemTime(times[i]);
-    for (let j = ps.length - 1; j >= 0 && keep.size < cap && looked.size < scan; j--) {
+    for (let j = ps.length - 1; j >= 0 && keep.size < cap; j--) {
       const p = ps[j];
-      if (looked.has(p)) continue;
-      looked.add(p);
-      const c = check(agentId, p, roots, deps, now, at);
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const fs = looked < scan && roots.some((r) => underRoot(p, r));
+      if (fs) looked++;
+      const c = check(agentId, p, roots, deps, now, at, fs);
       if (!c) continue;
       keep.add(p);
       keep.checked.set(p, c);
