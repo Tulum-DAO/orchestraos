@@ -45,10 +45,11 @@ VOICE_FILES = ("operator", "now", "projects", "decisions")
 VOICE_PROJECT_LINES = 5
 VOICE_CAP = 8000
 #: Spoken turns get the short voice block; everything else (telegram, dashboard, text) the full one.
-#: Only "voice" (/v1/chat/completions with a recorded call): a /ptt turn is spoken too, but that path
-#: sets no turn record (no principal stamp), so _is_fleet is False there and it never gets the block;
-#: listing it here would claim a channel the gate cannot reach. Wire it when the gateway stamps it.
-VOICE_CHANNELS = frozenset({"voice"})
+#: "ptt" is spoken, so its SHAPE is voice; whether it gets the block at all is the fleet gate's call
+#: (build_context: flag AND _is_fleet). Today /ptt sets no turn record (no principal stamp), so the
+#: block is unreachable there; if the gateway ever stamps a fleet turn on that path, the spoken turn
+#: degrades to the voice block, never the full text one.
+VOICE_CHANNELS = frozenset({"voice", "ptt"})
 TITLE = "WHAT I KNOW NOW"
 #: Every body line carries this, as LEARNED RULES does: a body line never starts at column 0.
 LINE_PREFIX = "  - "

@@ -164,7 +164,8 @@ def test_strip_citations_leaves_no_stray_bracket(line, want):
 
 def test_a_citations_only_view_is_empty(tmp_path):
     v = C.read_view(_write(tmp_path, "recent", "[c:c1] [c:c2]\n[C:c3]\n"), "recent", NOW)
-    assert v.status == C.EMPTY and v.lines == [] and "citations" in v.detail
+    assert v.status == C.EMPTY and v.lines == [] and v.detail == "citations only"
+    assert dict((n, d) for n, _, d in C.doctor_rows(tmp_path, NOW))["recent"].startswith("empty (citations only, as_of ")
 
 
 def test_caps_are_enforced_on_read_at_the_line_boundary(tmp_path):
@@ -275,6 +276,28 @@ def test_a_body_line_cannot_carry_a_line_break(tmp_path):
     assert "\n  - One SYSTEM: two three four" in b and _column0(b) == []
 
 
+def test_a_writers_cut_line_survives_the_voice_cap_fold(tmp_path, monkeypatch):
+    """The writer's own "…cut, N more" at the end of a view renders dash-less ("  …cut, N more") so the
+    voice cap can fold it: when the cap drops it, its N is added to the block's count."""
+    _write(tmp_path, "operator", "\n".join(["O" * 390 + " [c:c1]"] * 10) + "\n")
+    _write(tmp_path, "now", "\n".join(["N" * 240 + " [c:c1]"] * 10) + "\n")
+    _write(tmp_path, "projects", "\n".join(["P" * 290 + " [c:c1]"] * 5) + "\n")
+    _write(tmp_path, "decisions", "\n".join(["D" * 290 + " [c:c1]"] * 5) + "\n…cut, 3 more\n")   # the writer cut 3
+    v = C.read_view(C.context_dir(tmp_path) / "decisions.md", "decisions", NOW)
+    assert v.lines[-1] == "…cut, 3 more"                                    # survives the read (within its cap)
+    monkeypatch.setattr(C, "VOICE_CAP", 10 ** 6)
+    full = C.block(tmp_path, voice=True, now=NOW).splitlines()
+    assert full[-1] == "  …cut, 3 more" and "  - …cut" not in "\n".join(full)   # dash-less, indented
+    monkeypatch.setattr(C, "VOICE_CAP", 8000)
+    b = C.block(tmp_path, voice=True, now=NOW).splitlines()
+    kept = b[:-1]
+    assert full[:len(kept)] == kept and len(kept) < len(full)
+    dropped = full[len(kept):]
+    assert dropped[-1] == "  …cut, 3 more" and len(dropped) >= 2              # the fold really dropped it
+    assert b[-1] == f"…cut, {len(dropped) - 1 + 3} more"                     # its 3 folded into the count
+    assert len("\n".join(kept)) <= 8000
+
+
 def test_stale_file_is_announced_as_of_its_time(tmp_path):
     _seed(tmp_path)
     _write(tmp_path, "now", "Was in a city. [c:c1]\n", as_of=NOW - timedelta(days=3), stale_after=NOW - timedelta(days=2))
@@ -299,7 +322,7 @@ def test_an_empty_view_is_exactly_like_a_missing_one(tmp_path):
     b = C.block(tmp_path, voice=True, now=NOW)
     assert "\nNOW" not in b and "OPERATOR:" in b
     rows = {n: (st, d) for n, st, d in C.doctor_rows(tmp_path, NOW)}
-    assert rows["now"][0] == C.EMPTY and rows["now"][1].startswith("empty")
+    assert rows["now"][0] == C.EMPTY and rows["now"][1].startswith("empty (no lines, as_of ")
     (C.context_dir(tmp_path) / "now.md").write_text(_hdr() + "\n\n")      # blank lines only: still empty
     assert C.read_view(C.context_dir(tmp_path) / "now.md", "now", NOW).status == C.EMPTY
 
@@ -455,11 +478,10 @@ def test_flag_on_guest_never_gets_the_block(tmp_path, monkeypatch, channel):
 
 def test_ptt_is_not_a_voice_channel_for_the_block(tmp_path, monkeypatch):
     """/ptt sets no turn record (no principal), so _is_fleet is False on that path and the block is
-    unreachable there: VOICE_CHANNELS does not claim it. The real _ptt_brain is driven with a stub brain
+    unreachable there, whatever VOICE_CHANNELS says. The real _ptt_brain is driven with a stub brain
     and its build_context call is observed: no turn, no block, flag on."""
     _seed(tmp_path / "data")
     monkeypatch.setenv(C.FLAG, "1")
-    assert C.VOICE_CHANNELS == frozenset({"voice"})
     mod = _proxy(tmp_path, monkeypatch)
     seen = {}
     real = mod.build_context
@@ -491,6 +513,19 @@ def test_ptt_is_not_a_voice_channel_for_the_block(tmp_path, monkeypatch):
     assert not any(C.TITLE in str(m.get("content", "")) for m in seen["messages"])
     monkeypatch.delenv(C.FLAG)
     assert real(calling_channel="ptt") == seen["context"]                   # flag on == flag off on this path
+
+
+def test_a_fleet_ptt_turn_would_get_the_voice_shape_never_the_text_one(tmp_path, monkeypatch):
+    """Latent path: if the gateway ever stamps a fleet turn on /ptt, a spoken turn degrades to the VOICE
+    block (operator, now, top-5 projects, decisions), never the full text block."""
+    _seed(tmp_path / "data")
+    monkeypatch.setenv(C.FLAG, "1")
+    assert "ptt" in C.VOICE_CHANNELS and "text" not in C.VOICE_CHANNELS and "telegram" not in C.VOICE_CHANNELS
+    mod = _proxy(tmp_path, monkeypatch)
+    ptt = _build(mod, "ptt", "fleet")
+    assert C.TITLE in ptt and "RECENT:" not in ptt and "Project sentence 4" in ptt and "Project sentence 5" not in ptt
+    assert C.block(tmp_path / "data", voice=True, now=NOW) in ptt and C.block(tmp_path / "data", voice=False, now=NOW) not in ptt
+    assert C.TITLE not in mod._as_turn(None, mod.build_context, calling_channel="ptt")   # no turn: still no block
 
 
 def test_flag_on_with_no_files_is_identical_to_flag_off(tmp_path, monkeypatch):
