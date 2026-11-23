@@ -334,3 +334,23 @@ def test_proxy_without_source_health_behaves_as_before(data, monkeypatch):
     assert TELEGRAM_HEAD not in ctx                        # missing is still missing
     monkeypatch.setenv("ARTURO_FACTS_RECALL", "1")
     assert mod._knowledge_lookup("nobody-in-particular").startswith("No knowledge source for")
+
+
+def test_proxy_survives_a_source_health_that_raises_at_import(data, monkeypatch):
+    """Not just ImportError: a SyntaxError or a RuntimeError raised while importing the gate module
+    must also leave the proxy running on the pre-gate behaviour."""
+    import sys
+    import services.arturo as _pkg
+
+    class _Boom:
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "services.arturo.source_health":
+                raise RuntimeError("boom at import")
+            return None
+    monkeypatch.delitem(sys.modules, "services.arturo.source_health", raising=False)
+    monkeypatch.delattr(_pkg, "source_health", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_Boom()] + sys.meta_path)
+    mod = _load_proxy()
+    assert mod._source_health.__doc__.startswith("The pre-gate")
+    write_telegram(data)
+    assert TELEGRAM_HEAD in mod.build_context(calling_channel="text")
