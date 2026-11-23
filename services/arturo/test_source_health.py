@@ -223,7 +223,8 @@ def test_missing_sources_leave_no_heading_and_no_empty_block(mod, data):
 
 # --- the knowledge tool ---------------------------------------------------------------------------
 
-def test_knowledge_tool_names_a_missing_facts_store(mod, data):
+def test_knowledge_tool_names_a_missing_facts_store(mod, data, monkeypatch):
+    monkeypatch.setenv("ARTURO_FACTS_RECALL", "1")        # only then is the facts store consulted at all
     out = mod._knowledge_lookup("nobody-in-particular")
     assert out.startswith("No knowledge source for 'nobody-in-particular': the facts store (facts/facts_db.json) is missing.")
     assert "Traceback" not in out and "gm_command" in out
@@ -235,7 +236,14 @@ def test_knowledge_tool_keeps_the_old_answer_when_the_store_exists(mod, data):
     assert out.startswith("No knowledge found for 'nobody-in-particular'.")
 
 
-def test_knowledge_tool_unreadable_store_is_named_not_raised(mod, data):
+def test_knowledge_tool_flag_off_never_blames_a_store_it_did_not_read(mod, data, monkeypatch):
+    monkeypatch.delenv("ARTURO_FACTS_RECALL", raising=False)
+    out = mod._knowledge_lookup("nobody-in-particular")
+    assert out.startswith("No knowledge found for 'nobody-in-particular'.") and "facts_db" not in out
+
+
+def test_knowledge_tool_unreadable_store_is_named_not_raised(mod, data, monkeypatch):
+    monkeypatch.setenv("ARTURO_FACTS_RECALL", "1")
     (data / "facts").mkdir()
     (data / "facts" / "facts_db.json").mkdir()
     out = mod._knowledge_lookup("nobody-in-particular")
@@ -278,11 +286,20 @@ def test_safe_import_returns_module_or_none(tmp_path, monkeypatch):
 
 # --- running_flag: a flag as the RUNNING proxy has it, not as doctor's shell has it ----------------
 
-def _proc(tmp_path, pid, environ: dict):
+def _proc(tmp_path, pid, environ: dict, cmdline=("python3", "/opt/orchestra/services/arturo/arturo-proxy.py")):
     d = tmp_path / "proc" / str(pid)
     d.mkdir(parents=True)
     (d / "environ").write_bytes("\0".join(f"{k}={v}" for k, v in environ.items()).encode() + b"\0")
+    (d / "cmdline").write_bytes("\0".join(cmdline).encode() + b"\0")
     return tmp_path / "proc"
+
+
+def test_running_flag_refuses_a_reused_pid(data, tmp_path):
+    """The supervisor's recorded pid now belongs to sshd: its environ is not the proxy's."""
+    (data / "state" / "supervisor.json").write_text(json.dumps({"pid": 1, "children": {"arturo": {"pid": 4242}}}))
+    proc = _proc(tmp_path, 4242, {"ARTURO_CONTEXT_FILES": "WRONG-PROCESS"}, cmdline=("/usr/sbin/sshd", "-D"))
+    assert SH.running_flag("ARTURO_CONTEXT_FILES", data, env={}, proc_root=proc) == (None, "shell (pid reused)")
+    assert SH.running_flag("ARTURO_CONTEXT_FILES", data, env={"ARTURO_CONTEXT_FILES": "1"}, proc_root=proc) == ("1", "shell (pid reused)")
 
 
 def test_running_flag_prefers_the_proxy_environ(data, tmp_path):
@@ -299,3 +316,21 @@ def test_running_flag_falls_back_to_shell_then_unset(data, tmp_path):
     assert SH.running_flag("X_FLAG", data, env={}, proc_root=tmp_path / "noproc") == (None, "unset")   # dead pid
     (data / "state" / "supervisor.json").write_text("{not json")
     assert SH.running_flag("X_FLAG", data, env={"X_FLAG": "0"}, proc_root=tmp_path / "noproc") == ("0", "shell")
+
+
+# --- the proxy survives a broken source_health: behaves as before the gate (exists() only) ---------
+
+def test_proxy_without_source_health_behaves_as_before(data, monkeypatch):
+    import sys
+    import services.arturo as _pkg
+    monkeypatch.setitem(sys.modules, "services.arturo.source_health", None)   # import -> ImportError
+    monkeypatch.delattr(_pkg, "source_health", raising=False)                 # `from pkg import x` checks this first
+    mod = _load_proxy()
+    assert mod._source_health is not SH and mod._source_health.__doc__.startswith("The pre-gate")   # the fallback is in
+    write_profile(data, age=SH.PROFILE_MAX_AGE + 60)      # stale: the fallback cannot tell, injects as before
+    write_learning(data, age=SH.LEARNING_MAX_AGE + 60)
+    ctx = mod.build_context(calling_channel="text")
+    assert PROFILE_HEAD in ctx and RULES_HEAD in ctx and "(as of" not in ctx.split("LEARNED RULES")[1][:60]
+    assert TELEGRAM_HEAD not in ctx                        # missing is still missing
+    monkeypatch.setenv("ARTURO_FACTS_RECALL", "1")
+    assert mod._knowledge_lookup("nobody-in-particular").startswith("No knowledge source for")

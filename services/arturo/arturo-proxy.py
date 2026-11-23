@@ -53,7 +53,36 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
 from services.arturo import secrets_vault as _secrets_vault
-from services.arturo import source_health as _source_health   # fresh/stale/missing gate on prompt sources
+try:
+    from services.arturo import source_health as _source_health   # fresh/stale/missing gate on prompt sources
+except Exception as _sh_err:  # noqa: BLE001 — a broken gate must never fail a turn: behave as before (exists() only)
+    import logging as _sh_logging
+    _sh_logging.getLogger("custom-llm").error(f"source_health unavailable, prompt sources gated on exists() only: {_sh_err}")
+
+    class _source_health:  # type: ignore[no-redef]
+        """The pre-gate behaviour: a source that exists is read; nothing is ever marked stale."""
+        PROFILE_MAX_AGE = TELEGRAM_MAX_AGE = LEARNING_MAX_AGE = None
+
+        class _Status:
+            def __init__(self, path):
+                self.readable = os.path.exists(path)
+                self.state = "fresh" if self.readable else "missing"
+
+        @staticmethod
+        def usable(path, max_age=None, now=None):
+            return os.path.exists(path)
+
+        @staticmethod
+        def source_status(path, max_age=None, now=None):
+            return _source_health._Status(path)
+
+        @staticmethod
+        def as_of_suffix(status):
+            return ""
+
+        @staticmethod
+        def source_path(orchestra_dir, name):
+            return Path(orchestra_dir) / "facts" / "facts_db.json"
 # Keys Arturo uses but never sees or says: loaded into the commands it runs, blanked in all that comes back.
 _VAULT = _secrets_vault.Vault(Path(ORCHESTRA_DIR) / ".env.secrets")
 # The Telegram notifier is CODE, so it lives in the repo; ORCHESTRA_DIR is the DATA dir in an install
@@ -1484,9 +1513,12 @@ def _knowledge_lookup(query, category=None):
             pass
 
     if not results:
-        # No curated hit and no facts store on this install: say so plainly (never a traceback).
-        _facts = _source_health.source_status(_source_health.source_path(ORCHESTRA_DIR, "facts"))
-        if not _facts.readable:
+        # No curated hit, and the facts store (consulted only under ARTURO_FACTS_RECALL=1) is not
+        # there either: say so plainly (never a traceback). Flag off, the store was never read, so
+        # the answer must not blame it.
+        _facts = (_source_health.source_status(_source_health.source_path(ORCHESTRA_DIR, "facts"))
+                  if os.environ.get("ARTURO_FACTS_RECALL") == "1" else None)
+        if _facts is not None and not _facts.readable:
             return (f"No knowledge source for '{query}': the facts store (facts/facts_db.json) is {_facts.state}. "
                     "This may require a deeper investigation — consider using gm_command or read_file.")
         return f"No knowledge found for '{query}'. This may require a deeper investigation — consider using gm_command or read_file."

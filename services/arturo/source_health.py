@@ -153,6 +153,7 @@ def safe_import(name: str):
 # --- a flag as the RUNNING proxy sees it ----------------------------------------------------------
 
 PROXY_CHILD = "arturo"   # the supervisor's child name for services/arturo/run.sh (process_table.py)
+PROXY_CMDLINE_MARK = "arturo-proxy.py"   # what /proc/<pid>/cmdline must name before its environ is believed
 
 
 def running_flag(name: str, data_dir, env=None, proc_root="/proc", child=PROXY_CHILD):
@@ -160,12 +161,17 @@ def running_flag(name: str, data_dir, env=None, proc_root="/proc", child=PROXY_C
     /proc/<pid>/environ of the supervisor's arturo child (pid from <data>/state/supervisor.json, the
     file doctor already reads), else "shell" from this process's env, else "unset". A doctor row that
     reports a flag must say which: doctor's own shell rarely carries what `orchestra up` gave the
-    proxy. Read-only, never raises. The child pid is run.sh's; the proxy inherits that environ."""
+    proxy. Read-only, never raises. The recorded pid is trusted only when /proc/<pid>/cmdline names
+    PROXY_CMDLINE_MARK (the live child is python3 running arturo-proxy.py directly): a pid reused by
+    another process after a crash falls back to the shell with origin "shell (pid reused)"."""
     env = os.environ if env is None else env
     try:
         state = json.loads((Path(data_dir) / "state" / "supervisor.json").read_text())
         pid = int(((state.get("children") or {}).get(child) or {}).get("pid") or 0)
         if pid > 0:
+            cmdline = (Path(proc_root) / str(pid) / "cmdline").read_bytes().replace(b"\0", b" ")
+            if PROXY_CMDLINE_MARK.encode() not in cmdline:
+                return (env[name], "shell (pid reused)") if name in env else (None, "shell (pid reused)")
             raw = (Path(proc_root) / str(pid) / "environ").read_bytes()
             kv = dict(item.split("=", 1) for item in raw.decode("utf-8", "replace").split("\0") if "=" in item)
             return kv.get(name), "proxy"
