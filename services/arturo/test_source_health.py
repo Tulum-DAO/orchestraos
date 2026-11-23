@@ -261,3 +261,16 @@ def test_all_fresh_matches_the_base_commit_byte_for_byte(mod, data, tmp_path, mo
     write_telegram(data)
     write_learning(data)
     assert _stable(mod.build_context(calling_channel="voice")) == _stable(base_mod.build_context(calling_channel="voice"))
+
+
+# --- safe_import: a prompt-source reader that fails to import must never fail a turn --------------
+
+def test_safe_import_returns_module_or_none(tmp_path, monkeypatch):
+    assert SH.safe_import("services.arturo.source_health") is SH
+    assert SH.safe_import("services.arturo.no_such_reader_module") is None
+    pkg = tmp_path / "sh_broken_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "bad.py").write_text("raise RuntimeError('boom at import')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert SH.safe_import("sh_broken_pkg.bad") is None       # an exception raised at import, not just absence

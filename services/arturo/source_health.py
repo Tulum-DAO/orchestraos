@@ -134,3 +134,16 @@ def doctor_rows(orchestra_dir, now=None):
             detail = f"{rel_s} unreadable (not injected)"
         rows.append((name, st.state, detail))
     return rows
+
+
+def safe_import(name: str):
+    """Import a dotted module and return it, or None when the import fails for ANY reason: a prompt
+    source's reader is a nicety, and a broken one must never fail a turn. #604's build_context hook
+    imports `services.arturo.context_files` at module level outside its try block, so an import
+    error there would fail every turn, flag on or off; after that PR lands, its hook should read
+    `_context_files = _source_health.safe_import("services.arturo.context_files")` and skip when None."""
+    import importlib
+    try:
+        return importlib.import_module(name)
+    except Exception:  # noqa: BLE001 — SyntaxError, ImportError, anything the module raises at import
+        return None
