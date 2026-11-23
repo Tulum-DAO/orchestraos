@@ -274,3 +274,28 @@ def test_safe_import_returns_module_or_none(tmp_path, monkeypatch):
     (pkg / "bad.py").write_text("raise RuntimeError('boom at import')\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     assert SH.safe_import("sh_broken_pkg.bad") is None       # an exception raised at import, not just absence
+
+
+# --- running_flag: a flag as the RUNNING proxy has it, not as doctor's shell has it ----------------
+
+def _proc(tmp_path, pid, environ: dict):
+    d = tmp_path / "proc" / str(pid)
+    d.mkdir(parents=True)
+    (d / "environ").write_bytes("\0".join(f"{k}={v}" for k, v in environ.items()).encode() + b"\0")
+    return tmp_path / "proc"
+
+
+def test_running_flag_prefers_the_proxy_environ(data, tmp_path):
+    (data / "state" / "supervisor.json").write_text(json.dumps({"pid": 1, "children": {"arturo": {"pid": 4242}}}))
+    proc = _proc(tmp_path, 4242, {"PATH": "/usr/bin", "ARTURO_CONTEXT_FILES": "1"})
+    assert SH.running_flag("ARTURO_CONTEXT_FILES", data, env={}, proc_root=proc) == ("1", "proxy")
+    # the proxy is running WITHOUT the flag: that is the answer, even when doctor's shell has it
+    assert SH.running_flag("ARTURO_FACTS_RECALL", data, env={"ARTURO_FACTS_RECALL": "1"}, proc_root=proc) == (None, "proxy")
+
+
+def test_running_flag_falls_back_to_shell_then_unset(data, tmp_path):
+    assert SH.running_flag("X_FLAG", data, env={"X_FLAG": "1"}, proc_root=tmp_path / "noproc") == ("1", "shell")
+    (data / "state" / "supervisor.json").write_text(json.dumps({"pid": 1, "children": {"arturo": {"pid": 99999}}}))
+    assert SH.running_flag("X_FLAG", data, env={}, proc_root=tmp_path / "noproc") == (None, "unset")   # dead pid
+    (data / "state" / "supervisor.json").write_text("{not json")
+    assert SH.running_flag("X_FLAG", data, env={"X_FLAG": "0"}, proc_root=tmp_path / "noproc") == ("0", "shell")

@@ -16,6 +16,7 @@ sources. So every read site asks this module first:
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -147,3 +148,29 @@ def safe_import(name: str):
         return importlib.import_module(name)
     except Exception:  # noqa: BLE001 — SyntaxError, ImportError, anything the module raises at import
         return None
+
+
+# --- a flag as the RUNNING proxy sees it ----------------------------------------------------------
+
+PROXY_CHILD = "arturo"   # the supervisor's child name for services/arturo/run.sh (process_table.py)
+
+
+def running_flag(name: str, data_dir, env=None, proc_root="/proc", child=PROXY_CHILD):
+    """(value, origin) for env var `name` as the running proxy has it: origin "proxy" when read from
+    /proc/<pid>/environ of the supervisor's arturo child (pid from <data>/state/supervisor.json, the
+    file doctor already reads), else "shell" from this process's env, else "unset". A doctor row that
+    reports a flag must say which: doctor's own shell rarely carries what `orchestra up` gave the
+    proxy. Read-only, never raises. The child pid is run.sh's; the proxy inherits that environ."""
+    env = os.environ if env is None else env
+    try:
+        state = json.loads((Path(data_dir) / "state" / "supervisor.json").read_text())
+        pid = int(((state.get("children") or {}).get(child) or {}).get("pid") or 0)
+        if pid > 0:
+            raw = (Path(proc_root) / str(pid) / "environ").read_bytes()
+            kv = dict(item.split("=", 1) for item in raw.decode("utf-8", "replace").split("\0") if "=" in item)
+            return kv.get(name), "proxy"
+    except Exception:  # noqa: BLE001 — no supervisor file, dead pid, no /proc: fall back to the shell
+        pass
+    if name in env:
+        return env[name], "shell"
+    return None, "unset"
