@@ -154,7 +154,7 @@ done_ 6 "$bin $pin installed"
 # ---- 7. Sign in to the agent tool [person] -------------------------------------------------------
 logged_in() {
   if [ "$RUNTIME" = "claude" ]; then claude auth status 2>/dev/null | grep -q '"loggedIn": *true'
-  else python3 -c 'import json,os,sys; d=json.load(open(os.path.expanduser("~/.codex/auth.json"))); sys.exit(0 if d.get("tokens") else 1)' 2>/dev/null; fi
+  else python3 -c 'import json,os,sys; d=json.load(open(os.path.join(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"), "auth.json"))); sys.exit(0 if d.get("tokens") else 1)' 2>/dev/null; fi
 }
 if ! logged_in; then
   resume 7

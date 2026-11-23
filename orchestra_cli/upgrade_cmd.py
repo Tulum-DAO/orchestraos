@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import login_guard as LG
+
 CONTRACT_PATHS = (re.compile(r"^scripts/lineage_daemon/"), re.compile(r"^msg_store\.py$"),
                   re.compile(r"^scripts/approval[^/]*\.py$"))
 
@@ -51,6 +53,7 @@ class UpgradeReport:
     error: Optional[str] = None
     pulled: bool = False
     doctor_rc: Optional[int] = None
+    logins: str = ""                 # the login guard's one-line verdict
 
     def render(self) -> str:
         lines = []
@@ -68,20 +71,42 @@ class UpgradeReport:
             lines.append("dry run: nothing pulled, init and doctor not run")
         elif self.pulled and not self.error:
             lines.append("pulled --ff-only; init --yes and doctor ran (see above)")
+        if self.logins:
+            lines.append(f"logins: {self.logins}")
         if not self.error:
             lines.append("Seats are untouched: live tmux seats keep the code they were spawned with until their next "
                          "spawn/rotation. To run the new code in the services and beats: `orchestra down && orchestra up --detach`.")
         return "\n".join(lines)
 
 
+LOGIN_EXIT = 3
+
+
 def run_upgrade(repo_root: Path, *, git: Callable = default_git, init: Callable = default_init,
                 doctor: Callable = default_doctor, dry_run: bool = False,
-                init_kwargs: Optional[dict] = None) -> UpgradeReport:
+                init_kwargs: Optional[dict] = None, guard: Optional["LG.LoginGuard"] = None) -> UpgradeReport:
     root = Path(repo_root)
     rep = UpgradeReport(dry_run=dry_run)
+    # The login guard: fingerprint every provider login file before anything runs; re-check after every
+    # phase. A phase that harmed one stops the upgrade with exit 3 and a LOGIN LOST line naming the file
+    # and the phase. Nothing here ever writes a login file (see login_guard.py).
+    guard = (guard or LG.LoginGuard()).begin()
+
+    def harmed(phase: str) -> bool:
+        bad = guard.after(phase)
+        for f in bad:
+            print(f.line(), flush=True)
+        if bad:
+            rep.ok, rep.exit_code = False, LOGIN_EXIT
+            rep.error = f"{bad[0].line()}. Log in again with that provider's CLI; this upgrade did not write any login file."
+            rep.logins = guard.summary()
+        return bool(bad)
+
     rc, out = git(["git", "fetch", "--quiet", "origin"], cwd=root)
     if rc != 0:
         rep.ok, rep.exit_code, rep.error = False, 1, f"git fetch failed: {out.strip()[:200]}"
+        return rep
+    if harmed("fetch"):
         return rep
     _, log = git(["git", "log", "--oneline", "HEAD..@{u}"], cwd=root)
     rep.incoming = [l for l in (log or "").splitlines() if l.strip()]
@@ -102,8 +127,21 @@ def run_upgrade(repo_root: Path, *, git: Callable = default_git, init: Callable 
             rep.error = f"git pull --ff-only failed (local branch diverged from origin?): {out.strip()[:200]}"
             return rep
         rep.pulled = True
+        if harmed("pull"):
+            return rep
     init(root, yes=True, **(init_kwargs or {}))
+    if harmed("init"):
+        return rep
     rep.doctor_rc = doctor(root)
+    if harmed("doctor"):
+        return rep
     rep.exit_code = 0 if rep.doctor_rc == 0 else rep.doctor_rc
     rep.ok = rep.exit_code == 0
+    try:
+        from .settings import load_settings
+        guard.stamp_path = LG.stamp_path_for(load_settings(root).data_dir)
+        guard.seal("upgrade")
+    except Exception:  # noqa: BLE001 — the stamp is for doctor; init already wrote one
+        pass
+    rep.logins = guard.summary()
     return rep

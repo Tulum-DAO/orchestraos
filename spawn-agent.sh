@@ -1044,6 +1044,12 @@ spawn_agent() {
     _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q ORCHESTRA_AGENT_ID=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR" "$agent_id")"
     [[ -n "${ORCHESTRA_CONFIG:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'ORCHESTRA_CONFIG=%q' "$ORCHESTRA_CONFIG")"
     [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CLAUDE_CONFIG_DIR=%q' "$CLAUDE_CONFIG_DIR")"
+    # The other providers' login dirs too (login_guard.LOGIN_ENV): a codex/grok/gemini seat whose pane
+    # lacks the CODEX_HOME / GROK_HOME / GEMINI_CLI_HOME the operator logged in under reads the default
+    # dir and comes up signed out. HOME itself is the tmux server's (same user) and is not overridden.
+    [[ -n "${CODEX_HOME:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CODEX_HOME=%q' "$CODEX_HOME")"
+    [[ -n "${GROK_HOME:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'GROK_HOME=%q' "$GROK_HOME")"
+    [[ -n "${GEMINI_CLI_HOME:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'GEMINI_CLI_HOME=%q' "$GEMINI_CLI_HOME")"
     launch_cmd="$_orch_prefix $launch_cmd"
     # The pane's shell got the tmux SERVER's environment, which may still carry an installer
     # agent's session (a server started before this fix, or by hand): strip it from the CLI itself.

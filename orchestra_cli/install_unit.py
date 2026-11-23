@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import settings as S
+from . import login_guard as LG
 
 DEFAULT_DEST = Path("/etc/systemd/system")
 TEMPLATE_DIR_REL = Path("deploy") / "systemd"
@@ -289,10 +290,12 @@ def render_commands(cmds: list) -> str:
 def build_plan(st: S.Settings, sets: list, *, user=None, data_dir=None, python=None,
                dest: Path = DEFAULT_DEST, enable=True, now=False, force=False,
                allow_root=False, path_env=None, check_user=True, home=None, npm_bin=None,
-               which=shutil.which) -> Plan:
+               which=shutil.which, env: Optional[dict] = None) -> Plan:
     units = select_units(sets)
     conflict = double_telemetry_conflict(units, st.telemetry_enabled, dest)
-    notes = []
+    # A login dir chosen by env (CLAUDE_CONFIG_DIR, CODEX_HOME, ...) is not rendered into a unit: say so,
+    # or the seats the unit starts read the default dir and come up signed out.
+    notes = LG.login_env_notes(os.environ if env is None else env)
     if conflict:
         if not force:
             raise UnitError(conflict)
@@ -397,4 +400,23 @@ def cmd_install_unit(ns) -> int:
                   "orchestra.service would refuse to start next to it. Run `orchestra down` "
                   "first, or drop --now.", file=sys.stderr)
             return 2
-    return execute(plan, dry_run=ns.dry_run, use_sudo=not ns.no_sudo)
+    # The login guard around the install: nothing here should touch a provider login, and if something
+    # did (a hook, a sudo wrapper, a changed template) the operator hears it, by file name, now.
+    guard = LG.LoginGuard(stamp_path=LG.stamp_path_for(Path(plan.values["ORCHESTRA_DIR"]))).begin()
+    rc = execute(plan, dry_run=ns.dry_run, use_sudo=not ns.no_sudo)
+    bad = guard.after("install-unit")
+    for f in bad:
+        print(f.line(), file=sys.stderr)
+    if bad:
+        print("install-unit: a provider login file changed while the units were installed; nothing in "
+              "OrchestraOS writes those files. Log in again with that CLI.", file=sys.stderr)
+        return LOGIN_EXIT
+    if rc == 0 and not ns.dry_run:
+        try:
+            guard.seal("install-unit")
+        except OSError:
+            pass
+    return rc
+
+
+LOGIN_EXIT = 3

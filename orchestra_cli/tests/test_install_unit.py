@@ -42,6 +42,8 @@ def _plan(tmp_path, sets=None, telemetry=True, runtimes=("claude",), **kw):
     kw.setdefault("npm_bin", "")
     kw.setdefault("python", "/usr/bin/python3")
     kw.setdefault("which", lambda c, path=None: f"/x/{c}")
+    # the test sandbox sets CLAUDE_CONFIG_DIR; the login-dir warning (test_login_guard) must not fire here
+    kw.setdefault("env", {})
     return IU.build_plan(st, sets or ["stack"], **kw)
 
 

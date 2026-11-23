@@ -252,7 +252,7 @@ sid_is_held() {
     done
 
     local f now mtime
-    for f in "$HOME"/.claude/projects/*/"$sid".jsonl; do
+    for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$sid".jsonl; do
         [ -f "$f" ] || continue
         now=$(date +%s)
         mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
@@ -313,7 +313,8 @@ transcript_exists_in_cwd() {
     fi
     local slug
     slug=$(echo "$cwd" | sed 's/[\/.]/-/g')
-    [ -f "$HOME/.claude/projects/$slug/$session_id.jsonl" ]
+    # Claude keeps transcripts under its config dir: honour CLAUDE_CONFIG_DIR, the dir the login lives in.
+    [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$slug/$session_id.jsonl" ]
 }
 
 is_infra() {
