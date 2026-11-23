@@ -50,33 +50,16 @@ What it does, in order:
    it overrides the file.
 5. `orchestra doctor`; its exit code is the command's.
 
-Then restart, so the running services use the new code. Which command depends on how the
-stack is started:
+Then restart, so the running services use the new code:
 
 ```bash
-# started by hand (orchestra up --detach):
-orchestra down && orchestra up --detach
-
-# started by systemd (orchestra install-unit; `systemctl status orchestra` says active):
-sudo systemctl restart orchestra
+orchestra down && orchestra up --detach     # a stack you started by hand
+sudo systemctl restart orchestra            # a stack started by systemd (orchestra install-unit)
 ```
 
-On a systemd install never use `orchestra down && orchestra up --detach`: it starts a second
-supervisor that systemd does not know about, and the two fight over the same ports and data dir.
-`systemctl restart orchestra` restarts gateway, api, dashboard and the beats; it does not stop
-your seats.
-
-### Upgrading an install that belongs to another user
-
-When the checkout belongs to a different account (a client box an admin maintains), run the
-upgrade as that user and the restart as root:
-
-```bash
-sudo -u <user> -i bash -c 'cd ~/orchestraos && ~/.local/bin/orchestra upgrade'
-sudo systemctl restart orchestra
-```
-
-Then reload the dashboard once in the browser.
+On a systemd install do not use `orchestra down && orchestra up --detach`: `down` stops the unit
+and `up` starts a supervisor systemd does not know about. See "Restarting a systemd install"
+below, including the shape for upgrading a checkout that belongs to another user.
 
 (By-hand installs only. If `systemctl is-enabled orchestra` says `enabled`, see
 "Restarting a systemd install" below.)
@@ -153,8 +136,7 @@ If `orchestra doctor` is still green, the checkout is upgraded and nothing
 running was disturbed. To actually pick up the new code in a live process:
 
 ```bash
-orchestra down && orchestra up --detach   # restarts gateway/api/dashboard/beats (hand-started stack)
-sudo systemctl restart orchestra          # the same, on a systemd install (never down/up there)
+orchestra down && orchestra up --detach   # restarts gateway/api/dashboard/beats
 ```
 
 On a systemd install, `systemctl restart orchestra` instead (see "Restarting a systemd install" above).
