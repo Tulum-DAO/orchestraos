@@ -573,3 +573,35 @@ def test_nothing_in_the_tree_runs_a_provider_logout_or_touches_a_keychain():
             except OSError:
                 pass
     assert not hits, hits
+
+
+# ---- a copied (or shared) login is a logout: no container path copies or bind-mounts a host login -------------
+
+LOGIN_DIR_RE = re.compile(r"(?:\$\{?(?:HOME|localEnv:HOME)\}?|~)/\.(?:claude|codex|gemini|grok)\b")
+
+
+def test_the_devcontainer_gives_the_container_its_own_login_never_the_hosts():
+    """Host and container Claude refreshing ONE OAuth token (a bind mount of ~/.claude, or a copy) logs the
+    second one out. The dev container mounts a named volume: a separate identity, signed in once inside."""
+    doc = json.loads((REPO / ".devcontainer" / "devcontainer.json").read_text())
+    for m in doc.get("mounts", []):
+        kv = dict(part.split("=", 1) for part in m.split(",") if "=" in part)
+        if kv.get("target", "").endswith((".claude", ".codex", ".gemini", ".grok")):
+            assert kv.get("type") == "volume", f"a login dir is bind-mounted from the host: {m}"
+        assert not LOGIN_DIR_RE.search(kv.get("source", "")), f"host login dir mounted: {m}"
+    assert any(m.startswith("source=orchestraos-claude,") and "type=volume" in m for m in doc["mounts"])
+
+
+def test_no_dockerfile_or_doc_copies_or_bind_mounts_a_host_login():
+    docker_copy = re.compile(r"^\s*(?:COPY|ADD)\b.*\.(?:claude|codex|gemini|grok)\b|docker\s+cp\b.*\.(?:claude|codex|gemini|grok)\b")
+    bind = re.compile(r"-v\s+~/\.(?:claude|codex|gemini|grok)[:/]|--mount[^\n]*source=(?:\$\{?HOME\}?|~)/\.(?:claude|codex|gemini|grok)")
+    hits = []
+    files = [REPO / "Dockerfile", REPO / "Makefile"] + sorted((REPO / "docs").glob("*.md")) + sorted((REPO / "scripts").glob("*.sh")) \
+        + sorted((REPO / ".devcontainer").glob("*"))
+    for f in files:
+        if not f.is_file():
+            continue
+        for i, line in enumerate(f.read_text(errors="replace").splitlines()):
+            if docker_copy.search(line) or bind.search(line):
+                hits.append(f"{f.relative_to(REPO)}:{i + 1}: {line.strip()[:80]}")
+    assert not hits, "a host login copied or bind-mounted into a container (a copied login is a logout):\n" + "\n".join(hits)

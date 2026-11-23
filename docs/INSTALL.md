@@ -1327,9 +1327,12 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 #          orchestra up      # then open http://127.0.0.1:8891 on the laptop
 ```
 
-- The login is yours: the image contains no credentials. To keep it across containers,
-  mount your CLI config: `-v ~/.claude:/home/orchestra/.claude`. The dev container does
-  that mount for you and keeps the data dir in a named volume (`orchestraos-data`).
+- The login is yours: the image contains no credentials, and the container gets its OWN login: sign
+  in once inside it. To keep that login across containers, give it a named volume
+  (`-v orchestraos-claude:/home/orchestra/.claude`); the dev container does that for you and keeps
+  the data dir in another (`orchestraos-data`). Never bind-mount or copy your laptop's `~/.claude`
+  into a container: the host CLI and the container CLI would refresh the same OAuth token, and
+  the one that refreshes second is logged out (refresh-token rotation). A copied login is a logout.
 - VS Code / GitHub Codespaces: "Reopen in Container". The workspace is bind-mounted over
   the image's copy, so `postCreateCommand` re-runs `orchestra init` once (~1 min) to
   rebuild `.venv` and `node_modules` for the mounted tree.
