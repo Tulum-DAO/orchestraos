@@ -9,7 +9,14 @@ consumers read that wrong:
 
 These tests run a REAL tmux through a `tmux` shim that pins `-S <private socket>`, with TMUX
 removed from the environment, so nothing here can reach a live tmux server. The fake CLI is a
-symlink named `claude` to sleep, so its argv[0] is `claude` exactly as a real one's is.
+symlink named `claude` to a sleep binary, so its argv[0] is `claude` exactly as a real one's is.
+
+That sleep must RUN under a foreign argv[0]. GNU sleep does; the Rust uutils sleep that is
+`/usr/bin/sleep` on Ubuntu >= 25.10 (the ubuntu-26.04 CI runner) exits 1 with "Security
+violation: Requested utility `claude` does not match executable name", so every test waiting
+for runtime == "claude" timed out there (7 red on every CI run). The fixture probes the
+candidates (`sleep`, then Ubuntu's GNU `gnusleep`) and skips, naming the refusal, when none
+runs; test_fake_cli_probe_* pins that the skip fires only for a refusing sleep.
 """
 import json
 import os
@@ -38,16 +45,59 @@ def _real(name):
 REAL_TMUX = _real("tmux")
 pytestmark = pytest.mark.skipif(REAL_TMUX is None, reason="tmux binary not found")
 
+FAKE_CLI_NAME = "claude"
+
+
+def _runs_as(binary, name=FAKE_CLI_NAME):
+    """None when `binary`, linked as `name`, runs `name 0` to exit 0; else its first stderr line.
+    uutils coreutils compare argv[0] with the executable's own name and refuse a mismatch."""
+    d = tempfile.mkdtemp(prefix="pclp")
+    try:
+        link = os.path.join(d, name)
+        os.symlink(binary, link)
+        try:
+            # through sh, as the pane shell runs it: seat_launch_guard realpaths a direct
+            # Popen of the link to the sleep binary and reads that as "a real claude"
+            res = subprocess.run(["sh", "-c", 'exec "$1" 0', "_", link],
+                                 capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            return str(e)
+        if res.returncode == 0:
+            return None
+        return (res.stderr.strip().splitlines() or [f"exit {res.returncode}"])[0]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def fake_cli_sleep(candidates=None):
+    """(path, None) for the first sleep binary that runs as `claude`, or (None, reason) naming
+    every candidate's refusal. The reason is the skip text, so it must say what is missing."""
+    if candidates is None:
+        candidates = [p for p in (_real("sleep"), _real("gnusleep")) if p]
+    refusals = []
+    for cand in candidates:
+        err = _runs_as(cand)
+        if err is None:
+            return cand, None
+        refusals.append(f"{cand}: {err}")
+    return None, (f"no sleep binary runs under argv[0] {FAKE_CLI_NAME!r} (the fake CLI): "
+                  + ("; ".join(refusals) or "no sleep/gnusleep binary on PATH"))
+
+
+FAKE_CLI_SLEEP, FAKE_CLI_SKIP = fake_cli_sleep()
+
 
 @pytest.fixture()
 def lab(monkeypatch):
+    if FAKE_CLI_SLEEP is None:
+        pytest.skip(FAKE_CLI_SKIP)
     d = Path(tempfile.mkdtemp(prefix="pcl", dir="/tmp"))     # short: unix socket path limit
     sock, bindir = d / "s", d / "bin"
     bindir.mkdir()
     shim = bindir / "tmux"
     shim.write_text(f'#!/bin/sh\nexec "{REAL_TMUX}" -S "{sock}" "$@"\n')
     shim.chmod(0o755)
-    (bindir / "claude").symlink_to(shutil.which("sleep"))
+    (bindir / FAKE_CLI_NAME).symlink_to(FAKE_CLI_SLEEP)
     os.mkfifo(bindir / "gemini")       # a node-wrapped CLI's script path: `cat` blocks on it
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("ORCH_RELAUNCH_MIN_AGE_S", "0")        # the startup-gap floor has its own test
@@ -286,6 +336,30 @@ def test_an_interpreter_wrapped_known_cli_is_named(lab):
     (lab.bindir / "codex").symlink_to(lab.bindir / "gemini")       # a path named codex
     _seat(lab, "n2", f"bash -c 'exec -a node cat {lab.bindir}/codex'")
     assert _until(lambda: pane_cli.pane_state("n2")["runtime"] == "codex")
+
+
+def test_fake_cli_probe_skips_only_for_a_sleep_that_refuses_argv0(tmp_path):
+    """The lab's skip must fire on a uutils-shaped sleep (refuses argv[0] != its own name) and
+    ONLY then: a sleep that ignores argv[0] is chosen, and the reason names the refusal."""
+    gnu = tmp_path / "gnu" / "sleep"
+    gnu.parent.mkdir()
+    gnu.write_text("#!/bin/sh\nexit 0\n")                      # ignores $0, like GNU sleep
+    uu = tmp_path / "uu" / "sleep"
+    uu.parent.mkdir()
+    uu.write_text('#!/bin/sh\ncase "${0##*/}" in sleep) exit 0;; esac\n'
+                  'echo "Security violation: Requested utility \\`${0##*/}\\` does not match'
+                  ' executable name:" >&2\nexit 1\n')
+    for p in (gnu, uu):
+        p.chmod(0o755)
+    assert _runs_as(str(gnu)) is None
+    assert _runs_as(str(uu)).startswith("Security violation: Requested utility `claude`")
+    assert fake_cli_sleep([str(uu), str(gnu)]) == (str(gnu), None)
+    path, why = fake_cli_sleep([str(uu)])
+    assert path is None
+    assert "argv[0] 'claude'" in why and str(uu) in why and "Security violation" in why
+    assert fake_cli_sleep([])[0] is None
+    # this host: the lab either runs its fake CLI for real or has already said why not
+    assert (FAKE_CLI_SLEEP is None) == (FAKE_CLI_SKIP is not None)
 
 
 def test_a_missing_creation_time_is_never_relaunchable():
