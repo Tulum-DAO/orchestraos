@@ -53,8 +53,13 @@ What it does, in order:
 Then restart, so the running services use the new code:
 
 ```bash
-orchestra down && orchestra up --detach
+orchestra down && orchestra up --detach     # a stack you started by hand
+sudo systemctl restart orchestra            # a stack started by systemd (orchestra install-unit)
 ```
+
+On a systemd install do not use `orchestra down && orchestra up --detach`: `down` stops the unit
+and `up` starts a supervisor systemd does not know about. See "Restarting a systemd install"
+below, including the shape for upgrading a checkout that belongs to another user.
 
 (By-hand installs only. If `systemctl is-enabled orchestra` says `enabled`, see
 "Restarting a systemd install" below.)
