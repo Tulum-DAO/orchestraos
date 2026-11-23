@@ -130,6 +130,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     iu.add_argument("--now", action="store_true", help="also start the units now (`systemctl enable --now`)")
     iu.add_argument("--force", action="store_true",
                     help="install even when telemetryd would run twice, or as root")
+    iu.add_argument("--forget-login-dirs", dest="forget_login_dirs", action="store_true",
+                    help="drop a login dir an earlier install baked into the units even though it holds no login now "
+                         "(by default that is a loud stop); this run bakes what the shell has set, if a login is under it")
     idn = sub.add_parser("identity", help="the identity store (seat identities in state/orchestra-registry.db)")
     isub = idn.add_subparsers(dest="identity_cmd", required=True)
     ia = isub.add_parser("arm", help="make the database the identity truth on a data dir that already has seats "

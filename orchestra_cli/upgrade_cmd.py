@@ -91,6 +91,17 @@ def run_upgrade(repo_root: Path, *, git: Callable = default_git, init: Callable 
     # phase. A phase that harmed one stops the upgrade with exit 3 and a LOGIN LOST line naming the file
     # and the phase. Nothing here ever writes a login file (see login_guard.py).
     guard = (guard or LG.LoginGuard()).begin()
+    try:
+        from .settings import load_settings
+        stale = guard.load_baked(LG.stamp_path_for(load_settings(root).data_dir), step="baked-login-dirs")
+    except Exception:  # noqa: BLE001 — no readable config: nothing was baked for this data dir
+        stale = []
+    if stale:
+        for f in stale:
+            print(f.line(), flush=True)
+        rep.ok, rep.exit_code, rep.logins = False, LOGIN_EXIT, guard.summary()
+        rep.error = f"{stale[0].line()}. Nothing was pulled."
+        return rep
 
     def harmed(phase: str) -> bool:
         bad = guard.after(phase)

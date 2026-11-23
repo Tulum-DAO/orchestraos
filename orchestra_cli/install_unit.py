@@ -51,6 +51,9 @@ STACK_UNIT = "orchestra.service"
 # Units started by a timer, not enabled themselves (they have no [Install] section).
 TIMER_DRIVEN = {"orchestra-reconciler.service"}
 TELEMETRYD_UNIT = "orchestra-telemetryd.service"
+# The units that START SEATS (dashboard spawns under orchestra.service, boot recovery under
+# orchestra-recovery.service): they get the login-dir drop-in (login_guard.dropin_text).
+LOGIN_UNITS = ("orchestra.service", "orchestra-recovery.service")
 
 PLACEHOLDERS = ("ORCHESTRA_USER", "ORCHESTRA_ROOT", "ORCHESTRA_DIR", "ORCHESTRA_CONFIG",
                 "PYTHON", "PATH")
@@ -261,6 +264,11 @@ class Plan:
     enable: bool
     now: bool
     notes: list = field(default_factory=list)
+    login_env: dict = field(default_factory=dict)      # var -> dir baked into the seat-starting units
+    dropins: dict = field(default_factory=dict)        # unit -> drop-in text (always written: a re-run updates it)
+
+    def dropin_rel(self, unit: str) -> Path:
+        return Path(f"{unit}.d") / LG.DROPIN_NAME
 
     @property
     def enable_units(self) -> list:
@@ -272,6 +280,11 @@ class Plan:
         pre = ["sudo"] if sudo else []
         cmds = [pre + ["install", "-m", "0644"] + [str(self.staging / u) for u in self.units]
                 + [str(self.dest) + "/"]]
+        # The login-dir drop-ins: 0600 like the guard stamp (paths only, but nobody else needs to read them);
+        # -D makes <unit>.d/. Written on EVERY run, so a changed or unset variable replaces the old one.
+        for u in self.dropins:
+            cmds.append(pre + ["install", "-D", "-m", "0600", str(self.staging / self.dropin_rel(u)),
+                               str(self.dest / self.dropin_rel(u))])
         cmds.append(pre + ["systemctl", "daemon-reload"])
         if self.enable:
             cmds.append(pre + ["systemctl", "enable"] + (["--now"] if self.now else []) + self.enable_units)
@@ -293,9 +306,12 @@ def build_plan(st: S.Settings, sets: list, *, user=None, data_dir=None, python=N
                which=shutil.which, env: Optional[dict] = None) -> Plan:
     units = select_units(sets)
     conflict = double_telemetry_conflict(units, st.telemetry_enabled, dest)
-    # A login dir chosen by env (CLAUDE_CONFIG_DIR, CODEX_HOME, ...) is not rendered into a unit: say so,
-    # or the seats the unit starts read the default dir and come up signed out.
-    notes = LG.login_env_notes(os.environ if env is None else env)
+    # A login dir chosen by env (CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME, GEMINI_CLI_HOME) is baked into the
+    # seat-starting units as a drop-in, but only when a real login is found under it (gm ruling on D1); a set
+    # variable with no login under it is warned about and not baked. Unset: nothing baked, default dirs.
+    env = os.environ if env is None else env
+    baked, no_login = LG.bakeable_login_dirs(env)
+    notes = LG.login_env_notes(no_login)
     if conflict:
         if not force:
             raise UnitError(conflict)
@@ -308,8 +324,12 @@ def build_plan(st: S.Settings, sets: list, *, user=None, data_dir=None, python=N
                      f"directory on your PATH and re-run `orchestra install-unit`. Unit PATH: {values['PATH']}")
     rendered = {u: render_unit(st.repo_root, u, values) for u in units}
     staging = Path(values["ORCHESTRA_DIR"]) / "systemd"
+    dropins = {u: LG.dropin_text(baked) for u in units if u in LOGIN_UNITS}
+    if baked:
+        notes.append("login dirs baked into " + ", ".join(dropins) + ": " + ", ".join(f"{k}={v}" for k, v in baked.items())
+                     + " (a drop-in with the paths only; re-run install-unit after changing them)")
     return Plan(units=units, values=values, rendered=rendered, dest=Path(dest), staging=staging,
-                enable=enable, now=now, notes=notes)
+                enable=enable, now=now, notes=notes, login_env=baked, dropins=dropins)
 
 
 Runner = Callable[[list], int]
@@ -351,7 +371,13 @@ def execute(plan: Plan, *, dry_run=False, use_sudo=True, euid=None, interactive=
     plan.staging.mkdir(parents=True, exist_ok=True)
     for u, text in plan.rendered.items():
         (plan.staging / u).write_text(text)
-    out(f"\nrendered: {', '.join(str(plan.staging / u) for u in plan.units)}")
+    for u, text in plan.dropins.items():
+        d = plan.staging / plan.dropin_rel(u)
+        d.parent.mkdir(parents=True, exist_ok=True)
+        d.write_text(text)
+        os.chmod(d, 0o600)
+    out(f"\nrendered: {', '.join(str(plan.staging / u) for u in plan.units)}"
+        + (", " + ", ".join(str(plan.staging / plan.dropin_rel(u)) for u in plan.dropins) if plan.dropins else ""))
     if direct:
         cmds = plan.commands(sudo=False)
     elif use_sudo and sudo_usable(interactive):
@@ -392,6 +418,9 @@ def cmd_install_unit(ns) -> int:
         for u in plan.units:
             print(f"# ---- {plan.dest / u}")
             print(plan.rendered[u], end="" if plan.rendered[u].endswith("\n") else "\n")
+        for u, text in plan.dropins.items():
+            print(f"# ---- {plan.dest / plan.dropin_rel(u)}")
+            print(text, end="")
         return 0
     if ns.now and STACK_UNIT in plan.units and not ns.dry_run:
         status = SV.read_status(Path(plan.values["ORCHESTRA_DIR"]))
@@ -403,6 +432,25 @@ def cmd_install_unit(ns) -> int:
     # The login guard around the install: nothing here should touch a provider login, and if something
     # did (a hook, a sudo wrapper, a changed template) the operator hears it, by file name, now.
     guard = LG.LoginGuard(stamp_path=LG.stamp_path_for(Path(plan.values["ORCHESTRA_DIR"]))).begin()
+    # A dir an earlier install baked that holds no login now is a loud stop, unless this run replaces it
+    # (the variable is set to a dir that does hold a login) or the operator says --forget-login-dirs.
+    baked_findings = guard.load_baked(guard.stamp_path, step="install-unit")
+
+    def replaced(f) -> bool:
+        if getattr(ns, "forget_login_dirs", False):
+            return True
+        return any(plan.login_env.get(v) and plan.login_env[v] != guard.baked.get(v)
+                   for v, p in LG.LOGIN_DIR_PROVIDER.items() if p == f.provider)
+    stale = [f for f in baked_findings if not replaced(f)]
+    # a dead dir this run replaces (or forgets) is no longer a finding: the new stamp records the new dir
+    guard.findings = [f for f in guard.findings if f not in baked_findings or f in stale]
+    for f in stale:
+        print(f.line(), file=sys.stderr)
+    if stale:
+        print("install-unit: a login dir baked into the units has no login any more; not re-installing on top of "
+              "it. Log in there, or set the variable to the right dir, or pass --forget-login-dirs.", file=sys.stderr)
+        return LOGIN_EXIT
+    guard.baked = dict(plan.login_env)
     rc = execute(plan, dry_run=ns.dry_run, use_sudo=not ns.no_sudo)
     bad = guard.after("install-unit")
     for f in bad:

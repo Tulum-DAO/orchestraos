@@ -142,7 +142,7 @@ def test_stamp_is_0600_and_holds_hashes_only(fence):
     text = out.read_text()
     assert FAKE_TOKEN not in text and "fake@example" not in text and "0000-fake-uuid" not in text
     doc = json.loads(text)
-    assert set(doc) == {"stamp", "command", "files"} and doc["command"] == "test"
+    assert set(doc) == {"stamp", "command", "files", "baked"} and doc["command"] == "test"
     assert all(set(v) <= {"provider", "present", "kind", "size", "mode", "sha256", "login", "identity"} for v in doc["files"].values())
 
 
@@ -330,18 +330,186 @@ def test_install_unit_passes_and_stamps_when_logins_are_untouched(fence, tmp_pat
     assert LG.stamp_path_for(tmp_path / "data").exists()
 
 
-def test_install_unit_warns_when_a_login_dir_var_will_not_reach_the_unit(fence, tmp_path, monkeypatch):
+def _kw(tmp_path):
+    return dict(user=__import__("pwd").getpwuid(os.getuid()).pw_name, allow_root=True, dest=tmp_path / "dest",
+                path_env="/usr/bin:/bin", home="/home/someone", npm_bin="", python="/usr/bin/python3",
+                which=lambda c, path=None: f"/x/{c}")
+
+
+def _effective_unit_env(plan, unit):
+    """What `systemctl show -p Environment <unit>` would list: the unit's Environment= plus its drop-in's."""
+    return LG.parse_unit_env(plan.rendered[unit], plan.dropins.get(unit, ""))
+
+
+def _simulated_recovery_seat_env(unit_env, home):
+    """What a seat resumed by orchestra-recovery.service sees: systemd gives HOME from User=, the unit's
+    effective Environment, and the pane keeps whatever spawn-agent.sh's prefix carries (the same variables)."""
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    env.update(unit_env)
+    return env
+
+
+# ---- D1 (gm ruling): the login dirs the operator signed in under are BAKED into the seat-starting units ------
+
+def test_install_unit_bakes_only_a_set_var_whose_dir_holds_a_login(fence, tmp_path, monkeypatch):
+    """Condition 1: set + login found -> baked; set + no login -> warned, not baked; unset -> nothing baked."""
+    _fake_logins(fence)
     _install_unit_settings(tmp_path, monkeypatch)
     st = S.load_settings(repo_root=tmp_path / "repo", config_path=tmp_path / "repo" / "orchestra.toml")
-    kw = dict(user=__import__("pwd").getpwuid(os.getuid()).pw_name, allow_root=True, dest=tmp_path / "dest",
-              path_env="/usr/bin:/bin", home="/home/someone", npm_bin="", python="/usr/bin/python3",
-              which=lambda c, path=None: f"/x/{c}")
-    plan = IU.build_plan(st, ["stack"], env={"CLAUDE_CONFIG_DIR": "/home/someone/.claude-work", "CODEX_HOME": "/h/.codex-w"}, **kw)
-    note = "\n".join(plan.notes)
-    assert "CLAUDE_CONFIG_DIR" in note and "CODEX_HOME" in note and "signed out" in note
-    assert not any("CLAUDE_CONFIG_DIR" in t for t in plan.rendered.values()), "the var is warned about, never baked"
-    plain = IU.build_plan(st, ["stack"], env={"HOME": "/home/someone"}, **kw)
-    assert not any("WARNING: " in n and "CLAUDE_CONFIG_DIR" in n for n in plain.notes)
+    env = {"HOME": os.environ["HOME"], "CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"], "CODEX_HOME": os.environ["CODEX_HOME"],
+           "GROK_HOME": str(tmp_path / "empty-grok")}            # set, but nothing signed in there
+    plan = IU.build_plan(st, ["stack"], env=env, **_kw(tmp_path))
+    assert plan.login_env == {"CLAUDE_CONFIG_DIR": env["CLAUDE_CONFIG_DIR"], "CODEX_HOME": env["CODEX_HOME"]}
+    assert set(plan.dropins) == {"orchestra.service", "orchestra-recovery.service"}
+    for unit in plan.dropins:
+        eff = _effective_unit_env(plan, unit)
+        assert eff["CLAUDE_CONFIG_DIR"] == env["CLAUDE_CONFIG_DIR"] and eff["CODEX_HOME"] == env["CODEX_HOME"]
+        assert "GROK_HOME" not in eff and "GEMINI_CLI_HOME" not in eff
+        assert not re.search(r'Environment="HOME=', plan.dropins[unit]), "HOME comes from User=, never baked"
+    assert any("WARNING: GROK_HOME=" in n and "NOT baked" in n for n in plan.notes)
+    assert not any("CLAUDE_CONFIG_DIR" in n and "WARNING" in n for n in plan.notes)
+    # the rendered units themselves still carry no login dir (the drop-in does); unset = empty drop-in
+    assert not any("CLAUDE_CONFIG_DIR" in t for t in plan.rendered.values())
+    bare = IU.build_plan(st, ["stack"], env={"HOME": "/home/someone"}, **_kw(tmp_path))
+    assert bare.login_env == {} and bare.dropins and not any("Environment=" in t for t in bare.dropins.values())
+    assert not any("WARNING" in n for n in bare.notes)
+
+
+def test_install_unit_drop_in_carries_paths_only_is_0600_and_a_rerun_replaces_it(fence, tmp_path, monkeypatch):
+    """Conditions 2 and 4: a second install under another value UPDATES the drop-in (one install -D -m 0600 per
+    seat-starting unit, every run); the drop-in holds paths, never a token or a copy of a config file."""
+    f = _fake_logins(fence)
+    _install_unit_settings(tmp_path, monkeypatch)
+    st = S.load_settings(repo_root=tmp_path / "repo", config_path=tmp_path / "repo" / "orchestra.toml")
+    env1 = {"HOME": os.environ["HOME"], "CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"]}
+    plan1 = IU.build_plan(st, ["stack"], env=env1, **_kw(tmp_path))
+    ran = []
+    assert IU.execute(plan1, euid=1000, interactive=False, runner=lambda c: ran.append(c) or 0,
+                      sudo_usable=lambda i: True, out=lambda s: None) == 0
+    installs = [c for c in ran if c[:4] == ["sudo", "install", "-D", "-m"]]
+    assert [c[4] for c in installs] == ["0600", "0600"]
+    assert {Path(c[-1]).name for c in installs} == {LG.DROPIN_NAME}
+    staged = plan1.staging / plan1.dropin_rel("orchestra.service")
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+    text = staged.read_text()
+    assert FAKE_TOKEN not in text and "claudeAiOauth" not in text and f["cred"].read_text()[:10] not in text
+    assert text.count("Environment=") == 1 and f'CLAUDE_CONFIG_DIR={env1["CLAUDE_CONFIG_DIR"]}' in text
+    # re-run under a different dir that also holds a login: the staged drop-in is replaced, not kept
+    other = tmp_path / "home" / ".claude-other"
+    other.mkdir()
+    (other / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "FAKE2"}}))
+    plan2 = IU.build_plan(st, ["stack"], env={"HOME": os.environ["HOME"], "CLAUDE_CONFIG_DIR": str(other)}, **_kw(tmp_path))
+    assert IU.execute(plan2, euid=1000, interactive=False, runner=lambda c: 0, sudo_usable=lambda i: True, out=lambda s: None) == 0
+    text2 = staged.read_text()
+    assert f"CLAUDE_CONFIG_DIR={other}" in text2 and env1["CLAUDE_CONFIG_DIR"] not in text2
+    # re-run with the variable unset: the drop-in is written again, now carrying nothing (default dirs)
+    plan3 = IU.build_plan(st, ["stack"], env={"HOME": os.environ["HOME"]}, **_kw(tmp_path))
+    assert IU.execute(plan3, euid=1000, interactive=False, runner=lambda c: 0, sudo_usable=lambda i: True, out=lambda s: None) == 0
+    assert "Environment=" not in staged.read_text()
+
+
+def test_cmd_install_unit_records_the_bake_in_the_stamp_and_doctor_names_dir_and_baked(fence, tmp_path, monkeypatch, capsys):
+    """Condition 2 (doctor): logins:<provider> names the resolved dir and whether it is baked or default."""
+    _fake_logins(fence)
+    _install_unit_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(IU, "_npm_global_bin", lambda *a, **k: None)
+    monkeypatch.setattr(IU, "execute", lambda plan, **kw: 0)
+    assert IU.cmd_install_unit(_unit_ns(tmp_path)) == 0
+    stamp = json.loads(LG.stamp_path_for(tmp_path / "data").read_text())
+    assert stamp["baked"] == {"CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"], "CODEX_HOME": os.environ["CODEX_HOME"],
+                              "GROK_HOME": os.environ["GROK_HOME"], "GEMINI_CLI_HOME": os.environ["GEMINI_CLI_HOME"]}
+    assert FAKE_TOKEN not in json.dumps(stamp)
+    rows = dict((r[0], r) for r in LG.doctor_rows(tmp_path / "data"))
+    assert rows["logins:claude"][1] == "OK" and f"dir {os.environ['CLAUDE_CONFIG_DIR']}, baked into the units" in rows["logins:claude"][2]
+    # the same install seen from a shell without the variable: the row says which dir the units were baked with
+    plain = {"HOME": os.environ["HOME"]}
+    rows = dict((r[0], r) for r in LG.doctor_rows(tmp_path / "data", env=plain, home=os.environ["HOME"]))
+    assert "units baked with " + os.environ["CLAUDE_CONFIG_DIR"] in rows["logins:claude"][2]
+    # and a stamp with nothing baked says default
+    LG.write_stamp(LG.stamp_path_for(tmp_path / "data"), "init", LG.snapshot(plain, os.environ["HOME"]), {})
+    rows = dict((r[0], r) for r in LG.doctor_rows(tmp_path / "data", env=plain, home=os.environ["HOME"]))
+    assert "default" in rows["logins:claude"][2]
+
+
+def test_a_baked_dir_that_lost_its_login_fails_init_upgrade_and_install_unit_loudly(fence, tmp_path, monkeypatch, capsys):
+    """Condition 3: never a silent fall-through to the default dir."""
+    f = _fake_logins(fence)
+    data = fence["data"]
+    LG.write_stamp(LG.stamp_path_for(data), "install-unit", LG.snapshot(), {"CODEX_HOME": os.environ["CODEX_HOME"]})
+    # healthy: init and upgrade pass
+    root = _repo(tmp_path)
+    assert not I.failed_steps(I.run_init(root, data, run=Runner(), yes=True))
+    _discard(f["codex"])                                   # the baked dir has no login any more
+    rep = I.run_init(root, data, run=Runner(), yes=True)
+    failed = I.failed_steps(rep)
+    assert failed and "baked into the systemd units as CODEX_HOME" in failed[0].detail and os.environ["CODEX_HOME"] in failed[0].detail
+    assert "LOGIN LOST" in capsys.readouterr().err
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(tmp_path / "repo" / "orchestra.toml"))
+    (tmp_path / "repo" / "orchestra.toml").write_text(f'[data]\ndir = "{data}"\n')
+    git = Git()
+    up = U.run_upgrade(tmp_path / "repo", git=git, init=lambda r, **k: [], doctor=lambda r: 0)
+    assert up.exit_code == 3 and "CODEX_HOME" in up.error and "Nothing was pulled" in up.error
+    assert not any(c[:2] == ("git", "fetch") for c in git.calls)
+    # install-unit from a shell that still names the dead dir: exit 3; from a shell pointing at a dir with a login: proceeds
+    (tmp_path / "repo" / "orchestra.toml").write_text(f'[data]\ndir = "{data}"\n[runtimes]\nenabled = ["claude"]\n')
+    monkeypatch.setattr(IU, "_npm_global_bin", lambda *a, **k: None)
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(tmp_path / "repo"))
+    for sub in ("deploy", "config"):
+        (tmp_path / "repo" / sub).mkdir(exist_ok=True)
+    (tmp_path / "repo" / "deploy" / "systemd").symlink_to(REPO / "deploy" / "systemd")
+    (tmp_path / "repo" / "config" / "providers.json").symlink_to(REPO / "config" / "providers.json")
+    ran = []
+    monkeypatch.setattr(IU, "execute", lambda plan, **kw: ran.append(plan) or 0)
+    assert IU.cmd_install_unit(_unit_ns(tmp_path)) == 3 and ran == []
+    assert "CODEX_HOME" in capsys.readouterr().err
+    good = tmp_path / "home" / ".codex-good"
+    good.mkdir()
+    (good / "auth.json").write_text(json.dumps({"tokens": {"access_token": "FAKE3", "account_id": "acct_fake"}}))
+    monkeypatch.setenv("CODEX_HOME", str(good))
+    assert IU.cmd_install_unit(_unit_ns(tmp_path)) == 0 and ran[0].login_env["CODEX_HOME"] == str(good)
+    assert json.loads(LG.stamp_path_for(data).read_text())["baked"]["CODEX_HOME"] == str(good)
+    # --forget-login-dirs is the explicit way out when the dir is simply gone
+    monkeypatch.delenv("CODEX_HOME")
+    LG.write_stamp(LG.stamp_path_for(data), "install-unit", LG.snapshot(), {"CODEX_HOME": str(tmp_path / "nowhere")})
+    assert IU.cmd_install_unit(_unit_ns(tmp_path)) == 3
+    assert IU.cmd_install_unit(_unit_ns(tmp_path, forget_login_dirs=True)) == 0
+    assert "CODEX_HOME" not in json.loads(LG.stamp_path_for(data).read_text())["baked"]
+
+
+def test_a_recovered_seat_under_the_baked_units_reads_the_operators_login(fence, tmp_path, monkeypatch):
+    """Condition 5, by effect on the rendered files: install under a custom CLAUDE_CONFIG_DIR + CODEX_HOME,
+    read back the units' effective Environment (unit + drop-in, as `systemctl show -p Environment` would), run a
+    simulated recovery (the seat's env = HOME from User= + that Environment + spawn-agent.sh's prefix), and the
+    seat's login fingerprint equals the pre-install one. Sabotage: without the drop-in the seat reads ~/.claude."""
+    f = _fake_logins(fence)
+    _install_unit_settings(tmp_path, monkeypatch)
+    st = S.load_settings(repo_root=tmp_path / "repo", config_path=tmp_path / "repo" / "orchestra.toml")
+    shell = {"HOME": os.environ["HOME"], "CLAUDE_CONFIG_DIR": os.environ["CLAUDE_CONFIG_DIR"], "CODEX_HOME": os.environ["CODEX_HOME"]}
+    before = {p: fp for p, fp in LG.snapshot(shell, shell["HOME"]).items() if fp["present"]}
+    plan = IU.build_plan(st, ["stack"], env=shell, **_kw(tmp_path))
+    assert IU.execute(plan, euid=1000, interactive=False, runner=lambda c: 0, sudo_usable=lambda i: True, out=lambda s: None) == 0
+    unit_env = _effective_unit_env(plan, "orchestra-recovery.service")
+    assert unit_env["CLAUDE_CONFIG_DIR"] == shell["CLAUDE_CONFIG_DIR"] and unit_env["CODEX_HOME"] == shell["CODEX_HOME"]
+    seat_env = _simulated_recovery_seat_env(unit_env, shell["HOME"])
+    # spawn-agent.sh's prefix carries the same variables into the pane (the real lines, under bash)
+    src = (REPO / "spawn-agent.sh").read_text()
+    block = src[src.index("    _orch_prefix=\"$(printf 'ORCHESTRA_DIR=%q"):src.index('    launch_cmd="$_orch_prefix $launch_cmd"')]
+    script = tmp_path / "prefix_recovery_lg.sh"
+    script.write_text("ORCHESTRA_DIR=/d SCRIPT_DIR=/s agent_id=gm\n" + block + "\nprintf '%s\\n' \"$_orch_prefix\"\n")
+    prefix = subprocess.run(["bash", str(script)], env=seat_env, capture_output=True, text=True, check=True).stdout
+    pane_env = dict(seat_env, **dict(kv.split("=", 1) for kv in prefix.split() if kv.startswith(("CLAUDE_CONFIG_DIR=", "CODEX_HOME="))))
+    after = {p: fp for p, fp in LG.snapshot(pane_env, pane_env["HOME"]).items() if fp["present"]}
+    assert after == before, "the recovered seat sees exactly the login files the operator's shell had"
+    assert not [x for x in LG.compare(before, LG.snapshot(pane_env, pane_env["HOME"])) if x.fatal]
+    # SABOTAGE: remove the bake (a unit without the drop-in): the seat resolves the DEFAULT dirs, where nothing is signed in
+    unit_env_sabotaged = LG.parse_unit_env(plan.rendered["orchestra-recovery.service"])
+    seat_env_sabotaged = _simulated_recovery_seat_env(unit_env_sabotaged, shell["HOME"])
+    prefix = subprocess.run(["bash", str(script)], env=seat_env_sabotaged, capture_output=True, text=True, check=True).stdout
+    assert "CLAUDE_CONFIG_DIR=" not in prefix
+    lost = LG.snapshot(seat_env_sabotaged, shell["HOME"])
+    assert not any(fp["present"] for fp in lost.values()), "without the bake the seat reads ~/.claude and ~/.codex: signed out"
+    assert [x for x in LG.compare(before, lost) if x.fatal], "the guard calls that a lost login"
+    assert LG.provider_dirs(seat_env_sabotaged, shell["HOME"])["claude"] == (str(Path(shell["HOME"]) / ".claude"), "default")
 
 
 # ---- guarantee 2: doctor rows --------------------------------------------------------------------------

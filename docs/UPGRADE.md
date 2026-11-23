@@ -89,9 +89,16 @@ A token your CLI refreshed on its own while the upgrade ran is reported as a not
 fingerprints are kept in `<data>/state/login-guard.json` (mode 0600, hashes only); `orchestra doctor` shows
 `logins:<provider>` as `intact since <stamp>`, `CHANGED since <stamp>: <file> <why>`, or `no <provider>
 login found`. Seats get your shell's `HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` and
-`GEMINI_CLI_HOME` unchanged. One thing to know on a systemd install: a login kept outside the default dir
-(a `CLAUDE_CONFIG_DIR` or `CODEX_HOME` set in your shell) is not carried into the unit; `orchestra
-install-unit` warns about it and says how to add it as a drop-in.
+`GEMINI_CLI_HOME` unchanged. On a systemd install, `orchestra install-unit` bakes the login dirs set in
+your shell (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `GEMINI_CLI_HOME`) into the units that start
+seats (`orchestra.service`, `orchestra-recovery.service`) as a drop-in `<unit>.d/10-login-dirs.conf`
+(0600, paths only, never a token): only a variable that is set AND has a login under its dir is baked
+(a set variable with nothing signed in under it is warned about, not baked; unset means the default
+dirs). Re-running `install-unit` replaces the drop-in, so a changed or unset variable never leaves an
+old one behind. `orchestra doctor`'s `logins:<provider>` rows name the dir in use and whether it is baked
+or default, and if a baked dir later has no login, `init`, `upgrade` and `install-unit` stop loudly
+(exit 3) instead of falling through to the default dir; `orchestra install-unit --forget-login-dirs` is
+the explicit way to drop a dir that is gone.
 
 ## Restarting a systemd install
 

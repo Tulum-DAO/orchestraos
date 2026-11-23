@@ -39,6 +39,8 @@ PROVIDERS = ("claude", "codex", "gemini", "grok")
 # a different value than the shell the operator logged in from is effectively logged out.
 LOGIN_ENV = ("HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "GEMINI_CLI_HOME")
 STAMP_REL = Path("state") / "login-guard.json"
+# var -> the provider whose login lives under the dir it names (the dirs install-unit may bake into the units)
+LOGIN_DIR_PROVIDER = {"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "GROK_HOME": "grok", "GEMINI_CLI_HOME": "gemini"}
 
 
 @dataclass(frozen=True)
@@ -187,6 +189,84 @@ def compare(before: dict, after: dict, step: str = "") -> list:
     return out
 
 
+def provider_dirs(env: Optional[dict] = None, home: Optional[str] = None) -> dict:
+    """provider -> (resolved login dir, 'env' | 'default'): where each CLI reads its login for this env."""
+    env = os.environ if env is None else env
+    files = login_files(env, home)
+    out = {}
+    for var, prov in LOGIN_DIR_PROVIDER.items():
+        first = next(lf for lf in files if lf.provider == prov)
+        d = first.path.parent if prov != "gemini" else first.path.parent
+        out[prov] = (str(d), "env" if env.get(var) else "default")
+    return out
+
+
+def bakeable_login_dirs(env: Optional[dict] = None, home: Optional[str] = None):
+    """(baked, no_login): the login-dir variables SET in `env` whose dir holds a real login (fingerprint
+    present + login record) -> baked {var: path}; the ones set with no login found -> [(var, path)]."""
+    env = os.environ if env is None else env
+    snap = snapshot(env, home)
+    baked, no_login = {}, []
+    for var, prov in LOGIN_DIR_PROVIDER.items():
+        val = env.get(var)
+        if not val:
+            continue
+        if any(f.get("present") and f.get("login") for f in snap.values() if f["provider"] == prov):
+            baked[var] = val
+        else:
+            no_login.append((var, val))
+    return baked, no_login
+
+
+def check_baked(baked: dict, env: Optional[dict] = None, home: Optional[str] = None, step: str = "baked-login-dirs") -> list:
+    """A dir the units were baked with must still hold its login, or the seats they start come up signed
+    out: one FATAL finding per baked var whose dir has no login any more (vanished or signed out)."""
+    env = dict(os.environ if env is None else env)
+    out = []
+    for var, path in (baked or {}).items():
+        prov = LOGIN_DIR_PROVIDER.get(var)
+        if not prov:
+            continue
+        snap = snapshot(dict(env, **{var: path}), home)
+        if not any(f.get("present") and f.get("login") for f in snap.values() if f["provider"] == prov):
+            out.append(Finding(path, prov, f"baked into the systemd units as {var} but holds NO {prov} login now "
+                               f"(vanished or signed out); seats the units start would be signed out. Log in under it "
+                               f"again, or set {var} to the dir that holds the login and re-run `orchestra install-unit`", step))
+    return out
+
+
+DROPIN_NAME = "10-login-dirs.conf"
+
+
+def dropin_text(baked: dict) -> str:
+    """The systemd drop-in that carries the baked login dirs into a unit: paths only, never a token."""
+    lines = ["# Written by `orchestra install-unit` (orchestra_cli/login_guard.py); re-run it to change.",
+             "# The login dirs the operator signed in under, so seats and boot recovery started by the unit",
+             "# read the same login as the operator's shell. Paths only; no credential is copied.",
+             "[Service]"]
+    if not baked:
+        lines.append("# no login dir variable was set at install time: the default dirs are used")
+    for var in LOGIN_DIR_PROVIDER:
+        if var in baked:
+            val = str(baked[var])
+            if any(c in val for c in ('"', "\\", "\n", "\r")):
+                raise ValueError(f"{var} contains a character a unit file cannot carry")
+            lines.append(f'Environment="{var}={val.replace("%", "%%")}"')
+    return "\n".join(lines) + "\n"
+
+
+def parse_unit_env(*texts: str) -> dict:
+    """The effective Environment= of a unit plus its drop-ins (what `systemctl show -p Environment` lists)."""
+    out = {}
+    for text in texts:
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("Environment="):
+                k, _, v = line[len("Environment="):].strip('"').partition("=")
+                out[k] = v.replace("%%", "%")
+    return out
+
+
 class LoginGuard:
     """begin() before the first step; after(step) after each one; findings accumulate. seal(command)
     writes the stamp (hashes only, 0600) when nothing fatal happened."""
@@ -198,11 +278,22 @@ class LoginGuard:
         self.before: dict = {}
         self.last: dict = {}
         self.findings: list = []
+        self.baked: dict = {}          # var -> dir the units were baked with (from the stamp)
 
     def begin(self) -> "LoginGuard":
         self.before = snapshot(self.env, self.home)
         self.last = dict(self.before)
         return self
+
+    def load_baked(self, stamp_path: Path, step: str = "baked-login-dirs") -> list:
+        """Read the baked login dirs the last install-unit recorded and check each still holds its login.
+        Returns the FATAL findings (also kept in .findings)."""
+        self.stamp_path = Path(stamp_path)
+        doc = read_stamp(self.stamp_path)
+        self.baked = dict((doc or {}).get("baked") or {})
+        found = check_baked(self.baked, self.env, self.home, step)
+        self.findings.extend(found)
+        return found
 
     def present(self) -> list:
         return [p for p, f in self.before.items() if f.get("present")]
@@ -236,14 +327,15 @@ class LoginGuard:
         """Write the stamp doctor reads. Hashes, modes and the account-field hash only; 0600."""
         if self.stamp_path is None or self.fatal:
             return None
-        write_stamp(self.stamp_path, command, self.last or self.before)
+        write_stamp(self.stamp_path, command, self.last or self.before, self.baked)
         return self.stamp_path
 
 
-def write_stamp(path: Path, command: str, snap: dict) -> None:
+def write_stamp(path: Path, command: str, snap: dict, baked: Optional[dict] = None) -> None:
     files = {p: {k: f.get(k) for k in ("provider", "present", "kind", "size", "mode", "sha256", "login", "identity")}
              for p, f in snap.items() if f.get("present")}
-    doc = {"stamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "command": command, "files": files}
+    doc = {"stamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "command": command, "files": files,
+           "baked": dict(baked or {})}
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -281,44 +373,49 @@ def doctor_rows(data_dir: Path, env: Optional[dict] = None, home: Optional[str] 
     platform = platform or sys.platform
     now = snapshot(env, home)
     stamp = read_stamp(stamp_path_for(data_dir))
+    baked = dict((stamp or {}).get("baked") or {})
+    dirs = provider_dirs(env, home)
     rows = []
     for prov in PROVIDERS:
+        var = next(v for v, p in LOGIN_DIR_PROVIDER.items() if p == prov)
+        d, how = dirs[prov]
+        if var in baked:
+            where = f"dir {d}, baked into the units" if baked[var] == env.get(var) else \
+                f"dir {d} in this shell, units baked with {baked[var]}"
+        else:
+            where = f"dir {d}, " + ("default" if how == "default" else "shell env, not baked into the units")
         mine = {p: f for p, f in now.items() if f["provider"] == prov}
         present = {p: f for p, f in mine.items() if f.get("present")}
         if not present:
             if prov == "claude" and platform == "darwin":
                 rows.append((f"logins:{prov}", "INFO", "no login file; macOS keeps Claude's login in the Keychain (never touched)", ""))
+            elif var in baked:
+                rows.append((f"logins:{prov}", "WARN", f"no {prov} login found ({where}): seats the units start would be signed out",
+                             f"log in to {prov} under {baked[var]}, or re-run `orchestra install-unit` from a shell with {var} set to the dir that holds it"))
             else:
-                rows.append((f"logins:{prov}", "INFO", f"no {prov} login found", ""))
+                rows.append((f"logins:{prov}", "INFO", f"no {prov} login found ({where})", ""))
             continue
         if not stamp:
-            rows.append((f"logins:{prov}", "INFO", f"{len(present)} login file(s) found; not stamped yet",
+            rows.append((f"logins:{prov}", "INFO", f"{len(present)} login file(s) found; not stamped yet ({where})",
                          "run `orchestra upgrade` (or `orchestra init --yes`): the guard records their fingerprints"))
             continue
         stamped = {p: dict(f, provider=prov) for p, f in stamp["files"].items() if f.get("provider") == prov}
         if not stamped:
-            rows.append((f"logins:{prov}", "INFO", f"{len(present)} login file(s) found; none stamped at {stamp['stamp']} (logged in since)", ""))
+            rows.append((f"logins:{prov}", "INFO", f"{len(present)} login file(s) found; none stamped at {stamp['stamp']} (logged in since; {where})", ""))
             continue
         fatal = [f for f in compare(stamped, now) if f.fatal]
         if fatal:
             f0 = fatal[0]
-            rows.append((f"logins:{prov}", "WARN", f"CHANGED since {stamp['stamp']}: {f0.path} {f0.reason}",
+            rows.append((f"logins:{prov}", "WARN", f"CHANGED since {stamp['stamp']}: {f0.path} {f0.reason} ({where})",
                          f"log in to {prov} again if its CLI asks; nothing in OrchestraOS writes that file"))
         else:
-            rows.append((f"logins:{prov}", "OK", f"intact since {stamp['stamp']} ({stamp.get('command', '?')})", ""))
+            rows.append((f"logins:{prov}", "OK", f"intact since {stamp['stamp']} ({stamp.get('command', '?')}; {where})", ""))
     return rows
 
 
-def login_env_notes(env: Optional[dict] = None) -> list:
-    """For `orchestra install-unit`: the login-dir variables set in the installing shell that a systemd
-    unit will NOT carry (the unit's environment is rendered from the template; HOME comes from User=).
-    Seats and recovery started by the unit would then read the DEFAULT dirs, which may hold no login."""
-    env = os.environ if env is None else env
-    names = [k for k in LOGIN_ENV if k != "HOME" and env.get(k)]
-    if not names:
-        return []
-    return [("WARNING: " + ", ".join(names) + " is set in this shell, so your provider login lives outside "
-             "the default dir, but a systemd unit does not carry it: seats and boot recovery started by the "
-             "unit would read the default login dir (possibly signed out). Either log in under the default "
-             "dir for the service user, or add Environment=\"<VAR>=<value>\" to a drop-in "
-             "(`systemctl edit orchestra`) for " + ", ".join(names) + ".")]
+def login_env_notes(no_login: list) -> list:
+    """For `orchestra install-unit`: a login-dir variable set in the installing shell whose dir holds NO login
+    is not baked (there is nothing there to point the seats at); say so, once per variable."""
+    return [f"WARNING: {var}={path} is set in this shell but no login was found under it, so it is NOT baked "
+            f"into the units: seats and boot recovery started by them read the default dir. Log in under it "
+            f"(or unset {var}) and re-run `orchestra install-unit`." for var, path in no_login]

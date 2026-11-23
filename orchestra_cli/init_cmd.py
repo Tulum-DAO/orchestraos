@@ -344,6 +344,11 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         except Exception:  # noqa: BLE001
             raw = {}
     data_dir = resolve_data_dir(raw, data_dir).resolve()
+    # A login dir an `orchestra install-unit` baked into the units must still hold its login (else the seats the
+    # units start are signed out): a loud failed `logins` step, never a silent fall-through to the default dir.
+    for f in guard.load_baked(LG.stamp_path_for(data_dir), step="baked-login-dirs"):
+        print(f.line(), file=sys.stderr, flush=True)
+        report.append(Step(LOGINS_STEP, False, f"failed: {f.line()}"))
 
     # 2. config file (never overwritten)
     if config_path.exists():
