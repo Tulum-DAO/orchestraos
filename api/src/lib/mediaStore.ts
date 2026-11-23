@@ -489,7 +489,7 @@ export function itemTime(ts: unknown): number | undefined {
  *  under the roots and every check of the file now (one open). A refAt moves a held row's `seen` on. */
 function check(agentId: string, p: string, roots: readonly string[], deps: RefsDeps, now: number, refAt?: number, fs = true): Checked | null {
   const key = `${agentId}\0${p}`;
-  const until = misses.get(key);
+  const until = fs ? misses.get(key) : undefined;   // with no disk to ask, only the table can answer
   if (until !== undefined && until > now) return null;
   const have = deps.store.has(agentId, p, refAt);
   if (have) return { id: have, kind: deps.store.lookup(have)?.kind };
