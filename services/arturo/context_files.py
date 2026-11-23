@@ -21,6 +21,12 @@ stale_after = as_of + the block's window, so a view past stale_after is a real s
 announced "as of <time>". Times in the files are UTC with a Z; the block speaks them in the
 operator's zone (the operator_store `timezone` fact, else [operator] timezone in orchestra.toml,
 else UTC). An empty view (header, `---`, no lines) is treated exactly like a missing one.
+
+Every body line is rendered as "  - <line>" (the way LEARNED RULES renders its rules), so a view line
+that reads like a heading ("SYSTEM: ...", "LEARNED RULES (...):", "WHAT I KNOW NOW (...)") can never
+pass for one: only the block's own headings start at column 0. The caps are counted on the spoken
+text (citations stripped), so a citation-heavy file still delivers its cap; a single line longer than
+its cap is truncated with an ellipsis rather than rendered as nothing.
 """
 from __future__ import annotations
 
@@ -39,12 +45,22 @@ VOICE_FILES = ("operator", "now", "projects", "decisions")
 VOICE_PROJECT_LINES = 5
 VOICE_CAP = 8000
 #: Spoken turns get the short voice block; everything else (telegram, dashboard, text) the full one.
-VOICE_CHANNELS = frozenset({"voice", "ptt"})
+#: Only "voice" (/v1/chat/completions with a recorded call): a /ptt turn is spoken too, but that path
+#: sets no turn record (no principal stamp), so _is_fleet is False there and it never gets the block;
+#: listing it here would claim a channel the gate cannot reach. Wire it when the gateway stamps it.
+VOICE_CHANNELS = frozenset({"voice"})
 TITLE = "WHAT I KNOW NOW"
+#: Every body line carries this, as LEARNED RULES does: a body line never starts at column 0.
+LINE_PREFIX = "  - "
+ELLIPSIS = "…"
 
-_CITATION = re.compile(r"\s*\[c:[^\]\n]*\]")
-_CUT_LINE = re.compile(r"^…cut, (\d+) more$")
+_CITATION_OPEN = re.compile(r"\[c:", re.IGNORECASE)
+_CUT_LINE = re.compile(r"^\s*…cut, (\d+) more$")
 _HEADER_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
+#: scripts/notify_policy, loaded once by path (never by mutating sys.path per turn); None = not loadable.
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
+_NOTIFY_POLICY = None
+_NOTIFY_POLICY_TRIED = False
 
 FRESH, STALE, MISSING, MALFORMED, EMPTY = "fresh", "stale", "missing", "malformed", "empty"
 
@@ -65,7 +81,7 @@ class View:
     as_of: datetime | None = None
     stale_after: datetime | None = None
     sources: list = field(default_factory=list)
-    lines: list = field(default_factory=list)   # body lines, citations still attached
+    lines: list = field(default_factory=list)   # body lines, citations stripped, capped on that text
     detail: str = ""                  # why, for MALFORMED (doctor prints it)
 
     @property
@@ -74,7 +90,25 @@ class View:
 
 
 def strip_citations(line: str) -> str:
-    return _CITATION.sub("", line).strip()
+    """Remove every `[c:<id>]` citation (any case) and the space before it. Brackets nest ("[c:[x]]")
+    and an unclosed "[c:abc" runs to the end of the line, so no stray bracket ever reaches the model."""
+    out = []
+    i = 0
+    while True:
+        m = _CITATION_OPEN.search(line, i)
+        if not m:
+            out.append(line[i:])
+            break
+        out.append(line[i:m.start()].rstrip())
+        depth, j = 1, m.end()
+        while j < len(line) and depth:
+            if line[j] == "[":
+                depth += 1
+            elif line[j] == "]":
+                depth -= 1
+            j += 1
+        i = j                                   # unclosed: j == len(line), the rest is dropped
+    return "".join(out).strip()
 
 
 def _parse_time(raw: str) -> datetime | None:
@@ -100,6 +134,11 @@ def _cap_lines(lines: list, cap: int) -> list:
     for i, line in enumerate(lines):
         total += len(line) + (1 if kept else 0)
         if total > cap:
+            if not kept and len(line) > cap:    # one line over the cap on its own: say what fits, not nothing
+                kept.append(line[:max(cap - len(ELLIPSIS), 0)] + ELLIPSIS)
+                if i + 1 == len(lines):
+                    return kept
+                i += 1
             dropped = lines[i:]
             n = len(dropped)
             m = _CUT_LINE.match(dropped[-1])
@@ -124,7 +163,7 @@ def read_view(path, name: str, now: datetime | None = None) -> View:
     except OSError as e:
         return View(name, MALFORMED, path, detail=f"unreadable ({type(e).__name__})")
     try:
-        text = raw.decode("utf-8")
+        text = raw.decode("utf-8-sig")          # a UTF-8 BOM is tolerated, never part of the header
     except UnicodeDecodeError:
         return View(name, MALFORMED, path, detail="not utf-8")
     header, body, seen_sep = {}, [], False
@@ -153,7 +192,10 @@ def read_view(path, name: str, now: datetime | None = None) -> View:
     if not body:
         return View(name, EMPTY, path, as_of=as_of, stale_after=stale_after, sources=sources, detail="no lines")
     status = STALE if now > stale_after else FRESH
-    lines = _cap_lines(body, CAPS.get(name, VOICE_CAP))
+    spoken = [y for y in (strip_citations(x) for x in body) if y]        # the cap counts what the model gets
+    if not spoken:
+        return View(name, EMPTY, path, as_of=as_of, stale_after=stale_after, sources=sources, detail="citations only")
+    lines = _cap_lines(spoken, CAPS.get(name, VOICE_CAP))
     return View(name, status, path, as_of=as_of, stale_after=stale_after, sources=sources, lines=lines)
 
 
@@ -161,6 +203,23 @@ def read_all(orchestra_dir, now: datetime | None = None) -> list:
     d = context_dir(orchestra_dir)
     now = now or datetime.now(timezone.utc)
     return [read_view(d / f"{name}.md", name, now) for name in FILES]
+
+
+def _notify_policy():
+    """scripts/notify_policy, resolved by path ONCE per process (sys.path is never touched: the proxy
+    runs this every turn). None when the scripts dir is not there."""
+    global _NOTIFY_POLICY, _NOTIFY_POLICY_TRIED
+    if not _NOTIFY_POLICY_TRIED:
+        _NOTIFY_POLICY_TRIED = True
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("arturo_context_notify_policy", _SCRIPTS_DIR / "notify_policy.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _NOTIFY_POLICY = mod
+        except Exception:  # noqa: BLE001 — no scripts dir: config source unavailable
+            _NOTIFY_POLICY = None
+    return _NOTIFY_POLICY
 
 
 def operator_zone(state_dir=None):
@@ -175,13 +234,10 @@ def operator_zone(state_dir=None):
         except Exception:  # noqa: BLE001
             pass
     try:
-        import sys as _sys
-        root = str(Path(__file__).resolve().parent.parent.parent / "scripts")
-        if root not in _sys.path:
-            _sys.path.insert(0, root)
-        import notify_policy as _np
-        names.append(_np.install_user_and_zone()[1])
-    except Exception:  # noqa: BLE001 — no config, no scripts dir: UTC
+        _np = _notify_policy()
+        if _np is not None:
+            names.append(_np.install_user_and_zone()[1])
+    except Exception:  # noqa: BLE001 — no config: UTC
         pass
     for name in names:
         if name and isinstance(name, str):
@@ -201,14 +257,23 @@ def _as_given(dt: datetime, zone=timezone.utc) -> str:
     return dt.astimezone(zone).strftime("%Y-%m-%d %H:%M %Z")
 
 
+def _body_line(line: str) -> str:
+    """One rendered body line: prefixed, single-line, never at column 0. The writer's own cut marker
+    keeps its shape (indented, no dash) so the voice cap can fold it."""
+    line = " ".join(line.split())               # no newline, tab or other separator survives
+    if _CUT_LINE.match(line):
+        return "  " + line
+    return LINE_PREFIX + line
+
+
 def _section(view: View, zone, limit: int | None = None) -> list:
     head = view.name.upper()
     if view.status == STALE:
         head += f" (as of {_as_given(view.as_of, zone)}, past its refresh time)"
-    lines = [strip_citations(x) for x in view.lines]
+    lines = [x for x in (strip_citations(x) for x in view.lines) if x]
     if limit is not None and len(lines) > limit:
         lines = lines[:limit]
-    return [head + ":"] + [x for x in lines if x]
+    return [head + ":"] + [_body_line(x) for x in lines]
 
 
 def block(orchestra_dir, voice: bool, now: datetime | None = None, zone=None) -> str | None:
@@ -244,7 +309,7 @@ def doctor_rows(orchestra_dir, now: datetime | None = None) -> list:
         elif v.status == MISSING:
             detail = f"missing: {v.path}"
         elif v.status == EMPTY:
-            detail = f"empty (header only, as_of {_as_given(v.as_of)}): {v.path}"
+            detail = f"empty ({v.detail}, as_of {_as_given(v.as_of)}): {v.path}"
         else:
             detail = f"malformed: {v.detail} ({v.path})"
         rows.append((v.name, v.status, detail))
