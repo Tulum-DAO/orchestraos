@@ -716,6 +716,9 @@ def _gm_call_note(turns, summary):
     thread), so by default the GM gets a two-line digest for awareness, not the full transcript to mine for
     work (that duplicated what Arturo had already done). ARTURO_GM_INJECT_FULL=1 restores the transcript."""
     from services.arturo import endcall as _endcall
+    literal = _endcall.short_call_literal(turns)
+    if literal is not None:
+        return literal, None
     if os.environ.get("ARTURO_GM_INJECT_FULL", "0") == "1":
         return summary, _endcall.build_full_transcript(turns)
     if os.environ.get("ARTURO_GM_DIGEST", "1") != "1":
@@ -726,8 +729,11 @@ def _gm_call_note(turns, summary):
             {"role": "system", "content": _named(_GM_DIGEST_SYSTEM)},
             {"role": "user", "content": transcript}])
         digest = _endcall.sanitize_summary((resp.choices[0].message.content or "").strip())
-        if digest:
+        if _endcall.digest_is_grounded(digest, turns, wrapper_words=("FYI", "handled", "by", _aname())):
             return digest, None
+        if digest:
+            log.warning("gm digest rejected as ungrounded; sending literal transcript")
+            return summary, transcript
     except Exception as e:  # noqa: BLE001 — the headline still informs the GM
         log.warning(f"gm digest failed, sending the headline: {e!r}")
     return _endcall.sanitize_summary(f"FYI, handled by {_aname()}: {summary}"), None

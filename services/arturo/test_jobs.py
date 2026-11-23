@@ -159,17 +159,30 @@ def test_look_at_image_refuses_anything_outside_uploads(P, monkeypatch, tmp_path
         done()
 
 
-def test_the_gm_gets_a_digest_not_the_transcript(P, monkeypatch):
+def test_the_gm_gets_a_literal_for_a_one_user_turn_call(P, monkeypatch):
     turns = [{"role": "user", "text": "spin up a research agent on competitors"},
              {"role": "arturo", "text": "On it."}]
     monkeypatch.setenv("ARTURO_GM_DIGEST", "1")
-    monkeypatch.setattr(P, "brain", type("B", (), {"complete": staticmethod(lambda **k: P._brain.make_response(
-        "FYI, handled by Arturo: competitor research.\nStarted a research job. Nothing left open.", None, "stop"))}))
     summary, transcript = P._gm_call_note(turns, "Voice call: 2 turns")
-    assert transcript is None and summary.startswith("FYI, handled by Arturo:") and "\n" in summary
+    assert (summary, transcript) == ("1 turn: 'spin up a research agent on competitors'; reply: 'On it.'", None)
+
+    # Even the explicit full-transcript debug setting cannot turn a one-user-turn call back into
+    # an interpretive digest.
     monkeypatch.setenv("ARTURO_GM_INJECT_FULL", "1")
     summary, transcript = P._gm_call_note(turns, "Voice call: 2 turns")
-    assert "spin up a research agent" in transcript
+    assert (summary, transcript) == ("1 turn: 'spin up a research agent on competitors'; reply: 'On it.'", None)
+
+
+def test_gm_digest_rejects_a_fabricated_time_and_uses_the_literal_transcript(P, monkeypatch):
+    turns = [{"role": "user", "text": "research competitors"},
+             {"role": "arturo", "text": "research competitors"},
+             {"role": "user", "text": "show me the result"}]
+    monkeypatch.setenv("ARTURO_GM_DIGEST", "1")
+    monkeypatch.setattr(P, "brain", type("B", (), {"complete": staticmethod(lambda **k: P._brain.make_response(
+        "FYI, handled by Arturo: weekly team sync moved to Thursday 2 PM.", None, "stop"))}))
+    summary, transcript = P._gm_call_note(turns, "Voice call: 3 turns")
+    assert summary == "Voice call: 3 turns"
+    assert "research competitors" in transcript and "Thursday" not in transcript
 
 
 def test_deep_think_runs_arturos_brain_on_the_thread_and_answers_as_its_turn(P, monkeypatch):
