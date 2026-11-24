@@ -47,7 +47,7 @@ _LOG = logging.getLogger(__name__)
 from .adapter_claude import ClaudeWalAdapter
 from .adapter_codex import CodexWalAdapter
 from .adapter_gemini import GeminiWalAdapter
-from .enrichers import GitEnricher, ProcEnricher
+from .enrichers import GitEnricher, ProcEnricher, TTLRunCache
 from .store import WalStore
 from .wal_tailer import SeatLock
 
@@ -168,12 +168,23 @@ class LivenessLock:
             self._fh = None
 
 
+LINGER_QUIET_PASSES = 2      # refreshes (60 s apart) with no growth before an old file is let go
+LINGER_MAX_S = 900.0         # never linger longer than 15 min
+
+
+def _size(path):
+    try:
+        return os.path.getsize(path)
+    except (OSError, TypeError):
+        return None
+
+
 class _SeatCapture:
     """One seat's capture state: its store, per-provider adapter, optional
     enrichers, and the held per-seat SeatLock. Holds this seat's cursor(s) via
     the store's wal_cursors (keyed by source_path)."""
 
-    def __init__(self, seat, store, seat_lock, run_cache=None):
+    def __init__(self, seat, store, seat_lock, run_cache=None, sample_path=None):
         self.seat = seat
         self.store = store
         self.lock = seat_lock
@@ -181,10 +192,13 @@ class _SeatCapture:
                                     seat.generation)
         self.enrichers = []
         if seat.cwd:
+            # sample_path (requirement (b), mux path): the git enricher's last sample persists
+            # per seat, so a telemetryd RESTART re-emits deltas, not the whole dirty set
+            # (2026-09-20 20:06:26Z restart: ~11.7k file_mod rows per multiplexed seat).
             self.enrichers.append(GitEnricher(
                 store, seat.lineage_root, seat.generation, seat.sid, seat.cwd,
                 runtime=seat.runtime, run_cache=run_cache,
-                min_interval_s=GIT_ENRICH_INTERVAL_S))
+                min_interval_s=GIT_ENRICH_INTERVAL_S, sample_path=sample_path))
         if seat.panes_dir:
             self.enrichers.append(ProcEnricher(
                 store, seat.lineage_root, seat.generation, seat.sid,
@@ -212,11 +226,16 @@ class MultiplexedTailer:
         self._seats = {}   # lineage_root -> _SeatCapture
         self._liveness = None
         self.degraded_lineages = {}   # lineage_root -> reason for seats that raised this tick
-        # F2 CPU: a per-tick, per-(cwd,args) git-exec cache shared by every seat's
-        # GitEnricher. Seats sharing a cwd (the norm — dozens share the
-        # agent-orchestra repo) then run `git status`/`rev-parse` ONCE per cwd per
-        # tick instead of once per seat. Cleared at the top of every tick().
-        self._enricher_run_cache = {}
+        # F2 CPU: a per-(cwd,args) git-exec cache shared by every seat's GitEnricher.
+        # CROSS-TICK with a TTL = the git gate (2026-10-08 runaway git): seats sharing a cwd
+        # (dozens share the agent-orchestra repo) run `git status`/`rev-parse` at most ONCE per
+        # GIT_ENRICH_INTERVAL_S per cwd fleet-wide. Was cleared every tick, which let staggered
+        # seat windows re-run status every ~8 s.
+        self._enricher_run_cache = TTLRunCache(GIT_ENRICH_INTERVAL_S)
+        # LINGER (gm msg_17d5a7bd): a repathed seat's OLD capture keeps being drained on later
+        # refreshes, because the retiring generation may still be finishing its last turn after the
+        # repath tick. root -> [old _SeatCapture, last seen size, quiet passes, started at].
+        self._lingering = {}
 
     # --- registration -------------------------------------------------------
 
@@ -230,8 +249,117 @@ class MultiplexedTailer:
             return False   # another writer owns this seat's db; do not race it
         store = WalStore(os.path.join(self._wal_dir, f"{seat.lineage_root}.db"))
         self._seats[seat.lineage_root] = _SeatCapture(
-            seat, store, seat_lock, run_cache=self._enricher_run_cache)
+            seat, store, seat_lock, run_cache=self._enricher_run_cache,
+            sample_path=os.path.join(self._wal_dir, f"{seat.lineage_root}.gitsample.json"))
         return True
+
+    def refresh(self, seats, considered_roots=None):
+        """Follow rotations, new seats and retirements WITHOUT a daemon restart (gm msg_3b93dc9e /
+        msg_91f227e3, 10-09).
+
+        The seats were built ONCE at boot and each tailed its FROZEN source_path, so every seat
+        rotated since the boot was captured only in rare one-off bursts, and seats spawned after
+        the boot were never captured by the daemon at all. ``seats`` = freshly resolved MuxSeats
+        (the SAME seat_builder resolver the boot used). For each:
+          * same (source_path, sid, generation) -> untouched;
+          * changed -> the OLD file is drained to EOF first (a retiring generation writes its last
+            lines after promotion), then the capture is rebuilt IN PLACE on the SAME store and
+            SeatLock (new adapter generation + path; cursors are keyed by path, so a path an
+            earlier burst already read resumes where it stopped);
+          * unseen root -> registered.
+        ``considered_roots`` = every root the resolver looked at this pass (live seats). A
+        registered root NOT in it is retired/gone: drained, then dropped (store closed, SeatLock
+        released). A considered root with NO fresh MuxSeat could not be resolved: FAIL-CLOSED, it
+        keeps its current capture. ``considered_roots=None`` drops nothing. One log line per change.
+        Per-seat contained: one bad seat never stops the rest."""
+        out = {"rebuilt": [], "registered": [], "dropped": [], "kept_unresolved": [], "unchanged": 0,
+               "lingered": [], "linger_done": []}
+        self._linger_pass(out)
+        fresh = {}
+        for seat in seats or ():
+            root = getattr(seat, "lineage_root", None)
+            if root and seat.generation is not None and seat.source_path:
+                fresh[root] = seat
+        for root, seat in fresh.items():
+            try:
+                cap = self._seats.get(root)
+                if cap is None:
+                    if self.register(seat):
+                        out["registered"].append(root)
+                        _LOG.warning("telemetry mux: capture REGISTER %s sid %s gen %s", root,
+                                     (seat.sid or "-")[:8], seat.generation)
+                    continue
+                old = cap.seat
+                if (old.source_path, old.sid, old.generation) == (
+                        seat.source_path, seat.sid, seat.generation):
+                    out["unchanged"] += 1
+                    continue
+                self._drain(cap)
+                self._lingering[root] = [cap, _size(old.source_path), 0, time.time()]
+                self._seats[root] = _SeatCapture(
+                    seat, cap.store, cap.lock, run_cache=self._enricher_run_cache,
+                    sample_path=os.path.join(self._wal_dir, f"{root}.gitsample.json"))
+                out["rebuilt"].append(root)
+                _LOG.warning("telemetry mux: capture REPATH %s sid %s -> %s gen %s -> %s", root,
+                             (old.sid or "-")[:8], (seat.sid or "-")[:8], old.generation, seat.generation)
+            except Exception as e:  # noqa: BLE001 -- per-seat containment, like tick()
+                _LOG.warning("telemetry mux: refresh of seat %s failed (%s); keeping its capture",
+                             root, type(e).__name__)
+        if considered_roots is not None:
+            considered = set(considered_roots)
+            for root in list(self._seats):
+                if root in fresh:
+                    continue
+                try:
+                    if root in considered:
+                        out["kept_unresolved"].append(root)
+                        _LOG.warning("telemetry mux: capture KEEP %s (live but unresolvable this pass)",
+                                     root)
+                        continue
+                    cap = self._seats.pop(root)
+                    self._drain(cap)
+                    lingering = self._lingering.pop(root, None)
+                    if lingering:
+                        self._drain(lingering[0])          # same store: read before it closes
+                    cap.close()
+                    out["dropped"].append(root)
+                    _LOG.warning("telemetry mux: capture DROP %s sid %s (no longer a live seat)", root,
+                                 (cap.seat.sid or "-")[:8])
+                except Exception as e:  # noqa: BLE001
+                    _LOG.warning("telemetry mux: drop of seat %s failed (%s)", root, type(e).__name__)
+        return out
+
+    def _linger_pass(self, out):
+        """Re-drain each lingering OLD capture. It stops after LINGER_QUIET_PASSES refreshes with no
+        growth, or after LINGER_MAX_S, whichever comes first. Same adapter/store/cursor: no duplicates."""
+        now = time.time()
+        for root, entry in list(self._lingering.items()):
+            cap, last_size, quiet, started = entry
+            try:
+                size = _size(cap.seat.source_path)
+                if size is not None and last_size is not None and size > last_size:
+                    self._drain(cap)
+                    entry[1], entry[2] = size, 0
+                    out["lingered"].append(root)
+                else:
+                    entry[2] = quiet + 1
+                if entry[2] >= LINGER_QUIET_PASSES or now - started >= LINGER_MAX_S:
+                    self._drain(cap)                      # one last read before letting go
+                    del self._lingering[root]
+                    out["linger_done"].append(root)
+                    _LOG.warning("telemetry mux: capture LINGER-DONE %s sid %s", root,
+                                 (cap.seat.sid or "-")[:8])
+            except Exception as e:  # noqa: BLE001
+                self._lingering.pop(root, None)
+                _LOG.warning("telemetry mux: linger of %s failed (%s)", root, type(e).__name__)
+
+    @staticmethod
+    def _drain(cap):
+        """Read the seat's CURRENT file to EOF once (its last lines), adapter only. Never raises."""
+        try:
+            cap.adapter.tail(cap.seat.source_path)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("telemetry mux: drain of %s failed (%s)", cap.seat.lineage_root, type(e).__name__)
 
     # --- capture ------------------------------------------------------------
 
@@ -251,7 +379,7 @@ class MultiplexedTailer:
         self.degraded_lineages = {}
         if self._telemetry_disabled():
             return 0
-        self._enricher_run_cache.clear()   # F2: one git exec per cwd for THIS tick
+        self._enricher_run_cache.expire()  # F2: at most one git exec per cwd per TTL
         n = 0
         # PER-SEAT CONTAINMENT (DEC-1788481319): a fleet observer must NEVER die of
         # one seat's bad data. One seat's adapter/store exception is logged + marked

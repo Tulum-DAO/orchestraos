@@ -296,8 +296,8 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
                                    ring_for=r.ring_for, resolve_generation=r.resolve_generation)
 
     # Seat-set refresh (registry mtime driven): a seat spawned after boot appears on the
-    # next slow tick. Only the SEAT list is rebuilt; the durable mux registrations are
-    # left as built (a rotation re-registers through the lineage lane, not here).
+    # next slow tick. Only the SEAT list is rebuilt here; the durable capture follows
+    # rotations and new seats through mux_refresher below.
     registry_path = orchestra_dir / "registry.json"
     state = {"mtime": _mtime_or_none(registry_path)}
 
@@ -311,6 +311,24 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
                                   source_path=r.source_path, hooks_for=r.hooks_for,
                                   ring_for=r.ring_for, resolve_generation=r.resolve_generation)
         return fresh
+
+    def mux_refresher():
+        """(fresh MuxSeats, considered roots) from the LIVE stores (canonical sid/path/generation
+        now, not at boot), via the SAME build_seats + resolvers the boot used (one source).
+        Pane pids come from the ONE batched live_resolver call, never a per-seat tmux exec."""
+        _s, agents_now = r.load_stores(orchestra_dir)
+        live_now = r.live_sessions()
+        pids = {s: (v or {}).get("pid") for s, v in (r.live_resolver(sorted(live_now)) or {}).items()}
+        _seats, fresh = build_seats(agents_now, live_now, pane_pid=lambda aid: pids.get(aid),
+                                    source_path=r.source_path, hooks_for=lambda *_a: None,
+                                    ring_for=lambda _s: None,
+                                    resolve_generation=r.resolve_generation)
+        # Every live root the resolver looked at, keyed exactly as build_seats keys a MuxSeat:
+        # a registered root outside it is retired/gone (dropped); inside it but without a fresh
+        # MuxSeat it was unresolvable this pass (kept, fail-closed).
+        considered = {(rec or {}).get("lineage_root") or aid
+                      for aid, rec in (agents_now or {}).items() if aid in live_now}
+        return fresh, considered
 
     wal_dir = str(orchestra_dir / "state" / "wal")
     mux = MultiplexedTailer(wal_dir=wal_dir, lock_dir=wal_dir)
@@ -335,4 +353,7 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
         # (Claude fires no Stop on interrupt/kill) -> idle, while a real mid-tool
         # hang (pending tool_use) stays stalled.
         turn_resolver=build_turn_resolver(),
-        seats_refresh=seats_refresh)
+        seats_refresh=seats_refresh,
+        # Capture follows rotations + new seats: without it every seat rotated since this
+        # daemon booted was tailed on its DEAD boot-time transcript.
+        mux_refresher=mux_refresher)
