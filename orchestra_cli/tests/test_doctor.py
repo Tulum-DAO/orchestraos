@@ -617,3 +617,72 @@ def test_doctor_reports_db_checkpoint_default(tmp_path):
     st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     row = _by_name(D.run_doctor(st, _probes()))["db-checkpoint:service"]
     assert row.status == "OK" and "enabled" in row.detail
+
+
+# --- context:<view> (memory slice 1, step 5: the files Arturo reads behind ARTURO_CONTEXT_FILES=1) ---
+
+def _context_files(st, now):
+    from datetime import timedelta
+    from services.arturo import context_files as C
+    d = C.context_dir(st.data_dir)
+    d.mkdir(parents=True)
+
+    def hdr(as_of, stale_after):
+        return (f"as_of: {as_of.strftime('%Y-%m-%dT%H:%M:%SZ')}\nstale_after: {stale_after.strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+                "sources: c0110ed411d9b\n---\n")
+    (d / "operator.md").write_text(hdr(now - timedelta(minutes=5), now + timedelta(days=7)) + "A plain line. [c:c0110ed411d9b]\n")
+    (d / "now.md").write_text(hdr(now - timedelta(days=3), now - timedelta(days=2)) + "An old line. [c:c0110ed411d9b]\n")
+    (d / "projects.md").write_text("not a header\n")
+    (d / "decisions.md").write_text(hdr(now - timedelta(minutes=5), now + timedelta(days=1)))
+    # recent.md is missing
+    return C
+
+
+def _ctx_fence(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ARTURO_STATE", str(tmp_path / "data" / "state" / "arturo"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.delenv("ARTURO_CONTEXT_FILES", raising=False)
+    import os as _os
+    assert all(_os.environ[k].startswith(str(tmp_path)) for k in ("ORCHESTRA_DIR", "ARTURO_STATE", "HOME"))
+
+
+def test_context_view_rows_one_per_file_flag_off(tmp_path, monkeypatch):
+    _ctx_fence(tmp_path, monkeypatch)
+    from datetime import datetime, timezone
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    C = _context_files(st, datetime.now(timezone.utc))
+    assert D.CONTEXT_VIEWS == C.FILES
+    rows = _by_name(D.run_doctor(st, _probes()))
+    assert rows["context:operator"].status == D.OK and "present, fresh" in rows["context:operator"].detail
+    assert rows["context:now"].status == D.WARN and rows["context:now"].detail.startswith("stale since")
+    assert rows["context:projects"].status == D.WARN and "malformed" in rows["context:projects"].detail
+    assert rows["context:decisions"].status == D.INFO and rows["context:decisions"].detail.startswith("empty")
+    assert rows["context:recent"].status == D.INFO and "missing" in rows["context:recent"].detail   # flag off: nothing reads it
+    assert all(not rows[f"context:{n}"].required for n in C.FILES)
+    assert D.exit_code(list(rows.values())) == D.exit_code([c for c in rows.values() if not c.name.startswith("context:")])
+    for n in C.FILES:
+        assert D._share_name(f"context:{n}") == f"context:{n}"      # --share prints the row by name
+
+
+def test_context_view_missing_is_warn_when_the_flag_is_on(tmp_path, monkeypatch):
+    _ctx_fence(tmp_path, monkeypatch)
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    p = _probes()
+    p.env_get = lambda k: {"ARTURO_CONTEXT_FILES": "1"}.get(k)
+    rows = _by_name(D.run_doctor(st, p))
+    for n in D.CONTEXT_VIEWS:
+        assert rows[f"context:{n}"].status == D.WARN and "missing" in rows[f"context:{n}"].detail
+        assert rows[f"context:{n}"].remedy and not rows[f"context:{n}"].required
+
+
+def test_context_view_rows_absent_when_arturo_disabled(tmp_path, monkeypatch):
+    _ctx_fence(tmp_path, monkeypatch)
+    root = _repo(tmp_path)
+    (root / "orchestra.toml").write_text((root / "orchestra.toml").read_text() + '\n[arturo]\nenabled = false\n')
+    st = S.load_settings(repo_root=root)
+    assert not any(c.name.startswith("context:") for c in D.run_doctor(st, _probes()))

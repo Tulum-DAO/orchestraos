@@ -5438,6 +5438,23 @@ After spawning, the session name is auto-texted to Telegram.""")
     except Exception:
         pass
 
+    # Memory slice 1, step 5: the rendered context views gm keeps under state/context/ (operator, now,
+    # projects, decisions, recent), one block "WHAT I KNOW NOW (as of HH:MM)". Behind
+    # ARTURO_CONTEXT_FILES=1 and for fleet principals only (a guest's turn never sees them). Flag off,
+    # this prompt is byte-identical to before (services/arturo/test_context_files.py pins it).
+    # services/arturo/context_files.py reads the files (never a context.db), strips the [c:<id>]
+    # citations, announces a stale file with its as_of and skips a missing or malformed one; it never
+    # raises, and a turn never fails on it.
+    from services.arturo import context_files as _context_files
+    if _context_files.enabled() and _is_fleet(_TEAM_TURN.get()):
+        try:
+            _ctx = _context_files.block(ORCHESTRA_DIR, voice=calling_channel in _context_files.VOICE_CHANNELS,
+                                       zone=_context_files.operator_zone(ARTURO_STATE))
+            if _ctx:
+                parts.append("\n" + _ctx)
+        except Exception:  # noqa: BLE001 — the views are a nicety; a turn never fails on them
+            pass
+
     # Mode 1 (voice-surface-context spec §2): one honest line about what the operator is looking at in
     # the app RIGHT NOW, so Arturo can ground "what am I looking at". Arturo KNOWS but does not
     # narrate navigation (no proactive announcements). Omitted entirely if the file is missing/
