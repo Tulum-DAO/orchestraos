@@ -79,14 +79,50 @@ def opening(agent, load=None, directory=None, route=None):
     explicit ARTURO_NATIVE_CONTEXT_TOKENS is taken as meant)."""
     if not enabled():
         return ""
+    return _with_floor(lambda budget: _read(agent, budget, load, directory, route))
+
+
+def _with_floor(read):
     budget = budget_tokens()
-    text = _read(agent, budget, load, directory, route)
+    text = read(budget)
     if (not os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") and budget < FLOOR_BUDGET_TOKENS
             and describe(text)["turns"] < MIN_TURNS):
-        more = _read(agent, FLOOR_BUDGET_TOKENS, load, directory, route)
+        more = read(FLOOR_BUDGET_TOKENS)
         if describe(more)["turns"] > describe(text)["turns"]:
             text = more
     return text
+
+
+def opening_thread(thread_id, load=None):
+    """A call placed from the standalone Arturo page: that page's own thread (threads.db), never another chat. The
+    operator, 2026-11-25 (gm msg_e7402cbb): "one unified conversation between text and call that this call is part
+    of"; gm's chat stays reachable through the conversations tool."""
+    if not enabled():
+        return ""
+
+    def read(budget):
+        try:
+            return (load or thread_context.load_thread)(thread_id, calls_dir=calls_dir(), budget_tokens=budget)
+        except Exception as e:  # noqa: BLE001 — a call without its thread is still a call
+            log.warning(f"native: opening for thread {thread_id!r} failed: {e!r}")
+            return ""
+    return _with_floor(read)
+
+
+def opening_calls(load=None):
+    """A call that names neither a page thread nor an agent (an older dashboard): Arturo's own recent calls, no chat,
+    so no other seat's conversation is read out as if it were the operator's."""
+    if not enabled():
+        return ""
+
+    def read(budget):
+        try:
+            return (load or thread_context.load)(chat_agent="arturo", call_owner=None, calls_dir=calls_dir(),
+                                                 fetch=lambda a, n: [], budget_tokens=budget)
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"native: opening from Arturo's calls failed: {e!r}")
+            return ""
+    return _with_floor(read)
 
 
 def _read(agent, budget, load=None, directory=None, route=None):
@@ -154,6 +190,40 @@ class ChatFeed:
         self.cursor = max(l.at for l in lines)
         notes = []
         for ln in sorted(lines, key=lambda l: l.at):
+            notes.extend(thread_context.live_notes(ln, self.tz, self.tz_label))
+        notes = notes[: self.left]
+        self.left -= len(notes)
+        return notes
+
+
+class ThreadFeed:
+    """New TYPED operator turns of the page's own thread (threads.db) since the call started, as stamped notes. The
+    call's own spoken lines and Arturo's replies are not news to the call."""
+
+    def __init__(self, thread_id, db=None, since=None, tz=None, tz_label=None, operator=None, max_notes=FEED_MAX_NOTES):
+        self.thread_id = thread_id
+        self.db = db or thread_context.threads_db_path()
+        self.cursor = time.time() if since is None else since
+        if tz is None or tz_label is None:
+            tz, tz_label = thread_context.shaw_tz()
+        self.tz, self.tz_label = tz, tz_label
+        self.operator = operator or thread_context.operator_name()
+        self.left = max_notes
+
+    def poll(self):
+        if self.left <= 0:
+            return []
+        try:
+            lines = thread_context.thread_lines(self.thread_id, self.db, operator_label=self.operator)
+        except Exception as e:  # noqa: BLE001 — next poll tries again
+            log.info(f"native: thread feed for {self.thread_id!r} unreadable: {e!r}")
+            return []
+        new = [l for l in lines if l.channel == "chat" and l.who == self.operator and l.at > self.cursor]
+        if not new:
+            return []
+        self.cursor = max(l.at for l in new)
+        notes = []
+        for ln in sorted(new, key=lambda l: l.at):
             notes.extend(thread_context.live_notes(ln, self.tz, self.tz_label))
         notes = notes[: self.left]
         self.left -= len(notes)

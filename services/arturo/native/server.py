@@ -303,6 +303,8 @@ class NativeCall:
         # The thread above this call and the chat that arrives during it (call_context; Shaw 2026-11-25).
         self.chat_agent = call_context.default_chat_agent()
         self.opening_tokens = 0
+        self.chat_named = False     # the start frame named an agent: that agent's chat opens the call
+        self.page_thread = None     # the start frame named the standalone Arturo page's thread: that thread does
         self.opening_info = call_context.describe("")
         self.chat_feed = None
         self._feed_future = None
@@ -442,6 +444,13 @@ class NativeCall:
                         agent = d.get("agent")
                         if isinstance(agent, str) and _AGENT_ID_RE.fullmatch(agent):
                             self.chat_agent = agent          # the chat of the page the call was placed from
+                            self.chat_named = True
+                        thread = d.get("thread")
+                        if thread is not None and not self.chat_named:
+                            if isinstance(thread, str) and call_context.thread_context.THREAD_ID_RE.match(thread):
+                                self.page_thread = thread    # the standalone Arturo page's own thread
+                            else:
+                                log.warning(f"native: thread id refused: {str(thread)[:80]!r}")
                         if d.get("mode") == "offline":
                             self.mode = "offline"
                             self._use(self.server.offline_tools, self.server.offline_tools)
@@ -500,8 +509,16 @@ class NativeCall:
 
     async def _open(self):
         threaded = call_context.enabled()
-        opening_fut = (asyncio.get_running_loop().run_in_executor(
-            self.server.connect_pool, self.server.thread_loader, self.chat_agent) if threaded else None)
+        # what opens the call (gm msg_e7402cbb): the page's own thread, else the named agent's chat, else Arturo's
+        # own calls with no chat at all (never gm's chat read out as if it were the operator's)
+        if self.page_thread:
+            load, arg = self.server.page_thread_loader, (self.page_thread,)
+        elif self.chat_named:
+            load, arg = self.server.thread_loader, (self.chat_agent,)
+        else:
+            load, arg = self.server.calls_loader, ()
+        opening_fut = (asyncio.get_running_loop().run_in_executor(self.server.connect_pool, load, *arg)
+                       if threaded else None)
         if self.mode == "offline":
             from .simulator import OfflineProvider
             self.transport = LocalTransport(self)
@@ -532,14 +549,15 @@ class NativeCall:
         self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding), context=opening))
         if threaded:
             try:
-                self.chat_feed = self.server.chat_feed_factory(self.chat_agent)
+                self.chat_feed = (self.server.page_feed_factory(self.page_thread) if self.page_thread
+                                  else self.server.chat_feed_factory(self.chat_agent) if self.chat_named else None)
             except Exception as e:  # noqa: BLE001
                 log.warning(f"native {self.binding.conversation_id}: chat feed off: {e!r}")
         if self.provider is not None:
             asyncio.ensure_future(self.provider.start())
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
-                 f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent} "
+                 f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent if self.chat_named else '-'} thread={self.page_thread or '-'} "
                  f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
@@ -862,7 +880,8 @@ class NativeCall:
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
                    cadence=self.cadence_report(),
-                   thread={"chat": self.chat_agent, "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent,
+                   thread={"chat": self.chat_agent if self.chat_named else None, "thread_id": self.page_thread,
+                           "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent,
                            **self.opening_info})
         try:
             self.server.write_report(self.binding.conversation_id, rep)
@@ -906,7 +925,10 @@ class NativeServer:
             usage_store = voice_usage.UsageStore()
         self.usage_store = usage_store
         self._verify = verify
-        self.thread_loader = call_context.opening                   # (agent) -> the thread above a call
+        self.thread_loader = call_context.opening                   # (agent) -> that agent's chat + Arturo's calls
+        self.page_thread_loader = call_context.opening_thread       # (web_ thread id) -> the Arturo page's thread
+        self.calls_loader = call_context.opening_calls              # () -> Arturo's own calls, no chat
+        self.page_feed_factory = call_context.ThreadFeed            # (web_ thread id) -> .poll() -> [stamped notes]
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
 
     def _spoken(self, conversation_id):

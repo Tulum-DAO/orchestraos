@@ -43,6 +43,7 @@ def _go(tmp_path, monkeypatch, start, after_start, loader=None, flag=None):
         s = _server(tmp_path, monkeypatch)
         s.thread_loader = loader or (lambda agent: asked.append(agent) or f"THREAD for {agent}: last call said hi")
         s.chat_feed_factory = lambda agent: feeds.append(_Feed(agent)) or feeds[-1]
+        s.calls_loader = lambda: "ARTURO CALLS"
         c = await _client(s)
         try:
             ws, p = await _start(c, start)
@@ -61,7 +62,7 @@ async def _started(ws, p):
 
 
 def test_the_thread_opens_the_call_in_both_prompts(tmp_path, monkeypatch):
-    p, _, asked = _go(tmp_path, monkeypatch, {"type": "start"}, _started)
+    p, _, asked = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started)
     start = p.sent[0]
     assert start["type"] == "session.start"
     assert asked == ["gm"]                                          # the client page's chat is gm's (10-20 ruling)
@@ -76,7 +77,7 @@ def test_the_page_names_whose_chat_it_is(tmp_path, monkeypatch):
     _, feeds, asked = _go(tmp_path, monkeypatch, {"type": "start", "agent": "pm-demo"}, _started)
     assert asked == ["pm-demo"] and feeds[0].agent == "pm-demo"
     _, _, asked = _go(tmp_path, monkeypatch, {"type": "start", "agent": "../etc"}, _started)
-    assert asked == ["gm"]                                          # a malformed id is ignored
+    assert asked == []              # a malformed id is ignored: no chat at all, Arturo's own calls (gm msg_e7402cbb)
 
 
 def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_path, monkeypatch):
@@ -84,7 +85,7 @@ def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_p
         await asyncio.sleep(0.4)                                    # not started yet: nothing appended
         assert not [f for f in p.sent if f["type"].endswith(".append") and "dream fix" in f.get("content", "")]
         await _started(ws, p)
-    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, before_and_after)
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, before_and_after)
     notes = [f for f in p.sent if f["type"] == "session.thinking.append" and "dream fix" in f["content"]]   # the default kind
     assert len(notes) == 1 and notes[0]["content"].startswith("[2026-11-25T17:40:00Z 12:40 Tulum] chat gm")
     rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
@@ -94,7 +95,7 @@ def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_p
 def test_a_slow_or_broken_thread_never_holds_the_call(tmp_path, monkeypatch):
     def boom(agent):
         raise OSError("api down")
-    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=boom)
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=boom)
     assert p.sent[0]["type"] == "session.start"
     assert "THREAD" not in p.sent[0]["session"]["instructions"]
 
@@ -307,9 +308,79 @@ def test_an_opening_short_of_25_turns_is_asked_again_at_the_floor(monkeypatch):
 
 
 def test_the_call_report_says_what_the_opening_carried(tmp_path, monkeypatch):
-    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: _opening(7, n_summ=1))
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=lambda agent: _opening(7, n_summ=1))
     rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
     th = rep["thread"]
     assert th["turns"] == 7 and th["summarized"] == 1 and th["chat_lines"] == 3 and th["call_lines"] == 4
     assert th["first"] == "2026-11-25T17:00:00Z" and th["last"] == "2026-11-25T17:06:00Z"
     assert "vc_old0" in th["calls"] and th["opening_tokens"] > 0
+
+
+# --- a call from the standalone Arturo page opens with that page's own thread (gm msg_e7402cbb) ----------------------
+
+def _go_page(tmp_path, monkeypatch, start):
+    seen = {}
+
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        s.thread_loader = lambda agent: seen.setdefault("agent", []).append(agent) or "AGENT CHAT"
+        s.page_thread_loader = lambda tid: seen.setdefault("thread", []).append(tid) or _opening(3)
+        s.calls_loader = lambda: seen.setdefault("calls", []).append(1) or "ARTURO CALLS"
+        s.chat_feed_factory = lambda agent: seen.setdefault("agent_feed", []).append(agent) or _Feed(agent)
+        s.page_feed_factory = lambda tid: seen.setdefault("thread_feed", []).append(tid) or _Feed(tid)
+        c = await _client(s)
+        try:
+            ws, p = await _start(c, start)
+            await _started(ws, p)
+            await ws.send_str(json.dumps({"type": "disconnect"}))
+            await ws.close()
+        finally:
+            await c.close()
+        return p
+    p = _run(go())
+    rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
+    return p, seen, rep
+
+
+def test_a_standalone_page_call_opens_with_its_own_thread_and_the_feed_follows_it(tmp_path, monkeypatch):
+    p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start", "thread": "web_abc123"})
+    assert seen.get("thread") == ["web_abc123"] and seen.get("thread_feed") == ["web_abc123"]
+    assert "agent" not in seen and "agent_feed" not in seen and "calls" not in seen      # never gm's chat
+    assert rep["thread"]["thread_id"] == "web_abc123" and rep["thread"]["chat"] is None
+    assert rep["thread"]["turns"] == 3
+
+
+def test_a_call_naming_an_agent_opens_with_that_agents_chat(tmp_path, monkeypatch):
+    p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start", "agent": "dev-x"})
+    assert seen.get("agent") == ["dev-x"] and seen.get("agent_feed") == ["dev-x"] and "thread" not in seen
+    assert rep["thread"]["chat"] == "dev-x" and rep["thread"]["thread_id"] is None
+
+
+def test_a_call_naming_neither_opens_with_arturos_own_calls_and_no_chat_feed(tmp_path, monkeypatch):
+    p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start"})
+    assert seen.get("calls") == [1] and "agent" not in seen and "thread" not in seen
+    assert "agent_feed" not in seen and "thread_feed" not in seen
+    assert rep["thread"]["chat"] is None and rep["thread"]["thread_id"] is None
+
+
+def test_a_bad_thread_id_is_refused_and_logged_never_read(tmp_path, monkeypatch, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start", "thread": "../../etc/passwd"})
+    assert "thread" not in seen and seen.get("calls") == [1]
+    assert any("thread id refused" in r.getMessage() for r in caplog.records)
+
+
+def test_the_page_thread_feed_sends_new_typed_lines_only(tmp_path):
+    from services.arturo import thread_store
+    db = tmp_path / "threads.db"
+    st = thread_store.ThreadStore(db)
+    st.append_message("web_abc123", "user", "before the call", ts=1764090000)
+    feed = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, tz="UTC", tz_label="UTC", operator="Ada")
+    assert feed.poll() == []
+    st.append_message("web_abc123", "user", "typed during the call", ts=1764090010)
+    st.append_message("web_abc123", "user", "said on the call", mode="voice", ts=1764090011)
+    st.append_message("web_abc123", "assistant", "Arturo typed reply", ts=1764090012)
+    notes = feed.poll()
+    assert len(notes) == 1 and notes[0].startswith("[2025-11-25T17:00:10Z 17:00 UTC] chat Ada (typed, during this call)")
+    assert feed.poll() == []                                         # the cursor moved
