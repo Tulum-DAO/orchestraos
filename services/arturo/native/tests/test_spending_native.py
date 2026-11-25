@@ -15,7 +15,7 @@ from services.arturo.native.tool_ledger import ToolLedger
 from services.arturo.native.tools import ArturoTools
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "spending_tools.json").read_text())
-LIVE_TOKEN = "/home/shaw/apps/spending-tracker/data/agent-token"
+LIVE_TOKEN = os.path.expanduser("~/apps/spending-tracker/data/agent-token")   # the real file: a test must never read it
 
 
 # ---- a stub spending tracker on an ephemeral local port (never the live :8760) -------------------------------------

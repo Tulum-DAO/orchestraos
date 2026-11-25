@@ -56,7 +56,7 @@ const MSGDB = join(root, 'tasks.db');
   db.close();
 }
 process.env.MSG_DB_PATH = MSGDB;
-writeFileSync(join(orch, 'state', 'shaw-location.json'), JSON.stringify({ tz: 'America/Cancun', label: 'Tulum' }));
+writeFileSync(join(orch, 'state', 'shaw-location.json'), JSON.stringify({ tz: 'America/Cancun', label: 'Local' }));
 mkdirSync(join(orch, 'state', 'arturo'), { recursive: true });
 writeFileSync(join(orch, 'state', 'arturo', 'operator.json'), JSON.stringify({ facts: { name: { value: 'Shaw' } } }));
 
@@ -104,7 +104,7 @@ test('the chat and the agent\'s earlier calls, stamped, oldest first; the starti
     assert.match(r.headers.get('content-type') || '', /^text\/plain/);
     assert.equal(r.headers.get('cache-control'), 'no-store');
     const t = await r.text();
-    assert.ok(t.includes('[2026-11-25T17:00:00Z 12:00 Tulum] chat Shaw: is the dream fix in?'), t);
+    assert.ok(t.includes('[2026-11-25T17:00:00Z 12:00 Local] chat Shaw: is the dream fix in?'), t);
     assert.ok(t.includes(`call vc_prev00001 ${SEAT}: noted`));
     assert.ok(t.indexOf('Yes, merged') < t.indexOf('remember the roadmap call'));
     assert.ok(!t.includes('the call now starting') && !t.includes('an Arturo call'));
@@ -117,7 +117,7 @@ test('the chat and the agent\'s earlier calls, stamped, oldest first; the starti
 test('a held phone message is the operator\'s chat too', async () => {
   await withApp(async (base) => {
     const t = await (await fetch(`${base}/${SEAT}/call-context`)).text();
-    assert.match(t, /^\[2026-11-25T17:05:00Z 12:05 Tulum\] chat Shaw: held on the phone: did the fix land\?$/m);
+    assert.match(t, /^\[2026-11-25T17:05:00Z 12:05 Local\] chat Shaw: held on the phone: did the fix land\?$/m);
   });
 });
 
