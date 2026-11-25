@@ -11552,13 +11552,20 @@ DISMISS_ON_THE_PANE = "dismiss it on the pane"
 
 
 def _on_screen_menu(row):
-    """True for a menu bridge row whose menu is STILL on the agent's screen: origin 'menu_bridge' (the bridge's own
-    rows; a headless seat's card and an agent's written decision are not) and the pane's current menu matches the row's
-    question (_ledger_menu_matches, version-tolerant). A bridge row whose pane has moved on is not on screen: dismissing
-    it is right, and the same as what reconcile_orphans would do."""
+    """'on' | 'off' | 'unreadable' for a menu bridge row: whether its menu is STILL on the agent's screen. Only the
+    bridge's own rows (origin 'menu_bridge') are looked at; a headless seat's card and an agent's written decision are
+    always 'off'. 'on' = the pane's current menu matches the row's question (_ledger_menu_matches, version-tolerant);
+    'off' = the pane shows nothing or another menu (dismissing is right, and what reconcile_orphans would do);
+    'unreadable' = the pane could not be read (a tmux capture that failed or timed out): NOT evidence the menu is gone,
+    the same stance reconcile_orphans takes, so the caller refuses rather than tells the agent to stop waiting.
+    Reads the pane (ps + tmux capture): call it off the event loop."""
     if row.get("origin") != "menu_bridge":
-        return False
-    return _ledger_menu_matches(row.get("session") or row.get("from_agent"), row.get("question"))
+        return "off"
+    try:
+        return "on" if _ledger_menu_matches(row.get("session") or row.get("from_agent"), row.get("question")) else "off"
+    except Exception as e:  # noqa: BLE001 — an unreadable pane is not an empty one
+        print(f"[watch_gateway] discard: could not read the pane for {row.get('id')}: {e}", file=sys.stderr)
+        return "unreadable"
 
 
 def discard_fields(data):
@@ -11614,13 +11621,22 @@ async def handle_approval_discard(request):
     row = store.get(rid)
     if not row:
         return _json({"ok": False, "error": "not found"}, status=404)
-    if row.get("status") == "pending" and _on_screen_menu(row):
+    if row.get("status") == "pending" and row.get("origin") == "menu_bridge":
+        import asyncio
+        screen = await asyncio.get_event_loop().run_in_executor(None, _on_screen_menu, row)   # ps + tmux: off the loop
         agent = row.get("from_agent") or "the agent"
-        return _json({"ok": False, "id": rid, "agent": row.get("from_agent"),
-                      "error": f"This menu is on {agent}'s screen: {DISMISS_ON_THE_PANE} (Escape), which closes this card too.",
-                      "why": "the pane still shows this menu; a dismiss here would tell the agent not to wait while "
-                             "its screen still waits on it. Escape through /agent-key closes both together."},
-                     status=423)
+        if screen == "on":
+            return _json({"ok": False, "id": rid, "agent": row.get("from_agent"),
+                          "error": f"This menu is on {agent}'s screen: {DISMISS_ON_THE_PANE} (Escape), which closes this card too.",
+                          "why": "the pane still shows this menu; a dismiss here would tell the agent not to wait while "
+                                 "its screen still waits on it. Escape through /agent-key closes both together."},
+                         status=423)
+        if screen == "unreadable":
+            return _json({"ok": False, "id": rid, "agent": row.get("from_agent"),
+                          "error": f"Could not check {agent}'s screen for this menu: try again in a moment.",
+                          "why": "the pane could not be read, which is not proof the menu is gone; a dismiss would tell "
+                                 "the agent not to wait while its screen may still wait on it."},
+                         status=423)
     surface, by, device = discard_provenance(request, fields["surface"])
     import approval_schema as _AS
     now = _AS._now()                      # one clock: the summary's line and the mail's are the same string

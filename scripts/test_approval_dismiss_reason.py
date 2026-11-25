@@ -237,10 +237,17 @@ def test_a_reason_alone_is_enough_and_is_capped(box):
 
 
 def test_a_menu_still_on_the_agents_screen_is_refused_with_423_and_stays_pending(box, monkeypatch):
+    import threading
     import scripts.watch_gateway as G
     rid = _bridge_menu(box.ledger)
-    monkeypatch.setattr(G, "_current_menu", lambda session: {"question": "Which build?", "options": []} if session == "codex-gm" else None)
+    threads = []
+
+    def live(session):
+        threads.append(threading.current_thread() is threading.main_thread())
+        return {"question": "Which build?", "options": []} if session == "codex-gm" else None
+    monkeypatch.setattr(G, "_current_menu", live)
     st, d = box.call("POST", f"/approvals/{rid}/discard", body={"surface": "web", "reason": "old"})
+    assert threads and not any(threads), "the pane read (ps + tmux capture) runs off the event loop"
     assert st == 423 and d["ok"] is False
     assert d["error"] == "This menu is on codex-gm's screen: dismiss it on the pane (Escape), which closes this card too."
     assert d["agent"] == "codex-gm" and "Escape" in d["why"] and d["id"] == rid
@@ -260,16 +267,33 @@ def test_a_bridge_row_whose_pane_moved_on_is_dismissed(box, monkeypatch):
     assert box.call("POST", f"/approvals/{rid2}/discard")[1]["applied"] is True
 
 
-def test_a_headless_seats_card_is_not_mistaken_for_an_on_screen_menu(box, monkeypatch):
+def test_a_headless_seats_card_is_not_mistaken_for_an_on_screen_menu_and_gets_its_own_deny(box, monkeypatch):
     import scripts.watch_gateway as G
+    import headless_cards
     monkeypatch.setattr(G, "_current_menu", lambda session: {"question": "Which build?", "options": []})
-    monkeypatch.setattr(approval_resume, "_is_headless_card", lambda row: False)       # the notice path is not the point here
+    delivered = []
+    monkeypatch.setattr(headless_cards, "deliver_dismissed", lambda row: delivered.append(row["id"]) or True)
     rid = box.ledger.create(from_agent="codex-gm", question="Which build?", worker_kind="pane", kind="menu",
                             op_key="menu:codex-gm:hl-0123456789abcdef", origin="headless",
-                            menu={"options": [{"n": "1", "label": "A"}]})
-    assert G._on_screen_menu(box.ledger.get(rid)) is False
+                            menu={"options": [{"n": "1", "label": "A"}],
+                                  "bridge": {"kind": "headless", "seat": "codex-gm", "session": "codex-gm", "request_id": "req-1", "tool": "AskUserQuestion"}})
+    assert G._on_screen_menu(box.ledger.get(rid)) == "off"
     st, d = box.call("POST", f"/approvals/{rid}/discard", body={"reason": "x"})
     assert (st, d["applied"]) == (200, True)
+    assert delivered == [rid] and not box.sent          # a headless card is answered over its held request, no inbox notice
+
+
+def test_an_unreadable_pane_refuses_the_dismiss_instead_of_calling_the_menu_gone(box, monkeypatch):
+    import scripts.watch_gateway as G
+    rid = _bridge_menu(box.ledger)
+
+    def boom(session):
+        raise RuntimeError("tmux capture-pane timed out")
+    monkeypatch.setattr(G, "_current_menu", boom)
+    assert G._on_screen_menu(box.ledger.get(rid)) == "unreadable"
+    st, d = box.call("POST", f"/approvals/{rid}/discard", body={"reason": "old"})
+    assert st == 423 and d["ok"] is False and "Could not check codex-gm's screen" in d["error"] and "not proof" in d["why"]
+    assert box.ledger.get(rid)["status"] == "pending" and not box.sent
 
 
 def test_an_agents_own_menu_card_is_dismissed_like_any_other(box):
@@ -285,11 +309,11 @@ def test_on_screen_menu_is_origin_and_the_live_pane_together(monkeypatch):
     live = {"codex-gm": {"question": "Which build?  (1) A (2) B", "options": []}}
     monkeypatch.setattr(G, "_current_menu", lambda session: live.get(session))
     bridge = {"origin": "menu_bridge", "from_agent": "codex-gm", "question": "Which build?", "op_key": "menu:codex-gm:abc"}
-    assert G._on_screen_menu(bridge) is True                                           # containment, version-tolerant
-    assert G._on_screen_menu({**bridge, "from_agent": "pm-demo"}) is False              # another pane
-    assert G._on_screen_menu({**bridge, "origin": None}) is False                       # an agent's own menu: never
-    assert G._on_screen_menu({**bridge, "origin": "headless"}) is False
-    assert G._on_screen_menu({**bridge, "question": "Deploy now?"}) is False            # the pane shows a different menu
+    assert G._on_screen_menu(bridge) == "on"                                           # containment, version-tolerant
+    assert G._on_screen_menu({**bridge, "from_agent": "pm-demo"}) == "off"              # another pane
+    assert G._on_screen_menu({**bridge, "origin": None}) == "off"                       # an agent's own menu: never read
+    assert G._on_screen_menu({**bridge, "origin": "headless"}) == "off"
+    assert G._on_screen_menu({**bridge, "question": "Deploy now?"}) == "off"            # the pane shows a different menu
 
 
 def test_a_second_dismiss_is_idempotent_and_an_unknown_id_is_404(box):
