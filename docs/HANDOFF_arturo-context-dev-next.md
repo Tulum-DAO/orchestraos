@@ -57,3 +57,8 @@
 - #637 (builder privacy fix-forward) fixture review: OK, posted. #635 waits on #637 for CI.
 - gm hasn't yet confirmed the mapping (msg_0dfcca5e) or answered the phrase-merging question (msg_04543735).
 - Session ended on a usage limit at this point.
+
+## gm rulings received at the usage limit (NOT acted on yet)
+- msg_5bfe3426: (1) TURN = EXCHANGE: merge consecutive same-speaker phrases within one call into one stamped turn (stamp = first phrase), both twins + the fixture, its own small PR after #637 lands; report the span 25 merged turns cover on the real thread. (2) GO: respawn arturo-native:0.0 at the next quiet minute on the CURRENT pinned checkout with ARTURO_NATIVE_CONTEXT_TOKENS=2500 (rollback = the same command without the var); report the pid, healthz, and the first real call's START turns=. (3) Answer: the thread-source amendment is CODE (PR #644), not a flag. Until it's live, a standalone-page call reads gm chat + Arturo calls (current pinned build).
+- msg_ff784fd1: mapping 1-6 CONFIRMED; turn=exchange applies to the page thread too; mapping 4 is the acceptable interim.
+- msg_1d4fa8e0 (avatar-dev): the dashboard half is r35, after r34 (tonight); it mails the bundle hash + md5s when r35 is live, and the proving call pairs with that.
