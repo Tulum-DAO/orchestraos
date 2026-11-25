@@ -1,0 +1,20 @@
+{
+  "project_dir": "/home/shaw/wt/postcall-dev/program",
+  "last_updated": "2026-11-25T17:32:13Z",
+  "active_decisions": {
+    "DEC-1795627933880541": {
+      "id": "DEC-1795627933880541",
+      "topic": "Post-call commitments design (phase 1)",
+      "proposal_file": "docs/DESIGN_post-call-commitments.md",
+      "required_models": [
+        "postcall-dev-claude",
+        "codex"
+      ],
+      "status": "PROPOSED",
+      "created_at": "2026-11-25T17:32:13Z",
+      "created_by": "postcall-dev",
+      "votes": {}
+    }
+  },
+  "historical_decisions": []
+}
