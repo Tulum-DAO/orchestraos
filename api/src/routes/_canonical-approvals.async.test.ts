@@ -12,11 +12,11 @@
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, appendFileSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, appendFileSync, renameSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 const dir = mkdtempSync(join(tmpdir(), 'canonical-async-'));
 const counter = join(dir, 'calls');
@@ -108,8 +108,9 @@ test('both list routes keep the loop running and share one CLI run while tasks.d
 test('a write to tasks.db by any process drops the kept feed at once (resolve-everywhere)', async () => {
   const base = `http://127.0.0.1:${(server!.address() as { port: number }).port}`;
   const mod = await import('./_canonical-approvals.js');
-  await mod.readCanonicalPendingCached();          // kept, fresh
+  mod.invalidateCanonicalPendingCache();
   const t0 = Date.now();
+  await mod.readCanonicalPendingCached();          // kept, fetched now
   const before = calls();
   appendFileSync(db, 'x');                         // a writer that touches the main file
   assert.equal((await fetch(`${base}/api/approvals/unified?type=agent`)).status, 200);
@@ -128,11 +129,23 @@ test('a WAL-only commit on a real sqlite database drops the kept feed too', asyn
   const before = calls();
   await mod.readCanonicalPendingCached();
   assert.equal(calls() - before, 0, 'unchanged db: kept');
-  // keep the connection open so the WAL is not checkpointed into the main file on close: only -wal changes
-  py(`import sqlite3,time; c=sqlite3.connect(${JSON.stringify(db)}); c.execute("insert into t values(1)"); c.commit(); time.sleep(0.05)`);
-  await mod.readCanonicalPendingCached();
-  assert.equal(calls() - before, 1, 'a WAL commit changed the stamp and forced a fresh read');
-  assert.ok(Date.now() - t0 < mod.CANONICAL_TTL_MS, 'the TTL had not expired: the stamp did it');
+  // the writer stays alive across the read, so its commit is NOT checkpointed into the main file: only
+  // -wal (and -shm) change; the main file's mtime and size are asserted unchanged
+  const main0 = statSync(db);
+  const writer = spawn('python3', ['-c',
+    `import sqlite3,sys,time; c=sqlite3.connect(${JSON.stringify(db)}); c.execute("insert into t values(1)"); c.commit(); ` +
+    `print("committed", flush=True); time.sleep(5)`]);
+  await new Promise<void>((resolve) => writer.stdout.once('data', () => resolve()));
+  try {
+    const main1 = statSync(db);
+    assert.equal(`${main1.mtimeMs}:${main1.size}`, `${main0.mtimeMs}:${main0.size}`, 'the main file did not change: the commit lives in -wal');
+    assert.ok(statSync(`${db}-wal`).size > 0, 'the -wal file carries the commit');
+    await mod.readCanonicalPendingCached();
+    assert.equal(calls() - before, 1, 'a WAL-only commit changed the stamp and forced a fresh read');
+    assert.ok(Date.now() - t0 < mod.CANONICAL_TTL_MS, 'the TTL had not expired: the stamp did it');
+  } finally {
+    writer.kill();
+  }
 });
 
 test('a request arriving after a write does not join a read that started before it', async () => {

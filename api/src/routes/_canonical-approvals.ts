@@ -148,13 +148,17 @@ export function invalidateCanonicalPendingCache(): void {
 }
 
 /**
- * The pending feed for the list routes: one `approval.py pending --json` at a time, shared by the
- * concurrent requests that saw the same tasks.db stamp, and kept while tasks.db (and its WAL) is
- * unchanged, for at most CANONICAL_TTL_MS. tasks.db has many writers across a fleet, so on a busy host
- * the saving is mostly the concurrent requests; the point is that the event loop never blocks. A write
- * by ANY process changes the stamp, so a gateway answer drops from the web feed on the next read (the
- * resolve-everywhere contract, api/test/unified-approvals-canonical.test.mjs c2). A failed read is never
- * kept: it returns the last good rows while they are younger than CANONICAL_FALLBACK_MAX_AGE_MS, else [].
+ * The pending feed for the list routes: one `approval.py pending --json` per tasks.db stamp, shared by
+ * the concurrent requests that saw that stamp (a stamp change or an answer starts another run; runs are
+ * not capped while tasks.db keeps changing), and kept while tasks.db (and its WAL) is unchanged, for at
+ * most CANONICAL_TTL_MS. tasks.db has many writers across a fleet, so on a busy host the saving is
+ * mostly the concurrent requests; the point is that the event loop never blocks. A write by ANY process
+ * changes the stamp, so a gateway answer drops from the web feed on the next read (the resolve-everywhere
+ * contract, api/test/unified-approvals-canonical.test.mjs c2). A failed read is never kept: it returns
+ * the last good rows while they are younger than CANONICAL_FALLBACK_MAX_AGE_MS, else []. Those rows may
+ * predate an answer (they are marked stale, not dropped), so while the CLI is failing a just-answered
+ * card can show as pending for up to that long; before this change the list went empty instead. A read
+ * never overwrites rows fetched by a read that started after it.
  */
 export function readCanonicalPendingCached(): Promise<CanonicalRow[]> {
   const stamp = tasksDbStamp();
@@ -164,10 +168,11 @@ export function readCanonicalPendingCached(): Promise<CanonicalRow[]> {
   }
   if (canonicalInflight && canonicalInflight.stamp === stamp) return canonicalInflight.promise;
   const mine: { stamp: string; promise: Promise<CanonicalRow[]> } = { stamp, promise: undefined as unknown as Promise<CanonicalRow[]> };
+  const started = now;
   mine.promise = (async () => {
     const rows = await readCanonicalPendingAsync();
     if (rows) {
-      canonicalCache = { at: Date.now(), stamp, rows, stale: false };
+      if (!canonicalCache || canonicalCache.at <= started) canonicalCache = { at: Date.now(), stamp, rows, stale: false };
       return rows;
     }
     const fallbackFresh = canonicalCache && Date.now() - canonicalCache.at < CANONICAL_FALLBACK_MAX_AGE_MS;
