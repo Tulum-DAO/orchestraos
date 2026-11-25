@@ -26,7 +26,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 log = logging.getLogger("arturo-facts-recall")
@@ -121,6 +121,63 @@ def extract_keywords(text):
         if len(seen) >= MAX_KEYWORDS:
             break
     return seen
+
+
+# Time words make a question about WHEN, not a topic (2026-11-25: "what happened in the past day" matched every row
+# with "day" in it and surfaced last week). They become a window and are dropped from the search terms.
+_TIME_WORDS = set("yesterday tonight overnight night last past day days hours hour week weeks morning recent "
+                  "recently since lately earlier happened happening new".split())
+_N_UNITS = re.compile(r"\b(?:past|last)\s+(\d{1,3})\s+(hours?|days?|weeks?)\b")
+_PHRASES = (("last night", 18), ("overnight", 18), ("yesterday", 36), ("past day", 24), ("last day", 24),
+            ("this morning", 12), ("this week", 168), ("past week", 168), ("last week", 168),
+            ("last few days", 72), ("past few days", 72))
+
+
+def time_window_hours(text):
+    """Hours back the question reaches, or None when it names no time."""
+    low = " ".join((text or "").lower().replace("'s", "").split())
+    m = _N_UNITS.search(low)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        return n * (1 if unit.startswith("hour") else 24 if unit.startswith("day") else 168)
+    for phrase, hours in _PHRASES:
+        if phrase in low:
+            return hours
+    return None
+
+
+def topic_keywords(text):
+    """extract_keywords without the time words (and the numbers they come with)."""
+    return [w for w in extract_keywords(text) if w not in _TIME_WORDS and not w.isdigit()]
+
+
+def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
+    """Facts from the last `hours`, newest first, noise and superseded rows left out; with keywords, the rows that
+    match one come first (still newest first within each group). Read-only; no store, or an unreadable one: []."""
+    dbpath = dbpath or default_db_path()
+    if not os.path.exists(dbpath):
+        return []
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=float(hours))).strftime("%Y-%m-%dT%H:%M:%S")
+    noise_clause = " AND ".join(["lower(ltrim(text)) NOT LIKE ?"] * len(_NOISE_PREFIXES))
+    try:
+        con = _connect_ro(dbpath)
+        try:
+            rows = con.execute(
+                "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+                "WHERE ts >= ? AND COALESCE(state,'active') != 'superseded'"
+                + ((" AND " + noise_clause) if noise_clause else "") + " ORDER BY ts DESC LIMIT ?",
+                [cutoff] + [p + "%" for p in _NOISE_PREFIXES] + [max(k * 8, 100)]).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        log.error(f"facts-recall: recent_facts store error (non-fatal): {e}")
+        return []
+    facts = [f for f in _row_dicts(rows) if not _is_noise(f["text"])]
+    if keywords:
+        hit = [f for f in facts if any(kw in f["text"].lower() for kw in keywords)]
+        facts = hit + [f for f in facts if f not in hit]
+    return facts[:k]
 
 
 def _is_noise(txt):

@@ -1,0 +1,767 @@
+{
+ "_doc": "call-context: the Python loader (services/arturo/thread_context.py) and the API builder (api/src/lib/callContext.ts) produce these exact bytes. Regenerate only from the Python reference.",
+ "cases": [
+  {
+   "name": "chat and calls interleave, stamped in Tulum",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": "vc_now",
+   "budget": 2000,
+   "tz": "America/Cancun",
+   "tz_label": "Tulum",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "typed before the call",
+     "ts": "2025-11-25T17:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "gm answers",
+     "ts": "2025-11-25T17:00:05Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "[mail]",
+     "ts": "2025-11-25T17:00:06Z",
+     "audience": "agent",
+     "machine": "relay"
+    },
+    {
+     "kind": "tool_use",
+     "role": "assistant",
+     "ts": "2025-11-25T17:00:07Z",
+     "audience": "agent"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "typed after",
+     "ts": "2025-11-25T17:06:40Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "held on the phone, not yet delivered",
+     "ts": "2025-11-25T17:06:50.279013+00:00",
+     "queued": true
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "a queued non-operator row is not the chat",
+     "ts": "2025-11-25T17:06:51Z",
+     "queued": true
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_prev.json",
+     "doc": {
+      "call_id": "vc_prev",
+      "started_at": 1764090100,
+      "status": "live",
+      "turns": [
+       {
+        "role": "user",
+        "text": "spoken  line\n one",
+        "ts": 1764090100
+       },
+       {
+        "role": "assistant",
+        "text": "spoken reply",
+        "ts": 1764090101
+       },
+       {
+        "role": "tool",
+        "text": "tool row",
+        "ts": 1764090102
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_now.json",
+     "doc": {
+      "call_id": "vc_now",
+      "started_at": 1764090500,
+      "status": "live",
+      "turns": [
+       {
+        "role": "user",
+        "text": "current call",
+        "ts": 1764090500
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_gm.json",
+     "doc": {
+      "call_id": "vc_gm",
+      "agent": "gm",
+      "started_at": 1764090200,
+      "turns": [
+       {
+        "role": "user",
+        "text": "a call with gm, not Arturo",
+        "ts": 1764090200
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, Tulum time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw: typed before the call\n[2025-11-25T17:00:05Z 12:00 Tulum] chat gm: gm answers\n[2025-11-25T17:01:40Z 12:01 Tulum] call vc_prev Shaw: spoken line one\n[2025-11-25T17:01:41Z 12:01 Tulum] call vc_prev Arturo: spoken reply\n[2025-11-25T17:06:40Z 12:06 Tulum] chat Shaw: typed after\n[2025-11-25T17:06:50Z 12:06 Tulum] chat Shaw: held on the phone, not yet delivered\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "budget summarizes the older calls; secrets never pass",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 500,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "my key is sk-proj_abcdefghijklmnop and API_TOKEN=hunter2xyz",
+     "ts": "2025-11-25T19:30:00Z",
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_old0.json",
+     "doc": {
+      "call_id": "vc_old0",
+      "started_at": 1764090000,
+      "turns": [
+       {
+        "role": "user",
+        "text": "call 0 line 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764090000
+       },
+       {
+        "role": "assistant",
+        "text": "call 0 line 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764090001
+       },
+       {
+        "role": "user",
+        "text": "call 0 line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764090002
+       },
+       {
+        "role": "assistant",
+        "text": "call 0 line 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764090003
+       },
+       {
+        "role": "user",
+        "text": "call 0 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764090004
+       },
+       {
+        "role": "assistant",
+        "text": "call 0 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764090005
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_old1.json",
+     "doc": {
+      "call_id": "vc_old1",
+      "started_at": 1764091000,
+      "turns": [
+       {
+        "role": "user",
+        "text": "call 1 line 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764091000
+       },
+       {
+        "role": "assistant",
+        "text": "call 1 line 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764091001
+       },
+       {
+        "role": "user",
+        "text": "call 1 line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764091002
+       },
+       {
+        "role": "assistant",
+        "text": "call 1 line 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764091003
+       },
+       {
+        "role": "user",
+        "text": "call 1 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764091004
+       },
+       {
+        "role": "assistant",
+        "text": "call 1 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764091005
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_old2.json",
+     "doc": {
+      "call_id": "vc_old2",
+      "started_at": 1764092000,
+      "turns": [
+       {
+        "role": "user",
+        "text": "call 2 line 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764092000
+       },
+       {
+        "role": "assistant",
+        "text": "call 2 line 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764092001
+       },
+       {
+        "role": "user",
+        "text": "call 2 line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764092002
+       },
+       {
+        "role": "assistant",
+        "text": "call 2 line 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764092003
+       },
+       {
+        "role": "user",
+        "text": "call 2 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764092004
+       },
+       {
+        "role": "assistant",
+        "text": "call 2 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764092005
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_old3.json",
+     "doc": {
+      "call_id": "vc_old3",
+      "started_at": 1764093000,
+      "turns": [
+       {
+        "role": "user",
+        "text": "call 3 line 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764093000
+       },
+       {
+        "role": "assistant",
+        "text": "call 3 line 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764093001
+       },
+       {
+        "role": "user",
+        "text": "call 3 line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764093002
+       },
+       {
+        "role": "assistant",
+        "text": "call 3 line 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764093003
+       },
+       {
+        "role": "user",
+        "text": "call 3 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764093004
+       },
+       {
+        "role": "assistant",
+        "text": "call 3 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764093005
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_old4.json",
+     "doc": {
+      "call_id": "vc_old4",
+      "started_at": 1764094000,
+      "turns": [
+       {
+        "role": "user",
+        "text": "call 4 line 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764094000
+       },
+       {
+        "role": "assistant",
+        "text": "call 4 line 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764094001
+       },
+       {
+        "role": "user",
+        "text": "call 4 line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764094002
+       },
+       {
+        "role": "assistant",
+        "text": "call 4 line 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764094003
+       },
+       {
+        "role": "user",
+        "text": "call 4 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764094004
+       },
+       {
+        "role": "assistant",
+        "text": "call 4 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ts": 1764094005
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nEARLIER (summarized):\n- (3 older item(s) omitted)\n- [2025-11-25T17:50:00Z 17:50 UTC] call vc_old3, 6 phrase(s) not shown; Shaw: call 3 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx / Arturo: call 3 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…\nRECENT (verbatim):\n[2025-11-25T18:06:40Z 18:06 UTC] call vc_old4 Shaw: call 4 line 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[2025-11-25T18:06:41Z 18:06 UTC] call vc_old4 Arturo: call 4 line 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[2025-11-25T18:06:42Z 18:06 UTC] call vc_old4 Shaw: call 4 line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[2025-11-25T18:06:43Z 18:06 UTC] call vc_old4 Arturo: call 4 line 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[2025-11-25T18:06:44Z 18:06 UTC] call vc_old4 Shaw: call 4 line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[2025-11-25T18:06:45Z 18:06 UTC] call vc_old4 Arturo: call 4 line 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n[2025-11-25T19:30:00Z 19:30 UTC] chat Shaw: my key is sk-[redacted] and API_TOKEN=[redacted]\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "an agent's own calls",
+   "chat_agent": "dev-x",
+   "call_owner": "dev-x",
+   "exclude": null,
+   "budget": 1000,
+   "tz": "America/New_York",
+   "tz_label": "ET",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "hello dev",
+     "ts": "2025-11-25T17:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "hi",
+     "ts": "2025-11-25T17:00:01Z",
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_a.json",
+     "doc": {
+      "call_id": "vc_a",
+      "agent": "dev-x",
+      "started_at": "1764090050",
+      "turns": [
+       {
+        "role": "user",
+        "text": "call words"
+       },
+       {
+        "role": "dev-x",
+        "text": "agent words",
+        "ts": 1764090051
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_b.json",
+     "doc": {
+      "call_id": "vc_b",
+      "started_at": 1764090060,
+      "turns": [
+       {
+        "role": "user",
+        "text": "arturo call, not this agent's",
+        "ts": 1764090060
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Ada",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, ET time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 ET] chat Ada: hello dev\n[2025-11-25T17:00:01Z 12:00 ET] chat dev-x: hi\n[2025-11-25T17:00:50Z 12:00 ET] call vc_a Ada: call words\n[2025-11-25T17:00:51Z 12:00 ET] call vc_a dev-x: agent words\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "chat unreadable: the calls still come",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 800,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": null,
+   "chat_error": "OSError",
+   "journals": [
+    {
+     "name": "vc_c.json",
+     "doc": {
+      "call_id": "vc_c",
+      "started_at": 1764090000,
+      "turns": [
+       {
+        "role": "user",
+        "text": "still here",
+        "ts": 1764090000
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 17:00 UTC] call vc_c Shaw: still here\n(gm chat could not be read: OSError)\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "code points, not UTF-16 units, are counted and clipped",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 3000,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉",
+     "ts": "2025-11-25T17:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "ok ✅ word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+     "ts": "2025-11-25T17:00:01Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊",
+     "ts": "2025-11-25T17:00:02Z",
+     "audience": "user"
+    }
+   ],
+   "journals": [],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 17:00 UTC] chat Shaw: 🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉…\n[2025-11-25T17:00:01Z 17:00 UTC] chat gm: ok ✅ word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word…\n[2025-11-25T17:00:02Z 17:00 UTC] chat Shaw: 🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊🎊\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "whitespace is Python's isspace set: U+FEFF is a character, U+0085 and \\x1c-\\x1f are spaces",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 1000,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "﻿hellothere\u001cfriend\u001f ",
+     "ts": "2025-11-25T17:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "  　ok then﻿",
+     "ts": "2025-11-25T17:00:01Z",
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_ws.json",
+     "doc": {
+      "call_id": "vc_ws",
+      "started_at": 1764090005,
+      "turns": [
+       {
+        "role": "user",
+        "text": "\u001dspoken\u001e line﻿",
+        "ts": 1764090005
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 17:00 UTC] chat Shaw: ﻿hello there friend\n[2025-11-25T17:00:01Z 17:00 UTC] chat gm: ok then﻿\n[2025-11-25T17:00:05Z 17:00 UTC] call vc_ws Shaw: spoken line﻿\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "times: zones, microseconds, numeric strings; never a date alone, a boolean or a non-string text",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 1000,
+   "tz": "Asia/Kolkata",
+   "tz_label": "IST",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "offset +05:30",
+     "ts": "2025-11-25T22:31:00+05:30",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "micro",
+     "ts": "2025-11-25T17:02:00.123456Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "date alone is skipped",
+     "ts": "2025-11-25",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "boolean ts is skipped",
+     "ts": true,
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": 5,
+     "ts": "2025-11-25T17:03:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "numeric string ts",
+     "ts": "1764090240.5",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "same ms A",
+     "ts": "2025-11-25T17:05:00.0001Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "same ms B",
+     "ts": "2025-11-25T17:05:00.0004Z",
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_t.json",
+     "doc": {
+      "call_id": "vc_t",
+      "started_at": "1764090100",
+      "turns": [
+       {
+        "role": "user",
+        "text": "date-only turn falls back to the call start",
+        "ts": "2025-11-25"
+       },
+       {
+        "role": "user",
+        "text": {
+         "not": "text"
+        },
+        "ts": 1764090101
+       },
+       {
+        "role": "user",
+        "text": null,
+        "ts": 1764090102
+       },
+       {
+        "role": "assistant",
+        "text": "bool ts falls back too",
+        "ts": false
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, IST time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:01:00Z 22:31 IST] chat Shaw: offset +05:30\n[2025-11-25T17:01:40Z 22:31 IST] call vc_t Shaw: date-only turn falls back to the call start\n[2025-11-25T17:01:40Z 22:31 IST] call vc_t Arturo: bool ts falls back too\n[2025-11-25T17:02:00Z 22:32 IST] chat Shaw: micro\n[2025-11-25T17:04:00Z 22:34 IST] chat Shaw: numeric string ts\n[2025-11-25T17:05:00Z 22:35 IST] chat Shaw: same ms A\n[2025-11-25T17:05:00Z 22:35 IST] chat Shaw: same ms B\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "times out of range or not real are not times; ids and tags are strings or nothing; NaN is not JSON",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 1500,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "huge ts",
+     "ts": 1e+300,
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "milliseconds ts",
+     "ts": 1764090000000,
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "Feb 30",
+     "ts": "2025-02-30T00:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "hour 24",
+     "ts": "2025-11-25T24:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "offset +25:00",
+     "ts": "2025-11-25T17:00:00+25:00",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "arabic-indic digits",
+     "ts": "١٧٦٤٠٩٠٠٠٠",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "empty-list machine is still the chat",
+     "ts": 1764090001,
+     "audience": "user",
+     "machine": []
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "a real line",
+     "ts": 1764090002,
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_ids.json",
+     "doc": {
+      "call_id": {},
+      "agent": [],
+      "started_at": 1764090010,
+      "turns": [
+       {
+        "role": "user",
+        "text": "object call_id, list agent: Arturo's call, named by its file",
+        "ts": 1764090010
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_nan.json",
+     "raw": "{\"call_id\": \"vc_nan\", \"started_at\": NaN, \"turns\": [{\"role\": \"user\", \"text\": \"never read\", \"ts\": 1764090020}]}"
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:01Z 17:00 UTC] chat Shaw: empty-list machine is still the chat\n[2025-11-25T17:00:02Z 17:00 UTC] chat Shaw: a real line\n[2025-11-25T17:00:10Z 17:00 UTC] call vc_ids Shaw: object call_id, list agent: Arturo's call, named by its file\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "through the route: the agent's chat as the page shows it plus its own calls",
+   "route": true,
+   "chat_agent": "zz-callctx-fixture",
+   "call_owner": "zz-callctx-fixture",
+   "exclude": null,
+   "budget": 2000,
+   "tz": "America/Cancun",
+   "tz_label": "Tulum",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "is the dream fix in?",
+     "ts": "2025-11-25T17:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "Yes, merged at 06:09Z.",
+     "ts": "2025-11-25T17:00:30Z",
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_routecase1.json",
+     "doc": {
+      "call_id": "vc_routecase1",
+      "agent": "zz-callctx-fixture",
+      "started_at": 1764090060,
+      "status": "live",
+      "turns": [
+       {
+        "role": "user",
+        "text": "the fixture call, spoken",
+        "ts": 1764090060
+       },
+       {
+        "role": "agent",
+        "text": "heard it",
+        "ts": 1764090065
+       }
+      ]
+     }
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, Tulum time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw: is the dream fix in?\n[2025-11-25T17:00:30Z 12:00 Tulum] chat zz-callctx-fixture: Yes, merged at 06:09Z.\n[2025-11-25T17:01:00Z 12:01 Tulum] call vc_routecase1 Shaw: the fixture call, spoken\n[2025-11-25T17:01:05Z 12:01 Tulum] call vc_routecase1 zz-callctx-fixture: heard it\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  },
+  {
+   "name": "an empty thread says so",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 600,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": [],
+   "journals": [],
+   "operator_label": "Shaw",
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\n(no earlier chat or calls in this thread)\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+  }
+ ]
+}

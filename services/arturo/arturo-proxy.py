@@ -362,6 +362,7 @@ def _record_spawned_this_turn(session_name):
 # in-flight TEXT response, but ONLY before the partial has committed a side-effecting tool
 # dispatch (cancel cannot un-run execute_tool). Lock is held only for tiny flag ops.
 from services.arturo import thread_store as _thread_store   # G20 durable thread archive
+from services.arturo import thread_context as _thread_ctx   # an agent's chat + calls, every line stamped
 from services.arturo import thread_delete as _thread_delete   # a deleted chat's other traces, and its facts
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
@@ -1347,6 +1348,12 @@ def clean_cc_output(text):
 
 KNOWLEDGE_DIR = ORCHESTRA_DIR / "state" / "knowledge"
 
+def _knowledge_reads_facts():
+    """The knowledge tool reads the facts store under ARTURO_KNOWLEDGE_FACTS=1 (its own flag: native voice sets it
+    without starting the cache-warm thread ARTURO_FACTS_RECALL also starts) or ARTURO_FACTS_RECALL=1 (as before)."""
+    return os.environ.get("ARTURO_KNOWLEDGE_FACTS") == "1" or os.environ.get("ARTURO_FACTS_RECALL") == "1"
+
+
 def _knowledge_lookup(query, category=None):
     """Instant local knowledge lookup. <10ms. No SSH, no GM."""
     query_lower = query.lower().strip()
@@ -1488,6 +1495,21 @@ def _knowledge_lookup(query, category=None):
             except Exception:
                 pass
 
+    # TIME QUESTIONS (2026-11-25: "what happened last night" was scored as keywords and surfaced last week): time
+    # words make a window; its facts come newest first, each with its time, topic matches first.
+    if category is None and _knowledge_reads_facts():
+        try:
+            from services.arturo import facts_recall as _frt
+            _hours = _frt.time_window_hours(query)
+            if _hours:
+                _rf = _frt.recent_facts(_hours, keywords=_frt.topic_keywords(query), k=12)
+                if _rf:
+                    results.append(f"[RECENT — the last {_hours:g} h, newest first]\n" + "\n".join(
+                        f"  - [{(_f.get('ts') or '')[:16]}Z {_f.get('kind', 'fact')}] "
+                        f"{' '.join((_f.get('text') or '').split())[:220]}" for _f in _rf))
+        except Exception:
+            pass
+
     # BRAIN-FACT BLEND (hotfix 2026-09-14 — the operator live-test: knowledge('Noah') /
     # knowledge('last conversation with Alex') returned stale curated info and
     # never reached state/brain/facts.db, the ~29k-fact daily-refreshed brain).
@@ -1497,8 +1519,8 @@ def _knowledge_lookup(query, category=None):
     # scored, noise-filtered facts_recall.query_sources path (fast, read-only) — the
     # SAME merged sources as the passive FACTS block, so a fact written on the
     # dashboard surfaces on every path Arturo answers from.
-    # Gated on ARTURO_FACTS_RECALL (same flag as the passive facts seam).
-    if category in (None, "people", "projects") and os.environ.get("ARTURO_FACTS_RECALL") == "1":
+    # Gated on ARTURO_KNOWLEDGE_FACTS or ARTURO_FACTS_RECALL (_knowledge_reads_facts).
+    if category in (None, "people", "projects") and _knowledge_reads_facts():
         try:
             try:
                 import facts_recall as _fr
@@ -1523,7 +1545,7 @@ def _knowledge_lookup(query, category=None):
         # there either: say so plainly (never a traceback). Flag off, the store was never read, so
         # the answer must not blame it.
         _facts = (_source_health.source_status(_source_health.source_path(ORCHESTRA_DIR, "facts"))
-                  if os.environ.get("ARTURO_FACTS_RECALL") == "1" else None)
+                  if _knowledge_reads_facts() else None)
         if _facts is not None and not _facts.readable:
             return (f"No knowledge source for '{query}': the facts store (facts/facts_db.json) is {_facts.state}. "
                     "This may require a deeper investigation — consider using gm_command or read_file.")
@@ -1974,14 +1996,27 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_agent_conversation",
-            "description": "Read the message thread between agents. Use when the operator asks 'what are X and Y talking about?' or 'what did agent X say to agent Y?'. Can also read an agent's inbox to see all pending messages.",
+            "description": "Read an agent's CHAT (what the operator and the agent said to each other on the dashboard, newest last, every line timestamped) plus its pending inbox. Use for 'what is gm saying', 'what did I tell X', 'what did agent X say'. With conversation_id, reads that agent-to-agent message thread instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "agent_id": {"type": "string", "description": "Agent whose inbox or conversations to read."},
-                    "conversation_id": {"type": "string", "description": "Specific conversation thread ID to read (optional — if omitted, returns inbox summary)."},
+                    "conversation_id": {"type": "string", "description": "Specific agent-to-agent message thread ID (optional — if omitted, returns the agent's chat and inbox)."},
                 },
                 "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recent_work",
+            "description": "What happened in the fleet in the last N hours, newest first, every line timestamped: facts and decisions from the daily fact store, commits in the repos, and voice calls. Use for 'what happened last night / today / in the past day', 'what did we get done', 'catch me up'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {"type": "number", "description": "How far back, in hours (default 24, max 168)."},
+                },
             },
         },
     },
@@ -2790,6 +2825,163 @@ def _deep_turn(conversation_id, principal, untrusted=False):
     t = _voice_turn(conversation_id, principal)
     t.update(voice=False, deep=True, untrusted=bool(untrusted))
     return t
+
+
+RECENT_WORK_MAX = 15        # lines per section
+
+
+def _work_repos():
+    """The repos whose commits recent_work lists: $ARTURO_WORK_REPOS (':'-separated) else this checkout."""
+    env = (os.environ.get("ARTURO_WORK_REPOS") or "").strip()
+    return [r for r in env.split(":") if r] if env else [str(_REPO_ROOT)]
+
+
+def _git_since(repo, hours):
+    """[(iso time, short sha, subject)] newest first; [] when the path is not a repo or git fails."""
+    try:
+        r = subprocess.run(["git", "-C", repo, "log", f"--since={int(hours)} hours ago", "--no-merges",
+                            f"-n{RECENT_WORK_MAX}", "--format=%cI%x09%h%x09%s"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for ln in (r.stdout or "").splitlines() if r.returncode == 0 else []:
+        parts = ln.split("\t", 2)
+        if len(parts) == 3:
+            out.append(tuple(parts))
+    return out
+
+
+def _recent_work(hours):
+    """recent_work: the last `hours` of facts, commits and calls, newest first, every line stamped."""
+    try:
+        hours = max(1.0, min(float(hours or 24), 168.0))
+    except (TypeError, ValueError):
+        hours = 24.0
+    parts = [f"RECENT WORK — the last {hours:g} h, newest first (times UTC)."]
+    try:
+        from services.arturo import facts_recall as _frw
+        facts = _frw.recent_facts(hours, k=RECENT_WORK_MAX)
+    except Exception as e:  # noqa: BLE001
+        facts, parts = [], parts + [f"(facts store could not be read: {type(e).__name__})"]
+    if facts:
+        parts.append("Facts and decisions:")
+        parts += [f"  - [{(f.get('ts') or '')[:16]}Z {f.get('kind', 'fact')}] "
+                  f"{' '.join((f.get('text') or '').split())[:220]}" for f in facts]
+    for repo in _work_repos():
+        commits = _git_since(repo, hours)
+        if commits:
+            parts.append(f"Commits in {Path(repo).name}:")
+            parts += [f"  - [{iso[:16]}] {sha} {subj[:160]}" for iso, sha, subj in commits]
+    cutoff = time.time() - hours * 3600
+    calls = []
+    try:
+        for f in Path(VOICE_CALLS_DIR).glob("vc_*.json"):
+            if f.stat().st_mtime < cutoff:
+                continue
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            st = _thread_ctx._epoch(d.get("started_at"))
+            if st and st >= cutoff:
+                calls.append((st, d.get("call_id") or f.stem, len(d.get("turns") or []), d.get("agent") or "Arturo"))
+    except OSError:
+        pass
+    if calls:
+        parts.append("Voice calls:")
+        for st, cid, n, who in sorted(calls, reverse=True)[:RECENT_WORK_MAX]:
+            parts.append(f"  - [{datetime.fromtimestamp(st, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M')}Z] {cid} "
+                         f"with {who}, {n} turns")
+    if len(parts) == 1:
+        parts.append("Nothing recorded in that window.")
+    return "\n".join(parts)
+
+
+GM_ASK_WAIT_S = 25          # gm D2 (msg_09a35684): a bounded wait, then a promise, never silence
+GM_ASK_POLL_S = 1.0
+GM_ASK_DEDUPE_S = 600       # the same question again in the same call is not re-sent (no retry storm)
+_GM_ASKED = {}              # (call, normalized question) -> (msg id, when)
+_GM_ASKED_LOCK = _threading.Lock()
+
+
+def _gm_ask_now():
+    return time.time()
+
+
+def _gm_ask_sleep(s):
+    time.sleep(s)
+
+
+def _ask_brain(prompt, question):
+    """gm_command: ONE msg_store message to VOICE_BRAIN_SESSION (gm) with the call and thread in the subject, so gm's
+    reply lands in that thread; gm's reply in the message's conversation within GM_ASK_WAIT_S is the answer, else
+    the caller hears that gm has it and the answer comes to the chat. Replaced the pane scrape (jarvis-gm-query.sh),
+    which on 2026-11-25 handed a call Codex's preamble as the answer and does not ship in this tree."""
+    turn = _TEAM_TURN.get() or {}
+    call = str(turn.get("conversation_id") or turn.get("cid") or "")
+    thread = str(turn.get("thread_id") or "")
+    key = (call, " ".join(str(question).lower().split()))
+    promise = (f"gm has it; the answer comes to your chat. Tell the operator that in a few words and move on.")
+    now = _gm_ask_now()
+    with _GM_ASKED_LOCK:
+        for k in [k for k, v in _GM_ASKED.items() if now - v[1] > GM_ASK_DEDUPE_S]:
+            del _GM_ASKED[k]
+        prior = _GM_ASKED.get(key) if call else None
+    if prior:
+        return f"That question already went to gm ({prior[0]}); {promise}"
+    try:
+        if str(_REPO_ROOT) not in _sys.path:
+            _sys.path.insert(0, str(_REPO_ROOT))
+        from msg_store import MessageStore
+        store = MessageStore()
+        tag = " ".join(x for x in (f"thread {thread}" if thread else "", f"call {call}" if call else "") if x)
+        subject = f"[voice{(' ' + tag) if tag else ''}] {' '.join(str(question).split())[:70]}"
+        body = (f"{prompt}\n\nAnswer with a msg_store reply to this message. A reply within {GM_ASK_WAIT_S} s is "
+                f"spoken in the call; later, put the answer in the operator's chat"
+                f"{(' (thread ' + thread + ')') if thread else ''}.")
+        mid = store.send(from_agent="arturo", to_agent=VOICE_BRAIN_SESSION, type="task", subject=subject, body=body,
+                         priority="high", metadata={"voice_call": call, "thread_id": thread})
+        with _GM_ASKED_LOCK:
+            _GM_ASKED[key] = (mid, now)
+        conv = (store.get(mid) or {}).get("conversation_id")
+    except Exception as e:  # noqa: BLE001 — said plainly, never a stack to the caller
+        log.warning(f"gm_command: could not send to {VOICE_BRAIN_SESSION}: {e}")
+        return "Could not reach gm just now (the message store refused it). Tell the operator plainly; do not retry."
+    deadline = now + GM_ASK_WAIT_S
+    while conv and _gm_ask_now() < deadline:
+        try:
+            for m in store.thread(conv):
+                if m.get("id") != mid and m.get("from_agent") == VOICE_BRAIN_SESSION and (m.get("body") or "").strip():
+                    answer = m["body"].strip()
+                    return "gm says:\n" + (answer[:3000] + "\n... (truncated)" if len(answer) > 3000 else answer)
+        except Exception as e:  # noqa: BLE001 — the promise still stands
+            log.warning(f"gm_command: reading the reply failed: {e}")
+            break
+        _gm_ask_sleep(GM_ASK_POLL_S)
+    return promise
+
+
+READ_CHAT_BUDGET_TOKENS = 1500
+
+
+def _agent_chat_for_turn(agent_id):
+    """The agent's chat as the dashboard shows it (newest verbatim, stamped, secret shapes blanked) for a verified
+    fleet/owner caller, fenced or not: the fence limits what a turn may DO, and this is who may READ. Anyone else:
+    "" (the inbox summary alone, as before). An unreadable API is a line saying so."""
+    turn = _TEAM_TURN.get()
+    p = (turn or {}).get("principal") or ""
+    if not (p == "fleet" or p.startswith("owner:")):
+        return ""
+    try:
+        items = _thread_ctx.fetch_transcript(agent_id, 300)
+    except Exception as e:  # noqa: BLE001 — the inbox still answers
+        return f"({agent_id} chat could not be read: {type(e).__name__})"
+    tz, label = _thread_ctx.shaw_tz(str(ORCHESTRA_DIR))
+    lines = _thread_ctx.chat_lines(items, agent_label=agent_id,
+                                   operator_label=_thread_ctx.operator_name(str(ORCHESTRA_DIR)))
+    return _thread_ctx.render(lines, budget_tokens=READ_CHAT_BUDGET_TOKENS, tz=tz, tz_label=label,
+                                  title=f"{agent_id.upper()} CHAT")
 
 
 def _bound_tools(turn=None, use_current=True):
@@ -4763,7 +4955,6 @@ def _execute_tool_raw(name, args, user_turns=None):
 
     elif name == "gm_command":
         prompt = args.get("prompt", "")
-        timeout = min(args.get("timeout", 60), 120)
         if not prompt:
             return "ERROR: gm_command called with empty prompt. The AI did not provide a query. This is a bug — retry or rephrase."
 
@@ -4784,32 +4975,7 @@ def _execute_tool_raw(name, args, user_turns=None):
         # (2) tag provenance so gm can never mistake a voice-relayed query for the operator's typed input.
         prompt = f"[via {_aname()} voice — relay of the operator's spoken request] {prompt}"
 
-        # Use dedicated jarvis-gm for voice/chat queries (doesn't block main GM)
-        # Falls back to main GM via gm-converse.sh if jarvis-gm unavailable
-        # jarvis-gm-query.sh is CODE (the checkout), never under ORCHESTRA_DIR (the DATA dir), and it does
-        # not ship in every install: absent => say so plainly instead of a "No such file" GM error (S4).
-        gm_script = str(Path(os.environ.get("ORCHESTRA_ROOT") or _REPO_ROOT) / "jarvis-gm-query.sh")
-        if not os.path.isfile(gm_script):
-            return ("The GM relay is not installed on this system (jarvis-gm-query.sh), so I can't pass this "
-                    "to the GM. Tell the operator that plainly; do not retry.")
-        try:
-            r = subprocess.run(
-                ["bash", gm_script, prompt, str(timeout)],
-                capture_output=True, text=True, timeout=timeout + 10,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                response = r.stdout.strip()
-                # Truncate if too long for voice context
-                if len(response) > 3000:
-                    response = response[:3000] + "\n... (truncated)"
-                return f"GM response:\n{response}"
-            else:
-                error = r.stderr.strip() or r.stdout.strip() or "No response"
-                return f"GM error: {error[:500]}"
-        except subprocess.TimeoutExpired:
-            return f"GM timed out after {timeout}s. The query may be too complex for voice. Try breaking it down."
-        except Exception as e:
-            return f"GM error: {e}"
+        return _ask_brain(prompt, args.get("prompt", ""))
 
     elif name == "read_file" and _secret_path(args.get("path", "")):
         # Secrets stay host-side (the lethal trifecta's first rule): no turn, voice or deep run reads them back.
@@ -5106,6 +5272,9 @@ def _execute_tool_raw(name, args, user_turns=None):
         except Exception as e:
             return f"Failed to send message: {e}"
 
+    elif name == "recent_work":
+        return _recent_work(args.get("hours", 24))
+
     elif name == "read_agent_conversation":
         agent_id = args.get("agent_id", "")
         conversation_id = args.get("conversation_id", "")
@@ -5131,7 +5300,8 @@ def _execute_tool_raw(name, args, user_turns=None):
                 parts = [f"Inbox for {agent_id}: {len(pending)} pending messages"]
                 for m in pending[:5]:
                     parts.append(f"  [{m.get('priority','?')}] from {m.get('from_agent','?')}: {m.get('subject','')[:60]}")
-                return "\n".join(parts)
+                chat = _agent_chat_for_turn(agent_id)
+                return "\n".join(([chat, ""] if chat else []) + parts)
         except Exception as e:
             return f"Failed to read messages: {e}"
 
