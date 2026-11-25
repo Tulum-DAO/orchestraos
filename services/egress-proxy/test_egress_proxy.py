@@ -38,6 +38,11 @@ REFUSED_CIDRS = [
     "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
     "255.255.255.255/32",
     "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "2001:db8::/32",
+    # not public either, though not in the first list: IPv4-compatible, IPv4-translated,
+    # local-use NAT64, site-local, discard-only, IETF protocol assignments (incl. Teredo), 6to4,
+    # documentation (RFC 9637) and SRv6 SIDs
+    "::/96", "::ffff:0:0:0/96", "64:ff9b:1::/48", "fec0::/10", "100::/64", "2001::/23",
+    "2002::/16", "3fff::/20", "5f00::/16",
 ]
 
 
@@ -53,7 +58,7 @@ def test_every_listed_range_is_refused(addr):
     "9.255.255.255", "11.0.0.0", "100.63.255.255", "100.128.0.0", "126.255.255.255",
     "128.0.0.0", "169.253.255.255", "169.255.0.0", "172.15.255.255", "172.32.0.0",
     "192.0.1.0", "192.88.98.255", "192.169.0.0", "198.17.255.255", "198.20.0.0",
-    "223.255.255.255", "2001:db9::1", "fbff:ffff::1",
+    "223.255.255.255", "2001:db9::1", "2001:200::1", "2a00:1450:4001::1",
 ])
 def test_public_addresses_are_allowed(addr):
     assert ep.is_public(addr)
@@ -63,12 +68,13 @@ def test_public_addresses_are_allowed(addr):
     "::ffff:127.0.0.1", "::ffff:10.1.2.3", "::ffff:100.100.100.100", "::ffff:169.254.169.254",
     "::ffff:0.0.0.0", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::6464:6464",
     "64:ff9b::c0a8:101", "2002:7f00:1::1", "2002:a9fe:a9fe::",
+    "::127.0.0.1", "::ffff:0:127.0.0.1", "64:ff9b:1::7f00:1", "64:ff9b:1::101:101",
 ])
 def test_v4_embedded_in_v6_is_judged_by_the_v4_address(addr):
     assert not ep.is_public(addr)
 
 
-@pytest.mark.parametrize("addr", ["::ffff:1.1.1.1", "64:ff9b::101:101", "2002:808:808::1"])
+@pytest.mark.parametrize("addr", ["::ffff:1.1.1.1", "64:ff9b::101:101"])
 def test_v4_embedded_public_address_is_allowed(addr):
     assert ep.is_public(addr)
 
@@ -297,7 +303,9 @@ def test_http_to_private_destination_is_refused(host, addr):
     assert opened == [] and decoy_conns == 0
 
 
-@pytest.mark.parametrize("literal", ["127.0.0.1", "[::1]", "169.254.169.254", "100.100.100.100"])
+@pytest.mark.parametrize("literal", ["127.0.0.1", "[::1]", "169.254.169.254", "100.100.100.100",
+                                     "[::127.0.0.1]", "[::ffff:0:127.0.0.1]",
+                                     "[64:ff9b:1::7f00:1]", "[fec0::1]"])
 def test_http_to_private_ip_literal_is_refused(literal):
     async def go():
         proxy, resolver, server, port = await start_proxy(TABLE)
@@ -528,3 +536,79 @@ def test_redirect_to_a_private_address_is_passed_back_and_the_follow_up_refused(
     assert first.startswith(b"HTTP/1.1 302 ") and b"Location: http://169.254.169.254/" in first
     assert follow.startswith(b"HTTP/1.1 403 ")
     assert [a for a, _ in opened] == [FAKE_PUBLIC]
+
+
+# --------------------------------------------------------------------------------------------
+# Malformed input is a 400, never an unanswered connection or a forwarded injection
+
+def test_non_ascii_host_is_a_400():
+    async def go():
+        server = await ep.EgressProxy().start(0)   # the real system resolver
+        raw = "GET http://127\u30020\u30020\u30021:80/ HTTP/1.1\r\nHost: x\r\n\r\n".encode()
+        resp = await exchange(server.sockets[0].getsockname()[1], raw)
+        server.close()
+        return resp
+    resp = run(go())
+    assert resp.startswith(b"HTTP/1.1 400 ")
+
+
+def test_a_resolver_that_rejects_the_name_is_a_400():
+    async def go():
+        async def bad(host, port):
+            raise UnicodeError("label too long")
+        server = await ep.EgressProxy(resolver=bad).start(0)
+        resp = await exchange(server.sockets[0].getsockname()[1], get("x" * 70 + ".test"))
+        server.close()
+        return resp
+    assert run(go()).startswith(b"HTTP/1.1 400 ")
+
+
+def test_headers_named_by_connection_are_not_forwarded():
+    async def go():
+        async with FakeUpstream() as up:
+            _, _, server, port = await start_proxy(TABLE)
+            resp = await exchange(port, get(f"public.test:{up.port}", "/",
+                                            "Connection: keep-alive, X-Hop-Only\r\n"
+                                            "X-Hop-Only: secret\r\nX-End-To-End: kept\r\n"))
+            server.close()
+            return resp, up.heads
+    resp, heads = run(go())
+    assert resp.startswith(b"HTTP/1.1 200 ")
+    assert "x-hop-only" not in heads[0].lower() and "X-End-To-End: kept" in heads[0]
+
+
+@pytest.mark.parametrize("bad", ["X-A: a\nX-Injected: 1", "X-A: a\rX-Injected: 1",
+                                 "X-A\n: a", "X-A: a\x00"])
+def test_bare_cr_lf_or_nul_in_a_header_is_a_400(bad):
+    async def go():
+        async with FakeUpstream() as up:
+            proxy, _, server, port = await start_proxy(TABLE)
+            resp = await exchange(port, get(f"public.test:{up.port}", "/", bad + "\r\n"))
+            server.close()
+            return resp, proxy.opened, up.connections
+    resp, opened, conns = run(go())
+    assert resp.startswith(b"HTTP/1.1 400 ") and opened == [] and conns == 0
+
+
+def test_an_unexpected_error_still_gets_an_answer():
+    async def go():
+        async def broken(host, port):
+            raise RuntimeError("boom")
+        server = await ep.EgressProxy(resolver=broken).start(0)
+        resp = await exchange(server.sockets[0].getsockname()[1], get("x.test"))
+        server.close()
+        return resp
+    resp = run(go())
+    assert resp.startswith(b"HTTP/1.1 502 ") and resp.endswith(b"\r\n\r\nproxy error\n")
+
+
+def test_a_non_ascii_name_is_refused_before_any_lookup():
+    async def go():
+        table = {"bücher.test": [FAKE_PUBLIC], "xn--bcher-kva.test": [FAKE_PUBLIC]}
+        proxy, resolver, server, port = await start_proxy(table)
+        raw = "GET http://bücher.test/ HTTP/1.1\r\nHost: x\r\n\r\n".encode()
+        resp = await exchange(port, raw)
+        server.close()
+        return resp, resolver.calls, proxy.opened
+    resp, calls, opened = run(go())
+    assert resp.startswith(b"HTTP/1.1 400 ") and calls == [] and opened == []

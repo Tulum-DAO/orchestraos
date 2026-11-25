@@ -42,6 +42,15 @@ Start Chrome (or Chromium, headless or not) with all four of these flags:
 Adding this proxy does not change any existing browser tool configuration. Wiring it in is a
 separate step.
 
+**Known gap: DNS lookups by the browser.** Chrome cannot reach a private address with these
+flags. But a page-chosen hostname can still reach a DNS resolver as a lookup, which is a
+one-way way to leak data, not a way into private space. In a headless Chromium run with these
+flags, the net-log showed `<img>`, `fetch()` and `<link rel=prefetch>` hostnames going to
+Chrome's host resolver. `<link rel=dns-prefetch>`, `preconnect` and plain links did not. Those
+lookups failed inside the sandbox, and whether any DNS packet left the host was not measured.
+The old `--dns-prefetch-disable` switch is absent from current Chromium builds, so it is not
+listed here.
+
 ## What it decides, and how
 
 1. **Scheme and credentials.** Only `http`, `https`, `ws` and `wss` URLs are proxied. A URL or
@@ -49,7 +58,9 @@ separate step.
 2. **One lookup, at connect time.** The hostname is resolved once, when the request arrives.
    An IP literal is used as it is.
 3. **All answers must be public.** If any resolved address is not public, the whole request
-   is refused, even when other addresses in the same answer are public.
+   is refused, even when other addresses in the same answer are public. "Public" is an
+   allowlist test: the address must lie outside every refused range below, AND Python's
+   `ipaddress` must report it as global.
 4. **Connect to what was checked.** The upstream connection goes to an address from that same
    lookup. The name is never looked up a second time, so a DNS answer that changes between
    the check and the connection (DNS rebinding) cannot redirect it.
@@ -64,11 +75,19 @@ Refused destinations:
   `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`,
   `240.0.0.0/4`, `255.255.255.255`.
 - IPv6: `::`, `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`, `2001:db8::/32`.
-- IPv6 forms that embed an IPv4 address are judged by that IPv4 address: IPv4-mapped
-  (`::ffff:0:0/96`), NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`).
+- More IPv6 ranges, listed by name: `::/96` (IPv4-compatible), `::ffff:0:0:0/96`
+  (IPv4-translated), `64:ff9b:1::/48` (local-use NAT64), `fec0::/10` (site-local),
+  `100::/64` (discard), `2001::/23` (IETF protocol assignments, Teredo among them),
+  `2002::/16` (6to4), `3fff::/20` (documentation) and `5f00::/16` (SRv6). They are listed
+  because `ipaddress.is_global` gets some of them wrong (Python 3.12 calls `::7f00:1` and
+  `fec0::1` global), and its table differs between patch releases.
+- IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`) addresses are judged by the IPv4
+  address they carry.
 
-Plain HTTP requests are rewritten to origin form, with proxy-only headers (`Proxy-Connection`,
-`Proxy-Authorization`) stripped. Each request uses its own upstream connection. A WebSocket
+Plain HTTP requests are rewritten to origin form. Hop-by-hop headers are stripped:
+`Proxy-Connection`, `Proxy-Authorization`, the other fixed hop-by-hop headers, and any header
+named in `Connection`. A request is answered with `400` when its hostname is not ASCII, or
+when its request head contains a bare CR, a bare LF or a NUL. Each request uses its own upstream connection. A WebSocket
 upgrade keeps its `Upgrade` headers, and the proxy relays the connection in both directions
 once the upstream answers `101`.
 

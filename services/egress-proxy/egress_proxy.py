@@ -47,10 +47,15 @@ REFUSED_V4 = tuple(ipaddress.IPv4Network(n) for n in (
 ))
 REFUSED_V6 = tuple(ipaddress.IPv6Network(n) for n in (
     "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "2001:db8::/32",
+    # Listed explicitly because ipaddress.is_global gets some of them wrong (Python 3.12
+    # calls ::7f00:1, ::ffff:0:7f00:1 and fec0::1 global) and its table varies by patch
+    # release: IPv4-compatible, IPv4-translated, local-use NAT64, site-local, discard-only,
+    # IETF protocol assignments (Teredo among them), 6to4, documentation and SRv6 SIDs.
+    "::/96", "::ffff:0:0:0/96", "64:ff9b:1::/48", "fec0::/10", "100::/64", "2001::/23",
+    "2002::/16", "3fff::/20", "5f00::/16",
 ))
 # IPv6 forms that carry an IPv4 address in their low 32 bits: judged by that IPv4 address.
 EMBEDS_V4 = tuple(ipaddress.IPv6Network(n) for n in ("::ffff:0:0/96", "64:ff9b::/96"))
-SIX_TO_FOUR = ipaddress.IPv6Network("2002::/16")  # 6to4 carries IPv4 in bits 16..47
 
 # Set by main(): once the process is running as the real proxy, the test override is refused.
 _PRODUCTION = False
@@ -64,22 +69,21 @@ def _strip_zone(addr: str) -> str:
     return addr.split("%", 1)[0]
 
 
-def _v4_refused(ip: ipaddress.IPv4Address) -> bool:
-    return any(ip in net for net in REFUSED_V4)
+def _v4_public(ip: ipaddress.IPv4Address) -> bool:
+    return ip.is_global and not any(ip in net for net in REFUSED_V4)
 
 
 def is_public(addr: str) -> bool:
-    """True when `addr` (an IP literal) is a public address this proxy may connect to."""
+    """True when `addr` (an IP literal) is a public address this proxy may connect to.
+
+    An allowlist: the address must be outside every refused range AND ipaddress must call
+    it global. IPv4-mapped and NAT64 addresses are judged by the IPv4 address they carry."""
     ip = ipaddress.ip_address(_strip_zone(addr))
     if ip.version == 4:
-        return not _v4_refused(ip)
-    if any(ip in net for net in REFUSED_V6):
-        return False
+        return _v4_public(ip)
     if any(ip in net for net in EMBEDS_V4):
-        return not _v4_refused(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
-    if ip in SIX_TO_FOUR:
-        return not _v4_refused(ipaddress.IPv4Address((int(ip) >> 80) & 0xFFFFFFFF))
-    return True
+        return _v4_public(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    return ip.is_global and not any(ip in net for net in REFUSED_V6)
 
 
 class Refused(Exception):
@@ -145,6 +149,8 @@ def _host_port(authority: str, default_port: int) -> tuple[str, int]:
         raise BadRequest("invalid port") from None
     if not parts.hostname or not 0 < port < 65536:
         raise BadRequest("invalid destination")
+    if not parts.hostname.isascii():
+        raise BadRequest("invalid hostname")
     return parts.hostname, port
 
 
@@ -179,6 +185,8 @@ class EgressProxy:
                 addrs = await self.resolver(host, port)
             except OSError:
                 addrs = []
+            except ValueError:  # includes UnicodeError from the idna codec
+                raise BadRequest("invalid hostname") from None
             if not addrs:
                 raise UpstreamError("502 Bad Gateway", f"could not resolve {host}")
         self.policy.check(addrs)
@@ -226,6 +234,10 @@ class EgressProxy:
             except UpstreamError as exc:
                 writer.write(_response(exc.status, exc.body))
                 return
+            except Exception:  # fail closed, with an answer rather than a silent close
+                log.exception("unexpected error")
+                writer.write(_response("502 Bad Gateway", "proxy error"))
+                return
             await self._relay(reader, writer, *upstream)
         finally:
             for w in (writer, upstream[1] if upstream else None):
@@ -245,11 +257,13 @@ class EgressProxy:
             raise Refused(f"scheme {scheme} is not allowed")
         host, port = _host_port(url.netloc, ALLOWED_SCHEMES[scheme])
         upgrade = _is_upgrade(headers)
+        named = {t.strip().lower() for n, v in headers if n.lower() == "connection"
+                 for t in v.split(",")}
         out = [f"{method} {(url.path or '/') + ('?' + url.query if url.query else '')} {version}"]
         has_host = False
         for name, value in headers:
             low = name.lower()
-            if low in HOP_BY_HOP:
+            if low in HOP_BY_HOP or low in named:
                 continue
             has_host |= low == "host"
             out.append(f"{name}: {value}")
@@ -288,6 +302,8 @@ class EgressProxy:
 
 def _parse_head(head: bytes):
     lines = head.decode("latin-1").split("\r\n")
+    if any(c in line for line in lines for c in "\r\n\x00"):
+        raise BadRequest("bare CR, LF or NUL in the request head")
     try:
         method, target, version = lines[0].split(" ")
     except ValueError:
