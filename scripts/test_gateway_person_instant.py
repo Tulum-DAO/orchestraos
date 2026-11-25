@@ -1,4 +1,4 @@
-"""A person's message is never bounced (Shaw ruling via gm msg_5d3c5a01: "my messages should not be queued,
+"""A person's message is never bounced (operator ruling via gm msg_5d3c5a01: "my messages should not be queued,
 they should be instant").
 
 POST /agent-message from a PERSON's surface that reads a held answer (source not "mail", no automation
@@ -90,9 +90,9 @@ def box(tmp_path, monkeypatch):
     return {"data": data, "db": db, "fleet": FLEET, "kicks": kicks}
 
 
-#: The iPhone's User-Agent exactly as the live gateway.log recorded it (Nov 15, the refused sends).
-PHONE_UA = "OrchestraUltra/361 CFNetwork/3826.600.41 Darwin/24.6.0"
-WATCH_UA = "OrchestraUltraWatch/361 CFNetwork/3826.600.41 Darwin/24.6.0"
+#: The shipped apps' User-Agent SHAPE (product/build CFNetwork/version Darwin/version); synthetic numbers.
+PHONE_UA = "OrchestraUltra/1 CFNetwork/1 Darwin/1"
+WATCH_UA = "OrchestraUltraWatch/1 CFNetwork/1 Darwin/1"
 AGENT_UA = "curl/8.5.0"
 
 
@@ -170,10 +170,13 @@ BUSY_SUBTYPES = {
     "headless_question_waiting": {"reason": "busy", "state": "waiting", "headless": True,
                                   "activity": "A question or permission is waiting — needs the operator"},
     "headless_supervisor_down": {"reason": "busy", "state": "offline", "headless": True, "activity": "down"},
+    "headless_idle_only_caller": {"reason": "busy", "state": "headless", "headless": True,
+                                  "activity": "this seat runs headless; slash commands are not sent to it yet"},
+    "stalled_turn": {"reason": "busy", "state": "stalled", "activity": "Active turn, screen unchanged"},
 }
 
 
-#: Causes that clear on their own (or by Shaw's own answer): HELD. name -> the hold class.
+#: Causes that clear on their own (or by the operator's own answer): HELD. name -> the hold class.
 HELD_SUBTYPES = {
     "codex_or_gemini_mid_turn": "mid_turn",
     "permission_dialog": "permission_or_menu",
@@ -182,6 +185,8 @@ HELD_SUBTYPES = {
     "pane_lock_busy": "pane_lock",
     "initializing": "cli_starting",
     "headless_question_waiting": "question_pending",
+    "headless_idle_only_caller": "idle_only_headless",
+    "stalled_turn": "mid_turn",
 }
 #: Causes that never clear by themselves (or may already have delivered): the LIVE answer, no row. name -> status.
 LIVE_SUBTYPES = {
@@ -195,7 +200,11 @@ LIVE_SUBTYPES = {
 
 def test_every_busy_subtype_is_classified():
     assert set(HELD_SUBTYPES) | set(LIVE_SUBTYPES) == set(BUSY_SUBTYPES)
-    assert set(HELD_SUBTYPES.values()) <= set(G.PERSON_HOLD_CLASSES)
+    assert set(HELD_SUBTYPES.values()) == set(G.PERSON_HOLD_CLASSES), "every hold class has a case"
+    for name, cls in HELD_SUBTYPES.items():
+        assert G._person_hold_class(BUSY_SUBTYPES[name]) == cls, name
+    for name in LIVE_SUBTYPES:
+        assert G._person_hold_class(BUSY_SUBTYPES[name]) is None, name
 
 
 @pytest.mark.parametrize("name", sorted(LIVE_SUBTYPES))
@@ -248,7 +257,8 @@ def test_R2_a_failed_durable_write_is_never_a_409_and_never_claims_held(box, mon
         raise sqlite3.OperationalError("disk full")
     monkeypatch.setattr(G, "_hold_for_boundary", boom)
     status, body = _post(box, PHONE)
-    assert status == 503 and body["ok"] is False and body["held"] is False and "disk full" in body["hold_failed"]
+    assert status == 409 and body["ok"] is False and body["held"] is False and body["busy"] is True
+    assert "disk full" in body["hold_failed"]
 
 
 def test_R4_held_for_person_is_logged_with_its_reason(box, monkeypatch, caplog):
@@ -320,7 +330,8 @@ def test_H1_exit_and_quit_are_refused_before_anything_even_under_a_busy_pane_loc
     assert status == 502 and body["reason"] == "slash_command_refused" and _rows(box) == []
 
 
-@pytest.mark.parametrize("cmd", ["/exit", "/quit", "/clear"])
+@pytest.mark.parametrize("cmd", ["/exit", "/quit", "/clear", "/exit\ufeff", "/exit.", "/quit!", "/exit/x", "/clear.",
+                                 "hello\n/exit\u200b"])
 def test_H1_real_inject_under_a_busy_pane_lock_never_writes_a_slash_row(box, monkeypatch, cmd):
     """The proven H1 path, end to end: the REAL verified_inject, another typer holding the pane lock."""
     from contextlib import contextmanager
@@ -352,11 +363,43 @@ def test_H1_the_legacy_holds_never_take_a_slash_command_either(box, monkeypatch)
     assert status == 502 and body["text_returned"] == "/clear" and _rows(box) == []
 
 
-def test_H1_hold_for_boundary_itself_refuses_a_slash_body(box):
+@pytest.mark.parametrize("body", ["/exit", "  /clear", "/exit\ufeff", "/quit!", "/exit.", "a line\n/exit/x"])
+def test_H1_hold_for_boundary_itself_refuses_a_slash_body(box, body):
     with pytest.raises(ValueError):
-        G._hold_for_boundary("seat", "/exit", "operator")
-    with pytest.raises(ValueError):
-        G._hold_for_boundary("seat", "  /clear", "operator")
+        G._hold_for_boundary("seat", body, "operator")
+    assert _rows(box) == []
+
+
+def test_H1_mail_keeps_its_first_line_rule(box, monkeypatch):
+    """A later "/exit" line in a MAIL body is pasted text, never run: mail is delivered as before; a person's send
+    with the same body is refused (a hold would type it raw later)."""
+    seen = []
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False, source="mail", **k: (seen.append(source) or True, {}))
+    status, _ = _post(box, {"session": "seat", "text": "see below\n/exit", "source": "mail"}, actor="automation:lineage")
+    assert status == 200 and seen == ["mail"]
+    status, body = _post(box, {**PHONE, "text": "see below\n/exit"})
+    assert status == 502 and body["reason"] == "slash_command_refused" and seen == ["mail"]
+
+
+def test_a_refusal_that_is_not_held_never_says_held(box, monkeypatch):
+    """The recheck's words are neutral; only the handler, which knows a hold happened, says "held"."""
+    monkeypatch.setattr(G, "verified_inject", _refuse(BUSY_SUBTYPES["recheck_flipped_unsafe"]))
+    status, body = _post(box, {"session": "seat", "text": "hi"}, actor="operator:share-sheet")   # no accepts: 409
+    assert status == 409 and not body.get("held") and "held" not in body["activity"].lower(), body
+    status, body = _post(box, PHONE)                                                           # the phone: held
+    assert status == 200 and body["held"] and body["activity"].endswith(G.HELD_FOR_BOUNDARY_WORDS)
+    for words in G.MID_TURN_RECHECK_WORDS.values():
+        assert "held" not in words.lower()
+
+
+def test_a_failed_person_hold_is_a_409_the_clients_know(box, monkeypatch):
+    monkeypatch.setattr(G, "verified_inject", _refuse(BUSY_SUBTYPES["permission_dialog"]))
+
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(G, "_hold_for_boundary", boom)
+    status, body = _post(box, PHONE)
+    assert status == 409 and body["busy"] is True and body["held"] is False and "hold_failed" in body
     assert _rows(box) == []
 
 
@@ -557,23 +600,27 @@ def test_v2_one_person_hold_asks_for_one_router_pass(box, monkeypatch):
     assert box["kicks"][0] - t0 >= 0.2                 # after the delay, not inside the request
 
 
-def test_v2_ten_holds_in_two_seconds_ask_for_one_pass(box, monkeypatch):
-    monkeypatch.setattr(G, "PERSON_HOLD_KICK_DELAY_S", 2.5)
+def test_v2_ten_holds_in_one_window_schedule_one_pass(box, monkeypatch):
+    """No wall clock: a window long enough that the ten sends cannot leave it, then the scheduler's own record
+    (ONE handle, ten sends, no kick yet), then the handle fired by hand gives exactly one kick."""
+    monkeypatch.setattr(G, "PERSON_HOLD_KICK_DELAY_S", 600.0)
     monkeypatch.setattr(G, "verified_inject", _refuse(BUSY_SUBTYPES["permission_dialog"]))
+    scheduled = []
+    real = G._schedule_person_kick
+    monkeypatch.setattr(G, "_schedule_person_kick", lambda loop: scheduled.append(real(loop)) or scheduled[-1])
     async def go():
         async with TestClient(TestServer(G.build_app())) as c:
-            async def one(i):
-                await asyncio.sleep(i * 0.2)                 # ten sends spread over ~2 s
-                r = await c.post("/agent-message", json=PHONE, headers=_headers(box))
-                return r.status, time.monotonic()
-            res = await asyncio.gather(*(one(i) for i in range(10)))
-            await asyncio.sleep(3.0)
+            res = [(await c.post("/agent-message", json=PHONE, headers=_headers(box))).status for _ in range(10)]
+            h = G._person_kick["handle"]
+            assert h is not None and not h.cancelled() and box["kicks"] == []
+            h.cancel()
+            G._person_kick["handle"] = None
+            G._run_person_kick()                                     # what the one handle would have done
             return res
     res = asyncio.run(go())
-    stamps = [t for _, t in res]
-    assert [s for s, _ in res] == [200] * 10 and len(_rows(box)) == 10
-    assert max(stamps) - min(stamps) < G.PERSON_HOLD_KICK_DELAY_S, "the sends did not land inside one window"
-    assert len(box["kicks"]) == 1, box["kicks"]
+    assert res == [200] * 10 and len(_rows(box)) == 10
+    assert scheduled == [True] + [False] * 9, scheduled
+    assert len(box["kicks"]) == 1
 
 
 def test_v2_a_failing_kick_never_fails_the_send(box, monkeypatch):
@@ -593,6 +640,7 @@ def test_v2_scheduling_trouble_never_fails_the_send(box, monkeypatch):
     monkeypatch.setitem(G._person_kick, "handle", object())     # a broken pending handle: scheduling raises inside
     status, body = _post(box, PHONE)
     assert status == 200 and body["held"]
+    assert G._person_kick["handle"] is None, "the broken slot is dropped so the next hold schedules a real kick"
 
 
 def test_v2_a_delivered_send_and_mail_ask_for_no_extra_pass(box, monkeypatch):
@@ -673,7 +721,7 @@ def test_gm_a_slash_refusal_logs_who_asked(box, monkeypatch, caplog):
         _post(box, {**PHONE, "text": "/clear"}, actor="operator:web")
     lines = [r.getMessage() for r in caplog.records if "slash command" in r.getMessage()]
     assert len(lines) == 2, lines
-    assert "principal=fleet-bearer" in lines[0] and "OrchestraUltra/361" in lines[0] and "'/exit'" in lines[0]
+    assert "principal=fleet-bearer" in lines[0] and "OrchestraUltra/1" in lines[0] and "'/exit'" in lines[0]
     assert "actor=operator:web" in lines[1] and "'/clear'" in lines[1]
     assert FLEET not in " ".join(lines)                       # never the bearer itself
 
@@ -730,8 +778,8 @@ def test_v5_ordinary_text_with_a_slash_inside_is_still_held(box, monkeypatch):
 
 
 # ------------------------------------------------------------------ v6: a path is text, not a slash command (gm msg_1cf0ff32)
-PATH_BODIES = ["/home/you/orchestraos/scripts/x.py", "Read /tmp/agent-msg-msg_x.md\n/tmp/agent-msg-msg_x.md",
-               "see below\n/home/you/.orchestra/state/backups/y/", "﻿/tmp/x", "/ just a slash", "//comment"]
+PATH_BODIES = ["/home/<you>/orchestraos/scripts/x.py", "Read /tmp/agent-msg-msg_x.md\n/tmp/agent-msg-msg_x.md",
+               "see below\n/home/<you>/.orchestra/state/backups/y/", "﻿/tmp/x", "/ just a slash", "//comment"]
 
 
 @pytest.mark.parametrize("text", PATH_BODIES)
@@ -753,5 +801,5 @@ def test_v6_a_command_name_is_still_a_slash_line(text):
 
 
 def test_v6_hold_for_boundary_takes_a_path_body(box):
-    G._hold_for_boundary("seat", "/home/you/x.py\n/tmp/y", "operator")
+    G._hold_for_boundary("seat", "/home/<you>/x.py\n/tmp/y", "operator")
     assert len(_rows(box)) == 1

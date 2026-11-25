@@ -4275,31 +4275,43 @@ _SLASH_CMD_RE = re.compile(r"^\s*/(exit|quit)\b", re.IGNORECASE)
 
 
 def _slash_lead(line: str) -> str:
-    """A line as a terminal would read its first character: NFKC (fullwidth U+FF0F becomes "/"), then leading Unicode
-    format characters (category Cf: BOM, ZWSP, ZWNJ, ZWJ, WJ, bidi marks) and whitespace (NBSP, ideographic space
-    included) removed. Only for the CHECK: the text that is sent is never changed."""
+    """A line as a terminal would read it: NFKC (fullwidth U+FF0F becomes "/"), then Unicode format characters
+    (category Cf: BOM, ZWSP, ZWNJ, ZWJ, WJ, bidi marks) and whitespace (NBSP, ideographic space included) removed
+    at BOTH ends: a trailing BOM is not whitespace to Python, but a CLI that trims its input reads "/exit\ufeff"
+    as /exit. Only for the CHECK: the text that is sent is never changed."""
     import unicodedata
     t = unicodedata.normalize("NFKC", line or "")
-    i = 0
-    while i < len(t) and (t[i].isspace() or unicodedata.category(t[i]) == "Cf"):
+    i, j = 0, len(t)
+    while i < j and (t[i].isspace() or unicodedata.category(t[i]) == "Cf"):
         i += 1
-    return t[i:]
+    while j > i and (t[j - 1].isspace() or unicodedata.category(t[j - 1]) == "Cf"):
+        j -= 1
+    return t[i:j]
 
 
 #: A slash COMMAND as a CLI reads one: "/" + a command name (built-in, skill or plugin:skill), then a space or the
-#: end of the line. A path ("/home/you/x", "/tmp/agent-msg-...") has a second "/" in its first word, so it is
-#: text, never a command (gm msg_1cf0ff32: agent mail is full of lines that start with a path).
-_SLASH_TOKEN_RE = re.compile(r"^/[A-Za-z][\w:-]*(?:\s|$)")
+#: end of the line. A path with two or more segments ("/home/<you>/x", "/tmp/agent-msg-...") has a second "/" in
+#: its first word, so it is text, never a command (gm msg_1cf0ff32: agent mail is full of lines that start with a
+#: path). A ONE-WORD line such as "/tmp" or "/api is down" does read as a command here, as it would at the prompt:
+#: the cost is a refusal (409) instead of a hold for a person's send that starts that way, never a wrong keystroke.
+#: The name ends at whitespace, the end of the line, or punctuation ("/clear." is still /clear to a CLI that trims);
+#: a following "/" makes it a path, never a command.
+_SLASH_TOKEN_RE = re.compile(r"^/[A-Za-z][\w:-]*(?=$|[^\w:/-])")
+
+
+def _normalised_lines(text: str) -> list:
+    return [_slash_lead(x) for x in (text or "").splitlines() or [""]]
 
 
 def _slash_lines(text: str) -> list:
-    """Every line of `text` that reads as a slash command once invisible prefixes are gone (review pass 5)."""
-    return [ln for ln in (_slash_lead(x) for x in (text or "").splitlines() or [""]) if _SLASH_TOKEN_RE.match(ln)]
+    """Every line of `text` that reads as a slash command once invisible prefixes and suffixes are gone."""
+    return [ln for ln in _normalised_lines(text) if _SLASH_TOKEN_RE.match(ln)]
 
 
 def _ends_session(text: str) -> bool:
-    """True when ANY line, normalised, is /exit or /quit: refused outright, never typed, never held."""
-    return any(_SLASH_CMD_RE.match(ln) for ln in _slash_lines(text))
+    """True when ANY line, normalised, is /exit or /quit (the session-ender rule _SLASH_CMD_RE: "/exit.", "/quit!",
+    "/exit/x" and "/exit" + an invisible suffix all count): refused outright, never typed, never held."""
+    return any(_SLASH_CMD_RE.match(ln) for ln in _normalised_lines(text))
 
 
 # --- chip-dodge (task #16, gm msg_bcd00a9d / the operator field report) --------------
@@ -4328,7 +4340,9 @@ def chipsafe_text(text, tmp_dir=None):
                         f"agent-inject-{int(_t.time())}-{secrets.token_hex(4)}.md")
     # 0600 from creation (gm msg_173a8de6): the body is operator conversation and /tmp is shared
     # by every local user. The name is unique (time + 8 random hex), so O_EXCL: never write into
-    # a file someone else planted, never follow a symlink; umask can only narrow 0600.
+    # a file someone else planted, never follow a symlink; umask can only narrow 0600. Every reader
+    # of this file (the seat's CLI, services/arturo/endcall.py's delivered_evidence) runs as the same
+    # user as the gateway; a split-user install would need the mode widened or the readers moved.
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as fh:
@@ -4636,14 +4650,6 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
     # same pane so their keystrokes can't interleave.
     mid_turn = st.get("state") in (MID_TURN_STATES | STALLED_STATES)
     with _session_send_lock(session):
-        if strict_mid_turn and (mid_turn or turn_already_running):
-            unsafe = _mid_turn_recheck(session, force=force)
-            if unsafe:
-                out = {"reason": "busy", "state": state, "recheck": unsafe["why"],
-                       "activity": MID_TURN_RECHECK_WORDS.get(unsafe["why"], unsafe["why"])}
-                if unsafe.get("composer_text"):
-                    out["composer_text"] = unsafe["composer_text"]     # FULL: a device echoes it back exactly
-                return False, out
         # TYPED-NOT-ENTERED JOURNAL (gm msg_40dcd58a): the row exists from just before the text is
         # typed until the submit is verified, so a process killed in between (crash, SIGKILL, a
         # respawn-pane -k) leaves evidence the next start reconciles (reconcile_inject_journal).
@@ -4662,6 +4668,17 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
             # dies before Enter, so nothing is typed.
             print(f"[watch_gateway] inject journal write failed for {session}: {e}", file=sys.stderr)
             return False, {"reason": "journal_unwritable", "state": state, "detail": str(e)}
+        if strict_mid_turn and (mid_turn or turn_already_running):
+            # The LAST look, as late as it can be: after the journal row (its mkdir and write took time a person
+            # at the pane could have used to type) and immediately before the keys. A refusal clears the row.
+            unsafe = _mid_turn_recheck(session, force=force)
+            if unsafe:
+                inject_journal.clear(session)                          # nothing was typed
+                out = {"reason": "busy", "state": state, "recheck": unsafe["why"],
+                       "activity": MID_TURN_RECHECK_WORDS.get(unsafe["why"], unsafe["why"])}
+                if unsafe.get("composer_text"):
+                    out["composer_text"] = unsafe["composer_text"]     # FULL: a device echoes it back exactly
+                return False, out
         r = _tmux("send-keys", "-t", _st(session), "-l", text)
         if r.returncode != 0:
             inject_journal.clear(session)          # nothing was typed
@@ -4761,11 +4778,13 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
 
 #: What a person is told when the last look before the keys found the pane no longer safe.
 MID_TURN_RECHECK_WORDS = {
-    "permission_pending": "A permission prompt is waiting (hook) — held for the turn boundary",
-    "no_composer": "The composer left the screen (menu or prompt) — held for the turn boundary",
-    "stranded_chip": "A pasted chip sits unsent in the composer — held for the turn boundary",
-    "composer_text": "Text was typed into the composer — held for the turn boundary",
+    "permission_pending": "A permission prompt is waiting (hook); nothing was typed",
+    "no_composer": "The composer left the screen (menu or prompt); nothing was typed",
+    "stranded_chip": "A pasted chip sits unsent in the composer; nothing was typed",
+    "composer_text": "Text was typed into the composer; nothing was typed over it",
 }
+#: Appended to a held answer's activity by the handler, which is the only place that knows a hold happened.
+HELD_FOR_BOUNDARY_WORDS = "held for the turn boundary"
 #: Same trust window as agent-status.py HOOK_WAITING_TTL_S (a Notification hook older than this is stale).
 MID_TURN_HOOK_WAITING_TTL_S = 900
 
@@ -6760,9 +6779,9 @@ def _hold_for_boundary(session, text, actor, origin="app", hold_class=None, hold
     rides metadata.source. deliver_raw -> RAW verified-inject (a direct chat
     message, not the router's [MSG] envelope); held_for_boundary tags it for the
     boundary-delivery path + the guard-(a) held-SLA escalation."""
-    if _slash_lines(text):
+    if _slash_lines(text) or _ends_session(text):
         # A held row is typed RAW at a turn boundary with nobody watching: "/exit" would end the session,
-        # "/clear" wipe its context. Never stored (the router refuses one too: message-router.refuse_raw_slash_row).
+        # "/clear" wipe its context. Never stored; this is the only gate between the row and the keys.
         raise ValueError("a slash command is never held for later delivery")
     store = _held_store()
     return store.send(
@@ -6929,8 +6948,8 @@ def _person_refusal_words(info):
 
 def _person_hold_class(info):
     """Why a refused person's send may be HELD, or None when it must get the live answer (409/502) instead.
-    ENUMERATE THE SAFE CASES AND DENY THE REST: a hold is only for a cause that ENDS ON ITS OWN or by Shaw's own
-    answer, after which the router can type the row (pane idle, composer empty). Anything that never clears by
+    ENUMERATE THE SAFE CASES AND DENY THE REST: a hold is only for a cause that ENDS ON ITS OWN or by the operator's
+    own answer, after which the router can type the row (pane idle, composer empty). Anything that never clears by
     itself would strand the row (no SLA alert exists), so it keeps the live 409 with its stuck-text payload."""
     reason = info.get("reason")
     if reason == "initializing":
@@ -6945,7 +6964,7 @@ def _person_hold_class(info):
     state = info.get("state")
     if info.get("headless"):
         if state == "waiting":
-            return "question_pending"            # the seat's own question/permission: Shaw answers, the turn goes on
+            return "question_pending"            # the seat's own question/permission: the operator answers, the turn goes on
         if state == "headless":
             return "idle_only_headless"          # an idle-only caller on a headless seat: the router hands it over
         return None                              # offline: SupervisorDown may come AFTER the write (M2) -> live
@@ -6954,7 +6973,7 @@ def _person_hold_class(info):
     if state in ("working", "stalled"):
         return "mid_turn"                        # a running turn (any runtime): ends on its own
     if state == "waiting":
-        return "permission_or_menu"              # a menu/permission prompt: cleared by Shaw's answer
+        return "permission_or_menu"              # a menu/permission prompt: cleared by the operator's answer
     return None                                  # stopped, crashed, stranded, queued_input, idle-but-no-composer
 
 
@@ -7023,7 +7042,6 @@ def _person_router_kick():
 
 
 def _run_person_kick():
-    _person_kick["handle"] = None
     try:
         _person_router_kick()
         log.info("AGENT-MESSAGE person hold: router pass requested")
@@ -7039,11 +7057,18 @@ def _schedule_person_kick(loop):
         if (h is not None and not h.cancelled() and _person_kick.get("loop") is loop
                 and not loop.is_closed() and h.when() > loop.time()):
             return False
+
+        def _fire():
+            # Cleared HERE, on the loop, before the executor runs: a hold that lands while the kick runs schedules
+            # the next window's handle, and nothing on another thread can drop that reference afterwards.
+            _person_kick["handle"] = None
+            loop.run_in_executor(None, _run_person_kick)
         _person_kick["loop"] = loop
-        _person_kick["handle"] = loop.call_later(
-            PERSON_HOLD_KICK_DELAY_S, lambda: loop.run_in_executor(None, _run_person_kick))
+        _person_kick["handle"] = loop.call_later(PERSON_HOLD_KICK_DELAY_S, _fire)
         return True
     except Exception as e:  # noqa: BLE001
+        # Whatever sat in the slot is not a usable handle: drop it so the next hold schedules a fresh one.
+        _person_kick["handle"] = None
         log.warning(f"AGENT-MESSAGE person hold: kick not scheduled: {e!r}")
         return False
 
@@ -7080,15 +7105,18 @@ async def handle_agent_message(request):
     # Normalised first (pass 5): a BOM, zero-width or bidi prefix, a fullwidth slash, or a slash command on a later
     # line ("hello\n/exit") is still a slash command for these checks.
     is_slash = bool(_slash_lines(text))
-    if _ends_session(text):
-        log.warning(f"AGENT-MESSAGE -> {session}: slash command refused ({_slash_lines(text)[0][:20]!r}) "
+    # Mail keeps the first-line rule it always had (a later line of a long body is pasted, never run); a person's
+    # send is checked on every line, because a hold types the row raw later.
+    ends = _ends_session(text) if source == "person" else bool(_SLASH_CMD_RE.match(text or ""))
+    if ends:
+        log.warning(f"AGENT-MESSAGE -> {session}: slash command refused ({(_slash_lines(text) or _normalised_lines(text))[0][:20]!r}) "
                     f"{_caller_desc(request)}")
         return _json({"ok": False, "delivered": False, "reason": "slash_command_refused",
                       "detail": "session-ending command (/exit, /quit) refused on the message path"}, status=502)
 
     accepts = data.get("accepts")
     held_supported = isinstance(accepts, list) and "held" in accepts
-    # INSTANT FOR A PERSON (Shaw ruling via gm msg_5d3c5a01: "my messages should not be queued, they
+    # INSTANT FOR A PERSON (operator ruling via gm msg_5d3c5a01: "my messages should not be queued, they
     # should be instant"). See _person_instant: a person's surface that reads a held answer.
     _cls, _name = _parse_actor(request)
     instant = _person_instant(source, _cls, held_supported)
@@ -7122,8 +7150,9 @@ async def handle_agent_message(request):
                                                  hold_class=hold_class, hold_why=why))
         except Exception as e:  # noqa: BLE001 — never lie 'held' on a failed durable write
             log.warning(f"AGENT-MESSAGE person -> {session}: hold FAILED ({e!r}); busy: {why}")
-            return _json({"ok": False, "delivered": False, "held": False, "hold_failed": str(e), **info},
-                         status=503)
+            # 409 + busy, the answer the shipped clients already know (200/409/502): nothing was typed or stored.
+            return _json({"ok": False, "delivered": False, "held": False, "busy": True, "hold_failed": str(e),
+                          **info}, status=409)
         if idle_only:
             why = f"not a person surface, idle only; {why}"
         log.info(f"AGENT-MESSAGE person -> {session}: held-for-person {msg_id} "
@@ -7133,7 +7162,8 @@ async def handle_agent_message(request):
         return _json({"ok": True, "delivered": False, "held": True, "state": "held_for_boundary",
                       "message_id": msg_id, "held_reason": info.get("reason"), "hold_class": hold_class,
                       "agent_state": info.get("state"),
-                      "activity": (IDLE_ONLY_HOLD_WORDS if idle_only else info.get("activity") or "")},
+                      "activity": (IDLE_ONLY_HOLD_WORDS if idle_only
+                                   else f"{info.get('activity') or hold_class}; {HELD_FOR_BOUNDARY_WORDS}")},
                      status=PERSON_HOLD_STATUS)
     if not ok and info.get("reason") == "busy":
         # §9.6 P0: ONLY the pure mid-turn 'working' refusal converts to hold.
@@ -7144,7 +7174,7 @@ async def handle_agent_message(request):
                             and not info.get("composer_text"))
         if instant and is_slash:
             log.warning(f"AGENT-MESSAGE person -> {session}: slash command not held, 409 "
-                        f"({_slash_lines(text)[0][:20]!r}, state={info.get('state')}) {_caller_desc(request)}")
+                        f"({(_slash_lines(text) or _normalised_lines(text))[0][:20]!r}, state={info.get('state')}) {_caller_desc(request)}")
         elif instant:
             log.info(f"AGENT-MESSAGE person -> {session}: refused 409, not held "
                      f"(state={info.get('state')}: {info.get('recheck') or info.get('activity') or ''})")
