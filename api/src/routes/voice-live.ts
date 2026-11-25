@@ -92,9 +92,10 @@ function checkOrchestraSession(token: string | null): { check: CredentialCheck; 
   if (sig !== expected) return { check: 'invalid', user: null };
   try {
     const payload = JSON.parse(Buffer.from(b64, 'base64url').toString());
+    // A name is reported only once the credential has verified: an invalid or expired payload is a claim.
     const user = typeof payload.u === 'string' && payload.u ? payload.u : null;
-    if (typeof payload.exp !== 'number') return { check: 'invalid', user };
-    return { check: payload.exp >= Date.now() ? 'ok' : 'expired', user };
+    if (typeof payload.exp !== 'number') return { check: 'invalid', user: null };
+    return payload.exp >= Date.now() ? { check: 'ok', user } : { check: 'expired', user: null };
   } catch {
     return { check: 'invalid', user: null };
   }
@@ -117,7 +118,7 @@ function checkOrchestraToken(req: IncomingMessage): { check: CredentialCheck; us
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     const user = typeof payload.sub === 'string' && payload.sub ? payload.sub : null;
-    return { check: !payload.exp || payload.exp >= Math.floor(Date.now() / 1000) ? 'ok' : 'expired', user };
+    return !payload.exp || payload.exp >= Math.floor(Date.now() / 1000) ? { check: 'ok', user } : { check: 'expired', user: null };
   } catch {
     return { check: 'invalid', user: null };
   }
@@ -126,8 +127,9 @@ function checkOrchestraToken(req: IncomingMessage): { check: CredentialCheck; us
 function checkTailscale(req: IncomingMessage): { check: TailscaleCheck; user: string | null } {
   const login = String(req.headers['tailscale-user-login'] || '').trim().toLowerCase();
   if (!login) return { check: 'absent', user: null };
-  if (!isLoopback(req.socket?.remoteAddress)) return { check: 'not-loopback', user: login };
-  return { check: tailscaleOperator(req) ? 'ok' : 'not-allowed', user: login };
+  // The login header is a claim until Serve's loopback peer and the allowlist both agree: only then is it a name.
+  if (!isLoopback(req.socket?.remoteAddress)) return { check: 'not-loopback', user: null };
+  return tailscaleOperator(req) ? { check: 'ok', user: login } : { check: 'not-allowed', user: null };
 }
 
 /** The browser's credentials, in the order they are accepted (cookie, then JWT, then Tailscale login); the checks

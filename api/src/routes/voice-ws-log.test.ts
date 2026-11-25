@@ -129,7 +129,9 @@ for (const [name, path, upstreamPath] of routes) {
   });
 
   test(`${name}: refused-auth says which of cookie / token / tailscale failed and how, never the value`, async () => {
-    const cookie = sessionCookie({}, 'not-the-secret');
+    // Every failing credential below carries an attacker-chosen name: a refusal must never present it as user=.
+    const PLANTED = 'planted-attacker-name';
+    const cookie = sessionCookie({ u: PLANTED }, 'not-the-secret');
     const none = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin() })).status, 401));
     assert.equal(none.length, 1);
     const l0 = exactlyOne(none, 'refused-auth');
@@ -139,26 +141,27 @@ for (const [name, path, upstreamPath] of routes) {
 
     const bad = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), cookie })).status, 401));
     assert.ok(exactlyOne(bad, 'refused-auth').includes('cookie:invalid,token:absent,tailscale:absent'), bad[0]);
-    neverACredential(bad, cookie.slice('orchestra_session='.length));
+    neverACredential(bad, cookie.slice('orchestra_session='.length), PLANTED, 'user=');
 
-    const expired = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), cookie: sessionCookie({ exp: Date.now() - 1000 }) })).status, 401));
+    const expired = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), cookie: sessionCookie({ u: PLANTED, exp: Date.now() - 1000 }) })).status, 401));
     assert.ok(exactlyOne(expired, 'refused-auth').includes('cookie:expired,'), expired[0]);
+    neverACredential(expired, PLANTED, 'user=');
 
-    const badJwt = jwt({}, 'not-the-secret');
+    const badJwt = jwt({ sub: PLANTED }, 'not-the-secret');
     const tok = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), authorization: `Bearer ${badJwt}` })).status, 401));
     assert.ok(exactlyOne(tok, 'refused-auth').includes('cookie:absent,token:invalid,tailscale:absent'), tok[0]);
-    neverACredential(tok, badJwt);
+    neverACredential(tok, badJwt, PLANTED, 'user=');
 
-    const oldJwt = jwt({ exp: Math.floor(Date.now() / 1000) - 10 });
+    const oldJwt = jwt({ sub: PLANTED, exp: Math.floor(Date.now() / 1000) - 10 });
     const old = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), cookie: `orchestra_token=${oldJwt}` })).status, 401));
     assert.ok(exactlyOne(old, 'refused-auth').includes('token:expired,'), old[0]);
-    neverACredential(old, oldJwt);
+    neverACredential(old, oldJwt, PLANTED, 'user=');
 
-    // A Tailscale login that is not on the allowlist (none is configured here) is named, as the operator would be.
-    const ts = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), 'tailscale-user-login': 'nobody@example.test' })).status, 401));
+    // A Tailscale login that is not on the allowlist (none is configured here) is a claim, not an identity: not named.
+    const ts = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), 'tailscale-user-login': `${PLANTED}@example.test` })).status, 401));
     const lt = exactlyOne(ts, 'refused-auth');
     assert.ok(lt.includes('tailscale:not-allowed'), lt);
-    assert.ok(lt.includes('user=nobody@example.test'), lt);
+    neverACredential(ts, PLANTED, 'user=');
   });
 
   test(`${name}: refused-no-bearer when the gateway token file is missing`, async () => {
