@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import QuestionnaireForm from '../components/QuestionnaireForm';
+import SandboxedHtml from '../components/kit/SandboxedHtml';
 import { isLiveQuestionnaire } from '../lib/questionnaireForm';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -112,14 +113,7 @@ export default function Questionnaires() {
 
                 {expandedId === q.id && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
-                    {(
-                    <iframe
-                      src={`/api/questionnaires/${q.id}/html`}
-                      className="w-full border-0"
-                      style={{ minHeight: '600px' }}
-                      title={q.title}
-                    />
-                    )}
+                    <SandboxedHtml src={`/api/questionnaires/${q.id}/html`} questionnaireId={q.id} title={q.title} minHeight="600px" />
                   </div>
                 )}
               </div>
@@ -178,12 +172,7 @@ export default function Questionnaires() {
 
                   {isOpen && (
                     <div className="mt-3 rounded-lg overflow-hidden border border-neutral-700 bg-black">
-                      <iframe
-                        src={`/api/questionnaires/${q.id}/html`}
-                        className="w-full border-0"
-                        style={{ minHeight: '500px' }}
-                        title={q.title}
-                      />
+                      <SandboxedHtml src={`/api/questionnaires/${q.id}/html`} questionnaireId={q.id} title={q.title} minHeight="500px" />
                     </div>
                   )}
                 </div>

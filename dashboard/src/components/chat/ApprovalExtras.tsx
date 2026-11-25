@@ -2,6 +2,7 @@ import { clsx } from 'clsx';
 import { CheckCircle2, ChevronDown, ChevronRight, ExternalLink, ShieldCheck, User, XCircle } from 'lucide-react';
 import { operatorUserId } from '../../lib/runtimeConfig';
 import { urgencyWord } from '../../lib/approvalCard';
+import SandboxedHtml from '../kit/SandboxedHtml';
 
 /** The fields of an Approvals/Inbox row that show under a DecisionCard's text. */
 export interface ApprovalExtrasItem {
@@ -81,7 +82,7 @@ export default function ApprovalExtras({ item, expanded, onToggle }: { item: App
       )}
       {expanded && item.onepager_url && (
         <div className="rounded-lg overflow-hidden border border-border">
-          <iframe src={item.onepager_url} className="w-full border-0" style={{ minHeight: '500px' }} title="Proposal details" />
+          <SandboxedHtml src={item.onepager_url} title="Proposal details" minHeight="500px" />
         </div>
       )}
     </>
