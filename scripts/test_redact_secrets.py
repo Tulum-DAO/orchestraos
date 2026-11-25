@@ -210,3 +210,23 @@ def test_refresh_architecture_redacts_a_sentinel_in_every_dumped_section(tmp_pat
     assert "### Crons (2 active)" in out and "stale" not in out and out.count("## LIVE STATUS") == 1
     assert "127.0.0.1:8888" in out, "ordinary lines pass through"
     assert list((doc.parent / "architecture-backups").glob("ARCHITECTURE-*.md")), "the old doc was backed up"
+
+
+def test_refresh_architecture_backup_never_keeps_a_credential_from_an_earlier_block(tmp_path):
+    gh = _tok("gh", "p_", A36)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("crontab", "tmux", "ss"):
+        _fake_bin(bin_dir, name, "")
+    doc = tmp_path / "docs" / "ARCHITECTURE.md"
+    doc.parent.mkdir()
+    doc.write_text(f"# Architecture\n\nbody\n\n---\n\n## LIVE STATUS (auto-updated old)\n- */5 * * * * env GITHUB_TOKEN={gh} x\n")
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "ORCHESTRA_DIR": str(tmp_path / "data"),
+           "ARCH_DOC": str(doc), "HOME": str(tmp_path)}
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "refresh-architecture.sh")], env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    backups = list((doc.parent / "architecture-backups").glob("ARCHITECTURE-*.md"))
+    assert backups and all(gh not in b.read_text() for b in backups), "the backup kept the old credential"
+    assert gh not in doc.read_text()
+    assert "body" in backups[0].read_text(), "the backup is still the previous doc, only redacted"

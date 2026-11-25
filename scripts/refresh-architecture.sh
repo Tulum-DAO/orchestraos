@@ -25,9 +25,10 @@ if [ ! -f "$ARCH_DOC" ]; then
   exit 1
 fi
 
-# Backup current version; keep 14 days.
+# Backup current version, itself redacted: an earlier run (or an older script) may have written a
+# credential into the doc, and a verbatim copy would keep it for 14 days. Keep 14 days.
 mkdir -p "$BACKUP_DIR"
-cp "$ARCH_DOC" "$BACKUP_DIR/ARCHITECTURE-$(date +%Y%m%d-%H%M).md" 2>/dev/null
+"${REDACT[@]}" < "$ARCH_DOC" > "$BACKUP_DIR/ARCHITECTURE-$(date +%Y%m%d-%H%M).md" 2>/dev/null
 find "$BACKUP_DIR" -name "ARCHITECTURE-*.md" -mtime +14 -delete 2>/dev/null
 
 # Strip every earlier LIVE STATUS block, so the doc does not grow forever.
