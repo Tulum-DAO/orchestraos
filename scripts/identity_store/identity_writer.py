@@ -14,6 +14,7 @@ regenerates the JSON artifacts, so the legacy write is skipped.
 """
 import json
 import os
+import sys
 
 from scripts.identity_store import cutover, freeze, orchestra_db, shims
 
@@ -225,7 +226,21 @@ def swap_generation(orchestra_dir, root, green, blue_generation_id=None,
                                   blue_resume_builder=_blue_resume_builder())
     finally:
         conn.close()
+    _project_after_swap(orchestra_dir, root)
     return True
+
+
+def _project_after_swap(orchestra_dir, root):
+    """Re-project the JSON views (registry.json, agent-sessions.json) right after a swap commits,
+    so readers see the promoted generation at once instead of at the next reconciler run (live:
+    the data dir's registry.json kept a retired blue's session id for up to 15 min). The swap is
+    already committed: a projection failure is reported and never raised, so it can never turn a
+    committed swap into a failed one. The next projector run repairs the views."""
+    try:
+        project_now(orchestra_dir)
+    except Exception as e:  # noqa: BLE001 — the commit stands; say so and move on
+        print(f"[identity_writer] swap of {root} committed, but re-projection failed: "
+              f"{type(e).__name__}: {e} (the next projector run repairs the views)", file=sys.stderr)
 
 
 def project_now(orchestra_dir) -> bool:
