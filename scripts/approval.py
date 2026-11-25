@@ -789,6 +789,9 @@ def main(argv=None):
         # The caller must be who --from says (interposer guard, as request/human-task/questionnaire);
         # then the store checks that seat is the author, its current generation, or gm.
         if not _authorship_guard(args.from_agent):
+            # the guard's generic advice (--delegated-by) does not exist for patch: say what does
+            print(f"REFUSED: only the author of {args.id} (or gm) may patch it; ask that seat, or patch as "
+                  f"yourself only if you are its author", file=sys.stderr)
             return 4
         ok = store.update_fields(args.id, caller=args.from_agent, **fields)
         if not ok:

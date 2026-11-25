@@ -66,7 +66,7 @@ def _task(s, author="postcall-dev"):
 def _patch(db, rid, caller, *extra):
     env = dict(os.environ, APPROVAL_DB_PATH=db)
     return subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "patch", "--id", rid,
-                          "--from", caller, *extra], capture_output=True, text=True, env=env)
+                          "--from", caller, *extra], capture_output=True, text=True, env=env, timeout=60)
 
 
 @pytest.mark.parametrize("caller", ["postcall-dev", "postcall-dev-g4", "gm", "gm-g12"])
@@ -89,7 +89,7 @@ def test_the_cli_refuses_a_stranger_and_says_why(store, db):
     rid = _task(store)
     r = _patch(db, rid, "some-other-seat", "--summary", "hijacked")
     assert r.returncode == 4 and r.stdout.strip() == ""
-    assert "REFUSED" in r.stderr and "some-other-seat" in r.stderr and "postcall-dev" in r.stderr
+    assert "REFUSED" in r.stderr and "some-other-seat may not patch a card authored by postcall-dev" in r.stderr
     assert store.get(rid)["summary"] != "hijacked"
 
 
@@ -175,7 +175,7 @@ def test_the_cli_refuses_a_seat_that_borrows_the_authors_name(store, db, monkeyp
     rid = _task(store)
     rc = _main(db, monkeypatch, {"some-other-seat"}, "postcall-dev", rid, "--summary", "borrowed")
     err = capsys.readouterr().err
-    assert rc == 4 and "interposer" in err
+    assert rc == 4 and "interposer" in err and "only the author of" in err and "--delegated-by" not in err.split("REFUSED")[-1]
     assert store.get(rid)["summary"] != "borrowed"
 
 
