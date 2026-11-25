@@ -15,7 +15,15 @@ import hashlib
 import json
 
 KINDS = {"fact", "goal", "decision", "insight", "commitment"}
-STATES = {"active", "resolved", "expired", "superseded"}
+STATES = {"active", "resolved", "expired", "superseded", "archived", "unverified"}
+# Never served by recall. 'archived': decayed or set aside, treated like superseded. 'unverified': claims the
+# operator's words without a quote that checks out; kept, never served. services/arturo/facts_recall.py holds
+# the same tuple (it may not import this module; a test holds them equal).
+UNSERVED_STATES = ("superseded", "archived", "unverified")
+
+
+def is_served(state) -> bool:
+    return (state or "active") not in UNSERVED_STATES
 EXPIRY_CLASSES = {"standard", "durable", "ephemeral"}
 _REQUIRED = ("fact_id", "ts", "kind", "text", "actor", "confidence",
              "entities", "lanes", "provenance", "state", "expiry_class")

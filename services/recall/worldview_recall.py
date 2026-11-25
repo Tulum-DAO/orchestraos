@@ -6,7 +6,17 @@ next to the FACTS block. Read-only: every connection is mode=ro with query_only.
 import json
 import os
 
-from services.arturo.facts_recall import K, MAX_CHARS, SNIPPET_CHARS, _connect_ro
+from services.arturo.facts_recall import K, MAX_CHARS, SNIPPET_CHARS, _connect_ro, served
+
+
+def _statement_served(meta):
+    """A statement carries the state of the fact it was copied from in its metadata; one without a state
+    (written straight from its source) is served."""
+    try:
+        m = json.loads(meta) if isinstance(meta, str) else (meta or {})
+    except ValueError:
+        return True
+    return served(str(m.get("state") or "")) if isinstance(m, dict) else True
 
 L2_FLAG = "ARTURO_WORLDVIEW_L2"   # flag-inert until it is turned on
                                   # on purpose — default off = legacy facts path
@@ -86,13 +96,21 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             cite = ""
             try:
                 sids = _json.loads(derived or "[]")
-                if sids:
-                    row = con.execute("SELECT source_type, ts FROM statements WHERE"
-                                      " statement_id=?", (sids[-1],)).fetchone()
-                    if row:
-                        cite = f"per {row[0]} {str(row[1])[:10]}"
             except Exception:
-                pass
+                sids = []
+            if sids:
+                # A belief stands only on statements recall may serve: cite the newest servable one, and drop
+                # the belief when every statement under it is unserved. A belief whose statements are not in
+                # this db is served as before.
+                q = ",".join("?" * len(sids))
+                found = {r[0]: r for r in con.execute(
+                    f"SELECT statement_id, source_type, ts, metadata FROM statements WHERE statement_id IN ({q})",
+                    sids).fetchall()}
+                ok = [found[s] for s in sids if s in found and _statement_served(found[s][3])]
+                if found and not ok:
+                    continue
+                if ok:
+                    cite = f"per {ok[-1][1]} {str(ok[-1][2])[:10]}"
             # stmt-cluster beliefs store subject = value[:80] (worldview_migrate
             # _derive_beliefs), so "{subj}: {value}" would print the prefix twice.
             text = value if (value or "").startswith(subj or "") else f"{subj}: {value}"
@@ -108,6 +126,8 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" ORDER BY ts DESC LIMIT ?", s_params + [fluid_limit]).fetchall()
         newest = {}
         for sid, stype, ts, content, meta in rows:      # ts DESC: first seen wins per key
+            if not _statement_served(meta):
+                continue                                  # copied from a fact recall may not serve
             if stype == "wal" and not _wal_anchored(meta):
                 continue                                  # §5.2: unanchored wal row is not recallable
             sp = _sp(content)
@@ -135,6 +155,8 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" ORDER BY ts DESC LIMIT ?", s_params + [fluid_limit]).fetchall()
         wal_entries = []
         for sid, ts, content, meta in w_rows:
+            if not _statement_served(meta):
+                continue
             if not _wal_anchored(meta):
                 continue                                  # §5.2: unanchored is not recallable
             try:

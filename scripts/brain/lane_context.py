@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timezone
 
 import bus
+from facts_schema import is_served
 
 API_VERSION = 1
 _AFFINITY_WEIGHT = {"direct": 1.0, "alias": 0.8, "co-mention": 0.6}
@@ -84,7 +85,7 @@ def get_context(lane: str, *, db_path: str | None = None,
                 "freshness": _freshness(db_path, []), "facts": []}
 
     rows = bus.query(db_path, kinds=kinds, since=since)
-    in_lane = [f for f in rows if lane in f["lanes"]]
+    in_lane = [f for f in rows if lane in f["lanes"] and is_served(f["state"])]
     now = time.time()
     ranked = sorted(in_lane, key=lambda f: _score(f, lane, now), reverse=True)
 

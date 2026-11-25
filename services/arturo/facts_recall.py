@@ -42,6 +42,17 @@ MIN_KEYWORD_LEN = 3
 SNIPPET_CHARS = 160
 MAX_CHARS = 250 * 4          # ~250-token hard clamp, same budget shape as semantic recall
 
+# States recall never serves. 'superseded': replaced by a newer fact. 'archived': decayed or set aside, served
+# like superseded. 'unverified': claims the operator's words without a quote that checks out; kept, never served.
+# The brain's facts_schema.UNSERVED_STATES is the same tuple (a test holds them equal).
+UNSERVED_STATES = ("superseded", "archived", "unverified")
+SERVED_SQL = "COALESCE(state,'active') NOT IN (" + ",".join(f"'{s}'" for s in UNSERVED_STATES) + ")"
+
+
+def served(state):
+    """True for a state recall may serve. No state (rows from before the column) counts as active."""
+    return (state or "active") not in UNSERVED_STATES
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -152,7 +163,7 @@ def topic_keywords(text):
 
 
 def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
-    """Facts from the last `hours`, newest first, noise and superseded rows left out; with keywords, the rows that
+    """Facts from the last `hours`, newest first, noise and unserved (superseded, archived, unverified) rows left out; with keywords, the rows that
     match one come first (still newest first within each group). Read-only; no store, or an unreadable one: []."""
     dbpath = dbpath or default_db_path()
     if not os.path.exists(dbpath):
@@ -165,7 +176,7 @@ def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
         try:
             rows = con.execute(
                 "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
-                "WHERE ts >= ? AND COALESCE(state,'active') != 'superseded'"
+                "WHERE ts >= ? AND " + SERVED_SQL
                 + ((" AND " + noise_clause) if noise_clause else "") + " ORDER BY ts DESC LIMIT ?",
                 [cutoff] + [p + "%" for p in _NOISE_PREFIXES] + [max(k * 8, 100)]).fetchall()
         finally:
@@ -262,10 +273,10 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
     params = [f"%{kw}%" for kw in keywords]
     con = _connect_ro(dbpath)
     try:
-        # E1: superseded (demoted) facts are down-ranked out of recall — the
-        # newer fact that replaced them surfaces instead. Guarded so it works on
+        # E1: unserved facts (superseded, archived, unverified) stay out of recall — for
+        # a superseded one, the newer fact that replaced it surfaces instead. Guarded so it works on
         # older dbs whose rows predate the state column population.
-        not_sup = "COALESCE(state,'active') != 'superseded'"
+        not_sup = SERVED_SQL
         # SQL-level noise exclusion mirrors _is_noise (lstrip+lower+startswith) so
         # the bounded recency window (LIMIT ?) is filled with REAL candidates —
         # otherwise a burst of recent distiller prompt-echoes (all dated today)
@@ -360,7 +371,7 @@ def query_facts_json(path, keywords, k=K):
         txt = row.get("fact") or row.get("text") or ""
         if not txt:
             continue
-        if str(row.get("state") or "active") == "superseded":
+        if not served(str(row.get("state") or "")):
             continue
         cands.append({"fact_id": f"json:{row.get('id', i)}",
                       "ts": row.get("timestamp") or row.get("verified_at") or "",

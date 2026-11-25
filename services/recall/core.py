@@ -64,6 +64,7 @@ def open_slot_facts(facts_db, slot_key):
         try:
             rows = con.execute(
                 "SELECT fact_id, ts, kind, text, expiry_class FROM facts WHERE slot_key=? AND valid_to IS NULL "
+                f"AND {fr.SERVED_SQL} "
                 "ORDER BY (json_extract(provenance,'$.source_kind')='shaw-location') DESC, valid_from DESC LIMIT 2",
                 (slot_key,)).fetchall()
         finally:
