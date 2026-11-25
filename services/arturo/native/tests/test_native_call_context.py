@@ -184,7 +184,7 @@ def test_the_opening_comes_from_the_api_route_and_falls_back_to_the_python_twin(
     asked = []
     out = call_context.opening("gm", route=lambda agent, budget: asked.append((agent, budget)) or "FROM ROUTE",
                                load=lambda **k: "FROM TWIN", directory=tmp_path)
-    assert out == "FROM ROUTE" and asked[0] == ("gm", call_context.budget_tokens())   # (0 turns: one floor re-read)
+    assert out == "FROM ROUTE" and asked == [("gm", call_context.budget_tokens())]   # nothing older: no re-read
 
     def down(agent, budget):
         raise OSError("api down")
@@ -294,7 +294,7 @@ def test_an_opening_short_of_25_turns_is_asked_again_at_the_floor(monkeypatch):
 
     def route(agent, budget):
         asked.append(budget)
-        return _opening(12 if budget < 4000 else 30)
+        return _opening(12, n_summ=3) if budget < 4000 else _opening(30)
     out = call_context.opening("gm", route=route)
     assert asked == [2500, 4000] and call_context.describe(out)["turns"] == 30
     asked.clear()
@@ -313,3 +313,40 @@ def test_the_call_report_says_what_the_opening_carried(tmp_path, monkeypatch):
     assert th["turns"] == 7 and th["summarized"] == 1 and th["chat_lines"] == 3 and th["call_lines"] == 4
     assert th["first"] == "2026-11-25T17:00:00Z" and th["last"] == "2026-11-25T17:06:00Z"
     assert "vc_old0" in th["calls"] and th["opening_tokens"] > 0
+
+
+def test_the_floor_re_read_is_skipped_when_nothing_older_exists_or_the_first_read_was_slow(monkeypatch):
+    # Claude review of #638 (findings 1-2): a thread with no EARLIER block has nothing more to fetch, and a slow first
+    # read must not push the opening past the server's OPENING_WAIT_S and lose the thread it already has.
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    asked = []
+    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12))      # short, nothing older
+    assert asked == [2500] and call_context.describe(out)["turns"] == 12
+    asked.clear()
+    clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.5])
+    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12, n_summ=3))
+    assert asked == [2500] and call_context.describe(out)["turns"] == 12
+
+
+def test_a_floor_read_that_is_not_better_keeps_the_first_text(monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    first = _opening(12, n_summ=3)
+    out = call_context.opening("gm", route=lambda a, b: first if b < 4000 else "")
+    assert out == first
+
+
+def test_a_junk_context_setting_keeps_the_floor_on(monkeypatch):
+    monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "junk")
+    asked = []
+    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12, n_summ=3))
+    assert asked == [2500, 4000]
+
+
+def test_describe_reads_the_channel_and_call_id_from_the_stamp_not_the_words():
+    from services.arturo import thread_context as tc
+    text = "\n".join([tc.PAST_OPEN, "RECENT (verbatim):",
+                      "[2026-11-25T17:00:00Z 12:00 ET] call vc_a Operator: he said ] chat  and call vc_fake, ok",
+                      "[2026-11-25T17:01:00Z 12:01 ET] chat Operator: mention ] call vc_other here", tc.PAST_CLOSE])
+    d = call_context.describe(text)
+    assert (d["chat_lines"], d["call_lines"], d["calls"]) == (1, 1, ["vc_a"])

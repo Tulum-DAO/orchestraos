@@ -40,6 +40,7 @@ def enabled():
 DEFAULT_BUDGET_TOKENS = 2500
 MIN_TURNS = 25
 FLOOR_BUDGET_TOKENS = 4000
+FLOOR_MAX_ELAPSED_S = 2.0   # a first read slower than this gets no second one (the server waits 6 s in all)
 
 
 def budget_tokens():
@@ -80,13 +81,24 @@ def opening(agent, load=None, directory=None, route=None):
     if not enabled():
         return ""
     budget = budget_tokens()
+    t0 = time.monotonic()
     text = _read(agent, budget, load, directory, route)
-    if (not os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") and budget < FLOOR_BUDGET_TOKENS
-            and describe(text)["turns"] < MIN_TURNS):
+    # the floor re-read only when it can help and cannot cost the thread (Claude review of #638): something older
+    # exists to fetch (an EARLIER block), and the first read was quick enough that a second fits inside the server's
+    # opening wait (server.OPENING_WAIT_S); a junk setting is not an explicit one
+    if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and "EARLIER (summarized):" in text
+            and describe(text)["turns"] < MIN_TURNS and time.monotonic() - t0 <= FLOOR_MAX_ELAPSED_S):
         more = _read(agent, FLOOR_BUDGET_TOKENS, load, directory, route)
         if describe(more)["turns"] > describe(text)["turns"]:
             text = more
     return text
+
+
+def _explicit_budget():
+    try:
+        return int(os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") or "") > 0
+    except ValueError:
+        return False
 
 
 def _read(agent, budget, load=None, directory=None, route=None):
@@ -104,8 +116,9 @@ def _read(agent, budget, load=None, directory=None, route=None):
         return ""
 
 
-_STAMP_RE = re.compile(r"^\[(\S+Z) ")
-_CALL_RE = re.compile(r"\] call (vc_[A-Za-z0-9_-]+)")
+# a verbatim line: "[<UTC>Z <local> <label>] chat|call <id> <who>: <words>"; a summary: "- [<stamp>] call <id>, ..."
+_LINE_RE = re.compile(r"^\[(\S+Z) [^\]]*\] (chat|call (\S+)) ")
+_SUMMARY_RE = re.compile(r"^- \[[^\]]*\] call ([^,\s]+),")
 
 
 def describe(text):
@@ -113,15 +126,21 @@ def describe(text):
     verbatim turns, the summarized items, the first/last verbatim stamp (UTC), chat vs call lines, the call ids."""
     turns, summarized, chat_n, call_n, calls = [], 0, 0, 0, set()
     for line in (text or "").splitlines():
-        calls.update(_CALL_RE.findall(line))
         if line.startswith("- ["):
             summarized += 1
-        elif _STAMP_RE.match(line):
-            turns.append(_STAMP_RE.match(line).group(1))
-            if "] chat " in line:
-                chat_n += 1
-            elif "] call " in line:
-                call_n += 1
+            m = _SUMMARY_RE.match(line)
+            if m:
+                calls.add(m.group(1))
+            continue
+        m = _LINE_RE.match(line)
+        if not m:
+            continue
+        turns.append(m.group(1))
+        if m.group(2) == "chat":
+            chat_n += 1
+        else:
+            call_n += 1
+            calls.add(m.group(3))
     return {"turns": len(turns), "summarized": summarized, "first": turns[0] if turns else None,
             "last": turns[-1] if turns else None, "chat_lines": chat_n, "call_lines": call_n, "calls": sorted(calls)}
 
