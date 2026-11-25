@@ -43,12 +43,73 @@ def is_shaw_text(text):
 def redact(text):
     return TOKEN_RE.sub("[REDACTED_TOKEN]", text)
 
-def _fact(ts, surface, agent, kind, text):
-    return {"ts": ts, "surface": surface, "agent": agent, "actor": "shaw",
+def _fact(ts, surface, agent, kind, text, actor="shaw"):
+    return {"ts": ts, "surface": surface, "agent": agent, "actor": actor,
             "kind": kind, "text": redact(text.strip())[:2000]}
+
+# Text that reaches a pane as a "user" turn but that no person typed. Other processes type into panes the
+# same way a person does, so the transcript records these as typed; only the text gives them away.
+INJECTED_RE = re.compile(
+    r"^(Stop hook feedback:|<task-notification>|<local-command-|<cross-session-message|"
+    r"Another Claude session sent a message|You are [\w.-]+\. Read /tmp/agent-|"
+    r"\[(QUEUE-DIGEST|ROTATION|LINEAGE|WAL DELTA|pulse|LONG-MSG|fwd from|cron|DECISION ANSWERED|"
+    r"Usage limit reached|Earlier usage-limit notes)|"
+    r"You are (a|an|the) |# You are |You extract |Distill this |Classify each |"
+    r"From the (meeting/)?conversation transcript)")
+
+
+def turn_author(o, text):
+    """Who wrote this user turn, from the transcript's own metadata, then the text.
+    "shaw" only when nothing says otherwise; an older transcript without origin fields stays "shaw"."""
+    origin = o.get("origin") if isinstance(o.get("origin"), dict) else {}
+    source = o.get("promptSource")
+    if o.get("isMeta"):
+        return "hook"
+    if o.get("isSidechain"):
+        return "subagent"
+    if str(o.get("entrypoint") or "").startswith("sdk"):
+        return "headless"
+    if source == "suggestion_accepted":
+        return "model-suggestion"
+    if source == "system" or origin.get("kind") not in (None, "human"):
+        return "system"
+    if INJECTED_RE.match(text.lstrip()):
+        return "injected"
+    return "shaw"
+
+
+def transcript_ref(path):
+    """<project dir>/<session file>: stable, and carries no host path."""
+    return "/".join(os.path.normpath(path).split(os.sep)[-2:])
+
+
+def _turn_facts(o, agent, ref):
+    """0..N facts for one parsed transcript record. Each text block is cited by the message uuid and its
+    position among the message's text blocks, which no later write to the transcript can shift."""
+    if o.get("type") != "user":
+        return []
+    c = o.get("message", {}).get("content")
+    if isinstance(c, str):
+        texts = [c]
+    elif isinstance(c, list):
+        texts = [b.get("text", "") for b in c
+                 if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        texts = []
+    uuid = o.get("uuid")
+    out = []
+    for part, t in enumerate(texts):
+        if is_shaw_text(t):
+            fa = _fact(o.get("timestamp", ""), "cli", agent, "prompt", t, actor=turn_author(o, t))
+            fa["citation"] = {"transcript": ref, "uuid": uuid, "part": part}
+            fa["source_key"] = f"cli:{uuid}:{part}" if uuid else None
+            out.append(fa)
+    return out
+
 
 def extract_transcript_facts(path, agent):
     facts = []
+    ref = transcript_ref(path)
     try:
         with open(path, errors="replace") as f:
             for line in f:
@@ -56,27 +117,16 @@ def extract_transcript_facts(path, agent):
                     o = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if o.get("type") != "user":
-                    continue
-                c = o.get("message", {}).get("content")
-                texts = []
-                if isinstance(c, str):
-                    texts = [c]
-                elif isinstance(c, list):
-                    texts = [b.get("text", "") for b in c
-                             if isinstance(b, dict) and b.get("type") == "text"]
-                for t in texts:
-                    if is_shaw_text(t):
-                        facts.append(_fact(o.get("timestamp", ""), "cli", agent, "prompt", t))
+                facts.extend(_turn_facts(o, agent, ref))
     except OSError:
         pass
     return facts
 
 # --------------------------------------------------------------------------- #
 # A1 — incremental byte-offset checkpoint + MERGE-into-day-file (CPU-discipline
-# Part A; gm ruling msg_6af31c89 = Option (i) MERGE). Transcripts are append-only
-# JSONL, so we read only the bytes appended since the last dream and MERGE the new
-# facts into the day-file (never clobber). See dream/test_collect_incremental.py.
+# Part A, the MERGE option). Transcripts are append-only JSONL, so we read only the
+# bytes appended since the last dream and MERGE the new facts into the day-file
+# (never clobber).
 # --------------------------------------------------------------------------- #
 # Profiling counters (Part C) — the harness resets these and reads them to report the
 # cold (full-read) vs warm (tail) IO profile. Zero-cost when unused.
@@ -92,28 +142,14 @@ def profile_stats():
     return dict(_PROFILE)
 
 
-def _facts_from_line(line, agent):
-    """Parse one JSONL transcript line into 0..N Shaw facts (same rule as
+def _facts_from_line(line, agent, ref=""):
+    """Parse one JSONL transcript line into 0..N facts (same rule as
     extract_transcript_facts, applied per line)."""
     try:
         o = json.loads(line)
     except (json.JSONDecodeError, ValueError):
         return []
-    if o.get("type") != "user":
-        return []
-    c = o.get("message", {}).get("content")
-    if isinstance(c, str):
-        texts = [c]
-    elif isinstance(c, list):
-        texts = [b.get("text", "") for b in c
-                 if isinstance(b, dict) and b.get("type") == "text"]
-    else:
-        texts = []
-    out = []
-    for t in texts:
-        if is_shaw_text(t):
-            out.append(_fact(o.get("timestamp", ""), "cli", agent, "prompt", t))
-    return out
+    return _turn_facts(o, agent, ref)
 
 
 def _first_line_head(path):
@@ -182,7 +218,8 @@ def read_file_incremental(path, agent, entry):
     if consumed:
         for raw in data[:consumed].split(b"\n"):
             if raw.strip():
-                facts.extend(_facts_from_line(raw.decode("utf-8", "replace"), agent))
+                facts.extend(_facts_from_line(raw.decode("utf-8", "replace"), agent,
+                                              transcript_ref(path)))
 
     new_entry = {"inode": inode, "size": size, "offset": start + consumed,
                  "mtime": mtime, "head": _first_line_head(path)}
