@@ -106,3 +106,15 @@ def test_other_surfaces_keep_their_row_shape(tmp_path):
     (f,) = C.collect_jsonl(str(p), "telegram", lambda o: o.get("dir") == "inbound", "ts", "text", "bot")
     assert f == {"ts": "2026-11-01T10:00:00Z", "surface": "telegram", "agent": "bot", "actor": "shaw",
                  "kind": "message", "text": "ship it tonight"}
+
+
+def test_data_dir_comes_from_orchestra_dir(tmp_path, monkeypatch):
+    import importlib
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    try:
+        mod = importlib.reload(C)
+        assert mod.FACTS_DIR == os.path.join(str(tmp_path), "dream", "facts")
+        assert mod.CHECKPOINT_PATH == os.path.join(str(tmp_path), "dream", ".collect-checkpoint.json")
+    finally:
+        monkeypatch.delenv("ORCHESTRA_DIR")
+        importlib.reload(C)

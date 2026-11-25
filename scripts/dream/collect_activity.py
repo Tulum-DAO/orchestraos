@@ -10,7 +10,14 @@ Surfaces: cli (agent transcripts), telegram, dashboard, ui, voice.
 import json, os, re, sys, glob, hashlib
 from datetime import datetime, timedelta, timezone
 
-ORCH = os.path.expanduser("~/scripts/agent-orchestra")
+# The data dir is orchestra_cli's data_dir() ($ORCHESTRA_DIR first), like every other script here.
+# orchestra_cli lives in this file's checkout; appended, never prepended, so nothing is shadowed.
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:
+    sys.path.append(_ROOT)
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+ORCH = str(_data_dir())
 PROJECTS = os.path.expanduser("~/.claude/projects")
 FACTS_DIR = os.path.join(ORCH, "dream", "facts")
 CHECKPOINT_PATH = os.path.join(ORCH, "dream", ".collect-checkpoint.json")
