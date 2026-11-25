@@ -12,8 +12,9 @@ A main Chrome process (chrome-family executable, no --type=, profile under a plu
   own Chrome, never ours to end).
 Chrome outside the plugin roots is never reported.
 
-Usage: chrome_orphans.py            one line per orphan: pid<TAB>profile<TAB>why
-       chrome_orphans.py --all      every plugin Chrome with its verdict and parent chain
+Usage: chrome_orphans.py              one line per orphan: pid<TAB>profile<TAB>why
+       chrome_orphans.py --all        every plugin Chrome with its verdict and parent chain
+       chrome_orphans.py --protected  pids the age rule must spare: live-parent plugin Chrome + subtree
 
 Environment (tests): CHROME_REAPER_PROFILE_ROOTS (colon-separated roots, replaces the defaults),
 CHROME_REAPER_ADOPTERS (extra pids that count as adopters, like a test that is a subreaper),
@@ -101,6 +102,21 @@ def classify(procs, rts, adopters=()):
     return res
 
 
+def protected(procs, rts):
+    """Pids the AGE rule must not touch: every plugin Chrome with a live parent, and everything under it
+    (renderers, GPU, utility, a crashpad handler when it sits under it)."""
+    kids = {}
+    for pid, (ppid, _comm, _argv) in procs.items():
+        kids.setdefault(ppid, []).append(pid)
+    out, todo = set(), [pid for pid, _prof, verdict, _why in classify(procs, rts) if verdict == "spared"]
+    while todo:
+        pid = todo.pop()
+        if pid not in out:
+            out.add(pid)
+            todo.extend(kids.get(pid, ()))
+    return out
+
+
 def _chain(pid, procs, depth=6):
     names = []
     while pid in procs and depth:
@@ -113,6 +129,10 @@ def _chain(pid, procs, depth=6):
 def main(argv):
     procs = read_procs(os.environ.get("CHROME_REAPER_PROC", "/proc"))
     adopters = {int(p) for p in os.environ.get("CHROME_REAPER_ADOPTERS", "").split(",") if p.strip()}
+    if "--protected" in argv:
+        for pid in sorted(protected(procs, roots())):
+            print(pid)
+        return 0
     rows = classify(procs, roots(), adopters)
     for pid, prof, verdict, why in rows:
         if "--all" in argv:

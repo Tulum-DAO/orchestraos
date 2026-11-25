@@ -72,6 +72,14 @@ def test_both_spellings_of_the_root_match(tmp_path):
     assert sorted(p for p, _, v, _ in rows if v == "orphan") == [51, 52]
 
 
+def test_a_live_parent_plugin_chrome_and_its_children_are_protected_from_the_age_rule():
+    procs = {50: MCP, 51: _chrome(50), 52: (51, "chrome", ["chrome", "--type=renderer"]),
+             53: (52, "chrome", ["chrome", "--type=gpu-process"]),
+             61: _chrome(1, profile=ROOT + "/gone"), 62: (61, "chrome", ["chrome", "--type=renderer"]),
+             71: (1, "chrome", ["chrome", "--headless", "--user-data-dir=/home/u/other"])}
+    assert co.protected(procs, [ROOT]) == {51, 52, 53}
+
+
 # ───────── by effect: real processes, the real script ─────────
 
 REAPER = os.path.join(HERE, "chrome-reaper.sh")
@@ -168,3 +176,44 @@ def test_list_mode_kills_nothing_and_shows_the_verdict(tmp_path, fake_chrome):
     finally:
         os.killpg(p.pid, 9)
         p.wait()
+
+
+def _headless(fake_dir, name="chrome"):
+    """A fake browser that the AGE rule can see: comm chrome, --headless in its arguments."""
+    p = fake_dir / name
+    p.write_text("#!/bin/sh\nsleep 300\n")
+    p.chmod(0o755)
+    return p
+
+
+def test_the_age_rule_spares_a_live_parent_plugin_chrome_and_still_reaps_the_rest(tmp_path, fake_chrome):
+    root = tmp_path / "browser-profiles"
+    root.mkdir()
+    q = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "start_new_session": True}
+    # plugin Chrome under a live shell parent, with a child of its own (its sleep)
+    plugin = subprocess.Popen(["sh", "-c", f'"{fake_chrome}" --headless=new --user-data-dir="{root / "seat"}"; :'], **q)
+    # a headless Chrome outside the plugin root, also with a live parent
+    other = subprocess.Popen(["sh", "-c", f'"{fake_chrome}" --headless=new --user-data-dir="{tmp_path / "x"}"; :'], **q)
+    try:
+        time.sleep(2.2)                               # both now older than the 1 s limit below
+        kids = {}
+        for name, holder in (("plugin", plugin), ("other", other)):
+            br = int(subprocess.run(["pgrep", "-P", str(holder.pid)], capture_output=True, text=True).stdout.split()[0])
+            kid = int(subprocess.run(["pgrep", "-P", str(br)], capture_output=True, text=True).stdout.split()[0])
+            kids[name] = (br, kid)
+        allow = " ".join(str(p) for pair in kids.values() for p in pair)
+        env = {**os.environ, "CHROME_REAPER_PROFILE_ROOTS": str(root), "CHROME_REAPER_LOG": str(tmp_path / "log"),
+               "CHROME_REAPER_PIDS_ALLOW": allow}   # nothing outside this test is eligible
+        subprocess.run(["bash", REAPER, "1"], env=env, check=True, timeout=60)
+        alive = {n: [os.path.exists(f"/proc/{p}") and open(f"/proc/{p}/stat").read().split(")")[-1].split()[0] != "Z"
+                     for p in pair] for n, pair in kids.items()}
+        # the plugin browser and its child survive both sweeps; the other browser is reaped (a real
+        # Chrome's children are named chrome and go in the straggler sweep; this fake's child is sleep)
+        assert alive["plugin"] == [True, True] and alive["other"][0] is False
+    finally:
+        for h in (plugin, other):
+            try:
+                os.killpg(h.pid, 9)
+            except OSError:
+                pass
+            h.wait()

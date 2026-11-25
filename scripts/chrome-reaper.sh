@@ -69,10 +69,24 @@ else
   fi
 fi
 
+# The age rule below never touches a plugin Chrome whose parent is alive, or anything under it:
+# that is a live seat's own browser. If the list cannot be built, say so and protect nothing (the
+# age rule then behaves as it always did).
+if PROTECT_LIST="$(python3 "$HERE/chrome_orphans.py" --protected 2>/dev/null)"; then
+  PROTECT=" $(echo $PROTECT_LIST) "
+else
+  PROTECT=" "
+  $LIST_ONLY || echo "$(ts) [reaper] WARN live-parent plugin Chrome list unavailable; age rule unfiltered" >> "$LOG"
+fi
+# CHROME_REAPER_PIDS_ALLOW (tests only): when set, nothing outside this pid list is eligible.
+ALLOW=" ${CHROME_REAPER_PIDS_ALLOW:-} "
+eligible() { awk -v prot="$PROTECT" -v allow="$ALLOW" \
+  'index(prot, " " $1 " ") == 0 && (allow == "  " || index(allow, " " $1 " ") > 0)'; }
+
 # Main headless browser processes: chrome-family executable, has --headless, and is NOT a
 # child worker (renderers/gpu/utility carry --type=). These are the top-level browsers.
 mapfile -t MAINS < <(
-  ps -eo pid=,etimes=,comm=,args= | awk -v max="$MAX_AGE" '
+  ps -eo pid=,etimes=,comm=,args= | eligible | awk -v max="$MAX_AGE" '
     ($2+0) > max && $3 ~ /^chrome|^chromium|headless/ && /--headless/ && !/--type=/ { print $1 }'
 )
 
@@ -101,7 +115,7 @@ done
 
 # Sweep any chrome-family stragglers still older than MAX_AGE (orphaned renderers, etc.).
 straggler=0
-for pid in $(ps -eo pid=,etimes=,comm= | awk -v max="$MAX_AGE" '($2+0) > max && $3 ~ /^chrome|headless/ {print $1}'); do
+for pid in $(ps -eo pid=,etimes=,comm= | eligible | awk -v max="$MAX_AGE" '($2+0) > max && $3 ~ /^chrome|headless/ {print $1}'); do
   kill -KILL "$pid" 2>/dev/null && straggler=$((straggler+1))
 done
 
