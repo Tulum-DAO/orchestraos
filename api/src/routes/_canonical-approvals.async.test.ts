@@ -8,17 +8,17 @@
  * RED-first: readCanonicalPendingCached did not exist and both list routes called the sync reader.
  * Hermetic: ORCHESTRA_SCRIPTS_DIR points at a tmp dir whose approval.py is a fake that counts its calls,
  * sleeps 400 ms and prints two rows; tasks.db is a plain file in the tmp ORCHESTRA_DIR (only its stamp is read).
- * The tmp dir is removed at the end. Run: npx tsx --test <this file> (from api/)
+ * The tmp dir is removed at the end (testTmpDir, plus an explicit rm once the server is closed). Run: npx tsx --test <this file> (from api/)
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, appendFileSync, renameSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync, appendFileSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { testTmpDir } from '../lib/testTmp.js';
 import type { Server } from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
 
-const dir = mkdtempSync(join(tmpdir(), 'canonical-async-'));
+const dir = testTmpDir('canonical-async-');
 const counter = join(dir, 'calls');
 const db = join(dir, 'state', 'tasks.db');
 mkdirSync(join(dir, 'state'));
