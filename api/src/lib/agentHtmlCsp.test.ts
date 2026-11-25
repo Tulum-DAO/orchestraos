@@ -24,7 +24,7 @@ test('the agent-HTML policy: no data out, no navigation, inline script, presenta
   assert.equal(d.get('default-src'), "'none'");
   assert.equal(d.get('script-src'), "'unsafe-inline'");
   assert.equal(d.get('style-src'), "'unsafe-inline' https://fonts.googleapis.com");
-  assert.equal(d.get('img-src'), 'https: data:');
+  assert.equal(d.get('img-src'), 'data:');   // no blind https GETs out of a framed page (an image ping carries the viewer's identity)
   assert.equal(d.get('font-src'), 'https://fonts.gstatic.com');
   assert.equal(d.get('connect-src'), "'none'");
   assert.equal(d.get('form-action'), "'none'");

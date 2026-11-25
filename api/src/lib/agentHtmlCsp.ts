@@ -23,7 +23,7 @@ export const AGENT_HTML_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
   "style-src 'unsafe-inline' https://fonts.googleapis.com",
-  'img-src https: data:',
+  'img-src data:',
   'font-src https://fonts.gstatic.com',
   "connect-src 'none'",
   "form-action 'none'",
