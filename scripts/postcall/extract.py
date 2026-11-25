@@ -5,6 +5,14 @@ from dataclasses import dataclass, field
 
 _PUNCT = re.compile(r"[^\w\s]")
 _TS = re.compile(r"_\[(\d{1,3}):(\d{2})\]_")
+_TURN = re.compile(r"^\*\*([^*\n]+)\*\*[ \t]+_\[\d{1,3}:\d{2}\]_[ \t]*$", re.M)
+_STOP = frozenset("a an the to of for and or with you your me my i we our it this that by on in at "
+                  "be will just soon later talk sounds good okay ok thanks thank".split())
+MIN_CONTENT_WORDS = 3
+
+
+class AttributionError(Exception):
+    """The extractor's claim about which diarization label is Shaw is not backed by the transcript."""
 
 
 @dataclass
@@ -20,6 +28,8 @@ class Item:
     quote: str
     span: tuple
     citation: str
+    speaker: str = ""
+    trust: str = "inferred"
     fields: dict = field(default_factory=dict)
 
 
@@ -61,13 +71,46 @@ def _offset_label(transcript, pos):
     return f"{last.group(1)}:{last.group(2)}" if last else "00:00"
 
 
+def turns(transcript):
+    """[(speaker_label, body_start, body_end)] for each `**LABEL** _[MM:SS]_` turn."""
+    heads = list(_TURN.finditer(transcript))
+    out = []
+    for n, m in enumerate(heads):
+        end = heads[n + 1].start() if n + 1 < len(heads) else len(transcript)
+        out.append((m.group(1).strip(), m.end(), end))
+    return out
+
+
+def _speaker_of(span, call_turns):
+    for label, start, end in call_turns:
+        if start <= span[0] and span[1] <= end:
+            return label
+    return None
+
+
+def _substantive(text):
+    words = [w for w in _normalized_with_map(text or "")[0].split() if w not in _STOP]
+    return len(words) >= MIN_CONTENT_WORDS
+
+
 def ground(call, extraction):
+    raw_all = extraction.raw or {}
+    call_turns = turns(call.transcript)
+    shaw_label = raw_all.get("shaw_label")
+    evidence = locate_quote(raw_all.get("shaw_label_evidence"), call.transcript)
+    if raw_all.get("items") and (not shaw_label or evidence is None
+                                 or _speaker_of(evidence, call_turns) != shaw_label):
+        raise AttributionError(f"{call.call_id}: shaw_label {shaw_label!r} not evidenced in that speaker's turn")
     items = []
-    for raw in (extraction.raw or {}).get("items") or []:
+    for raw in raw_all.get("items") or []:
         span = locate_quote(raw.get("quote"), call.transcript)
-        if span is None:
+        if span is None or not _substantive(raw.get("commitment_text")):
             continue
-        items.append(Item(owner=raw.get("owner") or "", quote=raw["quote"], span=span,
+        speaker = _speaker_of(span, call_turns)
+        owner = raw.get("owner") or ""
+        if speaker is None or (owner == "shaw") != (speaker == shaw_label) or owner not in ("shaw", "participant"):
+            continue
+        items.append(Item(owner=owner, quote=raw["quote"], span=span,
                           citation=f"{call.call_id}@{_offset_label(call.transcript, span[0])}",
-                          fields=dict(raw)))
+                          speaker=speaker, trust="inferred", fields=dict(raw)))
     return items

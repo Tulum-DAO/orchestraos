@@ -24,7 +24,11 @@ def process(call, *, ledger, extractor, effects):
                                error=extraction.error or "extractor failed")
         return Result("failed_retry", reason=extraction.error)
 
-    items = extract.ground(call, extraction)
+    try:
+        items = extract.ground(call, extraction)
+    except extract.AttributionError as e:
+        ledger.set_call_status(call.call_id, "failed_retry", content_hash=call.content_hash, error=str(e))
+        return Result("failed_retry", reason=str(e))
     if not items:
         ledger.set_call_status(call.call_id, "no_card", content_hash=call.content_hash)
         return Result("no_card")
