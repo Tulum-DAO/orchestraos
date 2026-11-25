@@ -90,6 +90,8 @@ jobs:
             args: "contract"
           - name: plugins
             args: "plugins"        # channel plugins (plugins/telegram/tests) ran in no group before
+          - name: integrations-nod
+            args: "integrations/nod"   # the Nod import gate: ledger, licenses, NOTICE, import boundary
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
