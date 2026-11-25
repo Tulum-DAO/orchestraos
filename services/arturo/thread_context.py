@@ -386,12 +386,32 @@ def threads_db_path(orch_dir: Optional[str] = None):
     return os.path.join(root, "state", "arturo", "threads.db")
 
 
-def thread_lines(thread_id: str, db, operator_label: str = "Operator", assistant_label: str = "Arturo") -> list:
-    """The thread's turns, oldest first, as Lines: a typed turn is "chat"; a spoken one is "call <id>", the id taken
-    from the call's end marker that follows it ("live" while the call is still open). The end marker itself and the
-    hidden page tag are not words anyone said. Read-only; raises if the store cannot be read (load_thread falls
-    back). A bad id reads nothing."""
-    if not isinstance(thread_id, str) or not THREAD_ID_RE.match(thread_id):
+def thread_readable(thread_id: str, principal: Optional[str], db=None) -> bool:
+    """The proxy's _thread_refusal rule (Claude review of #644): "fleet" reads any thread; any other caller reads only
+    a thread it started (thread_store started_by); unknown or unreadable = no, for a non-fleet caller."""
+    if not isinstance(thread_id, str) or not THREAD_ID_RE.fullmatch(thread_id):
+        return False
+    if principal == "fleet":
+        return True
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{db or threads_db_path()}?mode=ro", uri=True, timeout=2)
+        try:
+            row = conn.execute("SELECT started_by FROM threads WHERE id=?", (thread_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — cannot tell: not theirs
+        return False
+    return row is not None and row[0] == (principal or "anonymous")
+
+
+def thread_entries(thread_id: str, db, operator_label: str = "Operator", assistant_label: str = "Arturo") -> list:
+    """(role, Line) for the thread's turns, oldest first. A typed turn is "chat"; a spoken one is "call <id>", the id
+    taken from the call's end marker that follows it. Spoken lines still open when a typed turn arrives belong to a
+    call that ended without its marker ("earlier"); at the end of the thread they are the call still open ("live").
+    The end marker and the hidden page tag are not words anyone said. Read-only; raises if the store cannot be read.
+    A bad id reads nothing and never opens the store."""
+    if not isinstance(thread_id, str) or not THREAD_ID_RE.fullmatch(thread_id):
         return []
     import sqlite3
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
@@ -417,13 +437,21 @@ def thread_lines(thread_id: str, db, operator_label: str = "Operator", assistant
         if not text or at is None or role not in ("user", "assistant"):
             continue
         who = operator_label if role == "user" else assistant_label
-        line = Line(at=at, who=who, text=text, channel="call" if mode == "voice" else "chat", call_id="live")
-        if line.channel == "call":
+        if mode == "voice":
+            line = Line(at=at, who=who, text=text, channel="call", call_id="live")
             pending.append(line)
         else:
-            line.call_id = ""
-        out.append(line)
+            for p in pending:
+                p.call_id = "earlier"
+            pending = []
+            line = Line(at=at, who=who, text=text, channel="chat", call_id="")
+        out.append((role, line))
     return out
+
+
+def thread_lines(thread_id: str, db, operator_label: str = "Operator", assistant_label: str = "Arturo") -> list:
+    """thread_entries without the roles."""
+    return [line for _, line in thread_entries(thread_id, db, operator_label, assistant_label)]
 
 
 def load_thread(thread_id: str, db=None, calls_dir=None, exclude: Optional[str] = None,

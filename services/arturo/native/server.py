@@ -447,7 +447,7 @@ class NativeCall:
                             self.chat_named = True
                         thread = d.get("thread")
                         if thread is not None and not self.chat_named:
-                            if isinstance(thread, str) and call_context.thread_context.THREAD_ID_RE.match(thread):
+                            if isinstance(thread, str) and call_context.thread_context.THREAD_ID_RE.fullmatch(thread):
                                 self.page_thread = thread    # the standalone Arturo page's own thread
                             else:
                                 log.warning(f"native: thread id refused: {str(thread)[:80]!r}")
@@ -512,7 +512,7 @@ class NativeCall:
         # what opens the call (gm msg_e7402cbb): the page's own thread, else the named agent's chat, else Arturo's
         # own calls with no chat at all (never gm's chat read out as if it were the operator's)
         if self.page_thread:
-            load, arg = self.server.page_thread_loader, (self.page_thread,)
+            load, arg = self.server.page_thread_loader, (self.page_thread, self.binding.principal)
         elif self.chat_named:
             load, arg = self.server.thread_loader, (self.chat_agent,)
         else:
@@ -549,7 +549,7 @@ class NativeCall:
         self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding), context=opening))
         if threaded:
             try:
-                self.chat_feed = (self.server.page_feed_factory(self.page_thread) if self.page_thread
+                self.chat_feed = (self.server.page_feed_factory(self.page_thread, principal=self.binding.principal) if self.page_thread
                                   else self.server.chat_feed_factory(self.chat_agent) if self.chat_named else None)
             except Exception as e:  # noqa: BLE001
                 log.warning(f"native {self.binding.conversation_id}: chat feed off: {e!r}")
@@ -926,9 +926,9 @@ class NativeServer:
         self.usage_store = usage_store
         self._verify = verify
         self.thread_loader = call_context.opening                   # (agent) -> that agent's chat + Arturo's calls
-        self.page_thread_loader = call_context.opening_thread       # (web_ thread id) -> the Arturo page's thread
+        self.page_thread_loader = lambda tid, principal: call_context.opening_thread(tid, principal=principal)
         self.calls_loader = call_context.opening_calls              # () -> Arturo's own calls, no chat
-        self.page_feed_factory = call_context.ThreadFeed            # (web_ thread id) -> .poll() -> [stamped notes]
+        self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
 
     def _spoken(self, conversation_id):

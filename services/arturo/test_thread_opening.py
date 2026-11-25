@@ -69,3 +69,36 @@ def test_an_unreadable_thread_falls_back_to_the_journals_that_name_it(tmp_path):
 def test_a_bad_thread_id_reads_nothing(tmp_path):
     db = _thread(tmp_path, ROWS)
     assert tc.thread_lines("../etc", db) == []
+
+
+def _owned(tmp_path, owner):
+    db = tmp_path / "threads.db"
+    st = thread_store.ThreadStore(db)
+    st.record_turn("web_abc123", "Shaw's private question", "Arturo's answer", principal=owner)
+    return db
+
+
+def test_only_fleet_or_the_threads_own_starter_may_read_it(tmp_path):
+    # Claude review of #644 (blocking): the proxy's _thread_refusal rule, mirrored. A non-fleet caller reads only a
+    # thread it started; anything else reads as if the thread did not exist (no opening, no feed, no journal fallback).
+    db = _owned(tmp_path, "owner:shaw")
+    assert tc.thread_readable("web_abc123", "fleet", db) is True
+    assert tc.thread_readable("web_abc123", "owner:shaw", db) is True
+    assert tc.thread_readable("web_abc123", "owner:bob", db) is False
+    assert tc.thread_readable("web_nobody", "owner:bob", db) is False          # unknown: fail closed for non-fleet
+    assert tc.thread_readable("web_abc123", "owner:bob", tmp_path / "missing.db") is False
+
+
+def test_a_crashed_call_without_its_end_marker_does_not_take_the_next_calls_id(tmp_path):
+    rows = [("user", "call A line", "voice", None), ("user", "typed between", "", None),
+            ("user", "call B line", "voice", None),
+            ("assistant", "Call ended (vc_B).", "voice", {"kind": "call_end", "call_id": "vc_B"})]
+    lines = tc.thread_lines("web_abc123", _thread(tmp_path, rows), operator_label="Ada")
+    assert [(l.call_id, l.text) for l in lines] == [("earlier", "call A line"), ("", "typed between"),
+                                                    ("vc_B", "call B line")]
+
+
+def test_a_bad_thread_id_never_opens_the_store(tmp_path, monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("opened")))
+    assert tc.thread_lines("../etc", tmp_path / "x.db") == [] and tc.thread_lines("web_x\n", tmp_path / "x.db") == []

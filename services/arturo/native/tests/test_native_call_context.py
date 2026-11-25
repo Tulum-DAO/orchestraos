@@ -324,10 +324,10 @@ def _go_page(tmp_path, monkeypatch, start):
     async def go():
         s = _server(tmp_path, monkeypatch)
         s.thread_loader = lambda agent: seen.setdefault("agent", []).append(agent) or "AGENT CHAT"
-        s.page_thread_loader = lambda tid: seen.setdefault("thread", []).append(tid) or _opening(3)
+        s.page_thread_loader = lambda tid, principal: seen.setdefault("thread", []).append(tid) or _opening(3)
         s.calls_loader = lambda: seen.setdefault("calls", []).append(1) or "ARTURO CALLS"
         s.chat_feed_factory = lambda agent: seen.setdefault("agent_feed", []).append(agent) or _Feed(agent)
-        s.page_feed_factory = lambda tid: seen.setdefault("thread_feed", []).append(tid) or _Feed(tid)
+        s.page_feed_factory = lambda tid, principal=None: seen.setdefault("thread_feed", []).append(tid) or _Feed(tid)
         c = await _client(s)
         try:
             ws, p = await _start(c, start)
@@ -384,3 +384,30 @@ def test_the_page_thread_feed_sends_new_typed_lines_only(tmp_path):
     notes = feed.poll()
     assert len(notes) == 1 and notes[0].startswith("[2025-11-25T17:00:10Z 17:00 UTC] chat Ada (typed, during this call)")
     assert feed.poll() == []                                         # the cursor moved
+
+
+def test_the_page_thread_feed_is_by_role_and_by_access(tmp_path):
+    # Claude review of #644: an operator named "Arturo" must not turn Arturo's typed reply into the operator's words;
+    # and a caller that may not read the thread gets nothing.
+    from services.arturo import thread_store
+    db = tmp_path / "threads.db"
+    st = thread_store.ThreadStore(db)
+    st.record_turn("web_abc123", "first", "reply", principal="owner:shaw", ts=1764090000)
+    feed = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, tz="UTC", tz_label="UTC", operator="Arturo")
+    st.append_message("web_abc123", "assistant", "Arturo typed reply", ts=1764090010)
+    st.append_message("web_abc123", "user", "the operator typed", ts=1764090011)
+    notes = feed.poll()
+    assert len(notes) == 1 and "the operator typed" in notes[0]
+    bob = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, principal="owner:bob", tz="UTC",
+                                  tz_label="UTC", operator="Ada")
+    st.append_message("web_abc123", "user", "secret", ts=1764090020)
+    assert bob.poll() == []
+
+
+def test_a_page_thread_the_caller_may_not_read_opens_with_nothing(tmp_path, monkeypatch):
+    from services.arturo import thread_store
+    db = tmp_path / "threads.db"
+    thread_store.ThreadStore(db).record_turn("web_abc123", "Shaw's private question", "answer", principal="owner:shaw")
+    monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
+    assert "private question" in call_context.opening_thread("web_abc123", principal="fleet")
+    assert call_context.opening_thread("web_abc123", principal="owner:bob") == ""

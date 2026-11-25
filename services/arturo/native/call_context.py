@@ -93,11 +93,14 @@ def _with_floor(read):
     return text
 
 
-def opening_thread(thread_id, load=None):
+def opening_thread(thread_id, load=None, principal="fleet"):
     """A call placed from the standalone Arturo page: that page's own thread (threads.db), never another chat. The
     operator, 2026-11-25 (gm msg_e7402cbb): "one unified conversation between text and call that this call is part
     of"; gm's chat stays reachable through the conversations tool."""
     if not enabled():
+        return ""
+    if not thread_context.thread_readable(thread_id, principal):
+        log.warning(f"native: thread {thread_id!r} is not readable by {principal!r}; the call opens without it")
         return ""
 
     def read(budget):
@@ -200,8 +203,10 @@ class ThreadFeed:
     """New TYPED operator turns of the page's own thread (threads.db) since the call started, as stamped notes. The
     call's own spoken lines and Arturo's replies are not news to the call."""
 
-    def __init__(self, thread_id, db=None, since=None, tz=None, tz_label=None, operator=None, max_notes=FEED_MAX_NOTES):
+    def __init__(self, thread_id, db=None, since=None, tz=None, tz_label=None, operator=None, max_notes=FEED_MAX_NOTES,
+                 principal="fleet"):
         self.thread_id = thread_id
+        self.principal = principal
         self.db = db or thread_context.threads_db_path()
         self.cursor = time.time() if since is None else since
         if tz is None or tz_label is None:
@@ -213,12 +218,14 @@ class ThreadFeed:
     def poll(self):
         if self.left <= 0:
             return []
+        if not thread_context.thread_readable(self.thread_id, self.principal, self.db):
+            return []
         try:
-            lines = thread_context.thread_lines(self.thread_id, self.db, operator_label=self.operator)
+            entries = thread_context.thread_entries(self.thread_id, self.db, operator_label=self.operator)
         except Exception as e:  # noqa: BLE001 — next poll tries again
             log.info(f"native: thread feed for {self.thread_id!r} unreadable: {e!r}")
             return []
-        new = [l for l in lines if l.channel == "chat" and l.who == self.operator and l.at > self.cursor]
+        new = [l for role, l in entries if role == "user" and l.channel == "chat" and l.at > self.cursor]
         if not new:
             return []
         self.cursor = max(l.at for l in new)
