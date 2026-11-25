@@ -628,12 +628,10 @@ def main(argv=None):
                 print(f"REFUSED: {action_hash[:12]} is {live['state']}: release it or wait", file=sys.stderr)
                 return 3
             action = (args.action, material, run_on, action_hash)
-        # Which card ids are already pending for this op_key BEFORE create(): if create() hands one of
-        # them back it did not make a new card, and that card is never voided below.
-        pre_existing = set()
-        if action is not None and args.op_key:
-            pre_existing = {r["id"] for r in store.find_by_op_key(args.op_key)
-                            if r.get("from_agent") == args.from_agent}
+        # create() says whether it inserted a card or handed an existing one back (op_key dedupe, re-card
+        # guard): only a card THIS call made may ever be voided below. A pre-read cannot tell: two
+        # requesters can both pre-read nothing, and the loser would then void the winner's live card.
+        report = {}
         rid = store.create(from_agent=args.from_agent, question=args.question,
                            worker_kind=args.worker_kind, op_key=args.op_key,
                            thread_key=args.thread_key, options=opts,
@@ -648,7 +646,7 @@ def main(argv=None):
                            process_instance_id=args.process_instance_id,
                            process_lease_id=args.process_lease_id,
                            origin=args.origin, urgency=args.urgency,
-                           default_option=args.default_option)
+                           default_option=args.default_option, report=report)
         if action is not None:
             # The ledger row, pointed at the id create() returned, and evidence.action mirrored onto that
             # card (D4) by ask() itself. create() may hand back an EXISTING card (op_key dedupe, or the
@@ -657,7 +655,7 @@ def main(argv=None):
             # never voided (it is legitimately there for its own action). A card this call created is
             # voided whenever the ledger refuses its row: a pending card with no row could run unledgered.
             name, material, run_on, action_hash = action
-            created_new = rid not in pre_existing
+            created_new = bool(report.get("inserted"))
             card = store.get(rid) or {}
             if card.get("status") != "pending":
                 # create()'s re-card guard (RECARD_GUARD_S) returns a RECENT same-op_key card whatever its
@@ -680,8 +678,9 @@ def main(argv=None):
             try:
                 outward_ledger.ask(name, material, card_id=rid, actor=args.from_agent, run_on=run_on)
             except outward_ledger.CardBusy as e:
-                if created_new:
-                    _void_superseded(store, rid, args.from_agent, None)
+                # The card demonstrably carries a live row for another requester's action: it is THEIR
+                # live card (a concurrent requester can reach here on a card it did not make, whatever
+                # it believes). Touch nothing.
                 print(f"REFUSED: card {rid} already carries action {e.existing_hash[:8]} ({e.state}); file a new "
                       f"card with a different --op-key", file=sys.stderr)
                 return 3

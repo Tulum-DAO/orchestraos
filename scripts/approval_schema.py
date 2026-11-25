@@ -362,7 +362,13 @@ class ApprovalStore:
                seat_id=None, run_id=None, generation=None, seat_epoch=None,
                provider=None, provider_session_id=None, process_instance_id=None,
                process_lease_id=None, origin=None,
-               block_task=None, blocks_what=None, urgency=None, default_option=None):
+               block_task=None, blocks_what=None, urgency=None, default_option=None,
+               report=None):
+        # `report` (optional dict): filled with {"inserted": bool} so a caller can tell a card this call
+        # made from one the op_key dedupe or the re-card guard handed back. The return value is
+        # unchanged (the id either way).
+        if report is not None:
+            report["inserted"] = False
         # §1.1/§4 identity kwargs are ALL optional + provenance-only. `provider`
         # is recorded, NEVER branched on. A value the caller passes (an adapter
         # that captured it from its runtime) always wins. What it leaves empty of
@@ -410,6 +416,8 @@ class ApprovalStore:
                 if row:
                     return row["id"]
             rid = _gen_id()
+            if report is not None:
+                report["inserted"] = True
             now = _now()
             exp = (datetime.now(timezone.utc) + timedelta(hours=EXPIRY_HOURS)).isoformat()
             c.execute(

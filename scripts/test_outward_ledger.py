@@ -1048,3 +1048,69 @@ def test_BLOCK2_an_answer_given_before_the_ask_never_authorises_it(env):
     assert _rows(h2)[0]["state"] == "approved"
     L.on_card_answer(rid2, "approve")                                          # idempotent, nothing to redo
     assert _rows(h2)[0]["state"] == "approved"
+
+
+# --- the pre-read race: a concurrent requester must never kill another requester's card ---------
+
+def test_RACE2_cardbusy_never_voids_the_shared_card(env, monkeypatch, capsys):
+    """Both requesters pass the pre-read before either creates; `pay` wins the row on the shared card;
+    `deploy` gets CardBusy. The shared card is the winner's live card: it must survive untouched."""
+    winner_rid = _card(env, op_key="same")
+    pay = L.ask("pay", {"amount": "1"}, card_id=winner_rid, actor="deploy-bot")
+    monkeypatch.setattr(env.__class__, "find_by_op_key", lambda self, op_key, origin=None: [])   # blind pre-read
+    monkeypatch.setattr(L, "card_live_row", lambda cid: None)                                   # blind compare
+    code, out, err = _run_request_inproc(["--op-key", "same"], capsys)
+    assert code == 3 and out == "" and "already carries action" in err and "voided" not in err
+    assert [r["id"] for r in env.pending_to_notify()] == [winner_rid]        # still pending
+    assert env.get(winner_rid)["status"] == "pending"
+    assert [r["id"] for r in L.show(card_id=winner_rid)] == [pay["id"]]      # still carrying its row
+    assert L.sweep() == {"uncertain": [], "approved": [], "not_run": []}
+    assert env.record_answer(winner_rid, "approve", None) is True
+    assert _rows(pay["action_hash"])[0]["state"] == "approved"
+
+
+def test_RACE2_created_new_comes_from_create_itself(env):
+    report = {}
+    a = env.create(from_agent="x", question="q", worker_kind="pane", op_key="k", report=report)
+    assert report == {"inserted": True}
+    report2 = {}
+    b = env.create(from_agent="x", question="q", worker_kind="pane", op_key="k", report=report2)
+    assert a == b and report2 == {"inserted": False}
+    env.record_answer(a, "approve", None)
+    report3 = {}
+    c = env.create(from_agent="x", question="q", worker_kind="pane", op_key="k", report=report3)
+    assert c == a and report3 == {"inserted": False}                         # the re-card guard's return
+    assert env.create(from_agent="x", question="q", worker_kind="pane", op_key="k2") != a   # signature unchanged
+
+
+CHILD_REQUEST2 = """
+import os, sys, time
+sys.path.insert(0, {here!r})
+import approval
+while not os.path.exists({flag!r}):
+    time.sleep(0.005)
+sys.exit(approval.main(["request", "Do it?", "--from", "deploy-bot", "--worker-kind", "node",
+                        "--action", {action!r}, "--material-args", {args!r}, "--op-key", "same"]))
+"""
+
+
+def test_RACE2_two_concurrent_requests_different_actions_same_op_key(env, tmp_path):
+    flag = str(tmp_path / "go")
+    specs = [("deploy", json.dumps({"target": "a"})), ("pay", json.dumps({"amount": "1"}))]
+    procs = [subprocess.Popen([PY, "-c", CHILD_REQUEST2.format(here=HERE, flag=flag, action=a, args=g)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=dict(os.environ))
+             for a, g in specs]
+    time.sleep(1.5)
+    open(flag, "w").close()
+    outs = [p.communicate(timeout=60) for p in procs]
+    codes = sorted(p.returncode for p in procs)
+    assert codes == [0, 3], outs
+    pending = env.pending_to_notify()
+    assert len(pending) == 1                                                   # the winner's card, alive
+    (winner,) = pending
+    rows = L.show(card_id=winner["id"])
+    assert len(rows) == 1 and rows[0]["state"] == "asked"
+    assert len([r for r in _rows() if r["card_id"]]) == 1                     # one card row in total
+    loser_err = [e for (o, e), p in zip(outs, procs) if p.returncode == 3][0]
+    assert "voided" not in loser_err and "superseded" not in loser_err
+    assert env.history(limit=10) == []                                       # nothing retired or discarded
