@@ -35,6 +35,48 @@ function dbPath(orch: string = ORCHESTRA_DIR): string {
   return path.join(orch, 'state', 'orchestra-registry.db');
 }
 
+// ---- Reads kept while the store is unchanged -------------------------------------------------
+// sessionOwners and lineageChainOf run on EVERY transcript request (the poll route resolves the
+// seat's file, then its lineage): opening the db and running the queries each time cost 14 ms +
+// 8 ms per request on a 100-generation lineage, a third of a warm page. Each answer is kept under
+// the store's file signature (size + mtime of the db and of its WAL, which takes writes before a
+// checkpoint) and read again the moment that changes. Callers never mutate what they get back.
+let reads = 0;
+/** How many times the store was opened and read (tests: a second call reads nothing). */
+export function identityStoreReads(): number { return reads; }
+
+/** A string that changes whenever the store is written; '' for no store. */
+export function identityStoreSig(orch: string = ORCHESTRA_DIR): string {
+  const p = dbPath(orch);
+  try {
+    const a = fs.statSync(p);
+    let w = '';
+    try { const b = fs.statSync(`${p}-wal`); w = `:${b.size}:${b.mtimeMs}`; } catch { /* no WAL */ }
+    return `${a.size}:${a.mtimeMs}${w}`;
+  } catch { return ''; }
+}
+
+const KEPT_MAX = 1024;
+/** A backstop on the signature: two same-size writes inside one mtime tick are indistinguishable by
+ *  stat, so no answer is kept longer than this however still the file looks. */
+export const KEPT_TTL_MS = 10_000;
+const kept = new Map<string, { sig: string; at: number; value: unknown }>();   // insertion order = oldest first
+
+function keptRead<T>(key: string, orch: string, read: () => T): T {
+  const sig = identityStoreSig(orch);
+  const hit = kept.get(key);
+  if (hit && hit.sig === sig && Date.now() - hit.at < KEPT_TTL_MS) return hit.value as T;
+  reads += 1;
+  const value = read();
+  kept.delete(key);
+  kept.set(key, { sig, at: Date.now(), value });
+  while (kept.size > KEPT_MAX) kept.delete(kept.keys().next().value as string);
+  return value;
+}
+
+/** Tests: forget every kept read. */
+export function forgetIdentityStoreReads(): void { kept.clear(); }
+
 // Cheap inline flag/env probe — mirrors registry-update._cutover_registry_write and
 // message-router.load_agent_meta. No DB touch; safe to call on every request.
 export function isCutoverActive(orch: string = ORCHESTRA_DIR): boolean {
@@ -87,6 +129,11 @@ export function canonicalTmuxSession(id: string, orch: string = ORCHESTRA_DIR): 
  *  many ids (a project dir can hold thousands of transcripts): one DB open, not one per id. null when
  *  the store is absent/unreadable. */
 export function sessionOwners(orch: string = ORCHESTRA_DIR):
+    { sessions: Map<string, { root: string; current: boolean }>; roots: Set<string> } | null {
+  return keptRead(`owners|${orch}`, orch, () => readSessionOwners(orch));
+}
+
+function readSessionOwners(orch: string):
     { sessions: Map<string, { root: string; current: boolean }>; roots: Set<string> } | null {
   let db: Database.Database | null = null;
   try {
@@ -222,6 +269,11 @@ export interface ChainLink {
  *  on through it). The walk stops at a generation never promoted, at an ambiguous or missing step,
  *  at a loop, or after `max` steps. Not a head, or no store: null. */
 export function lineageChainOf(sid: string, orch: string = ORCHESTRA_DIR, max = 1000):
+    { root: string; cwd: string | null; links: ChainLink[] } | null {
+  return keptRead(`chain|${orch}|${max}|${sid}`, orch, () => readLineageChainOf(sid, orch, max));
+}
+
+function readLineageChainOf(sid: string, orch: string, max: number):
     { root: string; cwd: string | null; links: ChainLink[] } | null {
   let db: Database.Database | null = null;
   try {

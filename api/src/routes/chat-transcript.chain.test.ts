@@ -9,7 +9,7 @@
 import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, appendFileSync, readFileSync, renameSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, appendFileSync, readFileSync, renameSync, rmSync, statSync, utimesSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 
@@ -70,6 +70,7 @@ writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({ se
 
 const { default: router, normalizeTranscript, forgetPastFiles } = await import('./chat-transcript.js');
 const { logCacheParses, clearLogCache } = await import('../services/transcript-log-cache.js');
+const { clearFirstPageCache } = await import('../services/transcript-first-page-cache.js');
 const { lineageChainOf } = await import('../services/identity-store-reader.js');
 
 const ALL = ['a1', 'a2', 'a3', 'a4', `rot:${G2}`, 'b1', 'b2', 'b2', 'b3', `rot:${G3}`, 'c1', 'c2'];
@@ -118,18 +119,22 @@ test('three generations read whole, in order, each item once, ONE marker between
   });
 });
 
-test('without before: exactly the old envelope (keys and count), and the live window is the newest items', async () => {
+test('without before: the old envelope (keys and count) plus has_older/oldest_id, and the live window is the newest items', async () => {
   await withServer(async (get) => {
     const env = await get('?limit=5');
-    assert.deepEqual(Object.keys(env), ['agent_id', 'session_id', 'grammar_version', 'items', 'render_items']);
-    assert.equal(env.items.length, 5);
-    assert.deepEqual(env.items.map((i: any) => i.uuid), ALL.slice(-5));
+    assert.deepEqual(Object.keys(env), ['agent_id', 'session_id', 'grammar_version', 'items', 'render_items', 'has_older', 'oldest_id']);
+    assert.equal(env.has_older, true, 'the window did not reach the start of the chain');
+    // 5 units reach into b2's two-item line; the first page keeps that line whole, so 6 items.
+    assert.equal(env.items.length, 6);
+    assert.deepEqual(env.items.map((i: any) => i.uuid), ALL.slice(-6));
+    assert.equal(env.oldest_id, `${G2}~b2`, 'oldest_id names a whole line');
     // a seat whose current log fills the window: the same as the one-log builder gives, plus the server's message
     // ref on each log item (reactions build step 1; normalizeTranscript, the contract's builder, stays ref-free)
     const two = await get('?limit=2');
     const lines = readFileSync(join(projects, `${G3}.jsonl`), 'utf-8').split('\n');
     assert.deepEqual(two.items.map((i: any) => i.ref), [`${G3}~c1#0`, `${G3}~c2#0`]);
-    const withoutRefs = { ...two, items: two.items.map(({ ref: _ref, ...it }: any) => it) };
+    const { has_older: _older, oldest_id: _oldest, ...twoEnvelope } = two;   // the paging keys are the route's, not the builder's
+    const withoutRefs = { ...twoEnvelope, items: two.items.map(({ ref: _ref, ...it }: any) => it) };
     assert.deepEqual(withoutRefs, normalizeTranscript(lines, SEAT, G3, 2, false, true));
   });
 });
@@ -144,8 +149,8 @@ test('every log item carries <session>~<uuid>#<part>: per generation, the same i
       `${G3}~c1#0`, `${G3}~c2#0`,
     ], 'markers have none; the two blocks of one line are #0 and #1');
     const cut = await get('?limit=5');
-    assert.equal(cut.items[0].uuid, 'b2', 'precondition: this window starts inside b2\'s line');
-    assert.equal(cut.items[0].ref, `${G2}~b2#1`, 'numbered from the line, not from the window');
+    assert.equal(cut.items[0].uuid, 'b2', 'precondition: this window starts at b2\'s line (kept whole)');
+    assert.deepEqual([cut.items[0].ref, cut.items[1].ref], [`${G2}~b2#0`, `${G2}~b2#1`], 'numbered from the line, both parts present');
     const again = await get('');
     assert.deepEqual(again.items.map((i: any) => i.ref ?? null), refs, 're-read: the same refs');
     for (const limit of [1, 2, 3]) {
@@ -188,6 +193,7 @@ test('at the very start: nothing older, and an unknown cursor is an empty page t
 
 test('a page reads each file once: cached until the file changes, and an append is seen at once', async () => {
   clearLogCache();
+  clearFirstPageCache();          // this test counts log parses: the kept first page would answer without any
   const start = logCacheParses();
   await withServer(async (get) => {
     await get('');
@@ -247,6 +253,58 @@ test('a warm-up the supervisor marked is left out of the chat, the live stream b
     assert.equal(normalizeTranscript(lines, SEAT, G3, 150).items.length, 4, 'a mark for another session leaves this one whole');
   } finally {
     rmSync(mark, { force: true });
+    write(G3, L3);
+  }
+});
+
+test('a predecessor log that was missing when the page was built is seen when it appears again', async () => {
+  forgetPastFiles();
+  clearFirstPageCache();
+  const gone = join(root, 'aside-g2.jsonl');
+  renameSync(join(projects, `${G2}.jsonl`), gone);
+  try {
+    await withServer(async (get) => {
+      const without = await get('');
+      assert.ok(!without.items.some((i: any) => String(i.uuid).startsWith('b')), 'precondition: built with G2 missing');
+      renameSync(gone, join(projects, `${G2}.jsonl`));
+      forgetPastFiles();                      // the 5-minute "not found" memo is a separate matter; the kept page must not add to it
+      const back = await get('');
+      assert.ok(back.items.some((i: any) => String(i.uuid).startsWith('b')), 'G2 is back: its items are on the page');
+    });
+  } finally {
+    try { renameSync(gone, join(projects, `${G2}.jsonl`)); } catch { /* already back */ }
+    forgetPastFiles();
+  }
+});
+
+test('the current log replaced atomically by one of the same size and mtime (a new inode) is parsed again', async () => {
+  clearLogCache();
+  clearFirstPageCache();
+  const log = join(projects, `${G3}.jsonl`);
+  const original = readFileSync(log, 'utf-8');
+  const old = statSync(log);
+  try {
+    await withServer(async (get) => {
+      const before = await get('');
+      assert.ok(JSON.stringify(before).includes('c2'), 'precondition');
+      const parsed = logCacheParses();
+      // utimes keeps whole milliseconds only: pin both files to the same whole-ms mtime first.
+      const pinned = new Date(Math.floor(old.mtimeMs / 1000) * 1000);   // a whole second: utimes stores a float of seconds
+      utimesSync(log, pinned, pinned);
+      await get('');                                                  // the kept page and the parsed log now carry the pinned mtime
+      const parsedPinned = logCacheParses();
+      const tmp = `${log}.tmp`;
+      writeFileSync(tmp, original.replace('c2', 'cZ'));            // same length, different bytes
+      utimesSync(tmp, pinned, pinned);
+      renameSync(tmp, log);
+      const now = statSync(log);
+      assert.equal(now.size, old.size); assert.equal(now.mtimeMs, pinned.getTime()); assert.notEqual(now.ino, old.ino, 'precondition: only the inode moved');
+      const after = await get('');
+      assert.ok(JSON.stringify(after).includes('cZ'), 'the replaced log is what the page shows');
+      assert.equal(logCacheParses(), parsedPinned + 1, 'the rotated file was parsed again');
+      void parsed;
+    });
+  } finally {
     write(G3, L3);
   }
 });

@@ -13,11 +13,11 @@ import { Router, type Request, type Response } from 'express';
 import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, realpathSync } from 'fs';
 import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
-import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
+import { LIVE_CARDS, mergeQueuedItems, queuedStateSig } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
 import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
 import { refable, partAt } from '../lib/messageRef.js';
-import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
+import { storeRules, applyStoreRules, compactionNotices, mergeNotices, storePath } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff } from '../lib/agentCalls.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
@@ -25,8 +25,10 @@ import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
-import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents } from '../services/identity-store-reader.js';
+import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents, identityStoreSig } from '../services/identity-store-reader.js';
 import { cachedLog } from '../services/transcript-log-cache.js';
+import { firstPage } from '../services/transcript-first-page-cache.js';
+import { callsDir } from '../lib/agentCalls.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
 import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdown.js';
@@ -47,9 +49,20 @@ const ORCH_DIR = dataDir();
 const CLAUDE_PROJECTS = join(HOME, '.claude', 'projects');
 const GEMINI_BRAIN = join(HOME, '.gemini', 'antigravity-cli', 'brain');
 
+// agent-sessions.json is read on every transcript request and is close to 1 MB on a busy install:
+// parsing it cost ~5 ms per request, a third of a cache hit. The parsed document is kept while the
+// file's inode, size and mtime are what they were; a rewrite is seen on the very next request.
+let agentSessionsKept: { sig: string; doc: Record<string, any> } | null = null;
 function loadAgentSessions(): Record<string, any> {
-  try { return JSON.parse(readFileSync(join(ORCH_DIR, 'state', 'agent-sessions.json'), 'utf-8')); }
-  catch { return {}; }
+  const p = join(ORCH_DIR, 'state', 'agent-sessions.json');
+  let sig: string;
+  try { const st = statSync(p); sig = `${st.ino}:${st.size}:${st.mtimeMs}`; } catch { agentSessionsKept = null; return {}; }
+  if (agentSessionsKept && agentSessionsKept.sig === sig) return agentSessionsKept.doc;
+  try {
+    const doc = JSON.parse(readFileSync(p, 'utf-8'));
+    agentSessionsKept = { sig, doc };
+    return doc;
+  } catch { agentSessionsKept = null; return {}; }
 }
 
 // Live Antigravity / Gemini conversation id (pane child fds) and the pane id for the hook file both
@@ -776,6 +789,9 @@ interface Segment {
   generation: number | null;
   promotedAt: string | null;
   file: () => string | null;
+  /** A past generation: look its file up again, past this segment's own memo (the kept first page
+   *  asks, so a file that was missing when the page was built is seen when it appears). */
+  refind?: () => string | null;
 }
 
 // Where each past generation's file is, so a page further back does not search the disk again
@@ -824,6 +840,7 @@ export function chatSegments(agentId: string, sid: string | null, currentPath: s
         }
         return found;
       },
+      refind: () => pastFile(from, head.cwd, l.conversation_path),
     });
   }
   return [...past, current];
@@ -1073,7 +1090,24 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
     units.push(got.value);
   }
   let hasOlder = false;
-  if (before !== null) {
+  if (before === null) {
+    // Without reading further (an older generation's file above all): the window is full and its
+    // oldest position has log lines below it in its own generation, or a generation above it in
+    // the chain. The chain's file may turn out unreadable; the next page then says has_older false.
+    // Keep one line's items together here too: a window that landed inside a line (an assistant's
+    // text and its tool call share a uuid) takes the rest of that line, so oldest_id names a whole
+    // line and the next page continues from it without losing an item. Only while the edge has
+    // lines below it in its own segment (edge.at > 0): no step into an older generation's file.
+    let edge = units.length >= limit ? units[units.length - 1] : undefined;
+    while (edge && edge.at > 0 && edge.item?.uuid) {
+      const next = walk.next();
+      if (next.done) break;
+      if (next.value.seg !== edge.seg || next.value.item?.uuid !== edge.item.uuid) break;
+      units.push(next.value);
+      edge = next.value;
+    }
+    hasOlder = !!edge && (edge.at > 0 || edge.seg > 0);
+  } else {
     let next = walk.next();
     // Keep one line's items together: take the rest of the oldest item's line too.
     const edge = units[units.length - 1];
@@ -2243,16 +2277,81 @@ export function chatItemsFor(agentId: string, limit = 2000): any[] {
   } catch { return []; }
 }
 
-// GET /api/agents/:id/transcript?limit= -> v2 envelope
-// { agent_id, session_id, grammar_version, items, render_items }
+// GET /api/agents/:id/transcript?limit= -> v2 envelope, the newest page
+// { agent_id, session_id, grammar_version, items, render_items, has_older, oldest_id }
 // GET /api/agents/:id/transcript?before=<cursor>&limit= -> the page just older than the cursor (a
-// page's own `oldest_id`, or an item's uuid), the same envelope plus { has_older, oldest_id }.
+// page's own `oldest_id`, or an item's uuid), the same envelope.
+// The first page defaults to FIRST_PAGE_LIMIT items (was 150: a seat switch loads one page per
+// visible seat, and 150 items of a busy seat were 230 KB-1 MB each); has_older/oldest_id on it
+// tell the client where the rest is. A cursor page still defaults to PAGE_LIMIT.
 const PAGE_LIMIT = 100;
+export const FIRST_PAGE_LIMIT = 40;
+
+/** `size:mtime` of a file, '' when it is not there. */
+function fileSig(p: string): string {
+  try { const st = statSync(p); return `${st.size}:${st.mtimeMs}`; } catch { return ''; }
+}
+
+/** The call journals as one string: the directory's mtime (a journal added or removed) and every
+ *  journal's size and mtime (one rewritten in place: a call that ended, a rating), since the page
+ *  shows each call's state. Several hundred stats, 4-5 ms on a busy install, so the answer is kept
+ *  for CALLS_SIG_TTL_MS: a seat switch's 20 requests pay once, and a call's state is at most a
+ *  second late on the page. '' with no directory. */
+export const CALLS_SIG_TTL_MS = 1000;
+let callsSigKept: { dir: string; at: number; sig: string } | null = null;
+function callsSig(dir: string): string {
+  const now = Date.now();
+  if (callsSigKept && callsSigKept.dir === dir && now - callsSigKept.at < CALLS_SIG_TTL_MS) return callsSigKept.sig;
+  const sig = callsSigNow(dir);
+  callsSigKept = { dir, at: now, sig };
+  return sig;
+}
+function callsSigNow(dir: string): string {
+  try {
+    const d = statSync(dir);
+    let n = 0; let size = 0; let newest = 0;
+    for (const f of readdirSync(dir)) {
+      if (!f.startsWith('vc_') || !f.endsWith('.json')) continue;
+      try { const st = statSync(join(dir, f)); n += 1; size += st.size; if (st.mtimeMs > newest) newest = st.mtimeMs; } catch { /* gone between readdir and stat */ }
+    }
+    return `${d.mtimeMs}:${n}:${size}:${newest}`;
+  } catch { return ''; }
+}
+
+/** Everything the first page is made of, as one string: the log's identity and bytes, the
+ *  lineage store, the seat's queued rows, its cut turns and warm-up mark, its settings, the
+ *  compaction store and its call journals. The kept page (services/transcript-first-page-cache.ts)
+ *  is served while this is the string it was built under. Not covered: a referenced image
+ *  appearing on disk later (its id is stable; it shows with the next change). */
+function firstPageValidity(agentId: string, sid: string | null, current: string): string {
+  const st = statSync(current);
+  const dir = dataDir();
+  const store = storePath(dir);
+  return [
+    current, `${st.ino}:${st.size}:${st.mtimeMs}`, sid ?? '',
+    identityStoreSig(),
+    queuedStateSig(agentId),
+    interruptedTurnsSig(agentId),
+    warmupMarkFor(agentId, sid).sig,
+    fileSig(join(dir, 'state', 'seat-settings.json')), fileSig(join(dir, 'state', 'seat-settings-default.json')),
+    fileSig(store), fileSig(`${store}-wal`),
+    callsSig(callsDir(dir)), fileSig(join(dir, 'state', 'voice-call-handoffs.json')), fileSig(join(dir, 'state', 'voice-call-ratings.json')),
+  ].join('|');
+}
+
+/** `Server-Timing: read;dur=<ms>` (and `cache;desc=hit|miss` for a first page): the server's own
+ *  time on the request, resolution to body, so a slow seat switch can be read from the browser's
+ *  network panel without guessing at the network's share. */
+function serverTiming(res: Response, startedAt: number, cache?: 'hit' | 'miss'): void {
+  const dur = (performance.now() - startedAt).toFixed(1);
+  res.set('Server-Timing', cache ? `read;dur=${dur}, cache;desc=${cache}` : `read;dur=${dur}`);
+}
 
 router.get('/:id/transcript', (req: Request, res: Response) => {
+  const startedAt = performance.now();
   const agentId = String(req.params.id);
   const before = typeof req.query.before === 'string' && req.query.before ? req.query.before.slice(0, 300) : null;
-  const limit = Math.min(parseInt(String(req.query.limit)) || (before === null ? 150 : PAGE_LIMIT), 500);
+  const limit = Math.min(parseInt(String(req.query.limit)) || (before === null ? FIRST_PAGE_LIMIT : PAGE_LIMIT), 500);
   const paged = (body: Record<string, unknown>) => before === null ? body : { has_older: false, oldest_id: null, ...body };
   // Resolution is INSIDE the try (gm ruling on DEC-1790239929422621): it touches the filesystem,
   // tmux and now a sqlite index, and this route is reachable on a PUBLIC ingress — an
@@ -2280,20 +2379,54 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     // one. Fail-open: anything wrong with the chain and the chat is this file alone, as before.
     // This generation's own log first, outside the fail-open views: unreadable is an error here.
     const current = path;
-    cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
-    let segs: Segment[];
-    try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
-    const win = chatWindow(agentId, segs, limit, before);
-    if (!win) {
-      res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'unknown cursor' }));
+    // `read`: every earlier generation's file the window reached into (the kept first page is
+    // valid only while those are unchanged too; the current log is covered by firstPageValidity).
+    // `missing`: the past segments whose file was not there when the page was built; the kept page
+    // asks for them again on every hit, so one that appears is seen.
+    const read = new Set<string>();
+    const missing: Segment[] = [];
+    const build = (): Record<string, unknown> | null => {
+      cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+      let segs: Segment[];
+      try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
+      segs = segs.map((s) => ({ ...s, file: () => { const f = s.file(); if (f && f !== current) read.add(f); else if (!f && s.refind) missing.push(s); return f; } }));
+      const win = chatWindow(agentId, segs, limit, before);
+      if (!win) return null;
+      const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
+      const body = withCalls(agentId, win, limit, before,
+        finishWindow(withNotices(agentId, win, limit, before), agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs }));
+      return { agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, ...body, has_older: win.has_older, oldest_id: win.oldest_id };
+    };
+    if (before !== null) {
+      const env = build();
+      serverTiming(res, startedAt);
+      if (!env) {
+        res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'unknown cursor' }));
+        return;
+      }
+      res.json(env);
       return;
     }
-    const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
-    const body = withCalls(agentId, win, limit, before,
-      finishWindow(withNotices(agentId, win, limit, before), agentId, true, before === null ? null : { cursorMs: Number.isNaN(cursorMs) ? null : cursorMs }));
-    const env: Record<string, unknown> = { agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, ...body };
-    if (before !== null) { env.has_older = win.has_older; env.oldest_id = win.oldest_id; }
-    res.json(env);
+    // The first page: kept serialized (and gzipped) per seat while nothing it is made of changed,
+    // so a seat switch that loads every visible seat's page again costs a stat and a send each.
+    // A cursor page is not kept: it is read once, scrolling back.
+    let built = false;
+    const page = firstPage(agentId, limit, firstPageValidity(agentId, sid, current), () => {
+      built = true;
+      const body = build() ?? {};
+      return { body, deps: [...read], probes: missing.map((s) => () => s.refind?.() ?? '') };
+    });
+    serverTiming(res, startedAt, built ? 'miss' : 'hit');
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Vary', 'Accept-Encoding');
+    if (page.gzip && req.acceptsEncodings('gzip')) {
+      res.set('Content-Encoding', 'gzip');
+      res.set('ETag', page.etag.replace(/"$/, '-gz"'));
+      res.send(page.gzip);
+    } else {
+      res.set('ETag', page.etag);
+      res.send(page.json);
+    }
   } catch (err) {
     res.json(paged({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) }));
   }
