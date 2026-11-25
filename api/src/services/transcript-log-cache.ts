@@ -20,7 +20,7 @@ export interface CachedLog {
   readonly memo: Map<string, unknown>;
 }
 
-interface Entry extends CachedLog { size: number; mtimeMs: number }
+interface Entry extends CachedLog { ino: number; size: number; mtimeMs: number }
 
 const entries = new Map<string, Entry>();   // insertion order = least recently used first
 let bytes = 0;
@@ -45,7 +45,7 @@ export function cachedLog(path: string, parse: (lines: string[]) => any[]): Cach
   // next request parses again. The other order could keep a short parse under the longer size.
   const st = statSync(path);
   const hit = entries.get(path);
-  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) {
+  if (hit && hit.ino === st.ino && hit.size === st.size && hit.mtimeMs === st.mtimeMs) {   // ino: an atomic replace keeps size and mtime
     entries.delete(path);
     entries.set(path, hit);
     return hit;
@@ -53,7 +53,7 @@ export function cachedLog(path: string, parse: (lines: string[]) => any[]): Cach
   drop(path);
   const items = parse(readFileSync(path, 'utf-8').split('\n'));
   parses += 1;
-  const entry: Entry = { items, memo: new Map(), size: st.size, mtimeMs: st.mtimeMs };
+  const entry: Entry = { items, memo: new Map(), ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
   if (st.size > LOG_CACHE_MAX_BYTES) return entry;
   entries.set(path, entry);
   bytes += st.size;

@@ -47,7 +47,8 @@ import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: shared reader
 import { gatewayWsUrl, gatewayUrl } from '../lib/gateway-url.js';
 import { dataDir } from '../lib/config.js';
-import { tailscaleOperator } from '../lib/tailscale-identity.js';
+import { tailscaleOperator, isLoopback } from '../lib/tailscale-identity.js';
+import { comboProxyVouched, comboProxyAdmin } from '../lib/combo-vouch.js';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { principal } from '../lib/principal.js';
 import { canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
@@ -60,51 +61,116 @@ function getCookie(req: IncomingMessage, name: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/** How one credential fared: present and valid, absent, present but failing its signature/shape, or expired. */
+export type CredentialCheck = 'ok' | 'absent' | 'invalid' | 'expired';
+/** The Tailscale identity Serve stamps: ok, no login header, a login but not from loopback (so not Serve's), or a
+ *  login that is not on the allowlist. */
+export type TailscaleCheck = 'ok' | 'absent' | 'not-loopback' | 'not-allowed';
+/** The front login proxy's vouch (lib/combo-vouch): ok, no vouch headers, a wrong secret or non-loopback peer, or a
+ *  vouched user whose role is not admin. */
+export type ComboCheck = 'ok' | 'absent' | 'invalid' | 'not-admin';
+
+export interface BrowserAuth {
+  ok: boolean;
+  /** Who, when any credential names someone: the session's user, the token's subject or the Tailscale login. */
+  user: string | null;
+  /** The credential that let the request in. */
+  via: 'cookie' | 'token' | 'tailscale' | 'combo' | null;
+  cookie: CredentialCheck;
+  token: CredentialCheck;
+  tailscale: TailscaleCheck;
+  combo: ComboCheck;
+}
+
 // Same HMAC scheme as combo-proxy.js's makeSessionToken/verifySessionToken —
 // the `orchestra_session` cookie that already gates every page, and every
 // other WS (/ws/terminal), in front of this app. Duplicated here (not
 // imported) per the file-ownership rule: combo-proxy.js is not edited and
 // exports nothing importable.
-function verifyOrchestraSession(token: string | null): boolean {
-  if (!token) return false;
+function checkOrchestraSession(token: string | null): { check: CredentialCheck; user: string | null } {
+  if (!token) return { check: 'absent', user: null };
   const dot = token.indexOf('.');
-  if (dot < 0) return false;
+  if (dot < 0) return { check: 'invalid', user: null };
   const b64 = token.slice(0, dot);
   const sig = token.slice(dot + 1);
   const expected = createHmac('sha256', sessionSecret()).update(b64).digest('base64url');
-  if (sig !== expected) return false;
+  if (sig !== expected) return { check: 'invalid', user: null };
   try {
     const payload = JSON.parse(Buffer.from(b64, 'base64url').toString());
-    return typeof payload.exp === 'number' && payload.exp >= Date.now();
+    // A name is reported only once the credential has verified: an invalid or expired payload is a claim.
+    const user = typeof payload.u === 'string' && payload.u ? payload.u : null;
+    if (typeof payload.exp !== 'number') return { check: 'invalid', user: null };
+    return payload.exp >= Date.now() ? { check: 'ok', user } : { check: 'expired', user: null };
   } catch {
-    return false;
+    return { check: 'invalid', user: null };
   }
 }
 
 // Same JWT scheme as routes/token-auth.ts's verifyJwt (Bearer header or the
 // `orchestra_token` cookie) — accepted as an alternate valid session (the
 // multi-tenant login path uses this one instead of the VPS cookie).
-function verifyOrchestraToken(req: IncomingMessage): boolean {
+function checkOrchestraToken(req: IncomingMessage): { check: CredentialCheck; user: string | null } {
   let token: string | null = null;
   const auth = req.headers.authorization;
   if (auth?.startsWith('Bearer ')) token = auth.slice(7);
   if (!token) token = getCookie(req, 'orchestra_token');
-  if (!token) return false;
+  if (!token) return { check: 'absent', user: null };
   const parts = token.split('.');
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) return { check: 'invalid', user: null };
   const [header, body, sig] = parts;
   const expected = createHmac('sha256', jwtSecret()).update(`${header}.${body}`).digest('base64url');
-  if (sig !== expected) return false;
+  if (sig !== expected) return { check: 'invalid', user: null };
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
-    return !payload.exp || payload.exp >= Math.floor(Date.now() / 1000);
+    const user = typeof payload.sub === 'string' && payload.sub ? payload.sub : null;
+    return !payload.exp || payload.exp >= Math.floor(Date.now() / 1000) ? { check: 'ok', user } : { check: 'expired', user: null };
   } catch {
-    return false;
+    return { check: 'invalid', user: null };
   }
 }
 
+function checkTailscale(req: IncomingMessage): { check: TailscaleCheck; user: string | null } {
+  const login = String(req.headers['tailscale-user-login'] || '').trim().toLowerCase();
+  if (!login) return { check: 'absent', user: null };
+  // The login header is a claim until Serve's loopback peer and the allowlist both agree: only then is it a name.
+  if (!isLoopback(req.socket?.remoteAddress)) return { check: 'not-loopback', user: null };
+  return tailscaleOperator(req) ? { check: 'ok', user: login } : { check: 'not-allowed', user: null };
+}
+
+/** The front login proxy admits a tailnet user with no cookie and vouches on the upgrade with its shared secret plus
+ *  x-orchestra-user / x-orchestra-role (the same predicate the /ready routes accept). Loopback + secret + admin. */
+function checkCombo(req: IncomingMessage): { check: ComboCheck; user: string | null } {
+  const h = (n: string) => { const v = req.headers[n]; return String((Array.isArray(v) ? v[0] : v) || '').trim(); };
+  if (!h('x-orchestra-proxy-auth') && !h('x-orchestra-user')) return { check: 'absent', user: null };
+  if (!comboProxyVouched(req)) return { check: 'invalid', user: null };
+  return comboProxyAdmin(req) ? { check: 'ok', user: h('x-orchestra-user') } : { check: 'not-admin', user: null };
+}
+
+/** The browser's credentials, in the order they are accepted (cookie, then JWT, then Tailscale login, then the login
+ *  proxy's vouch); the checks stop at the first that passes, and a refusal reports all four, so the log can say what
+ *  was missing. */
+export function browserAuth(req: IncomingMessage): BrowserAuth {
+  const out: BrowserAuth = { ok: false, user: null, via: null, cookie: 'absent', token: 'absent', tailscale: 'absent', combo: 'absent' };
+  const cookie = checkOrchestraSession(getCookie(req, 'orchestra_session'));
+  out.cookie = cookie.check;
+  out.user = cookie.user;
+  if (cookie.check === 'ok') return { ...out, ok: true, via: 'cookie' };
+  const token = checkOrchestraToken(req);
+  out.token = token.check;
+  out.user = out.user ?? token.user;
+  if (token.check === 'ok') return { ...out, ok: true, via: 'token', user: token.user ?? out.user };
+  const ts = checkTailscale(req);
+  out.tailscale = ts.check;
+  out.user = out.user ?? ts.user;
+  if (ts.check === 'ok') return { ...out, ok: true, via: 'tailscale', user: ts.user ?? out.user };
+  const combo = checkCombo(req);
+  out.combo = combo.check;
+  if (combo.check === 'ok') return { ...out, ok: true, via: 'combo', user: combo.user };
+  return out;
+}
+
 export function browserIsAuthenticated(req: IncomingMessage): boolean {
-  return verifyOrchestraSession(getCookie(req, 'orchestra_session')) || verifyOrchestraToken(req) || tailscaleOperator(req);
+  return browserAuth(req).ok;
 }
 
 /**
@@ -170,6 +236,29 @@ export const UPSTREAM_HANDSHAKE_MS = 10_000;
  *  stalled upstream can never make this process buffer a stream of mic audio without bound. */
 export const MAX_PENDING_BYTES = 2 * 1024 * 1024;
 
+/** One line per WebSocket outcome, in the API's log (console, like lib/access-log.ts): `[voice-ws <iso>] k=v ...`.
+ *  Values with whitespace or quotes are JSON-quoted; empty values are left out. Never a credential: callers pass
+ *  outcomes, statuses, hosts and logins, and the bearer, cookie and JWT values never reach this function. */
+export function voiceWsLog(fields: Record<string, string | number | null | undefined>): void {
+  const bits: string[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === null || v === undefined || v === '') continue;
+    const str = String(v);
+    bits.push(`${k}=${/[\s"\\]/.test(str) ? JSON.stringify(str) : str}`);
+  }
+  console.log(`[voice-ws ${new Date().toISOString()}] ${bits.join(' ')}`);
+}
+
+/** The upstream as the log names it: scheme and host (never userinfo) plus the dialed path. */
+function upstreamForLog(gatewayWsUrl: string, path: string): string {
+  try {
+    const u = new URL(gatewayWsUrl);
+    return `${u.protocol}//${u.host}${path}`;
+  } catch {
+    return `<unparseable gateway url>${path}`;
+  }
+}
+
 export function bridgeBrowserSocket(httpServer: HttpServer, gatewayWsUrl: string, spec: BrowserBridgeSpec) {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -177,93 +266,138 @@ export function bridgeBrowserSocket(httpServer: HttpServer, gatewayWsUrl: string
     const url = new URL(req.url || '/', 'http://internal');
     if (url.pathname !== spec.path) return; // not ours — fall through untouched (e.g. /ws/terminal)
 
-    if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
-      // CSWSH guard runs BEFORE auth — no auth oracle for cross-site callers.
-      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
+    // Every exit below leaves exactly one line: the path, who (when any credential names someone), the requester,
+    // the outcome and its particulars. An upgrade never passes the Express access log, so this is the only trace.
+    const startedAt = Date.now();
+    const xff = req.headers['x-forwarded-for'];
+    const who: Record<string, string | number | null | undefined> = {
+      path: spec.path,
+      user: null,
+      addr: req.socket?.remoteAddress ?? null,
+      'x-forwarded-for(claimed)': xff ? (Array.isArray(xff) ? xff.join(',') : String(xff)) : null,
+    };
+    const log = (outcome: string, extra: Record<string, string | number | null | undefined> = {}) =>
+      voiceWsLog({ ...who, outcome, ...extra });
 
-    if (!browserIsAuthenticated(req)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
+    try {
+      if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
+        // CSWSH guard runs BEFORE auth — no auth oracle for cross-site callers.
+        log('refused-origin', { status: 403, origin: req.headers.origin || 'absent', host: req.headers.host || 'absent' });
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
 
-    const target = spec.upstream(url, req);
-    if ('refuse' in target) {
-      socket.write(target.refuse);
-      socket.destroy();
-      return;
-    }
+      const auth = browserAuth(req);
+      who.user = auth.user;
+      if (!auth.ok) {
+        log('refused-auth', { status: 401, reason: `cookie:${auth.cookie},token:${auth.token},tailscale:${auth.tailscale},combo:${auth.combo}` });
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
 
-    const gatewayToken = readGatewayToken();
-    if (!gatewayToken) {
-      // W1: LOUD failure at the HTTP-upgrade layer (before any WS handshake)
-      // rather than a hung/silent connection.
-      socket.write(
-        'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'
-        + `voice bridge unavailable: watch-gateway bearer token missing at ${gatewayTokenFile()}`,
-      );
-      socket.destroy();
-      return;
-    }
+      const target = spec.upstream(url, req);
+      if ('refuse' in target) {
+        const status = Number(/^HTTP\/1\.1 (\d{3})/.exec(target.refuse)?.[1]) || 0;
+        const body = target.refuse.split('\r\n\r\n')[1] || '';
+        log('refused-request', { status, reason: body.slice(0, 120) });
+        socket.write(target.refuse);
+        socket.destroy();
+        return;
+      }
 
-    wss.handleUpgrade(req, socket, head, (clientWs) => {
-      // MEDIUM finding (security review, commit 4840bf6247): the gateway
-      // bearer must never appear in a URL (query strings land in access
-      // logs, proxy logs, etc.). Send it as an Authorization header instead
-      // — the same pattern routes/voice.ts already uses for /voice-call.
-      const upstream = new WebSocket(
-        `${gatewayWsUrl}${target.path}`,
-        { headers: { Authorization: `Bearer ${gatewayToken}` }, handshakeTimeout: spec.handshakeMs ?? UPSTREAM_HANDSHAKE_MS },
-      );
+      const gatewayToken = readGatewayToken();
+      if (!gatewayToken) {
+        // W1: LOUD failure at the HTTP-upgrade layer (before any WS handshake)
+        // rather than a hung/silent connection.
+        log('refused-no-bearer', { status: 502 });
+        socket.write(
+          'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'
+          + `voice bridge unavailable: watch-gateway bearer token missing at ${gatewayTokenFile()}`,
+        );
+        socket.destroy();
+        return;
+      }
 
-      let upstreamOpen = false;
-      const pending: Array<{ data: any; isBinary: boolean }> = [];
-      let pendingBytes = 0;
+      // ws answers a malformed handshake (no Sec-WebSocket-Key, wrong version, ...) with 400 and destroys the socket
+      // without ever calling back: the socket closing before the callback ran is that outcome.
+      let accepted = false;
+      socket.once('close', () => { if (!accepted) log('aborted-handshake', { status: 400 }); });
 
-      upstream.on('open', () => {
-        upstreamOpen = true;
-        for (const m of pending.splice(0)) upstream.send(m.data, { binary: m.isBinary });
-        pendingBytes = 0;
-      });
+      wss.handleUpgrade(req, socket, head, (clientWs) => {
+        accepted = true;
+        // MEDIUM finding (security review, commit 4840bf6247): the gateway
+        // bearer must never appear in a URL (query strings land in access
+        // logs, proxy logs, etc.). Send it as an Authorization header instead
+        // — the same pattern routes/voice.ts already uses for /voice-call.
+        const upstream = new WebSocket(
+          `${gatewayWsUrl}${target.path}`,
+          { headers: { Authorization: `Bearer ${gatewayToken}` }, handshakeTimeout: spec.handshakeMs ?? UPSTREAM_HANDSHAKE_MS },
+        );
+        log('dialed', { via: auth.via, upstream: upstreamForLog(gatewayWsUrl, target.path) });
 
-      upstream.on('unexpected-response', (_req, res) => {
-        spec.onUpstreamRejected(clientWs, res.statusCode || 0);
-      });
+        let upstreamOpen = false;
+        let upstreamFailed = false;   // one upstream-refused line, whether it was an HTTP status or a socket error
+        const pending: Array<{ data: any; isBinary: boolean }> = [];
+        let pendingBytes = 0;
 
-      upstream.on('message', (data, isBinary) => {
-        if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data as any, { binary: isBinary });
-      });
+        upstream.on('open', () => {
+          upstreamOpen = true;
+          for (const m of pending.splice(0)) upstream.send(m.data, { binary: m.isBinary });
+          pendingBytes = 0;
+        });
 
-      upstream.on('close', (code, reasonBuf) => {
-        if (clientWs.readyState !== WebSocket.OPEN) return;
-        spec.onUpstreamClosed(clientWs, code, reasonBuf?.toString() || '');
-      });
+        upstream.on('unexpected-response', (_req, res) => {
+          if (!upstreamFailed) { upstreamFailed = true; log('upstream-refused', { status: res.statusCode || 0 }); }
+          spec.onUpstreamRejected(clientWs, res.statusCode || 0);
+        });
 
-      upstream.on('error', (err) => {
-        if (clientWs.readyState === WebSocket.OPEN) spec.onUpstreamError(clientWs, err);
-      });
+        upstream.on('message', (data, isBinary) => {
+          if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data as any, { binary: isBinary });
+        });
 
-      clientWs.on('message', (data, isBinary) => {
-        if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
-          upstream.send(data as any, { binary: isBinary });
-        } else {
-          pendingBytes += (data as Buffer).length ?? 0;
-          if (pendingBytes > MAX_PENDING_BYTES) {
-            pending.length = 0;
-            try { clientWs.close(1009, 'too much audio before the voice service answered'); } catch { /* gone */ }
-            try { upstream.terminate(); } catch { /* noop */ }
-            return;
+        upstream.on('close', (code, reasonBuf) => {
+          if (clientWs.readyState !== WebSocket.OPEN) return;
+          spec.onUpstreamClosed(clientWs, code, reasonBuf?.toString() || '');
+        });
+
+        upstream.on('error', (err) => {
+          if (!upstreamFailed && !upstreamOpen) {
+            upstreamFailed = true;
+            log('upstream-refused', { error: (err as NodeJS.ErrnoException).code || err.message });
           }
-          pending.push({ data, isBinary });
-        }
-      });
+          if (clientWs.readyState === WebSocket.OPEN) spec.onUpstreamError(clientWs, err);
+        });
 
-      clientWs.on('close', () => { try { upstream.close(); } catch { /* noop */ } });
-      clientWs.on('error', () => { try { upstream.close(); } catch { /* noop */ } });
-    });
+        clientWs.on('message', (data, isBinary) => {
+          if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
+            upstream.send(data as any, { binary: isBinary });
+          } else {
+            pendingBytes += (data as Buffer).length ?? 0;
+            if (pendingBytes > MAX_PENDING_BYTES) {
+              pending.length = 0;
+              try { clientWs.close(1009, 'too much audio before the voice service answered'); } catch { /* gone */ }
+              try { upstream.terminate(); } catch { /* noop */ }
+              return;
+            }
+            pending.push({ data, isBinary });
+          }
+        });
+
+        clientWs.on('close', (code, reasonBuf) => {
+          log('closed', { code, reason: reasonBuf?.toString() || '', ms: Date.now() - startedAt });
+          try { upstream.close(); } catch { /* noop */ }
+        });
+        clientWs.on('error', () => { try { upstream.close(); } catch { /* noop */ } });
+      });
+    } catch (e) {
+      // A throw here would otherwise be an uncaught exception from the http server's 'upgrade' emit: say what it was,
+      // answer the browser, and never leave the socket hanging.
+      log('error', { status: 500, error: e instanceof Error ? e.message : String(e) });
+      try { socket.write('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n'); } catch { /* gone */ }
+      socket.destroy();
+    }
   });
 }
 

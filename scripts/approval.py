@@ -311,6 +311,25 @@ def _patch_refusal(store, rid, fields):
     return f"card {rid} could not be changed"
 
 
+def _void_superseded(store, rid, from_agent, winner):
+    """The request race: this card was created, then the outward ledger refused its row because
+    `winner` already holds the action. A pending approval card with no ledger row is a card that
+    could run outside the ledger, so it is taken out of pending here, in the same call. Retire it
+    as superseded by the winner when the retire columns are armed; else discard it (terminal,
+    kept in history). Either way it can never be answered or resumed."""
+    if not rid or rid == winner:
+        return
+    reason = (f"superseded by {winner}: the same outward action is already carded" if winner
+              else "voided: the outward ledger refused this card's action")
+    ok, _why = store.retire(rid, from_agent, reason, superseded_by=winner)
+    if not ok:
+        store.mark_discarded(rid)
+    if winner:
+        print(f"[approval] {rid} superseded by {winner} (not pending; answer the winner)", file=sys.stderr)
+    else:
+        print(f"[approval] {rid} voided (not pending): the ledger refused its action", file=sys.stderr)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -363,6 +382,17 @@ def main(argv=None):
                          "originally needed this decision, when YOU (the card "
                          "author) carry it as its delegated authority. Never "
                          "a bypass — --from must still be YOU.")
+    # Outward-action ledger (docs/OUTWARD_ACTIONS.md): the card approves ONE outward action with
+    # EXACTLY these material arguments. The executor later claims the same action+args; a changed
+    # argument, a second run, or a run after an interrupted one is refused by the ledger.
+    pr.add_argument("--action", default=None, metavar="NAME",
+                    help="the outward action this card approves (e.g. deploy, pay, send_email); "
+                         "needs --material-args")
+    pr.add_argument("--material-args", dest="material_args", default=None, metavar="JSON",
+                    help="JSON object of the arguments that make the action what it is: str/int/bool/"
+                         "null/list/object, no floats (pass amounts as strings); list order is material")
+    pr.add_argument("--run-on", dest="run_on", default="approve",
+                    help="comma-separated answers that mean RUN (default approve; an option n for a menu card)")
     # Evidence-attached completion brief (spec §3.4 — the anti-"claiming done").
     # Agent reports DONE with proof; the operator accepts (archive) or responds (follow-up).
     pc = sub.add_parser("complete")
@@ -482,6 +512,13 @@ def main(argv=None):
     rt.add_argument("--superseded-by", dest="superseded_by", default=None,
                     help="apr_/qnr_ id of the card that replaced it")
     args = p.parse_args(argv)
+    try:
+        # Outward-action ledger backstop: a lost claim becomes uncertain and an unreconciled asked row
+        # meets its card's answer on ANY later invocation. Never a reason to block the verb.
+        import outward_ledger
+        outward_ledger.sweep()
+    except Exception as e:  # noqa: BLE001
+        print(f"[approval] outward ledger sweep skipped: {type(e).__name__}: {e}", file=sys.stderr)
     store = _store(); store.migrate()
 
     if args.cmd == "request":
@@ -563,6 +600,38 @@ def main(argv=None):
                       file=sys.stderr)
                 return 2
             args.default_option = d
+        action = None
+        if args.action or args.material_args:
+            if not (args.action and args.material_args):
+                print("[approval] --action and --material-args go together", file=sys.stderr)
+                return 2
+            import outward_ledger
+            try:
+                material = json.loads(args.material_args)
+                if not isinstance(material, dict):
+                    raise ValueError("--material-args must be a JSON object")
+                action_hash = outward_ledger.canonical_hash(args.action, material)
+            except ValueError as e:
+                print(f"[approval] bad --material-args: {e}", file=sys.stderr)
+                return 2
+            run_on = [o.strip() for o in str(args.run_on or "approve").split(",") if o.strip()] or ["approve"]
+            # V7c: the hash already has a row. asked/approved -> that card is the answer (idempotent
+            # re-requesters keep working, like the op_key dedupe). executing / unreleased uncertain ->
+            # refused: nothing files a second run of an action that is running or may have run.
+            live = outward_ledger.live_row(action_hash=action_hash)
+            if live is not None:
+                if live["state"] in ("asked", "approved") and live.get("card_id"):
+                    print(f"[approval] {args.action} {action_hash[:12]} is already {live['state']} on card "
+                          f"{live['card_id']}: no second card", file=sys.stderr)
+                    print(live["card_id"])
+                    return 0
+                print(f"REFUSED: {action_hash[:12]} is {live['state']}: release it or wait", file=sys.stderr)
+                return 3
+            action = (args.action, material, run_on, action_hash)
+        # create() says whether it inserted a card or handed an existing one back (op_key dedupe, re-card
+        # guard): only a card THIS call made may ever be voided below. A pre-read cannot tell: two
+        # requesters can both pre-read nothing, and the loser would then void the winner's live card.
+        report = {}
         rid = store.create(from_agent=args.from_agent, question=args.question,
                            worker_kind=args.worker_kind, op_key=args.op_key,
                            thread_key=args.thread_key, options=opts,
@@ -577,7 +646,60 @@ def main(argv=None):
                            process_instance_id=args.process_instance_id,
                            process_lease_id=args.process_lease_id,
                            origin=args.origin, urgency=args.urgency,
-                           default_option=args.default_option)
+                           default_option=args.default_option, report=report)
+        if action is not None:
+            # The ledger row, pointed at the id create() returned, and evidence.action mirrored onto that
+            # card (D4) by ask() itself. create() may hand back an EXISTING card (op_key dedupe, or the
+            # re-card guard): a card approves exactly ONE outward action, so an existing card that already
+            # carries a different action, or one that is no longer pending, gets no ledger row and is
+            # never voided (it is legitimately there for its own action). A card this call created is
+            # voided whenever the ledger refuses its row: a pending card with no row could run unledgered.
+            name, material, run_on, action_hash = action
+            created_new = bool(report.get("inserted"))
+            card = store.get(rid) or {}
+            if card.get("status") != "pending":
+                # create()'s re-card guard (RECARD_GUARD_S) returns a RECENT same-op_key card whatever its
+                # status: an already-answered card must never carry a new action (its one answer is spent).
+                from approval_schema import RECARD_GUARD_S
+                from datetime import datetime, timezone
+                try:
+                    age = (datetime.now(timezone.utc) - datetime.fromisoformat(card["created_at"])).total_seconds()
+                except (KeyError, TypeError, ValueError):
+                    age = 0
+                wait = max(0, int(RECARD_GUARD_S - age))
+                print(f"REFUSED: op-key {args.op_key} re-card guard returned {card.get('status') or 'missing'} card "
+                      f"{rid}; wait {wait}s or use a new --op-key", file=sys.stderr)
+                return 3
+            held = outward_ledger.card_live_row(rid)
+            if held is not None and held["action_hash"] != action_hash:
+                print(f"REFUSED: card {rid} already carries action {held['action_hash'][:8]} ({held['state']}); "
+                      f"file a new card with a different --op-key", file=sys.stderr)
+                return 3
+            try:
+                outward_ledger.ask(name, material, card_id=rid, actor=args.from_agent, run_on=run_on)
+            except outward_ledger.CardBusy as e:
+                # The card demonstrably carries a live row for another requester's action: it is THEIR
+                # live card (a concurrent requester can reach here on a card it did not make, whatever
+                # it believes). Touch nothing.
+                print(f"REFUSED: card {rid} already carries action {e.existing_hash[:8]} ({e.state}); file a new "
+                      f"card with a different --op-key", file=sys.stderr)
+                return 3
+            except outward_ledger.DuplicateAction as e:
+                live = e.row                      # the row that holds the hash, as the ledger saw it
+                if created_new:
+                    _void_superseded(store, rid, args.from_agent, live.get("card_id"))
+                if live.get("state") in ("asked", "approved") and live.get("card_id"):
+                    print(f"[approval] {name} {action_hash[:12]} is already {live['state']} on card "
+                          f"{live['card_id']}: no second card", file=sys.stderr)
+                    print(live["card_id"])
+                    return 0
+                print(f"REFUSED: {action_hash[:12]} is {e.state}: release it or wait", file=sys.stderr)
+                return 3
+            except outward_ledger.LedgerRefused as e:
+                if created_new:
+                    _void_superseded(store, rid, args.from_agent, None)
+                print(f"REFUSED: {e.reason} (state: {e.state})", file=sys.stderr)
+                return 3
         try:
             notify(rid, store=store)            # primary trigger: instant push
         except Exception as e:  # noqa: BLE001 — cron backstop will re-notify
@@ -821,7 +943,10 @@ def main(argv=None):
                 "feature": r.get("feature"), "provider": r.get("provider"),
                 # §6.1 human_task feed export (additive; None on legacy/unarmed rows).
                 "block_task": r.get("block_task"), "blocks_what": r.get("blocks_what"),
-                "snoozed_until": r.get("snoozed_until")} for r in rows]
+                "snoozed_until": r.get("snoozed_until"),
+                # The evidence JSON as stored (additive): the web reads evidence.action (the outward-action
+                # state) from the same column the phone and watch already decode.
+                "evidence": r.get("evidence")} for r in rows]
         print(json.dumps(out, default=str))
         return 0
     if args.cmd == "answer" and args.on_behalf_of:

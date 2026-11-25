@@ -50,8 +50,26 @@ import time
 
 __all__ = ["refusal_for", "main", "record", "fail_open_fields", "SEND_RE", "LOG_PATH"]
 
-LOG_PATH = os.environ.get("SSG_LOG") or os.path.expanduser(
-    "$ORCHESTRA_DIR/logs/send-shape-guard.log")
+
+
+def _default_log_path() -> str:
+    """$ORCHESTRA_DIR/logs/send-shape-guard.log, else ~/.orchestra/logs/send-shape-guard.log.
+
+    The data dir is read from the environment, never written into a string literal:
+    os.path.expanduser does not expand "$VARS", so the old literal resolved RELATIVE TO THE
+    SENDER'S CWD and left a directory named "$ORCHESTRA_DIR" in every repo a send came from.
+    An unset, relative or still-unexpanded value falls back to the default.
+    """
+    d = (os.environ.get("ORCHESTRA_DIR") or "").strip()
+    if not d or "$" in d or not os.path.isabs(os.path.expanduser(d)):
+        d = "~/.orchestra"
+    path = os.path.join(os.path.expanduser(d), "logs", "send-shape-guard.log")
+    # No HOME and no passwd entry leaves "~" literal: log nowhere rather than into the cwd
+    # (record() swallows the failed makedirs("")).
+    return path if os.path.isabs(path) else ""
+
+
+LOG_PATH = os.environ.get("SSG_LOG") or _default_log_path()
 
 
 def record(verdict: str, cmd: str, detail: str = "") -> None:

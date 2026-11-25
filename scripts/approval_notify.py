@@ -102,6 +102,39 @@ def build_payload(row, token):
         })
     return {**base, "actions": actions}
 
+# --- Outward-action ledger (docs/OUTWARD_ACTIONS.md, notify policy) ---------------------------------
+# The first ntfy push and the first Telegram ping are outward actions with no card of their own:
+# each is claimed (claim_direct) before the network call and finished after it, so a notifier
+# killed between claim and send leaves an `uncertain` row instead of a silent duplicate. A
+# dropped push contradicts the delivery contract (held, never dropped) while a duplicate push is
+# the lesser harm, so notify.* rows carry policy='at_least_once': an uncertain push gets ONE
+# more attempt (attempt=2, the cron backstop is the driver), never a third. An exception BEFORE
+# the network call is not_run ("<Class>: before send", retried as before); DURING/AFTER it is
+# uncertain ("<Class>: during send"). approval_resume.escalate and refire_on_return are NOT wrapped
+# (their repeats are designed).
+def _ledger():
+    import outward_ledger
+    return outward_ledger
+
+
+def _ledger_claim(action, key):
+    """A ledger claim for one send, or None when the ledger refuses it (already running, or the
+    one allowed resend is spent): then nothing is sent and the caller logs one line."""
+    L = _ledger()
+    try:
+        return L.claim_direct(action, {"card_id": key}, actor="approval_notify", policy="at_least_once")
+    except L.LedgerRefused as e:
+        print(f"[approval_notify] {action} for {key} not sent: {e.reason} (state: {e.state})", file=sys.stderr)
+        return None
+
+
+def _ledger_finish(claim, state, reason):
+    try:
+        _ledger().finish(claim["action_hash"], state, reason)
+    except Exception as e:  # noqa: BLE001 — the send already happened or not; the ledger line is secondary
+        print(f"[approval_notify] ledger finish {claim['action_hash'][:12]} {state} failed: {e}", file=sys.stderr)
+
+
 def notify(rid, store=None):
     store = store or ApprovalStore()
     row = store.get(rid)
@@ -109,12 +142,23 @@ def notify(rid, store=None):
         return
     if _policy_gate("approval", row, store) != notify_policy.OK:
         return
-    token = ntfy_token()
-    if not token:                                   # never silently push without auth
-        raise RuntimeError("ntfy token missing (~/.config/jarvis/ntfy-token) — refusing to push unauthenticated")
-    payload = build_payload(row, token)
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    _http_post(NTFY_BASE, headers, json.dumps(payload))   # POST to ROOT, topic is in the body
+    claim = _ledger_claim("notify.ntfy", rid)
+    if claim is None:
+        return
+    stage = "before"
+    try:
+        token = ntfy_token()
+        if not token:                                   # never silently push without auth
+            raise RuntimeError("ntfy token missing (~/.config/jarvis/ntfy-token) — refusing to push unauthenticated")
+        payload = build_payload(row, token)
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        stage = "during"
+        _http_post(NTFY_BASE, headers, json.dumps(payload))   # POST to ROOT, topic is in the body
+    except Exception as e:
+        _ledger_finish(claim, "not_run" if stage == "before" else "uncertain",
+                       f"{type(e).__name__}: {stage} send")
+        raise
+    _ledger_finish(claim, "done", "sent")
     store.set_notified(rid)
 
 def build_qnr_payload(row):
@@ -205,11 +249,17 @@ def notify_telegram(key, text, state=None, state_path=None, send=None):
     state = _load_tg_state(state_path) if owns_state else state
     if state.get(key, {}).get("sent_at"):
         return True                                   # per-channel dedup
+    claim = _ledger_claim("notify.telegram", key)
+    if claim is None:
+        return False                                  # not stamped; the ledger said why
     ok = False
     try:
         ok = bool(send(text))
     except Exception as e:  # noqa: BLE001 — a failed channel is retriable, never fatal
         print(f"[approval_notify] telegram {key} failed: {e}", file=sys.stderr)
+        _ledger_finish(claim, "uncertain", f"{type(e).__name__}: during send")
+    else:
+        _ledger_finish(claim, "done" if ok else "not_run", "sent" if ok else "send failed")
     if ok:
         import time as _t
         state[key] = {"sent_at": _t.time()}

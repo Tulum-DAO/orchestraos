@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """gate-hook.py — the Claude Code PreToolUse safety gate (attention part 2a, plan §5.2 / §6): the entry script.
 
-Installed by hooks/install.py as a PreToolUse row (timeout 600, the standard fail-open `[ -f ] && … || exit 0`
+Installed by hooks/install.py as a PreToolUse row (timeout 600, the standard fail-open `if [ -f ]; then …; [ $? -eq 2 ] && exit 2; fi; exit 0`
 form, no onFailure). It reads stdin, checks the kill switch <data>/state/attention/GATE_OFF with nothing but os
 and sys (present -> allow: no output, nothing read or written), then runs scripts/gate_hook.py, which holds the
 logic and is imported (not run as __main__) so its bytecode is cached. Any failure to load it allows the call.

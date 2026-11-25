@@ -51,6 +51,9 @@ export interface CanonicalRow {
   /** A task for you that was snoozed: when it comes back (ISO). Null / absent otherwise, and on an install whose
    *  human_task columns are not armed. */
   snoozed_until?: string | null;
+  /** The row's evidence JSON as stored (a string), additive. An outward-action card carries
+   *  `evidence.action` = {hash, action, state, reason, updated_at} (docs/OUTWARD_ACTIONS.md). */
+  evidence?: string | null;
 }
 
 export interface AnswerResult {

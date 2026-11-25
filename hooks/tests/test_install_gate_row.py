@@ -2,7 +2,7 @@
 
 The gate row FAILS OPEN: a hook that crashes, is killed or is missing lets the call run. It carries
 no `onFailure` key (an invalid value silently drops the row; "block" would fail closed) and uses the
-same `[ -f ] && ... || exit 0` command form as every other row, with a 600 s timeout. The hook speaks
+same `if [ -f ]; then ...; [ $? -eq 2 ] && exit 2; fi; exit 0` command form as every other row, with a 600 s timeout. The hook speaks
 only through stdout JSON on exit 0, which must reach Claude Code unchanged.
 """
 import json
@@ -86,8 +86,8 @@ def test_gate_row_installed_once_with_timeout_and_no_onfailure(tmp_settings, rep
     # the standard fail-open form, identical in shape to every other row
     script = str(repo.resolve() / GATE)
     assert row["command"] == H._command(repo.resolve(), (repo / "data").resolve(), GATE, "py")
-    assert row["command"].startswith(f'[ -f "{script}" ] && ORCHESTRA_DIR=')
-    assert row["command"].endswith(f"|| exit 0 {H.MARKER}") and " exec " not in row["command"]
+    assert row["command"].startswith(f'if [ -f "{script}" ]; then ORCHESTRA_DIR=')
+    assert row["command"].endswith(f"[ $? -eq 2 ] && exit 2; fi; exit 0 {H.MARKER}") and " exec " not in row["command"]
     # other rows carry no extra keys
     others = [h for v in _hooks(tmp_settings).values() for r in v for h in r["hooks"]
               if H._is_ours(h["command"]) and GATE not in h["command"]]

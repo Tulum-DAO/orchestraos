@@ -23,6 +23,7 @@ import { readGatewayToken } from '../lib/gateway-token.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { principal as defaultPrincipal, type Principal } from '../lib/principal.js';
 import { submitQuestionnaire } from './questionnaireSubmit.js';
+import { setAgentHtmlHeaders } from '../lib/agentHtmlCsp.js';
 
 const CODE_ROOT = process.env.ORCHESTRA_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -153,7 +154,7 @@ router.get('/:id/html', (req: Request, res: Response) => {
     }
   }
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  setAgentHtmlHeaders(res);   // agent-written HTML: CSP (no network, opaque origin), nosniff, no referrer — lib/agentHtmlCsp.ts
   res.send(html);
 });
 

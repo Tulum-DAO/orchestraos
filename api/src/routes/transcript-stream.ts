@@ -41,6 +41,7 @@ import { resolveTranscriptPath, resolveSubagentTranscriptPath, SAFE_SUBAGENT_ID,
 import { paneGone } from '../lib/paneProbe.js';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { isSafeAgentId } from '../lib/agentPaths.js';
+import { gzipEventStream, sseWrite } from '../lib/compress.js';
 import { dataDir } from '../lib/config.js';
 import { headlessSeats } from '../services/status-stream.js';
 import { LiveText, type LiveTextView } from '../services/live-text.js';
@@ -59,7 +60,10 @@ router.param('id', agentScopeParam);
 
 const TICK_MS = 1000;
 const HEARTBEAT_MS = 25000;
-const DEFAULT_LIMIT = 150;
+/** Items in the snapshot a new connection gets (was 150). A seat switch opens one stream per visible
+ *  seat; 150 items of a busy seat were 230 KB-1 MB of JSON each and the first screen shows a dozen.
+ *  The poll route's pages (?before=) hold the rest. ?limit= still asks for more, up to MAX_LIMIT. */
+const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 500;
 /** Live text is read more often than the transcript: words arrive many times a second. */
 const LIVE_TICK_MS = 250;
@@ -224,23 +228,28 @@ router.get('/:id/transcript/stream', (req: Request, res: Response) => {
     (req.headers['last-event-id'] as string | undefined) ||
     (typeof req.query.after === 'string' ? req.query.after : undefined);
 
+  // gzipped (lib/compress.ts): the snapshot on connect is a first page, 50-200 KB of JSON for a
+  // busy seat; every frame is flushed through the compressor as it is written (`send`), so no
+  // event waits for the next one.
+  gzipEventStream(res);
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
-  res.write('retry: 3000\n\n');
+  const send = (frame: string) => sseWrite(res, frame);
+  send('retry: 3000\n\n');
 
   const entry = getTailer(agentId, limit);
   const tailer = entry.tailer;
   const unsubscribe = tailer.subscribe((ev) => {
-    res.write(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+    send(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
   }, lastEventId);
-  const onGone = () => { res.write(': gone\n\n'); };
+  const onGone = () => { send(': gone\n\n'); };
   entry.gone.add(onGone);
   const onLive = (v: LiveTextView) => {
-    res.write(`event: live_text\ndata: ${JSON.stringify({ agent_id: agentId, ...v })}\n\n`);
+    send(`event: live_text\ndata: ${JSON.stringify({ agent_id: agentId, ...v })}\n\n`);
   };
   // A turn already under way when the page opens: its words so far, at once (the others hear
   // of a change from this step as usual; this client gets the state once, after it).
@@ -251,20 +260,20 @@ router.get('/:id/transcript/stream', (req: Request, res: Response) => {
 
   // The compaction notice: the latest ones now, then each start or finish as it happens (same object as the poll
   // route's `compaction` item; it updates in place by id). Never part of any model's context.
-  const onNotice = (it: Record<string, unknown>) => { res.write(`event: compaction\ndata: ${JSON.stringify(it)}\n\n`); };
+  const onNotice = (it: Record<string, unknown>) => { send(`event: compaction\ndata: ${JSON.stringify(it)}\n\n`); };
   noticeStep(agentId, entry);
   for (const it of visibleNotices(agentId).slice(-NOTICES_ON_CONNECT)) onNotice(it);
   entry.noticeSubs.add(onNotice);
 
   // The live step: what it is doing now, at once, then each change.
   const onStep = (st: StepBody | null) => {
-    res.write(`event: step\ndata: ${JSON.stringify(st ? { agent_id: agentId, ...st } : { agent_id: agentId, kind: null })}\n\n`);
+    send(`event: step\ndata: ${JSON.stringify(st ? { agent_id: agentId, ...st } : { agent_id: agentId, kind: null })}\n\n`);
   };
   stepBeat(agentId, entry);
   onStep(entry.step);
   entry.stepSubs.add(onStep);
 
-  const heartbeat = setInterval(() => { res.write(': ping\n\n'); }, HEARTBEAT_MS);
+  const heartbeat = setInterval(() => { send(': ping\n\n'); }, HEARTBEAT_MS);
   heartbeat.unref?.();
 
   req.on('close', () => {
@@ -301,13 +310,15 @@ export function handleSubagentStream(req: Request, res: Response): void {
     (req.headers['last-event-id'] as string | undefined) ||
     (typeof req.query.after === 'string' ? req.query.after : undefined);
 
+  gzipEventStream(res);                       // as the seat stream: gzipped, a flush per frame
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
-  res.write('retry: 3000\n\n');
+  const send = (frame: string) => sseWrite(res, frame);
+  send('retry: 3000\n\n');
 
   let entry = subLive.get(key);
   if (!entry) {
@@ -322,9 +333,9 @@ export function handleSubagentStream(req: Request, res: Response): void {
   }
   const mine = entry;
   const unsubscribe = mine.tailer.subscribe((ev) => {
-    res.write(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
+    send(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
   }, lastEventId);
-  const heartbeat = setInterval(() => { res.write(': ping\n\n'); }, HEARTBEAT_MS);
+  const heartbeat = setInterval(() => { send(': ping\n\n'); }, HEARTBEAT_MS);
   heartbeat.unref?.();
   req.on('close', () => {
     clearInterval(heartbeat);

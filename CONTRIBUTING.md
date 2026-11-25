@@ -81,6 +81,14 @@ make test-perf                 # perf-ratio tests live here; they assume a quiet
 pip install detect-secrets && detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
 ```
 
+On a box other people (or other agents) share, put each heavy gate command behind
+`scripts/heavy-gate.sh <command> [args...]` — for example `scripts/heavy-gate.sh make test` or
+`scripts/heavy-gate.sh npx tsc --noEmit`. The wrapper takes one machine-wide lock
+(`ORCHESTRA_GATE_LOCK`, default `${XDG_RUNTIME_DIR:-/tmp}/orchestra-heavy-gate.lock`), the same lock
+the pre-push hook's secret scan takes, then runs the command with the lock held for its whole life. A
+second heavy run prints `waiting for the heavy-gate lock held by pid N` and queues instead of stacking
+on the CPU.
+
 Running the full suite on a machine that also runs a live OrchestraOS fleet? Export
 `ORCH_GUARD_RUN=1` for that run:
 
