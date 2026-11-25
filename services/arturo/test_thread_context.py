@@ -220,3 +220,20 @@ def test_the_opening_is_fenced_as_past_context_that_is_over(tmp_path):
                     tz="UTC", tz_label="UTC")
     assert empty.startswith(tc.PAST_OPEN) and empty.endswith(tc.PAST_CLOSE)
     assert "NEW call" in tc.PAST_CLOSE and "nobody has spoken" in tc.PAST_CLOSE
+
+
+def test_a_turn_is_an_exchange_consecutive_phrases_of_one_speaker_in_one_call_merge():
+    # gm ruling msg_5bfe3426 (the operator: "the last 20 or 25 turns"): 25 phrases spanned 12 minutes; 25 exchanges
+    # let him reference "earlier". The merged turn keeps the first phrase's stamp; chat lines never merge.
+    L = tc.Line
+    lines = [L(T0, "Ada", "I didn't ask about", "call", "vc_a"), L(T0 + 1, "Ada", "that", "call", "vc_a"),
+             L(T0 + 2, "Arturo", "You didn't.", "call", "vc_a"), L(T0 + 3, "Arturo", "Sorry.", "call", "vc_a"),
+             L(T0 + 4, "Ada", "next call", "call", "vc_b"), L(T0 + 5, "Ada", "typed", "chat"),
+             L(T0 + 6, "Ada", "typed again", "chat")]
+    out = tc.render(lines, budget_tokens=2000, tz="UTC", tz_label="UTC")
+    body = out.split("RECENT (verbatim):\n")[1].splitlines()
+    assert body == ["[2025-11-25T17:00:00Z 17:00 UTC] call vc_a Ada: I didn't ask about that",
+                    "[2025-11-25T17:00:02Z 17:00 UTC] call vc_a Arturo: You didn't. Sorry.",
+                    "[2025-11-25T17:00:04Z 17:00 UTC] call vc_b Ada: next call",
+                    "[2025-11-25T17:00:05Z 17:00 UTC] chat Ada: typed",
+                    "[2025-11-25T17:00:06Z 17:00 UTC] chat Ada: typed again"]

@@ -190,12 +190,25 @@ function summaries(dropped: Line[], tz: string, tzLabel: string, red: Redactor):
   });
 }
 
+/** A turn is an exchange (thread_context.merge_phrases): consecutive phrases by the same speaker in the same call are
+ *  one turn, stamped at its first phrase. Chat lines never merge. `lines` in time order. */
+export function mergePhrases(lines: Line[]): Line[] {
+  const out: Line[] = [];
+  for (const ln of lines) {
+    const prev = out[out.length - 1];
+    if (prev && ln.channel === 'call' && prev.channel === 'call' && ln.call_id === prev.call_id && ln.who === prev.who) {
+      out[out.length - 1] = { ...prev, text: `${prev.text} ${ln.text}` };
+    } else out.push(ln);
+  }
+  return out;
+}
+
 export function render(lines: Line[], budgetTokens = DEFAULT_BUDGET_TOKENS, tz = 'UTC', tzLabel = 'UTC',
   title = 'THREAD', red: Redactor = redact): string {
   const head = `${title}: everything above this call, oldest first. Every line is [UTC time, ${tzLabel} time] then `
     + 'chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.';
   if (!lines.length) return `${head}\n(no earlier chat or calls in this thread)`;
-  const sorted = [...lines].sort((a, b) => a.at - b.at);
+  const sorted = mergePhrases([...lines].sort((a, b) => a.at - b.at));
   const summaryCap = Math.max(40, Math.trunc(budgetTokens * SUMMARY_SHARE));
   let room = budgetTokens - estimateTokens(head) - summaryCap;
   const kept: string[] = [];

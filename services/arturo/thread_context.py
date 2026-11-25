@@ -258,13 +258,28 @@ def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> lis
     return out
 
 
+def merge_phrases(lines: list) -> list:
+    """A turn is an exchange (gm ruling msg_5bfe3426): consecutive phrases by the same speaker in the same call become
+    one turn, stamped at its first phrase. Chat lines never merge. `lines` in time order."""
+    out = []
+    for ln in lines:
+        prev = out[-1] if out else None
+        if (prev is not None and ln.channel == "call" and prev.channel == "call" and ln.call_id == prev.call_id
+                and ln.who == prev.who):
+            out[-1] = Line(at=prev.at, who=prev.who, text=f"{prev.text} {ln.text}", channel="call",
+                           call_id=prev.call_id)
+        else:
+            out.append(ln)
+    return out
+
+
 def render(lines: list, budget_tokens: int = DEFAULT_BUDGET_TOKENS, tz: str = "UTC", tz_label: str = "UTC",
            title: str = "THREAD", call_summary: Optional[dict] = None) -> str:
     head = (f"{title}: everything above this call, oldest first. Every line is [UTC time, {tz_label} time] then "
             "chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.")
     if not lines:
         return f"{head}\n(no earlier chat or calls in this thread)"
-    lines = sorted(lines, key=lambda l: l.at)
+    lines = merge_phrases(sorted(lines, key=lambda l: l.at))
     summary_cap = max(40, int(budget_tokens * SUMMARY_SHARE))
     room = budget_tokens - estimate_tokens(head) - summary_cap
     kept = []
