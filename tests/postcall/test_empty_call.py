@@ -43,14 +43,14 @@ def test_short_call_never_reaches_the_extractor(fixture_dir, led, fx):
     call = _pocket(fixture_dir, "fragment-90s")
     result = pipeline.process(call, ledger=led, extractor=_never_called, effects=fx)
     assert result.status == "skipped_floor"
-    assert fx.planned == []
+    assert fx.sent == []
 
 
 def test_non_call_category_never_reaches_the_extractor(fixture_dir, led, fx):
     call = _pocket(fixture_dir, "ad-category")
     result = pipeline.process(call, ledger=led, extractor=_never_called, effects=fx)
     assert result.status == "skipped_floor"
-    assert fx.planned == []
+    assert fx.sent == []
 
 
 def test_extractor_with_no_items_files_no_card(fixture_dir, led, fx):
@@ -61,7 +61,7 @@ def test_extractor_with_no_items_files_no_card(fixture_dir, led, fx):
 
     result = pipeline.process(call, ledger=led, extractor=empty, effects=fx)
     assert result.status == "no_card"
-    assert fx.planned == []
+    assert fx.sent == []
     assert led.call_status(call.call_id) == "no_card"
 
 
@@ -73,7 +73,7 @@ def test_extractor_failure_is_retried_not_marked_empty(fixture_dir, led, fx):
 
     result = pipeline.process(call, ledger=led, extractor=broken, effects=fx)
     assert result.status == "failed_retry"
-    assert fx.planned == []
+    assert fx.sent == []
     assert led.call_status(call.call_id) == "failed_retry"
 
 
@@ -82,14 +82,14 @@ def test_fabricated_quotes_are_grounded_away_and_no_card_is_filed(fixture_dir, l
     result = pipeline.process(call, ledger=led, extractor=_canned(fixture_dir, "two-party-fabricated.json"),
                               effects=fx)
     assert result.status == "no_card"
-    assert fx.planned == []
+    assert fx.sent == []
 
 
 def test_grounded_items_plan_exactly_one_card(fixture_dir, led, fx):
     call = _pocket(fixture_dir, "two-party-call")
     result = pipeline.process(call, ledger=led, extractor=_canned(fixture_dir, "two-party-ok.json"), effects=fx)
     assert result.status == "carded"
-    cards = [e for e in fx.planned if e.kind == "card"]
+    cards = [e for e in fx.sent if e.kind == "card"]
     assert len(cards) == 1
     assert len(result.items) == 2
 

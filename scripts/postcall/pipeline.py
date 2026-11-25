@@ -12,7 +12,14 @@ class Result:
     reason: str | None = None
 
 
+_DONE = ("carded", "no_card", "skipped_floor")
+
+
 def process(call, *, ledger, extractor, effects):
+    prior = ledger.call_row(call.call_id)
+    if prior and prior["status"] in _DONE and prior["content_hash"] == call.content_hash:
+        ledger.run_pending(effects)
+        return Result("already_processed")
     reason = sources.below_floor(call)
     if reason:
         ledger.set_call_status(call.call_id, "skipped_floor", content_hash=call.content_hash, error=reason)
@@ -34,6 +41,7 @@ def process(call, *, ledger, extractor, effects):
         return Result("no_card")
 
     payload = card.build_questionnaire(call, items)
-    effects.plan(Effect(effect_id=f"card:{call.call_id}:r0:p1", kind="card", payload=payload))
+    ledger.plan(Effect(effect_id=f"card:{call.call_id}:r0:p1", kind="card", payload=payload), call_id=call.call_id)
     ledger.set_call_status(call.call_id, "carded", content_hash=call.content_hash)
+    ledger.run_pending(effects)
     return Result("carded", items=items)

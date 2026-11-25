@@ -79,4 +79,4 @@ def test_pipeline_marks_unproven_label_as_failed_retry_with_no_card(call, tmp_pa
 
     result = pipeline.process(call, ledger=led, extractor=extractor, effects=fx)
     assert result.status == "failed_retry"
-    assert fx.planned == []
+    assert fx.sent == []
