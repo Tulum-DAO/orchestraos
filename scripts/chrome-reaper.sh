@@ -13,6 +13,11 @@
 #   - `claude` agent processes
 #   Only processes whose executable name is in the chrome/chromium family are eligible.
 #
+# Orphaned plugin Chrome (any age): a Chrome whose profile is under the browser plugin's profile
+# root and whose MCP parent is gone (reparented to pid 1 or `systemd --user`) is ended first, one log
+# line each. A plugin Chrome with a live parent is that seat's own process and is never touched here.
+# The decision is scripts/chrome_orphans.py (tested); this script only acts on its list.
+#
 # Usage: chrome-reaper.sh [max_age_seconds]   (default 3600 = 1h)
 #        chrome-reaper.sh --list [max_age]     show what WOULD be reaped, kill nothing
 set -u
@@ -32,6 +37,37 @@ kill_tree() {
   done
   kill "-$sig" "$p" 2>/dev/null
 }
+
+# Every descendant pid of $1 (not $1 itself), depth-first.
+tree_pids() {
+  local k
+  for k in $(pgrep -P "$1" 2>/dev/null); do
+    echo "$k"
+    tree_pids "$k"
+  done
+}
+
+# Orphaned plugin Chrome first, at any age.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+if $LIST_ONLY; then
+  echo "Plugin Chrome (verdict, pid, profile, why, parent chain):"
+  python3 "$HERE/chrome_orphans.py" --all || echo "chrome_orphans.py failed"
+else
+  mapfile -t ORPHANS < <(python3 "$HERE/chrome_orphans.py" 2>/dev/null)
+  OTREE=()
+  for row in "${ORPHANS[@]}"; do
+    IFS=$'\t' read -r opid oprof owhy <<< "$row"
+    [ -n "$opid" ] || continue
+    # the subtree is listed BEFORE the TERM: once the browser exits, its renderers are reparented
+    OTREE+=("$opid" $(tree_pids "$opid"))
+    echo "$(ts) [reaper] ORPHAN pid=$opid profile=$oprof why=$owhy" >> "$LOG"
+    kill -TERM "$opid" 2>/dev/null
+  done
+  if [ "${#OTREE[@]}" -gt 0 ]; then
+    sleep 3
+    for p in "${OTREE[@]}"; do kill -KILL "$p" 2>/dev/null; done
+  fi
+fi
 
 # Main headless browser processes: chrome-family executable, has --headless, and is NOT a
 # child worker (renderers/gpu/utility carry --type=). These are the top-level browsers.
