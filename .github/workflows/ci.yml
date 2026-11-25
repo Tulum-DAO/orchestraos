@@ -76,6 +76,8 @@ jobs:
           - name: services-arturo
             args: "services/arturo"
             extra: "scipy"         # OPTIONAL at runtime (the downlink FIR); installed here so its tests run
+          - name: services-egress-proxy
+            args: "services/egress-proxy"
           - name: hooks
             args: "hooks"          # the installer's own tests (settings.json writes) ran nowhere before
           - name: scripts-top
