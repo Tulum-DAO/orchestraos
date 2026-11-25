@@ -1,0 +1,5 @@
+{"shaw_label": "SPEAKER_00", "shaw_label_evidence": "This is Shaw.",
+ "items": [
+  {"owner": "shaw", "kind": "commitment", "counterpart": "Dana Reyes", "action_type": "document_send", "operation": "send", "deliverable": "pricing deck", "commitment_text": "Send Dana the pricing deck", "timeframe": "by Friday", "quote": "I'll send you the pricing deck by Friday.", "speaker": "SPEAKER_00", "agent_takeable": false, "recurring": false},
+  {"owner": "participant", "kind": "commitment", "counterpart": "Dana Reyes", "action_type": "document_send", "operation": "send", "deliverable": "api credentials", "commitment_text": "Dana shares the API credentials", "timeframe": "tomorrow morning", "quote": "I will share the API credentials with you tomorrow morning.", "speaker": "SPEAKER_01", "agent_takeable": false, "recurring": false}
+ ]}
