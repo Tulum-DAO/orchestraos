@@ -1,0 +1,13 @@
+VERDICT: REJECT
+
+1. [blocker] **Round-3 blocker 1 remains unresolved.** `docs/DESIGN_post-call-commitments.md:210–215` matches occurrences using fresh LLM deliverable text and raw character-span overlap. A paraphrased deliverable or inserted transcript prefix can create another commitment for the same promise, allowing duplicate tasks/dispatches. Additionally, the segments content-hash call ID changes on every correction (`:46`), bypassing same-call reconciliation altogether. Persist stable call identity and reconcile revisions before minting new occurrences.
+
+2. [blocker] **Round-3 blocker 2 is only partly resolved.** Requiring verified attribution fixes the inferred-attribution bypass (`docs/DESIGN_post-call-commitments.md:220–227`), but the claimed drafting/sending distinction is absent from the reused enum. `~/repos/pocket-agent/commitment_miner.py:34–36` defines email/message/document_send/etc., with no draft operation. “Draft an email” and “send an email” can therefore share owner, counterpart, action_type and deliverable, suppressing a distinct commitment. Specify an operation distinction that prevents this merge.
+
+3. [blocker] **Dispatch authorization contradicts durable intent creation.** `docs/DESIGN_post-call-commitments.md:56–62,254–262` requires persisting `dispatch:<cmt>` before sending, then refuses dispatch if that effect exists. Following both rules loses every approved dispatch. Require the matching planned/reconciled intent to exist; reject an already-confirmed external dispatch rather than the intent itself.
+
+4. [should] **Round-3 blockers 3 and 4 are resolved at design level.** The transactional first-answer decision and per-commitment effects address answer ordering (`docs/DESIGN_post-call-commitments.md:229–234`); immutable sequences, latest-sequence checks and evidence reconciliation address patch recovery (`:236–249`). Retain the rollout gate: `~/scripts/agent-orchestra/scripts/approval_schema.py:648–663` still performs the unguarded update.
+
+5. [should] **Strengthen the new participant/owner contract.** `docs/DESIGN_post-call-commitments.md:117–128` checks evidence presence and claimed speaker identity, but never explicitly requires the item’s quote to occur inside that speaker’s segment. Enforce that association before marking attribution verified. Calendar attendance alone also establishes invitation, not actual participation; label it accordingly.
+
+6. [should] **Clarify chase deadlines.** The chase option promises “+2 business days” (`docs/DESIGN_post-call-commitments.md:186`), while the deadline contract preserves null (`:167`). Specify a separate chase date and its calculation so the resulting task matches the approved option.

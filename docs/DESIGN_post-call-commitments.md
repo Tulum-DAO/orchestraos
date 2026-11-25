@@ -1,7 +1,7 @@
 # DESIGN: post-call commitments (phase 1 note)
 
 - Seat: postcall-dev (T1, parent gm). Branch `build/post-call-commitments`, worktree `/home/shaw/wt/postcall-dev/program`.
-- v1 written 2026-11-25 ~17:30Z. **v2 followed codex REJECT round 1 (8 findings); v3 followed codex REJECT round 2 (5 blockers, 3 should-fixes). v4 = the scope correction above. All are addressed; see §Review.** Status: **DESIGN ONLY, no code yet.** gm approves phase 2 or sends it back.
+- v1 written 2026-11-25 ~17:30Z. **v2 followed codex REJECT round 1 (8 findings); v3 followed codex REJECT round 2 (5 blockers, 3 should-fixes). v4 = the scope correction above; v4.1/v4.2 = codex rounds 4-5 fixes. All are addressed; see §Review.** Status: **DESIGN ONLY, no code yet.** gm approves phase 2 or sends it back.
 - Program (msg_3e8d4dad, relayed in `prompts/postcall-dev.md`): when a call is ingested, put up ONE review card
   per call listing Shaw's commitments and intentions, with deadlines and the agent work that could be offloaded.
   On approval, create human tasks, dispatch approved agent work, and tell Shaw once when the results are ready.
@@ -43,7 +43,7 @@ Four facts the build depends on, found in the survey:
 | source | canonical `call_id` | "ready" means | skip |
 |---|---|---|---|
 | `pocket` | `pocket:<recording_id>` | `meta.ingested == true` and a transcript exists | `category` outside the miner's call/meeting set, or `duration < 120 s` (the miner uses 5 min; **gm call**) |
-| `segments` | `seg:<sha256(segments file)[:16]>` (the dir name is kept as the title) | a `*segments.json` that's parseable and unchanged for 120 s | fewer than 2 distinct speakers or fewer than 60 words |
+| `segments` | `seg:<inbox dir name>`, which is stable; a content change bumps `revision` and keeps the id | a `*segments.json` that's parseable and unchanged for 120 s | fewer than 2 distinct speakers or fewer than 60 words |
 
 - **Arturo voice calls are not inputs** (scope correction). The supersession and identity handling v3 needed for them is gone.
 - **No backfill.** Only calls whose `ended_at`/`created_at` falls after `live_start_ts` (§7; set once at activation) are considered. The 638 historical recordings are ignored. Mining the past would be a separate gm or Shaw decision.
@@ -100,6 +100,8 @@ Four facts the build depends on, found in the survey:
   - `agent_takeable` + `agent_work`, one line, always a draft, research or an internal artefact; agents never send as Shaw (FOUNDATION §3)
   - `matches_existing`
   - `deliverable`: the normalized object noun phrase, used for matching (§5)
+  - `operation`: `draft | send | do | review | schedule | decide` (§5)
+  - `same_as_occ`: set only on re-extraction (§5)
   - `speaker`: which diarization label or turn role said the quote
   - The quote is still verbatim.
 - **Scope (v4):** Shaw's commitments and intentions, **and** each participant's promises to Shaw or his side. Promises between two other people are left out unless Shaw is the beneficiary (**gm call**).
@@ -107,7 +109,7 @@ Four facts the build depends on, found in the survey:
 ### 2a. Participants: who was on the call
 Two sources are combined, and each participant gets a trust level.
 1. **Calendar match:** the event whose start-end window overlaps the recording (`created_at` to `created_at + duration`, ±10 min), using the §3 ICS feed.
-   - Its attendee list (CN + email, minus Shaw) is the **verified participant set**.
+   - Its attendee list (CN + email, minus Shaw and `DECLINED`) is the **invited set**. An invitee counts as a **participant** only once a speaker is mapped to them. The card's `With:` line marks spoken participants ✓ and invited-but-unmapped people `(invited)`.
    - Two overlapping events: the one with the larger overlap wins, and a tie means no match.
    - No calendar feed, or no event: participants are unverified.
 2. **Speakers:**
@@ -125,7 +127,7 @@ Two sources are combined, and each participant gets a trust level.
      - **inferred:** every Pocket item.
        - Diarized transcripts carry only `SPEAKER_00`/`SPEAKER_01` labels (checked on disk 2026-11-25), and nothing on the box maps a label to Shaw.
        - When a transcript is diarized, the LLM proposes Shaw's label with quoted evidence, and code requires that label to agree across the call's items; if it doesn't, the call goes `failed_retry` and then to manual review.
-       - An item's `owner` must match its speaker: Shaw's label for `shaw`, any other label for `participant`. A mismatch drops the item.
+       - **Quote-in-segment rule:** the grounded quote's span must lie entirely inside **one** speaker turn (the text between two `**SPEAKER_xx**` / segment boundaries), and that turn's speaker determines the attribution. An item's `owner` must match it: Shaw's label for `shaw`, any other label for `participant`. A quote that spans turns, or an owner mismatch, drops the item. The same rule applies to segments files, using the `speaker` field.
        - When a transcript isn't diarized, the item is marked `speaker unknown`.
      - **Inferred and unknown items are never covered by Q1 accept-all (§4).** Each needs its own explicit answer, so no task or dispatch comes from an unconfirmed attribution.
        - **(Inferred:** most Pocket items will be ⚠ until a calendar feed exists, so accept-all will cover little. That's the honest cost of having no speaker identity on the box.)
@@ -183,7 +185,10 @@ Precedence, first hit wins; `due_source` names the rule.
   - **The prompt itself carries the evidence**, since there's no question-level detail field: `[⚠ ]<action> · <counterpart> · Due: <display>\n"<quote, cut to 200 chars>" (<citation>)`.
   - **Section (a) Yours.** Option 1 is always the suggestion, labelled "(suggested)": `Assign to <seat>: <agent_work>` when the item is agent-takeable and a live seat resolves, otherwise `Take it myself`. Then `Take it myself` (if it isn't option 1) and `Drop`.
   - **Section (b) Theirs** (chase items):
-    - `Track it: remind me to chase <name> by <due or +2 business days>` (suggested), which becomes a human task `Chase <name>: <their promise>`;
+    - `Track it: chase <name> on <chase_date>` (suggested), which becomes a human task `Chase <name>: <their promise>`.
+      - **`chase_date` is a separate field from their `due_ts`:** their `due_ts` + 1 business day at 10:00 when known; otherwise the call date + 2 business days at 10:00, in `tz_at_call`.
+      - `due_source` is `chase: their due <x> + 1bd` or `chase default: call + 2bd`.
+      - The option label shows the exact date, so the task's evidence `due_ts` = the `chase_date` Shaw approved. Their own `due_ts` stays null when unknown.
     - `Assign to <seat>: draft a follow-up nudge for me to send` (only when a seat resolves; a draft only, never sent as Shaw);
     - `Drop`.
   - **Uncertain-match items** (§5) also get `Same as "<existing>" (<date>): update it`.
@@ -207,12 +212,12 @@ Precedence, first hit wins; `due_source` names the rule.
 - **Occurrence** `occ_<random>`: one per extracted item, stored with `(call_id, owner, deliverable, action_type, quote, span_start, span_end)`.
   - The span is the character offsets of the grounded quote in the transcript.
   - **Two commitments inside one quote** are two occurrences, distinguished by `deliverable` and `action_type`.
-- **Re-extraction of the same call** maps a new item onto an existing occurrence only if ALL of these hold:
-  - same `owner`;
-  - same `action_type`;
-  - same normalized `deliverable`;
-  - quote spans overlap by ≥50%.
-  Otherwise it's a new occurrence. So a shifted quote boundary doesn't create a duplicate, and two deliverables in one sentence don't collapse. (`recording_id` is stable, so there's no late canonicalization in v4.)
+- **Re-extraction of the same call (v4.1)** reconciles before minting anything:
+  1. Every existing occurrence's stored quote **text** is relocated in the new transcript by exact normalized search, which gives its new span. Raw offsets are never compared across revisions, so a prefix inserted into the transcript can't break the match.
+  2. The re-extraction prompt receives the existing occurrences (id, quote, owner, action) and must return `same_as_occ` for every item that restates one. Code accepts `same_as_occ` only when **all** of these hold: owner, `action_type`, `operation` and normalized `deliverable` are equal to the old occurrence's; the new quote overlaps the relocated old span (or the quote text is equal); and the mapping is **one-to-one**, meaning no other new item in this extraction claims the same old occurrence. If two new items claim one old occurrence, or a claim fails any field check, **every** item involved goes to the uncertain path in step 3. Nothing is merged silently.
+  3. A new item that has no accepted `same_as_occ` but shares its owner and overlaps a relocated span is **uncertain**. It gets the `Same as "<existing>"` option and ⚠, and it's excluded from accept-all, so Shaw sees it instead of a silent duplicate.
+  4. Anything else is a new occurrence.
+  Two deliverables in one sentence stay two occurrences: their `deliverable` (or `operation`) values differ, so at most one can pass the field check for a given old occurrence, and a double claim is routed to review. The call id is stable for both sources (`recording_id`, inbox dir name).
 - **Commitment** `cmt_<random>`: the thing Shaw tracks, which is also the human-task op_key. Each occurrence points at exactly one commitment.
 
 **Linking an occurrence in a later call to an existing commitment:**
@@ -221,7 +226,7 @@ Precedence, first hit wins; `due_source` names the rule.
   - **both** occurrences have *verified* attribution (§2);
   - same `owner`;
   - same resolved counterpart id;
-  - same `action_type` (the miner's enum: email, message, calendar_invite, document_send, review, follow_up, so drafting ≠ sending);
+  - same `action_type` (the miner's enum: email, message, calendar_invite, document_send, review, follow_up) **and** same `operation`. That's a new cmt-v2 field: `draft | send | do | review | schedule | decide`. The enum alone can't tell "draft the email" from "send the email" (`commitment_miner.py:34-36`); `operation` can;
   - same normalized `deliverable`;
   - neither item is `recurring`.
 - **Anything else the LLM calls a match is *uncertain*.** The item goes on the new card with an extra option, `Same as "<existing>" (<date>): update it`, and ⚠, and it's excluded from accept-all. **No merge effect (patch, seat notice, suppression) happens before Shaw picks that option.** Inferred-attribution items therefore never merge on their own.
@@ -235,6 +240,7 @@ Precedence, first hit wins; `due_source` names the rule.
 
 **Due-date changes** (an auto-link, or Shaw choosing "update it"):
 - Every change becomes an immutable row `due_changes(cmt, seq, due_ts, due_source, from_occ)`, with `seq` increasing.
+- **The task's date is derived, not copied.** For a Shaw item, task `due_ts` = the commitment `due_ts`. For a **chase** item (owner = participant), task `due_ts` = `chase_date(their due_ts)` (§4 rule), recomputed from each new `seq`. The `patch` payload always carries the *derived* task date, and its `due_source` says `chase: their due <x> + 1bd`.
 - Its effects are `patch:<cmt>:s<seq>` and `duenote:<cmt>:s<seq>`. Payloads are stored when the effect is planned and never rebuilt.
 - **Ordering:** before running any `patch`/`duenote` effect, every older planned effect for that commitment is marked `obsolete`, so a stale retry can't overwrite a newer date.
 - **Patch reconciliation:** a read-only SQL read of the row's `evidence` JSON. If it equals the payload, `confirmed`; otherwise re-apply, but only if this is still the latest `seq`.
@@ -252,14 +258,14 @@ Precedence, first hit wins; `due_source` names the rule.
 ## 6. Dispatch and results
 
 - **Applying an answer,** only after §4's status and final-answer checks:
-  - **Take it myself / Track it:** effect `task:<cmt>` runs `approval.py human-task --from postcall --task <short> --op-key <cmt> --feature commitment --blocks <counterpart> --summary <miner 4-line format + citation> --evidence {due_ts,due_source}`. One human task per commitment.
+  - **Take it myself / Track it:** (evidence `due_ts` = the commitment's due for Shaw items, or the approved `chase_date` for chase items, §5) effect `task:<cmt>` runs `approval.py human-task --from postcall --task <short> --op-key <cmt> --feature commitment --blocks <counterpart> --summary <miner 4-line format + citation> --evidence {due_ts,due_source}`. One human task per commitment.
   - **Assign to agent:** effect `dispatch:<cmt>`.
   - Every effect is written in the same transaction as the first-applied-wins decision (§5).
   - **Drop:** ledger `dropped`.
 - **Authorization check before every dispatch,** in code, which refuses on any mismatch:
   1. The questionnaire row is `submitted`/`resumed` and the answer for `q_n` is `final`, or Q1=1 applied to an unanswered item.
   2. The chosen option index maps, in the **frozen** `card_items.options_json`, to `Assign to <seat>`. The seat and `agent_work` scope come from that frozen row, never from a fresh resolve.
-  3. The commitment's `decision` was set by *this* card and question (`decision_src`), and no `dispatch:<cmt>` effect exists yet.
+  3. The `dispatch:<cmt>` intent row exists, was created **by the decision transaction** for this card and question (its payload's `decision_src` equals the commitment's), and is `planned` or `sent` (being reconciled). An intent that's already `confirmed` means it was delivered, so skip it. No intent at all, or a `decision_src` mismatch, means refuse and alert gm. Because the decision is set once, at most one such intent can ever exist.
   4. The seat is live in the registry right now. If it isn't, there's no silent reroute: we send the item to gm with the card id so gm picks the seat, and the ledger records `rerouted`.
 - **Message:**
   - `msg_store.py send --from postcall --to <seat> --type task --priority high --subject "[postcall dispatch:<cmt>] <action>" --body-file <f>`.
@@ -341,7 +347,7 @@ Precedence, first hit wins; `due_source` names the rule.
   4. **Shaw's validation is recorded.** The miner's kill-switch says Shaw validates its first live batch. gm files one card to Shaw linking the shadow batch, and his answer is recorded. **A waiver needs Shaw's own word on that card**; gm can't waive on its own authority.
   5. gm writes `MODE=live`, which creates the live ledger and sets `live_start_ts`.
   6. *(reschedule patching only)* orchestraos-builder's guarded `update_fields` has landed. Until then that one path is a no-op that gets reported (§5).
-  No real card reaches Shaw before step 5.
+  **No generated post-call card reaches Shaw before step 5.** The only Shaw-facing card before then is the deliberate step-4 validation card that gm files.
 
 ## 8. Files and owners
 
@@ -401,4 +407,16 @@ Precedence, first hit wins; `due_source` names the rule.
   6. Calendar and zone → email-only matching, RRULE/EXDATE/cancelled/declined handling, DST rules, a visible "zone assumed".
   7. Shaw validation → it needs his own word on a card; gm can't waive it.
 - **Scope correction (msg_ecea3d6c), applied in v4:** Arturo calls dropped; Pocket and segments sources; a (b) Theirs section with chase items; §2a participants from calendar overlap and speakers.
-- **Codex round 4 (v4 note):** see below.
+- **Codex round 4 (v4 note): `REJECT`.** It confirmed round-3 blockers 3 and 4 resolved, then raised 3 new blockers and 3 should-fixes, all fixed in v4.1:
+  1. Re-extraction identity, and a segments id that was a content hash → a stable dir-name id; quote text relocated instead of comparing offsets; `same_as_occ`; uncertain matches shown to Shaw.
+  2. Drafting vs. sending → a new `operation` field required for auto-link.
+  3. Dispatch check vs. the intent row → the check now requires the decision-created intent and skips one that's `confirmed`.
+  4. Quote-in-segment rule.
+  5. Invited vs. spoke.
+  6. An explicit `chase_date`, separate from their due date.
+- **Codex round 5 (v4.1 note): `REJECT`.** It confirmed round-4 blockers 2 and 3 and the segments id as resolved, then raised one blocker: `same_as_occ` lacked the field and one-to-one checks. Fixed in v4.2:
+  - full field equality plus a one-to-one mapping, with double claims sent to review;
+  - (should) the chase task's date is derived from each due change;
+  - (nit) rollout wording.
+- **Codex round 6 (v4.2 note): NOT RUN.** `codex exec` exited with "Your workspace is out of credits" (17:45Z). agy is not used, per the role. **The last codex verdict on record is round 5's `REJECT`, whose single blocker v4.2 targets; codex hasn't confirmed that fix.**
+- **Congruence DEC-1795627933880541:** postcall-dev-claude APPROVE (v4.2); codex REJECT (round 5, v4.1). **Status: not CONSENSUS_REACHED.** gm decides whether to approve on this record or wait for codex credits.
