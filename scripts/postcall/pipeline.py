@@ -46,8 +46,8 @@ def process(call, *, ledger, extractor, effects):
     pages = card.build(title=call.title, items=card_items, **_card_context(call, card_items))
     for n, page in enumerate(pages, 1):
         payload = {"title": page.title, "summary": page.summary, "questions": page.questions, "frozen": page.frozen}
-        ledger.plan(Effect(effect_id=f"card:{call.call_id}:r0:p{n}", kind="card", payload=payload),
-                    call_id=call.call_id)
+        ledger.plan_card(Effect(effect_id=f"card:{call.call_id}:r0:p{n}", kind="card", payload=payload),
+                         call_id=call.call_id, frozen=page.frozen)
     ledger.set_call_status(call.call_id, "carded", content_hash=call.content_hash)
     ledger.run_pending(effects)
     return Result("carded", items=items)
