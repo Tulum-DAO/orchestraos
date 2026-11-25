@@ -8,8 +8,11 @@ attribution columns when they are armed, and the author's notice carries the rea
 
 Who and where are the EDGE's word, never the client's (R7d, the rule _gateway_answer_tags already applies to answers):
 the gateway reads only `reason` and a surface hint from the body, derives `by` and the device from the authenticated
-principal, and checks the hint against that edge's own surfaces. A forged `by` is ignored. A menu that is on an agent's
-screen (the menu bridge's row) is refused: it is dismissed with Escape on the pane, so the pane and the card agree.
+principal, and checks the hint against that edge's own surfaces; every dismiss through the gateway leaves the line, so a
+body-less dismiss (iOS today) and a web dismiss record the same act the same way. A forged `by` is ignored. A menu that
+is on an agent's screen (the menu bridge's row, and the pane still shows it) is refused with 423: it is dismissed with
+Escape on the pane, so the pane and the card agree; a bridge row whose pane moved on, a headless seat's card and an
+agent's own written menu are dismissed like any other card.
 
 Hermetic: tmp tasks.db, HOME a tmp dir, no ntfy; the author's notice is captured by stubbing the message store; the HTTP
 tests run the gateway app on a scratch box (attention_testbox) with a fleet bearer and minted device tokens.
@@ -49,10 +52,10 @@ def _menu(s):
                     op_key="decide:codex-gm:build", menu={"options": [{"n": "1", "label": "A"}, {"n": "2", "label": "B"}]})
 
 
-def _bridge_menu(s):
+def _bridge_menu(s, digest="abc"):
     """The menu bridge's row for a menu that IS on the agent's screen (origin menu_bridge, op_key menu:...)."""
     return s.create(from_agent="codex-gm", question="Which build?", worker_kind="pane", kind="menu",
-                    op_key="menu:codex-gm:abc", menu={"options": [{"n": "1", "label": "A"}, {"n": "2", "label": "B"}]},
+                    op_key=f"menu:codex-gm:{digest}", menu={"options": [{"n": "1", "label": "A"}, {"n": "2", "label": "B"}]},
                     origin="menu_bridge")
 
 
@@ -169,15 +172,26 @@ def test_the_route_needs_the_approve_scope_and_a_principal(box):
 
 @pytest.mark.parametrize("body", [None, b"", b"{}", b"not json", b"[1,2]", b"null"],
                          ids=["no-body", "empty", "empty-object", "non-json", "list", "null"])
-def test_no_fields_is_the_plain_dismiss_as_before(box, body):
+def test_no_fields_still_dismisses_and_records_where_and_who_from_the_edge(box, body):
     rid = _task(box.ledger)
     headers = {"Content-Type": "application/json"} if body is not None else None
     st, d = _raw(box, f"/approvals/{rid}/discard", body, headers=headers)
     assert (st, d["ok"], d["applied"], d["id"]) == (200, True, True, rid)
     row = box.ledger.get(rid)
-    assert row["status"] == "discarded" and "DISMISSED" not in (row["summary"] or "")
-    assert row.get("answered_by") is None and row.get("answer_surface") is None
-    assert box.sent["to_agent"] == "postcall-dev" and "— DISMISSED" not in box.sent["body"]
+    assert row["status"] == "discarded"
+    line = row["summary"][row["summary"].rfind("— DISMISSED"):]
+    assert line.endswith(" via gateway by operator") and ": " not in line               # where and who; no reason
+    assert (row["answer_surface"], row["answered_by"], row.get("answer_device")) == ("gateway", "operator", None)
+    assert box.sent["to_agent"] == "postcall-dev" and box.sent["body"].endswith("\n\n" + line)
+
+
+def test_a_body_less_device_dismiss_is_recorded_like_a_web_one(box):
+    rid = _task(box.ledger)
+    st, d = _raw(box, f"/approvals/{rid}/discard", None, who="approve")
+    assert (st, d["applied"]) == (200, True)
+    row = box.ledger.get(rid)
+    assert (row["answer_surface"], row["answered_by"]) == ("watch", "operator") and row["answer_device"].endswith(":Phone")
+    assert "via watch by operator" in row["summary"]
 
 
 def test_the_web_dismiss_records_where_who_and_why_with_who_from_the_bearer(box):
@@ -222,14 +236,40 @@ def test_a_reason_alone_is_enough_and_is_capped(box):
     assert line.endswith(": " + "r" * 500) and "via gateway by operator" in line
 
 
-def test_a_menu_on_the_agents_screen_is_refused_and_stays_pending(box):
+def test_a_menu_still_on_the_agents_screen_is_refused_with_423_and_stays_pending(box, monkeypatch):
+    import scripts.watch_gateway as G
     rid = _bridge_menu(box.ledger)
+    monkeypatch.setattr(G, "_current_menu", lambda session: {"question": "Which build?", "options": []} if session == "codex-gm" else None)
     st, d = box.call("POST", f"/approvals/{rid}/discard", body={"surface": "web", "reason": "old"})
-    assert st == 409 and d["ok"] is False and d["error"] == "dismiss it on the pane"
+    assert st == 423 and d["ok"] is False
+    assert d["error"] == "This menu is on codex-gm's screen: dismiss it on the pane (Escape), which closes this card too."
     assert d["agent"] == "codex-gm" and "Escape" in d["why"] and d["id"] == rid
     assert box.ledger.get(rid)["status"] == "pending" and not box.sent
-    st, _ = box.call("POST", f"/approvals/{rid}/discard")                                # the plain call too
-    assert st == 409 and box.ledger.get(rid)["status"] == "pending"
+    st, _ = box.call("POST", f"/approvals/{rid}/discard")                                # the body-less call too
+    assert st == 423 and box.ledger.get(rid)["status"] == "pending"
+
+
+def test_a_bridge_row_whose_pane_moved_on_is_dismissed(box, monkeypatch):
+    import scripts.watch_gateway as G
+    rid = _bridge_menu(box.ledger)
+    monkeypatch.setattr(G, "_current_menu", lambda session: None)                      # nothing on the screen now
+    st, d = box.call("POST", f"/approvals/{rid}/discard", body={"reason": "stale"})
+    assert (st, d["applied"]) == (200, True) and box.ledger.get(rid)["status"] == "discarded"
+    rid2 = _bridge_menu(box.ledger, digest="def")
+    monkeypatch.setattr(G, "_current_menu", lambda session: {"question": "Do you want to proceed?", "options": []})   # a different menu
+    assert box.call("POST", f"/approvals/{rid2}/discard")[1]["applied"] is True
+
+
+def test_a_headless_seats_card_is_not_mistaken_for_an_on_screen_menu(box, monkeypatch):
+    import scripts.watch_gateway as G
+    monkeypatch.setattr(G, "_current_menu", lambda session: {"question": "Which build?", "options": []})
+    monkeypatch.setattr(approval_resume, "_is_headless_card", lambda row: False)       # the notice path is not the point here
+    rid = box.ledger.create(from_agent="codex-gm", question="Which build?", worker_kind="pane", kind="menu",
+                            op_key="menu:codex-gm:hl-0123456789abcdef", origin="headless",
+                            menu={"options": [{"n": "1", "label": "A"}]})
+    assert G._on_screen_menu(box.ledger.get(rid)) is False
+    st, d = box.call("POST", f"/approvals/{rid}/discard", body={"reason": "x"})
+    assert (st, d["applied"]) == (200, True)
 
 
 def test_an_agents_own_menu_card_is_dismissed_like_any_other(box):
@@ -238,6 +278,18 @@ def test_an_agents_own_menu_card_is_dismissed_like_any_other(box):
     assert (st, d["applied"]) == (200, True)
     assert "via web by operator: decided elsewhere" in box.ledger.get(rid)["summary"]
     assert box.sent["to_agent"] == "codex-gm"
+
+
+def test_on_screen_menu_is_origin_and_the_live_pane_together(monkeypatch):
+    import scripts.watch_gateway as G
+    live = {"codex-gm": {"question": "Which build?  (1) A (2) B", "options": []}}
+    monkeypatch.setattr(G, "_current_menu", lambda session: live.get(session))
+    bridge = {"origin": "menu_bridge", "from_agent": "codex-gm", "question": "Which build?", "op_key": "menu:codex-gm:abc"}
+    assert G._on_screen_menu(bridge) is True                                           # containment, version-tolerant
+    assert G._on_screen_menu({**bridge, "from_agent": "pm-demo"}) is False              # another pane
+    assert G._on_screen_menu({**bridge, "origin": None}) is False                       # an agent's own menu: never
+    assert G._on_screen_menu({**bridge, "origin": "headless"}) is False
+    assert G._on_screen_menu({**bridge, "question": "Deploy now?"}) is False            # the pane shows a different menu
 
 
 def test_a_second_dismiss_is_idempotent_and_an_unknown_id_is_404(box):

@@ -40,13 +40,15 @@ test('an unknown card is a 404', async () => {
   assert.equal(r.status, 404);
 });
 
-test('the gateway\'s 409 (a menu on the agent\'s screen) keeps its words, why and agent; it is not a gateway fault', async () => {
-  const r = await dismissCard('apr_menu0001', deps({ status: 409, body: { ok: false, error: 'dismiss it on the pane', agent: 'codex-gm',
-                                                                           why: 'Escape through /agent-key closes both' } }));
-  assert.equal(r.status, 409);
-  assert.deepEqual(r.body, { error: 'dismiss it on the pane', id: 'apr_menu0001', why: 'Escape through /agent-key closes both', agent: 'codex-gm' });
-  const bare = await dismissCard('apr_menu0002', deps({ status: 409, body: {} }));
-  assert.deepEqual([bare.status, bare.body.error], [409, 'dismiss refused']);
+test('the gateway\'s 423 (a menu on the agent\'s screen) keeps its words, why and agent; it is not a gateway fault nor a 409', async () => {
+  const r = await dismissCard('apr_menu0001', deps({ status: 423, body: { ok: false, error: 'This menu is on codex-gm\'s screen: dismiss it on the pane (Escape), which closes this card too.', agent: 'codex-gm',
+                                                                           why: 'the pane still shows this menu' } }));
+  assert.equal(r.status, 423);
+  assert.deepEqual(r.body, { error: 'This menu is on codex-gm\'s screen: dismiss it on the pane (Escape), which closes this card too.', id: 'apr_menu0001', why: 'the pane still shows this menu', agent: 'codex-gm' });
+  const bare = await dismissCard('apr_menu0002', deps({ status: 423, body: {} }));
+  assert.deepEqual([bare.status, bare.body.error], [423, 'This card cannot be dismissed here.']);
+  const closed = await dismissCard('apr_menu0003', deps({ status: 409, body: { ok: false, error: 'x' } }));
+  assert.equal(closed.status, 502, 'a 409 from the gateway is not a refusal the web knows; it stays a gateway fault');
 });
 
 test('no token or no gateway is a 502 and nothing is sent without a token', async () => {

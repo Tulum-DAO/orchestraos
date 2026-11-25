@@ -27,7 +27,6 @@ import {
   canonicalAnswer,
   answerPeer,
   answerRefusalStatus,
-  answerSurface,
   type CanonicalRow,
   type AnswerResult,
 } from './_canonical-approvals.js';
@@ -601,15 +600,15 @@ export function refusalBody(result: AnswerResult, id: string, verb: string): Rec
 }
 
 /**
- * What the dismiss route tells the gateway. The surface is THIS route's word (R7d: the web route holds the
- * authenticated session, so it asserts provenance itself, as canonicalAnswerArgv does for answers): `web`, or `chat`
- * when the client says it dismissed from a chat thread; a claim to be the phone or the watch is `web`. The reason is
- * the one field taken from the client: a trimmed string, capped at 500 characters. `by` is never read or sent; the
- * gateway stamps who from its bearer.
+ * What the dismiss route tells the gateway. The surface is THIS route's word, `web`, pinned here (R7d: the web route
+ * holds the authenticated session and asserts provenance itself; no client hint is read, not even `chat`, which the
+ * answer path accepts as a hint: a dismiss has no server-side chat path to vouch for it). The reason is the one field
+ * taken from the client: a trimmed string, capped at 500 characters. `by` is never read or sent; the gateway stamps
+ * who from its bearer.
  */
 export function dismissFieldsOf(body: unknown): DismissFields {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-  const out: DismissFields = { surface: answerSurface(b.surface) };
+  const out: DismissFields = { surface: 'web' };
   if (typeof b.reason === 'string' && b.reason.trim()) out.reason = b.reason.trim().slice(0, 500);
   return out;
 }
@@ -854,9 +853,9 @@ router.post('/:id/answer', (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/approvals/unified/:id/dismiss — close a pending card of ANY kind without an answer (the card's ✕):
-// approval, task for you (human_task / commitment), menu. Optional body { reason, surface: 'chat'? }: the reason and
-// this route's surface go onto the card's history line and into the author's notice; who dismissed is the gateway's
-// word from its bearer (dismissFieldsOf). A menu that is on an agent's screen comes back 409 "dismiss it on the pane"
+// approval, task for you (human_task / commitment), menu. Optional body { reason }: the reason and this route's
+// surface (web) go onto the card's history line and into the author's notice; who dismissed is the gateway's word
+// from its bearer (dismissFieldsOf). A menu that is on an agent's screen comes back 423 with a readable error
 // (Escape via /api/agents/:id/agent-key closes the pane's menu and the card together). The gateway's discard does the
 // work (history + a "don't keep waiting" note to the agent); see lib/approval-dismiss.ts. Scoped like every /:id route
 // by approvalScopeParam above.

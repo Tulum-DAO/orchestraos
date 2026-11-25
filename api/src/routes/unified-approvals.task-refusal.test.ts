@@ -44,9 +44,9 @@ test('any other refusal keeps its own words (and its why)', () => {
   assert.ok(!('kind' in b) && !('verbs' in b));
 });
 
-test('the dismiss body to the gateway: this route\'s surface, the client\'s reason, never a by', () => {
+test('the dismiss body to the gateway: this route\'s surface (web, always), the client\'s reason, never a by', () => {
   assert.deepEqual(dismissFieldsOf({ surface: ' web ', reason: ' old, remove ', by: 'operator' }), { surface: 'web', reason: 'old, remove' });
-  assert.deepEqual(dismissFieldsOf({ surface: 'chat', reason: 'r' }), { surface: 'chat', reason: 'r' });
+  assert.deepEqual(dismissFieldsOf({ surface: 'chat', reason: 'r' }), { surface: 'web', reason: 'r' }, 'no client hint is read, chat included');
   assert.deepEqual(dismissFieldsOf({ surface: 'watch', by: 'pm-x' }), { surface: 'web' }, 'a claim to be the watch is the web');
   assert.deepEqual(dismissFieldsOf({ surface: 7, reason: ['x'] }), { surface: 'web' });
   assert.deepEqual(dismissFieldsOf(undefined), { surface: 'web' });
@@ -144,21 +144,21 @@ test('the dismiss route sends the gateway its own surface and the reason, with t
       await call('POST', '/apr_task0001/dismiss');
       assert.deepEqual(JSON.parse(seen.body!), { surface: 'web' }, 'no body: still this route\'s surface, nothing else');
       await call('POST', '/apr_task0001/dismiss', { surface: 'chat', reason: 'answered in the thread' });
-      assert.deepEqual(JSON.parse(seen.body!), { surface: 'chat', reason: 'answered in the thread' });
+      assert.deepEqual(JSON.parse(seen.body!), { surface: 'web', reason: 'answered in the thread' }, 'chat is a client claim here: web');
     });
   } finally { gw.close(); delete process.env.WATCH_GATEWAY_URL; }
 });
 
-test('a menu on the agent\'s screen: the gateway\'s 409 "dismiss it on the pane" reaches the client as it is', async () => {
+test('a menu on the agent\'s screen: the gateway\'s 423 reaches the client as it is, with its error, why and agent', async () => {
   const seen: Seen = {};
-  const why = "this menu is on codex-gm's screen: Escape through /agent-key closes the pane's menu and this card together";
-  const gw = await gatewayStub({ status: 409, body: { ok: false, error: 'dismiss it on the pane', id: 'apr_menu1', agent: 'codex-gm', why } }, seen);
+  const error = "This menu is on codex-gm's screen: dismiss it on the pane (Escape), which closes this card too.";
+  const gw = await gatewayStub({ status: 423, body: { ok: false, error, id: 'apr_menu1', agent: 'codex-gm', why: 'the pane still shows this menu' } }, seen);
   process.env.WATCH_GATEWAY_URL = `http://127.0.0.1:${(gw.address() as AddressInfo).port}`;
   try {
     await withApp(async (call) => {
       const r = await call('POST', '/apr_menu1/dismiss', { reason: 'old' });
-      assert.equal(r.status, 409);
-      assert.deepEqual([r.body.error, r.body.agent, r.body.why], ['dismiss it on the pane', 'codex-gm', why]);
+      assert.equal(r.status, 423);
+      assert.deepEqual([r.body.error, r.body.agent, r.body.why], [error, 'codex-gm', 'the pane still shows this menu']);
     });
   } finally { gw.close(); delete process.env.WATCH_GATEWAY_URL; }
 });

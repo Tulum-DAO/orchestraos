@@ -11551,6 +11551,16 @@ DISCARD_SURFACES = DISCARD_SURFACES_DEVICE + DISCARD_SURFACES_FLEET
 DISMISS_ON_THE_PANE = "dismiss it on the pane"
 
 
+def _on_screen_menu(row):
+    """True for a menu bridge row whose menu is STILL on the agent's screen: origin 'menu_bridge' (the bridge's own
+    rows; a headless seat's card and an agent's written decision are not) and the pane's current menu matches the row's
+    question (_ledger_menu_matches, version-tolerant). A bridge row whose pane has moved on is not on screen: dismissing
+    it is right, and the same as what reconcile_orphans would do."""
+    if row.get("origin") != "menu_bridge":
+        return False
+    return _ledger_menu_matches(row.get("session") or row.get("from_agent"), row.get("question"))
+
+
 def discard_fields(data):
     """The optional body of POST /approvals/{id}/discard. The client's word counts for ONE thing: `reason`
     (a trimmed string, capped at 500 characters) and the surface HINT it is checked against the edge's set in
@@ -11585,36 +11595,37 @@ async def handle_approval_discard(request):
     discard's sibling). Saves to history + fires ONE honest notify to the emitter
     so a parked agent never waits forever on a dismissed ask. Takes EVERY card kind
     (approval, human_task, menu; operator order 2026-11-25) and an optional body
-    {surface, reason}; the history line says where / who / why with where and who
-    from the principal (discard_provenance). A menu that is ON an agent's screen
-    (the menu bridge's row, _is_terminal_menu) is refused with 409: it is dismissed
-    with Escape on the pane (/agent-key), so the pane and the card agree; marking it
-    discarded here would tell the agent not to wait while its pane still shows the menu.
-    An empty, missing or non-JSON body is the plain dismiss, as before."""
+    {surface, reason}. Every dismiss through here leaves the history line (where / who,
+    and why when given) with where and who from the principal (discard_provenance), so
+    a body-less dismiss (iOS today) and a web dismiss record the same act the same way.
+    A menu that is ON an agent's screen (_on_screen_menu) is refused with 423: it is
+    dismissed with Escape on the pane (/agent-key), so the pane and the card agree;
+    marking it discarded here would tell the agent not to wait while its pane still
+    shows the menu. 423, not 409: the web client reads 409 as "already answered".
+    A missing, empty or non-JSON body is a dismiss with no reason."""
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     rid = request.match_info["id"]
     try:
         fields = discard_fields(await request.json()) if request.can_read_body else discard_fields(None)
-    except Exception:  # noqa: BLE001 — an empty or non-JSON body is a plain dismiss
+    except Exception:  # noqa: BLE001 — an empty or non-JSON body is a dismiss with no reason
         fields = discard_fields(None)
     store = ApprovalStore(); store.migrate()
     row = store.get(rid)
     if not row:
         return _json({"ok": False, "error": "not found"}, status=404)
-    if row.get("status") == "pending" and _is_terminal_menu(row):
-        return _json({"ok": False, "error": DISMISS_ON_THE_PANE, "id": rid, "agent": row.get("from_agent"),
-                      "why": f"this menu is on {row.get('from_agent') or 'the agent'}'s screen: Escape through "
-                             f"/agent-key closes the pane's menu and this card together"}, status=409)
-    line = None
-    if fields["surface"] or fields["reason"]:
-        surface, by, device = discard_provenance(request, fields["surface"])
-        import approval_schema as _AS
-        now = _AS._now()                      # one clock: the summary's line and the mail's are the same string
-        line = _AS.dismiss_line(now, surface, by, fields["reason"])
-        ok = store.discard(rid, surface=surface, by=by, reason=fields["reason"], device=device, now=now)
-    else:
-        ok = store.discard(rid)
+    if row.get("status") == "pending" and _on_screen_menu(row):
+        agent = row.get("from_agent") or "the agent"
+        return _json({"ok": False, "id": rid, "agent": row.get("from_agent"),
+                      "error": f"This menu is on {agent}'s screen: {DISMISS_ON_THE_PANE} (Escape), which closes this card too.",
+                      "why": "the pane still shows this menu; a dismiss here would tell the agent not to wait while "
+                             "its screen still waits on it. Escape through /agent-key closes both together."},
+                     status=423)
+    surface, by, device = discard_provenance(request, fields["surface"])
+    import approval_schema as _AS
+    now = _AS._now()                      # one clock: the summary's line and the mail's are the same string
+    line = _AS.dismiss_line(now, surface, by, fields["reason"])
+    ok = store.discard(rid, surface=surface, by=by, reason=fields["reason"], device=device, now=now)
     if ok:
         try:
             import asyncio

@@ -19,12 +19,12 @@ export interface DismissDeps {
 export interface DismissResult { status: number; body: Record<string, unknown> }
 
 /**
- * Where and why a card was dismissed, as the API tells the gateway. `surface` is the API's own word (web or chat,
- * answerSurface), never the client's; `reason` is the only field a client supplies. WHO dismissed is never sent: the
+ * Where and why a card was dismissed, as the API tells the gateway. `surface` is the API's own word (`web`, this
+ * route's edge; no client hint is read); `reason` is the only field a client supplies. WHO dismissed is never sent: the
  * gateway derives it from the bearer it authenticated (R7d), exactly as it does for answered_by, so no client can
  * record that the operator dismissed a card, or that a web dismiss came from the watch.
  */
-export interface DismissFields { surface?: 'web' | 'chat'; reason?: string }
+export interface DismissFields { surface?: 'web'; reason?: string }
 
 export async function dismissCard(id: string, deps: DismissDeps, fields: DismissFields = {}): Promise<DismissResult> {
   const token = deps.token();
@@ -37,9 +37,9 @@ export async function dismissCard(id: string, deps: DismissDeps, fields: Dismiss
   }
   if (r.status === 404) return { status: 404, body: { error: `Approval item '${id}' not found`, id } };
   // The gateway's own refusal (a menu that is on the agent's screen: "dismiss it on the pane"): its words, its why
-  // and the agent reach the client as they are, a 409 and not a gateway fault.
-  if (r.status === 409) {
-    return { status: 409, body: { error: r.body?.error || 'dismiss refused', id,
+  // and the agent reach the client as they are. 423, never 409: the web reads 409 as "already answered or closed".
+  if (r.status === 423) {
+    return { status: 423, body: { error: r.body?.error || 'This card cannot be dismissed here.', id,
                                   ...(r.body?.why ? { why: r.body.why } : {}), ...(r.body?.agent ? { agent: r.body.agent } : {}) } };
   }
   if (r.status !== 200 || !r.body?.ok) {
