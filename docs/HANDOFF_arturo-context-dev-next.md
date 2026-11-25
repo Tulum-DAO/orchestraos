@@ -8,18 +8,20 @@
 - Rollback command (old tree), on the card: `ARTURO_NATIVE_GPTLIVE=1 bash /home/shaw/scripts/agent-orchestra/services/arturo/native/run.sh 2>&1 | tee -a /home/shaw/scripts/agent-orchestra/logs/arturo-native.log` via `tmux respawn-pane -k -t arturo-native:0.0`, quiet check first.
 - ~/orchestraos (live tree) is 41 commits behind main with 432 dirty entries; never pull it yourself.
 
-## 1. Current Goal & Phase State
-- Goal: Arturo's context during/between calls (role prompt). Phases done: gaps 1-4 + past day (#627), native cutover (16:59 Tulum).
-- Current step: LATENCY (Shaw's binding condition on the cutover card): measure open->START, START->greet, caller end-of-speech -> first audio on real calls tonight; plan with numbers to gm by Thu 11-26 12:00 Tulum. No latency change live before gm OKs it.
+## 1. Current Goal & Phase State (rewritten at rotation, 2026-11-25 23:55Z)
+- LIVE: native :5076, pane arturo-native:0.0, pid 4106439, from the pinned worktree /home/shaw/wt/arturo-context-dev/native-live (aa84d24), env ARTURO_NATIVE_CONTEXT_TOKENS=2500. Opens with gm chat + Arturo calls (about 24 turns). The dashboard already sends start.thread (avatar-dev, bundle index-DXsXqetJ.js); the live build ignores it until #644.
+- Shaw's due dates (gm msg_c6dacdfa): 25-turn own-thread opening LIVE by 23:00 Tulum tonight (already at risk); latency plan with numbers 08:00 Tulum 11-26; #635 (takes-calls D1+D4; it replaced #634) card 10:00 11-26; unified-log writer verdict with the latency plan.
+- Codex is out of credits: every review is a fenced read-only Claude reviewer; cards say so.
 
-## 2. Open Loops
-- [ ] Latency plan to gm by 11-26 12:00 Tulum (proving call greeted 4.95 s live vs 2.44 s probe; live has 39 tools vs 31).
-- [ ] PR #635 review -> merge card (mine) -> :5071 relay restart on gm GO at a quiet minute -> prove with one tagged call on a non-Arturo takes-calls agent (opening_tokens > 0, a previous call named). D2 flag: one tagged relay session before default on.
-- [ ] Follow-up PR 1 (gm ruling via builder msg_6dc3cd8c): calls=unowned alias for ownerless journals + journal carries agent id; operator name from state/operator.json first.
-- [ ] "the operator" wording PR (no name in public repo), separate.
-- [ ] Builder follow-up (2): SECRET_RE \S and /i without u flag: its own reviewed change.
-- [ ] After cutover: gm wants real-call greet timing logged for a day; raise budget to 3000 only if 1500 shows headroom (msg_b17efda9).
-- [ ] codex-arturo PR #630 (test-call finalize guard) rides the packet; not ours to merge.
+## 2. Open Loops (in order)
+- [ ] #638 (feat/native-opening-turns, worktree /home/shaw/wt/arturo-context-dev/turns, head 700a51d): builder's reviewer BLOCKED it (9 findings, PR comment 7177841744). Still open after 700a51d: keep only the LAST 25 turns after a floor re-read (not the whole 4,000-token block); test the 25 boundary exactly; report fields budget / reread / source (route vs twin) / timeout-skip; the "ET" label in tests should be "Local" (#637 convention). Card apr_fe545d12 has a HOLD note. Fold red-first, push, mail builder the head, note the card.
+- [ ] #645 (feat/turn-is-exchange, worktree /home/shaw/wt/arturo-context-dev/merge, head cc83b28): builder's reviewer BLOCKED it (6 findings, PR comment 7177842452). The clip cuts the END of a merged turn (keep the tail, or clip per phrase); the same-call check is untested in both twins + fixture; the "phrase(s) not shown" label; name matching can fold operator and agent together (match on role); a time-gap limit within a turn; a test comment with a pronoun + internal id. Card apr_f7e96424 has a HOLD note.
+- [ ] #644 (feat/native-page-thread, same turns worktree, head 8ba9370): first review BLOCKED on thread access, fixed in 8ba9370; a re-review subagent was running at rotation (its result is not known to me). Then merge #645 into it, re-point its base to main after #638 merges, CI, card.
+- [ ] After the merges: a quiet-minute respawn of the native from a fresh clean checkout of the new main (carries #637's spending_tools expanduser), on gm's GO. Report pid, healthz, START turns=.
+- [ ] #635 (feat/agent-call-context-signed, worktree /home/shaw/wt/arturo-context-dev/agents): review was asked of builder; card by 10:00 11-26.
+- [ ] Latency plan (08:00): measure open->START, START->greet and end-of-speech->first-audio on real calls (~/.orchestra/state/arturo/native/calls/*.json + arturo-native.log START/END). Include cold vs warm and 39 vs 31 tools.
+- [ ] Unified log: ~/.orchestra/state/unified-conversation.jsonl stopped 2026-11-22 06:41 Tulum; find the writer that died; revive vs retire in favour of the contract.
+- [ ] Follow-ups: calls=unowned alias + state/operator.json first (gm via builder msg_6dc3cd8c); "the operator" wording PR; SECRET_RE flags.
 
 ## 3. Decisions
 1. Opening fenced as PAST CONTEXT (both twins + native fenced()): without it, no greet (probe native-90a7e00cd3d1 vs control native-8f4a14b348a8).
@@ -28,12 +30,12 @@
 4. Native from a clean worktree, not a pull of the dirty live tree (gm GO msg_8d3b2cf8).
 
 ## 4. Declared First Effect
-`curl -s http://127.0.0.1:5076/native/healthz && grep -E ": (START|END) " ~/.orchestra/logs/arturo-native.log | tail -6`
+`cd /home/shaw/wt/arturo-context-dev/turns && git switch feat/native-opening-turns && timeout 60 gh api repos/Tulum-DAO/orchestraos/issues/comments/7177841744 --jq .body`
 
-## 5. Next 3 Actions
-1. Read real-call START/END lines + reports in ~/.orchestra/state/arturo/native/calls/ for greet + turn latency.
-2. Chase the PR #635 review; on MERGE-OK file the merge card.
-3. Draft the latency plan to gm.
+## 5. Next 3 Immediate Actions
+1. Fold builder's #638 findings red-first (last-25 after the re-read, boundary test, report fields, Local label), push, note card apr_fe545d12, mail builder the head.
+2. Fold builder's #645 findings red-first (keep the tail of a merged turn, role-based merge, same-call fixture case, gap limit), push, note card apr_f7e96424, mail builder.
+3. Read the #644 re-review on the PR; merge #645 into #644; CI; card. Then the respawn from new main on gm's GO.
 
 ## 6. Canary Questions
 1. **Q1:** Which commit sha did #627 squash-merge to, and which approval card authorized it? (msg_a794504c_44057527)
