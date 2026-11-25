@@ -363,6 +363,17 @@ def main(argv=None):
                          "originally needed this decision, when YOU (the card "
                          "author) carry it as its delegated authority. Never "
                          "a bypass — --from must still be YOU.")
+    # Outward-action ledger (docs/OUTWARD_ACTIONS.md): the card approves ONE outward action with
+    # EXACTLY these material arguments. The executor later claims the same action+args; a changed
+    # argument, a second run, or a run after an interrupted one is refused by the ledger.
+    pr.add_argument("--action", default=None, metavar="NAME",
+                    help="the outward action this card approves (e.g. deploy, pay, send_email); "
+                         "needs --material-args")
+    pr.add_argument("--material-args", dest="material_args", default=None, metavar="JSON",
+                    help="JSON object of the arguments that make the action what it is: str/int/bool/"
+                         "null/list/object, no floats (pass amounts as strings); list order is material")
+    pr.add_argument("--run-on", dest="run_on", default="approve",
+                    help="comma-separated answers that mean RUN (default approve; an option n for a menu card)")
     # Evidence-attached completion brief (spec §3.4 — the anti-"claiming done").
     # Agent reports DONE with proof; the operator accepts (archive) or responds (follow-up).
     pc = sub.add_parser("complete")
@@ -482,6 +493,13 @@ def main(argv=None):
     rt.add_argument("--superseded-by", dest="superseded_by", default=None,
                     help="apr_/qnr_ id of the card that replaced it")
     args = p.parse_args(argv)
+    try:
+        # Outward-action ledger backstop: a lost claim becomes uncertain and an unreconciled asked row
+        # meets its card's answer on ANY later invocation. Never a reason to block the verb.
+        import outward_ledger
+        outward_ledger.sweep()
+    except Exception as e:  # noqa: BLE001
+        print(f"[approval] outward ledger sweep skipped: {type(e).__name__}: {e}", file=sys.stderr)
     store = _store(); store.migrate()
 
     if args.cmd == "request":
@@ -563,6 +581,34 @@ def main(argv=None):
                       file=sys.stderr)
                 return 2
             args.default_option = d
+        action = None
+        if args.action or args.material_args:
+            if not (args.action and args.material_args):
+                print("[approval] --action and --material-args go together", file=sys.stderr)
+                return 2
+            import outward_ledger
+            try:
+                material = json.loads(args.material_args)
+                if not isinstance(material, dict):
+                    raise ValueError("--material-args must be a JSON object")
+                action_hash = outward_ledger.canonical_hash(args.action, material)
+            except ValueError as e:
+                print(f"[approval] bad --material-args: {e}", file=sys.stderr)
+                return 2
+            run_on = [o.strip() for o in str(args.run_on or "approve").split(",") if o.strip()] or ["approve"]
+            # V7c: the hash already has a row. asked/approved -> that card is the answer (idempotent
+            # re-requesters keep working, like the op_key dedupe). executing / unreleased uncertain ->
+            # refused: nothing files a second run of an action that is running or may have run.
+            live = outward_ledger.live_row(action_hash=action_hash)
+            if live is not None:
+                if live["state"] in ("asked", "approved") and live.get("card_id"):
+                    print(f"[approval] {args.action} {action_hash[:12]} is already {live['state']} on card "
+                          f"{live['card_id']}: no second card", file=sys.stderr)
+                    print(live["card_id"])
+                    return 0
+                print(f"REFUSED: {action_hash[:12]} is {live['state']}: release it or wait", file=sys.stderr)
+                return 3
+            action = (args.action, material, run_on, action_hash)
         rid = store.create(from_agent=args.from_agent, question=args.question,
                            worker_kind=args.worker_kind, op_key=args.op_key,
                            thread_key=args.thread_key, options=opts,
@@ -578,6 +624,21 @@ def main(argv=None):
                            process_lease_id=args.process_lease_id,
                            origin=args.origin, urgency=args.urgency,
                            default_option=args.default_option)
+        if action is not None:
+            # The ledger row, pointed at the id create() returned (an op_key dedupe may hand back an
+            # existing card), and evidence.action mirrored onto that card (D4) by ask() itself.
+            name, material, run_on, action_hash = action
+            try:
+                outward_ledger.ask(name, material, card_id=rid, actor=args.from_agent, run_on=run_on)
+            except outward_ledger.DuplicateAction as e:
+                live = outward_ledger.live_row(action_hash=action_hash) or {}
+                if live.get("state") in ("asked", "approved") and live.get("card_id"):
+                    print(f"[approval] {name} {action_hash[:12]} is already {live['state']} on card "
+                          f"{live['card_id']}: no second card", file=sys.stderr)
+                    print(live["card_id"])
+                    return 0
+                print(f"REFUSED: {action_hash[:12]} is {e.state}: release it or wait", file=sys.stderr)
+                return 3
         try:
             notify(rid, store=store)            # primary trigger: instant push
         except Exception as e:  # noqa: BLE001 — cron backstop will re-notify
@@ -821,7 +882,10 @@ def main(argv=None):
                 "feature": r.get("feature"), "provider": r.get("provider"),
                 # §6.1 human_task feed export (additive; None on legacy/unarmed rows).
                 "block_task": r.get("block_task"), "blocks_what": r.get("blocks_what"),
-                "snoozed_until": r.get("snoozed_until")} for r in rows]
+                "snoozed_until": r.get("snoozed_until"),
+                # The evidence JSON as stored (additive): the web reads evidence.action (the outward-action
+                # state) from the same column the phone and watch already decode.
+                "evidence": r.get("evidence")} for r in rows]
         print(json.dumps(out, default=str))
         return 0
     if args.cmd == "answer" and args.on_behalf_of:
