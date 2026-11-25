@@ -52,6 +52,12 @@ same action and arguments already have a pending or approved card, `request` pri
 card's id and exits 0 (idempotent re-requesters keep working). If the action is `executing`, or
 `uncertain` and not yet released, it exits 3: `<hash> is executing|uncertain: release it or wait`.
 
+Two requests for the same action at the same moment: one card wins the ledger row; the other is
+taken out of pending in the same call (retired as "superseded by <winner>", or discarded on an
+install without the retire columns) and can never be answered. A pending approval card with no
+ledger row is never left behind, and a card that was never filed with `--action` cannot be claimed
+at all: `claim` finds no approved row for its arguments.
+
 ## How an executor claims
 
 Claim with the **exact** arguments you are about to use, run, then finish:
@@ -106,6 +112,16 @@ Because a dropped push would break the delivery contract (held, never dropped) w
 push is the lesser harm, these rows carry `policy='at_least_once'`: an uncertain push gets **one**
 more attempt (attempt 2, driven by the existing cron backstop), never a third. If attempt 2 is also
 uncertain, the "Check:" card is filed. Every other action class is `policy='once'`.
+
+Two conditions hold on that one resend:
+
+- **Same card, same buttons.** The retry is built from the same stored row, so the ntfy title and
+  every action button name the same card id as the first attempt, and the Telegram text is
+  identical. The receiving surface can dedupe on the card id.
+- **Counted.** Every double push adds one to the day's health counter,
+  `<data dir>/state/usage/health/<YYYY-MM-DD>.json` (the install's local day):
+  `{"double_pushes": n, "by_channel": {"ntfy": n, "telegram": n}}`. A first send never touches
+  the file.
 
 Not wrapped: the "not acking" escalation push (its 30-minute repeat is designed) and the re-fire
 when the phone returns to the tailnet.
