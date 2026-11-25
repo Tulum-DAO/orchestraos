@@ -98,6 +98,31 @@ def test_finalize_idempotent_no_double_inject(scratch, monkeypatch):
     assert len(injections) == 1
 
 
+def test_test_call_is_terminally_suppressed_before_merge_or_gm_inject(tmp_path, monkeypatch):
+    """Sabotage guard: a diagnostic test journal must never enter operator history."""
+    scratch = tmp_path / "voice-calls"
+    scratch.mkdir()
+    p = scratch / "vc_client_testcall.json"
+    d = {"call_id": "vc_client_testcall", "source": "client", "status": "ended", "test": True,
+         "thread_id": "web_test_only", "turns": [{"role": "user", "text": "synthetic", "ts": 1}]}
+    p.write_text(json.dumps(d))
+    p.write_text(json.dumps(d))
+    m = _load_proxy(scratch)
+    m._GM_INJECT_ENABLED = True
+    m._INJECT_ASYNC = False
+    injected = []
+    monkeypatch.setattr(__import__("services.arturo.endcall", fromlist=["inject_to_gm"]),
+                        "inject_to_gm", lambda *a, **k: injected.append(1) or (True, 1))
+    assert m.finalize_from_client(client_call_id="vc_client_testcall") is True
+    got = json.loads(p.read_text())
+    assert got["status"] == "test"
+    assert got["gm_inject_suppressed"] is True
+    assert got["thread_card_written"] is False
+    assert got["test_finalized"] is True
+    assert "merged_server" not in got
+    assert injected == []
+
+
 def test_watchdog_guard_suppresses_superseded_server(scratch, monkeypatch):
     m = _load_proxy(scratch)
     m._GM_INJECT_ENABLED = True
