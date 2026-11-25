@@ -632,7 +632,7 @@ def _headless_session(session):
         return False
 
 
-def deliver_discarded(row, store):
+def deliver_discarded(row, store, dismissed=None):
     """R8: one honest 'discarded without an answer' notify so a parked agent
     never waits forever on a dismissed ask (mirrors questionnaire_resume).
     A headless seat's card is answered 'deny, dismissed' over its control
@@ -649,9 +649,8 @@ def deliver_discarded(row, store):
     body = (f"[APPROVAL DISCARDED {row['id']}] Your request '{row['question']}' was "
             f"DISMISSED without an answer. Do not keep waiting on it; proceed per "
             f"your own judgment or re-raise if it still matters.")
-    summary = row.get("summary") or ""
-    if "— DISMISSED " in summary:          # where / who / why, as the dismiss recorded it
-        body += "\n\n" + summary[summary.rfind("— DISMISSED "):].strip()
+    if dismissed:          # where / who / why, the line THIS dismiss wrote (approval_schema.dismiss_line);
+        body += "\n\n" + dismissed.strip()   # never read back from the summary: an older card's line could ride a re-raise
     _msg_store().send(from_agent="approval-loop", to_agent=row["from_agent"],
                       type="approval_discarded",
                       subject=f"Approval {row['id']} discarded",

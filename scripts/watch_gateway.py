@@ -11542,22 +11542,42 @@ async def handle_questionnaire_discard(request):
     return _json({"ok": True, "applied": ok, "id": qid})
 
 
-DISCARD_SURFACES = ("web", "phone", "watch", "gateway", "agent_cli", "quest")
+# Where a dismiss may say it came from, PER EDGE (R7d, the same split as _gateway_answer_tags): a device token
+# is the watch or the phone and may only claim one of those; the fleet bearer is the API (web / chat), the Quest
+# gateway or an agent's CLI and may only claim one of those. Provenance only: a surface NEVER gates authorization.
+DISCARD_SURFACES_DEVICE = ("watch", "phone")
+DISCARD_SURFACES_FLEET = ("web", "chat", "quest", "gateway", "agent_cli")
+DISCARD_SURFACES = DISCARD_SURFACES_DEVICE + DISCARD_SURFACES_FLEET
+DISMISS_ON_THE_PANE = "dismiss it on the pane"
 
 
 def discard_fields(data):
-    """The optional body of POST /approvals/{id}/discard: {surface, by, reason}, each a trimmed string or
-    None; surface only from the known set; reason capped at 500 characters. Anything else is ignored."""
-    out = {"surface": None, "by": None, "reason": None}
+    """The optional body of POST /approvals/{id}/discard. The client's word counts for ONE thing: `reason`
+    (a trimmed string, capped at 500 characters) and the surface HINT it is checked against the edge's set in
+    discard_provenance. `by` is never read: who dismissed is the authenticated principal's word (R7d), the same
+    rule _gateway_answer_tags applies to answered_by. Anything else in the body is ignored."""
+    out = {"surface": None, "reason": None}
     if not isinstance(data, dict):
         return out
-    for k, cap in (("surface", 32), ("by", 64), ("reason", 500)):
+    for k, cap in (("surface", 32), ("reason", 500)):
         v = data.get(k)
         if isinstance(v, str) and v.strip():
             out[k] = v.strip()[:cap]
-    if out["surface"] not in DISCARD_SURFACES:
-        out["surface"] = None
     return out
+
+
+def discard_provenance(request, surface_hint):
+    """(surface, by, device) for a dismiss, derived from the AUTHENTICATED principal, never the body (R7d).
+
+    `by` is 'operator': the bearer (fleet or device) authenticates the operator, exactly as _gateway_answer_tags
+    rules for answered_by; a client that could name `by` could claim the operator dismissed its own card. The
+    surface hint is accepted only from the edge's own set: a device may say watch|phone (else watch), the fleet
+    bearer web|chat|quest|gateway|agent_cli (else gateway), so neither edge can record itself as the other. The
+    device is the principal's "<id>:<label>" (_answer_device), None for the fleet bearer."""
+    device = _answer_device(request)
+    allowed, dflt = (DISCARD_SURFACES_DEVICE, "watch") if device else (DISCARD_SURFACES_FLEET, "gateway")
+    surface = surface_hint if surface_hint in allowed else dflt
+    return surface, "operator", device
 
 
 async def handle_approval_discard(request):
@@ -11565,7 +11585,12 @@ async def handle_approval_discard(request):
     discard's sibling). Saves to history + fires ONE honest notify to the emitter
     so a parked agent never waits forever on a dismissed ask. Takes EVERY card kind
     (approval, human_task, menu; operator order 2026-11-25) and an optional body
-    {surface, by, reason} that goes onto the card's history line."""
+    {surface, reason}; the history line says where / who / why with where and who
+    from the principal (discard_provenance). A menu that is ON an agent's screen
+    (the menu bridge's row, _is_terminal_menu) is refused with 409: it is dismissed
+    with Escape on the pane (/agent-key), so the pane and the card agree; marking it
+    discarded here would tell the agent not to wait while its pane still shows the menu.
+    An empty, missing or non-JSON body is the plain dismiss, as before."""
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     rid = request.match_info["id"]
@@ -11577,13 +11602,25 @@ async def handle_approval_discard(request):
     row = store.get(rid)
     if not row:
         return _json({"ok": False, "error": "not found"}, status=404)
-    ok = store.discard(rid, **fields)
+    if row.get("status") == "pending" and _is_terminal_menu(row):
+        return _json({"ok": False, "error": DISMISS_ON_THE_PANE, "id": rid, "agent": row.get("from_agent"),
+                      "why": f"this menu is on {row.get('from_agent') or 'the agent'}'s screen: Escape through "
+                             f"/agent-key closes the pane's menu and this card together"}, status=409)
+    line = None
+    if fields["surface"] or fields["reason"]:
+        surface, by, device = discard_provenance(request, fields["surface"])
+        import approval_schema as _AS
+        now = _AS._now()                      # one clock: the summary's line and the mail's are the same string
+        line = _AS.dismiss_line(now, surface, by, fields["reason"])
+        ok = store.discard(rid, surface=surface, by=by, reason=fields["reason"], device=device, now=now)
+    else:
+        ok = store.discard(rid)
     if ok:
         try:
             import asyncio
             row = store.get(rid)
             await asyncio.get_event_loop().run_in_executor(
-                None, approval_resume.deliver_discarded, row, store)
+                None, approval_resume.deliver_discarded, row, store, line)
         except Exception as e:  # noqa: BLE001 — the discard is durable even if the notify hiccups
             print(f"[watch_gateway] approval discard-notify failed for {rid}: {e}", file=sys.stderr)
     return _json({"ok": True, "applied": ok, "id": rid})

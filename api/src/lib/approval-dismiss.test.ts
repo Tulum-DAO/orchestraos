@@ -40,6 +40,15 @@ test('an unknown card is a 404', async () => {
   assert.equal(r.status, 404);
 });
 
+test('the gateway\'s 409 (a menu on the agent\'s screen) keeps its words, why and agent; it is not a gateway fault', async () => {
+  const r = await dismissCard('apr_menu0001', deps({ status: 409, body: { ok: false, error: 'dismiss it on the pane', agent: 'codex-gm',
+                                                                           why: 'Escape through /agent-key closes both' } }));
+  assert.equal(r.status, 409);
+  assert.deepEqual(r.body, { error: 'dismiss it on the pane', id: 'apr_menu0001', why: 'Escape through /agent-key closes both', agent: 'codex-gm' });
+  const bare = await dismissCard('apr_menu0002', deps({ status: 409, body: {} }));
+  assert.deepEqual([bare.status, bare.body.error], [409, 'dismiss refused']);
+});
+
 test('no token or no gateway is a 502 and nothing is sent without a token', async () => {
   const noTok = deps({ status: 200, body: { ok: true, applied: true } }, '');
   assert.equal((await dismissCard('apr_demo0004', noTok)).status, 502);
@@ -54,7 +63,7 @@ test('the id is escaped into the gateway path', async () => {
   assert.equal(d.calls[0], 'http://gw.example/approvals/apr_x%2F..%2Fy/discard tok');
 });
 
-test('where, who and why ride to the gateway as the discard body (every card kind, one shape)', async () => {
+test('where and why ride to the gateway as the discard body (every card kind, one shape; never who)', async () => {
   const bodies: string[] = [];
   const d: DismissDeps & { calls: string[] } = {
     calls: [],
@@ -62,9 +71,9 @@ test('where, who and why ride to the gateway as the discard body (every card kin
     base: () => 'http://gw.example',
     post: async (url, _t, body) => { bodies.push(body ?? ''); return { status: 200, body: { ok: true, applied: true } }; },
   };
-  const r = await dismissCard('apr_task0001', d, { surface: 'web', by: 'operator', reason: 'old, remove' });
+  const r = await dismissCard('apr_task0001', d, { surface: 'web', reason: 'old, remove' });
   assert.equal(r.status, 200);
-  assert.deepEqual(JSON.parse(bodies[0]), { surface: 'web', by: 'operator', reason: 'old, remove' });
+  assert.deepEqual(JSON.parse(bodies[0]), { surface: 'web', reason: 'old, remove' });
   await dismissCard('apr_task0001', d);
   assert.equal(bodies[1], '{}', 'no fields: the body stays an empty object, as before');
 });

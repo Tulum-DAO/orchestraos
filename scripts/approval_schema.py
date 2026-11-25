@@ -63,7 +63,8 @@ GATED_MIGRATIONS: list = [
     # gate, NOT migrate-on-restart). Two additive-nullable columns; legacy rows
     # carry NULL after the ALTER. Stamped at the ONE core (record_answer);
     # provenance-only, NEVER branched on for authorization.
-    #   answer_surface  web|phone|watch|gateway|agent_cli|unknown — where answered
+    #   answer_surface  web|chat|phone|watch|quest|gateway|agent_cli|unknown — where answered
+    #                   (or dismissed: mark_discarded stamps the same columns)
     #   answered_by     the principal: 'operator' | '<agent_id>' (self-authored gates)
     {"id": "m20260825_answer_attribution",
      "columns": [("answer_surface", "TEXT"), ("answered_by", "TEXT")]},
@@ -249,6 +250,16 @@ def _ledger_answer_hook(rid, answer, option_n=None, answer_text=None):
     except Exception as e:  # noqa: BLE001 — the ledger is a view of the answer, never a gate on it
         print(f"[approval_schema] outward ledger hook for {rid} failed ({type(e).__name__}): {e}",
               file=sys.stderr)
+
+
+def dismiss_line(now, surface=None, by=None, reason=None):
+    """The ONE history line a dismiss with where/who/why leaves: "— DISMISSED <utc> via <surface> by <who>: <reason>".
+    mark_discarded appends it to the summary; the gateway hands the same string to approval_resume.deliver_discarded
+    for the author's notice, so the mail never has to find it in the summary (an older card's line, carried along by
+    a re-raise that copied the summary, must never read as this dismiss's)."""
+    who = f" by {by}" if by else ""
+    where = f" via {surface}" if surface else ""
+    return f"— DISMISSED {now[:19]}Z{where}{who}" + (f": {reason}" if reason else "")
 
 
 class ApprovalStore:
@@ -1109,39 +1120,45 @@ class ApprovalStore:
         finally:
             c.close()
 
-    def mark_discarded(self, rid, surface=None, by=None, reason=None):
+    def mark_discarded(self, rid, surface=None, by=None, reason=None, device=None, now=None):
         """DEC-1786664626 Q3 + the operator F2: the operator dismissed a decision WITHOUT
         answering -> terminal 'discarded', SAVED to history (never deleted).
         Only a still-'pending' row can be discarded (an answered one goes to
         history via its answer). Idempotent: returns False if not pending.
 
         Every card kind (approval, human_task, menu) takes it (operator order 2026-11-25,
-        gm msg_b083c465). When the caller says where/who/why, a history line goes onto the
-        summary (as retire does; no new column), and the attribution columns are stamped
-        when they are armed (PRAGMA-guarded, fail-open like record_answer)."""
-        now = _now()
+        gm msg_b083c465). When the caller says where/who/why, the history line
+        (`dismiss_line`) goes onto the summary, as retire does (no new column; a NULL summary
+        starts from the question, the same precedent, so a card that never had a summary
+        renders its question once as the summary and once as the title: accepted, it is
+        what retire already does). The attribution columns are stamped when they are
+        armed (PRAGMA-guarded, fail-open like record_answer); `device` is the caller's
+        "<device_id>:<label>" or None for the fleet bearer, exactly as record_answer takes it.
+        `surface`/`by`/`device` are the EDGE's word, never the client's (R7d): the gateway
+        derives them from the authenticated principal before calling here."""
+        now = now or _now()                   # a caller that also mails the line passes its clock, so both match
         c = self._conn()
         try:
             sets = ["status='discarded'", "answered_at=?", "discarded_at=?"]
             vals = [now, now]
             if surface or by or reason:
-                who = f" by {by}" if by else ""
-                where = f" via {surface}" if surface else ""
-                line = f"\n\n— DISMISSED {now[:19]}Z{where}{who}" + (f": {reason}" if reason else "")
-                sets.append("summary=COALESCE(summary, question, '') || ?"); vals.append(line)
+                sets.append("summary=COALESCE(summary, question, '') || ?")
+                vals.append("\n\n" + dismiss_line(now, surface, by, reason))
                 cols = {r[1] for r in c.execute("PRAGMA table_info(approval_requests)").fetchall()}
                 if "answer_surface" in cols and "answered_by" in cols:
                     sets += ["answer_surface=?", "answered_by=?"]; vals += [surface or "unknown", by]
+                if "answer_device" in cols:
+                    sets.append("answer_device=?"); vals.append(device)
             res = c.execute(
                 f"UPDATE approval_requests SET {', '.join(sets)} WHERE id=? AND status='pending'", vals + [rid])
             c.commit()
             return res.rowcount > 0
         finally:
             c.close()
-    def discard(self, rid, surface=None, by=None, reason=None):
+    def discard(self, rid, surface=None, by=None, reason=None, device=None, now=None):
         """R8 name for mark_discarded (questionnaire-era gateway + tests call
         store.discard). One implementation, two names."""
-        return self.mark_discarded(rid, surface=surface, by=by, reason=reason)
+        return self.mark_discarded(rid, surface=surface, by=by, reason=reason, device=device, now=now)
     def answered_unacked(self):
         c = self._conn()
         try:

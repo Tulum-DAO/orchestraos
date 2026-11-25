@@ -11,15 +11,20 @@ import { gatewayUrl } from './gateway-url.js';
 
 export interface DismissDeps {
   token: () => string;
-  /** `body` is the JSON the gateway reads (where / who / why); '{}' when the caller said nothing. */
+  /** `body` is the JSON the gateway reads (where / why); '{}' when the caller said nothing. */
   post: (url: string, token: string, body?: string) => Promise<{ status: number; body: any }>;
   base: () => string;
 }
 
 export interface DismissResult { status: number; body: Record<string, unknown> }
 
-/** Where, who and why a card was dismissed; each optional. One shape for the web, iOS and the gateway. */
-export interface DismissFields { surface?: string; by?: string; reason?: string }
+/**
+ * Where and why a card was dismissed, as the API tells the gateway. `surface` is the API's own word (web or chat,
+ * answerSurface), never the client's; `reason` is the only field a client supplies. WHO dismissed is never sent: the
+ * gateway derives it from the bearer it authenticated (R7d), exactly as it does for answered_by, so no client can
+ * record that the operator dismissed a card, or that a web dismiss came from the watch.
+ */
+export interface DismissFields { surface?: 'web' | 'chat'; reason?: string }
 
 export async function dismissCard(id: string, deps: DismissDeps, fields: DismissFields = {}): Promise<DismissResult> {
   const token = deps.token();
@@ -31,6 +36,12 @@ export async function dismissCard(id: string, deps: DismissDeps, fields: Dismiss
     return { status: 502, body: { error: 'gateway unreachable', detail: err?.message, id } };
   }
   if (r.status === 404) return { status: 404, body: { error: `Approval item '${id}' not found`, id } };
+  // The gateway's own refusal (a menu that is on the agent's screen: "dismiss it on the pane"): its words, its why
+  // and the agent reach the client as they are, a 409 and not a gateway fault.
+  if (r.status === 409) {
+    return { status: 409, body: { error: r.body?.error || 'dismiss refused', id,
+                                  ...(r.body?.why ? { why: r.body.why } : {}), ...(r.body?.agent ? { agent: r.body.agent } : {}) } };
+  }
   if (r.status !== 200 || !r.body?.ok) {
     return { status: 502, body: { error: r.body?.error || `gateway refused (${r.status})`, id } };
   }
