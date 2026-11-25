@@ -564,7 +564,7 @@ def main():
     sys.stderr.write(
         f"BLOCKED (git-state-guard): this git command would revert or DELETE live state on the "
         f"shared tree ({reason}). Protected: state/, DOCS/, registry.json. This class of op erased "
-        f"live DECs + the registry 3x. If you truly must, ask the operator. Never stash/checkout/reset/clean "
+        f"live DECs + the registry 3x. If you truly must, ask gm. Never stash/checkout/reset/clean "
         f"the shared live tree.\n")
     return 2
 
