@@ -55,8 +55,14 @@ def estimate_tokens(text: str) -> int:
     return math.ceil(len(text or "") / 4)
 
 
-_NUM_RE = re.compile(r"-?\d+(\.\d+)?")
-_ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})")
+_NUM_RE = re.compile(r"-?[0-9]+(\.[0-9]+)?")
+_ISO_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}:[0-9]{2})")
+# datetime's range (years 1..9999) in epoch seconds: anything outside is not a time (the API twin uses the same).
+_MIN_EPOCH, _MAX_EPOCH = -62135596800, 253402300799
+
+
+def _in_range(x: float) -> bool:
+    return math.isfinite(x) and _MIN_EPOCH <= x <= _MAX_EPOCH
 
 
 def _ms(x: float) -> float:
@@ -69,17 +75,19 @@ def _epoch(v) -> Optional[float]:
     if isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
-        return _ms(float(v)) if math.isfinite(v) else None
+        return _ms(float(v)) if _in_range(float(v)) else None
     if not isinstance(v, str):
         return None
     s = v.strip()
     if _NUM_RE.fullmatch(s):
-        return _ms(float(s))
+        x = float(s)
+        return _ms(x) if _in_range(x) else None
     if not _ISO_RE.fullmatch(s):
         return None
     try:
-        return _ms(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
-    except ValueError:
+        x = datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        return _ms(x) if _in_range(x) else None
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -123,7 +131,12 @@ def chat_lines(items: Iterable[dict], agent_label: str, operator_label: str = "O
     """The chat as the operator sees it: text items tagged for the user, not machine turns (mail, approvals, relay)."""
     out = []
     for it in items or []:
-        if not isinstance(it, dict) or it.get("kind") != "text" or it.get("audience") != "user" or it.get("machine"):
+        if not isinstance(it, dict) or it.get("kind") != "text":
+            continue
+        # what the operator sees: tagged for the user, or their own message held for delivery (queued, untagged)
+        if not (it.get("audience") == "user" or (it.get("queued") is True and it.get("role") == "user")):
+            continue
+        if isinstance(it.get("machine"), str) and it["machine"]:           # a machine turn, not the chat
             continue
         if not isinstance(it.get("text"), str):
             continue
@@ -134,6 +147,10 @@ def chat_lines(items: Iterable[dict], agent_label: str, operator_label: str = "O
         who = operator_label if it.get("role") == "user" else agent_label
         out.append(Line(at=at, who=who, text=text, channel="chat"))
     return out
+
+
+def _no_constant(name):
+    raise ValueError(f"not JSON: {name}")
 
 
 def _journal_files(calls_dir, now: float) -> list:
@@ -159,15 +176,16 @@ def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, a
     for f in _journal_files(calls_dir, now if now is not None else datetime.now(timezone.utc).timestamp()):
         try:
             with open(f, encoding="utf-8") as fh:
-                doc = json.load(fh)
+                doc = json.load(fh, parse_constant=_no_constant)       # NaN/Infinity: not JSON (the API twin agrees)
         except (OSError, ValueError):
             continue
         if not isinstance(doc, dict):
             continue
-        cid = str(doc.get("call_id") or os.path.basename(f)[:-5])
+        cid = doc["call_id"] if isinstance(doc.get("call_id"), str) and doc["call_id"] else os.path.basename(f)[:-5]
         if exclude and cid == exclude:
             continue
-        if (doc.get("agent") or None) != (owner or None):
+        agent = doc["agent"] if isinstance(doc.get("agent"), str) and doc["agent"] else None
+        if agent != (owner or None):                                   # only a named agent owns a call
             continue
         start = _epoch(doc.get("started_at"))
         for t in doc.get("turns") or []:

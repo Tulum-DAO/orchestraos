@@ -177,7 +177,7 @@ _CASES = json.loads((__import__("pathlib").Path(__file__).resolve().parents[2] /
 @pytest.mark.parametrize("case", _CASES, ids=[c["name"] for c in _CASES])
 def test_the_shared_call_context_cases(case, tmp_path):
     for j in case["journals"]:
-        (tmp_path / j["name"]).write_text(json.dumps(j["doc"]))
+        (tmp_path / j["name"]).write_text(j["raw"] if "raw" in j else json.dumps(j["doc"]))
 
     def fetch(agent, limit):
         if case["items"] is None:

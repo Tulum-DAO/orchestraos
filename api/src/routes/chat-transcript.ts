@@ -25,7 +25,7 @@ import { redactSecrets } from '../lib/redactSecrets.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
-import { agentScopeParam } from '../lib/agent-scope.js';
+import { agentScopeParam, canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
 import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents } from '../services/identity-store-reader.js';
@@ -2364,6 +2364,14 @@ router.get('/:id/transcript.md', (req: Request, res: Response) => {
 // every piece through the same secret redactor. `calls` defaults to this agent; "arturo" = Arturo's own calls.
 const FORWARDED = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip',
   'tailscale-funnel-request', 'tailscale-user-login', 'x-orchestra-peer'];
+/** Whose calls may merge in: an owner is scoped like :id (router.param), so an out-of-scope owner is the same 404.
+ *  Arturo's own calls (owner null) are the operator's: only a principal that sees every agent reads them. */
+export function callOwnerVisible(p: ReturnType<typeof principal>, owner: string | null,
+  resolveTags: (id: string) => unknown = defaultResolveTags): boolean {
+  if (owner === null) return !p?.clientScope && p?.allowedAgents === '*';
+  return canPrincipalSeeAgent(p, { id: owner, tags: resolveTags(owner) });
+}
+
 /** A request from a process on this box, not relayed by any proxy (exported for its test). */
 export function directLoopback(req: { socket?: { remoteAddress?: string }; headers: Record<string, unknown> }): boolean {
   return isLoopback(req.socket?.remoteAddress) && !FORWARDED.some((h) => req.headers[h] !== undefined);
@@ -2377,6 +2385,7 @@ router.get('/:id/call-context', (req: Request, res: Response) => {
   const callsQ = typeof req.query.calls === 'string' ? req.query.calls : '';
   if (callsQ && callsQ !== 'arturo' && !isSafeAgentId(callsQ)) { res.status(400).type('text/plain').send('bad calls'); return; }
   const owner = callsQ === 'arturo' ? null : (callsQ || agentId);
+  if (!callOwnerVisible(principal(req), owner)) { res.status(404).json({ error: `Agent '${owner ?? 'arturo'}' not found` }); return; }
   const exQ = typeof req.query.exclude === 'string' ? req.query.exclude : '';
   if (exQ && !CALL_ID_RE.test(exQ)) { res.status(400).type('text/plain').send('bad exclude'); return; }
   try {
@@ -2384,11 +2393,13 @@ router.get('/:id/call-context', (req: Request, res: Response) => {
     const [tz, tzLabel] = shawTz(dataDir());
     const exact = [readGatewayToken()].filter(Boolean);
     // ONE redaction, inside the builder, on each piece BEFORE it is clipped (a secret cut at the clip boundary would
-    // otherwise ship as a near-complete prefix): the twin's own shapes, then the full redactor and this install's token.
+    // otherwise ship as a near-complete prefix): this install's token by exact value FIRST (a token containing "sk-"
+    // must not be half-eaten by a shape), then the twin's shapes, then the full redactor. The full redactor is a
+    // superset of the twin's, so on secret-shaped text the route's bytes differ from the twin's, by design.
     const text = buildCallContext({
       chatAgent: agentId, callOwner: owner, items, journals: readJournals(callsDir(dataDir()), Date.now() / 1000),
       exclude: exQ || null, budgetTokens: clampBudget(req.query.budget), tz, tzLabel, operatorLabel: operatorName(dataDir()),
-      redact: (t: string) => redactSecrets(redact(t), exact).text,
+      redact: (t: string) => redactSecrets(redact(exact.reduce((x, v) => x.split(v).join('[redacted]'), t)), exact).text,
     });
     res.status(200).type('text/plain; charset=utf-8').set('Cache-Control', 'no-store').send(text);
   } catch (err) {

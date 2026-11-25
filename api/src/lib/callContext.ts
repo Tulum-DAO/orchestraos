@@ -37,8 +37,12 @@ const WS_RUN = new RegExp(`[${WS}]+`, 'g');
 const WS_EDGES = new RegExp(`^[${WS}]+|[${WS}]+$`, 'g');
 const squash = (s: string) => s.split(WS_RUN).filter(Boolean).join(' ');
 const strip = (s: string) => s.replace(WS_EDGES, '');
-const NUM_RE = /^-?\d+(\.\d+)?$/;
-const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+const NUM_RE = /^-?[0-9]+(\.[0-9]+)?$/;
+const ISO_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2})(:([0-9]{2})(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}:[0-9]{2})$/;
+// Python's datetime range (years 1..9999), in epoch seconds: anything outside is not a time.
+const MIN_EPOCH = -62135596800;
+const MAX_EPOCH = 253402300799;
+const inRange = (x: number) => Number.isFinite(x) && x >= MIN_EPOCH && x <= MAX_EPOCH;
 const toMs = (x: number) => Math.floor(x * 1000) / 1000;
 
 export const estimateTokens = (text: string) => Math.ceil(cpLen(text || '') / 4);
@@ -50,13 +54,20 @@ export function clampBudget(v: unknown): number {
 }
 
 export function epoch(v: unknown): number | null {
-  if (typeof v === 'number') return Number.isFinite(v) ? toMs(v) : null;
+  if (typeof v === 'number') return inRange(v) ? toMs(v) : null;
   if (typeof v !== 'string') return null;
   const t = strip(v);
-  if (NUM_RE.test(t)) return toMs(Number(t));
-  if (!ISO_RE.test(t)) return null;
+  if (NUM_RE.test(t)) { const x = Number(t); return inRange(x) ? toMs(x) : null; }
+  const m = ISO_RE.exec(t);
+  if (!m) return null;
+  // a real calendar date and clock time, as fromisoformat demands (Date.parse rolls 2025-02-30 over to March)
+  const [y, mo, d, h, mi, se] = [m[1], m[2], m[3], m[4], m[5], m[7] ?? '0'].map(Number);
+  const dim = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  if (mo < 1 || mo > 12 || d < 1 || d > dim || h > 23 || mi > 59 || se > 59) return null;
+  const off = /^[+-]([0-9]{2}):([0-9]{2})$/.exec(m[9]);
+  if (off && (Number(off[1]) > 23 || Number(off[2]) > 59)) return null;
   const ms = Date.parse(t);
-  return Number.isNaN(ms) ? null : toMs(ms / 1000);
+  return Number.isNaN(ms) || !inRange(ms / 1000) ? null : toMs(ms / 1000);
 }
 
 export const redact = (text: string) =>
@@ -74,7 +85,10 @@ function clip(text: string, n: number, red: Redactor): string {
 export function chatLines(items: any[], agentLabel: string, operatorLabel = 'Operator', since: number | null = null): Line[] {
   const out: Line[] = [];
   for (const it of items || []) {
-    if (!it || typeof it !== 'object' || it.kind !== 'text' || it.audience !== 'user' || it.machine) continue;
+    if (!it || typeof it !== 'object' || it.kind !== 'text') continue;
+    // what the operator sees: tagged for the user, or their own message held for delivery (queued, untagged)
+    if (!(it.audience === 'user' || (it.queued === true && it.role === 'user'))) continue;
+    if (typeof it.machine === 'string' && it.machine) continue;           // a machine turn, not the chat
     if (typeof it.text !== 'string') continue;
     const text = strip(it.text);
     const at = epoch(it.ts);
@@ -101,7 +115,7 @@ export function readJournals(callsDir: string, now: number): Journal[] {
   files.sort((a, b) => (b[0] - a[0]) || (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0));
   const out: Journal[] = [];
   for (const [, f] of files.slice(0, CALL_FILES_MAX)) {
-    try { out.push({ file: f, doc: JSON.parse(fs.readFileSync(f, 'utf-8')) }); } catch { /* mid-write */ }
+    try { out.push({ file: f, doc: JSON.parse(fs.readFileSync(f, 'utf-8')) }); } catch { /* mid-write, or NaN/Infinity */ }
   }
   return out;
 }
@@ -112,9 +126,10 @@ export function callLines(journals: Journal[], owner: string | null, exclude: st
   const out: Line[] = [];
   for (const { file, doc } of journals) {
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) continue;
-    const cid = String(doc.call_id || path.basename(file).slice(0, -5));
+    const cid = typeof doc.call_id === 'string' && doc.call_id ? doc.call_id : path.basename(file).slice(0, -5);
     if (exclude && cid === exclude) continue;
-    if ((doc.agent || null) !== (owner || null)) continue;
+    const agent = typeof doc.agent === 'string' && doc.agent ? doc.agent : null;   // only a named agent owns a call
+    if (agent !== (owner || null)) continue;
     const start = epoch(doc.started_at);
     for (const t of Array.isArray(doc.turns) ? doc.turns : []) {
       if (!t || typeof t !== 'object') continue;

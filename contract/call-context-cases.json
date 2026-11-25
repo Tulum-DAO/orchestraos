@@ -44,6 +44,20 @@
      "text": "typed after",
      "ts": "2025-11-25T17:06:40Z",
      "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "held on the phone, not yet delivered",
+     "ts": "2025-11-25T17:06:50.279013+00:00",
+     "queued": true
+    },
+    {
+     "kind": "text",
+     "role": "assistant",
+     "text": "a queued non-operator row is not the chat",
+     "ts": "2025-11-25T17:06:51Z",
+     "queued": true
     }
    ],
    "journals": [
@@ -104,7 +118,7 @@
     }
    ],
    "operator_label": "Shaw",
-   "expected": "THREAD: everything above this call, oldest first. Every line is [UTC time, Tulum time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw: typed before the call\n[2025-11-25T17:00:05Z 12:00 Tulum] chat gm: gm answers\n[2025-11-25T17:01:40Z 12:01 Tulum] call vc_prev Shaw: spoken line one\n[2025-11-25T17:01:41Z 12:01 Tulum] call vc_prev Arturo: spoken reply\n[2025-11-25T17:06:40Z 12:06 Tulum] chat Shaw: typed after"
+   "expected": "THREAD: everything above this call, oldest first. Every line is [UTC time, Tulum time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw: typed before the call\n[2025-11-25T17:00:05Z 12:00 Tulum] chat gm: gm answers\n[2025-11-25T17:01:40Z 12:01 Tulum] call vc_prev Shaw: spoken line one\n[2025-11-25T17:01:41Z 12:01 Tulum] call vc_prev Arturo: spoken reply\n[2025-11-25T17:06:40Z 12:06 Tulum] chat Shaw: typed after\n[2025-11-25T17:06:50Z 12:06 Tulum] chat Shaw: held on the phone, not yet delivered"
   },
   {
    "name": "budget summarizes the older calls; secrets never pass",
@@ -593,6 +607,97 @@
    ],
    "operator_label": "Shaw",
    "expected": "THREAD: everything above this call, oldest first. Every line is [UTC time, IST time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:01:00Z 22:31 IST] chat Shaw: offset +05:30\n[2025-11-25T17:01:40Z 22:31 IST] call vc_t Shaw: date-only turn falls back to the call start\n[2025-11-25T17:01:40Z 22:31 IST] call vc_t Arturo: bool ts falls back too\n[2025-11-25T17:02:00Z 22:32 IST] chat Shaw: micro\n[2025-11-25T17:04:00Z 22:34 IST] chat Shaw: numeric string ts\n[2025-11-25T17:05:00Z 22:35 IST] chat Shaw: same ms A\n[2025-11-25T17:05:00Z 22:35 IST] chat Shaw: same ms B"
+  },
+  {
+   "name": "times out of range or not real are not times; ids and tags are strings or nothing; NaN is not JSON",
+   "chat_agent": "gm",
+   "call_owner": null,
+   "exclude": null,
+   "budget": 1500,
+   "tz": "UTC",
+   "tz_label": "UTC",
+   "items": [
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "huge ts",
+     "ts": 1e+300,
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "milliseconds ts",
+     "ts": 1764090000000,
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "Feb 30",
+     "ts": "2025-02-30T00:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "hour 24",
+     "ts": "2025-11-25T24:00:00Z",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "offset +25:00",
+     "ts": "2025-11-25T17:00:00+25:00",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "arabic-indic digits",
+     "ts": "١٧٦٤٠٩٠٠٠٠",
+     "audience": "user"
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "empty-list machine is still the chat",
+     "ts": 1764090001,
+     "audience": "user",
+     "machine": []
+    },
+    {
+     "kind": "text",
+     "role": "user",
+     "text": "a real line",
+     "ts": 1764090002,
+     "audience": "user"
+    }
+   ],
+   "journals": [
+    {
+     "name": "vc_ids.json",
+     "doc": {
+      "call_id": {},
+      "agent": [],
+      "started_at": 1764090010,
+      "turns": [
+       {
+        "role": "user",
+        "text": "object call_id, list agent: Arturo's call, named by its file",
+        "ts": 1764090010
+       }
+      ]
+     }
+    },
+    {
+     "name": "vc_nan.json",
+     "raw": "{\"call_id\": \"vc_nan\", \"started_at\": NaN, \"turns\": [{\"role\": \"user\", \"text\": \"never read\", \"ts\": 1764090020}]}"
+    }
+   ],
+   "operator_label": "Shaw",
+   "expected": "THREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:01Z 17:00 UTC] chat Shaw: empty-list machine is still the chat\n[2025-11-25T17:00:02Z 17:00 UTC] chat Shaw: a real line\n[2025-11-25T17:00:10Z 17:00 UTC] call vc_ids Shaw: object call_id, list agent: Arturo's call, named by its file"
   },
   {
    "name": "through the route: the agent's chat as the page shows it plus its own calls",

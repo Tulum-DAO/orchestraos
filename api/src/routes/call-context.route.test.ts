@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { join } from 'node:path';
 
 const SEAT = 'zz-callctx-seat';
@@ -40,6 +41,21 @@ writeFileSync(join(orch, 'state', 'agents', `${FIX.chat_agent}.json`), JSON.stri
 const TOKEN = 'gwtok_' + 'Q7'.repeat(20);
 writeFileSync(join(orch, 'state', 'watch-gateway-token'), TOKEN + '\n');
 process.env.WATCH_GATEWAY_TOKEN_FILE = join(orch, 'state', 'watch-gateway-token');
+// A token that contains "sk-": the exact match must run before the shapes, or the shape eats only its tail.
+const SK_TOKEN = 'R8'.repeat(20) + 'sk-abcdef';
+// A phone message held for delivery (msg_store held_message): the operator's own words, shown in the chat.
+const MSGDB = join(root, 'tasks.db');
+{
+  const db = new Database(MSGDB);
+  db.exec(`CREATE TABLE messages (
+    id TEXT PRIMARY KEY, type TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL,
+    body TEXT, status TEXT NOT NULL DEFAULT 'pending', metadata TEXT,
+    created_at TEXT NOT NULL, delivered_at TEXT, acknowledged_at TEXT);`);
+  db.prepare(`INSERT INTO messages (id,type,from_agent,to_agent,body,status,created_at)
+    VALUES ('h1','held_message','operator',?,'held on the phone: did the fix land?','pending','2026-11-25T17:05:00.000000+00:00')`).run(SEAT);
+  db.close();
+}
+process.env.MSG_DB_PATH = MSGDB;
 writeFileSync(join(orch, 'state', 'shaw-location.json'), JSON.stringify({ tz: 'America/Cancun', label: 'Tulum' }));
 mkdirSync(join(orch, 'state', 'arturo'), { recursive: true });
 writeFileSync(join(orch, 'state', 'arturo', 'operator.json'), JSON.stringify({ facts: { name: { value: 'Shaw' } } }));
@@ -53,7 +69,8 @@ const reply = (uuid: string, text: string, ts: string) => JSON.stringify({ type:
 const straddle = 'x'.repeat(1170) + ' ' + TOKEN + ' tail';
 writeFileSync(join(projects, `${SID}.jsonl`), [
   user('a1', 'is the dream fix in? my token is sk-proj_abcdefghijklmnop', '00:00'), reply('a2', 'Yes, merged at 06:09Z.', '00:30'),
-  user('a3', straddle, '00:40'), user('a4', `again ${TOKEN}`, '00:50'),
+  user('a3', straddle, '00:40'), user('a4', `again ${TOKEN}`, '00:50'), user('a5', `sk token ${SK_TOKEN} end`, '00:55'),
+  user('a6', 'tokens: 12345, password: reset, see https://x.test/a?key=abcd ok', '00:56'),
 ].join('\n') + '\n');
 // The fixture's route case: its chat as a Claude log, its journals beside the others.
 const iso = (ts: string) => ts.replace(/(\.\d{3})?Z$/, '.000Z');
@@ -69,7 +86,8 @@ journal('vc_now000001', { agent: SEAT, status: 'live', started_at: epoch('20:00'
   turns: [{ role: 'user', text: 'the call now starting', ts: epoch('20:00') }] });
 journal('vc_arturo001', { started_at: epoch('05:00'), turns: [{ role: 'user', text: 'an Arturo call', ts: epoch('05:00') }] });
 
-const { default: transcriptRouter, directLoopback } = await import('./chat-transcript.js');
+const { default: transcriptRouter, directLoopback, callOwnerVisible } = await import('./chat-transcript.js');
+const { buildCallContext } = await import('../lib/callContext.js');
 
 async function withApp(fn: (base: string) => Promise<void>) {
   const app = express();
@@ -94,6 +112,55 @@ test('the chat and the agent\'s earlier calls, stamped, oldest first; the starti
     assert.ok(!t.includes(TOKEN.slice(0, 20)), 'the gateway token (or a prefix of it) was served');
     assert.ok(t.includes('again [redacted'));
   });
+});
+
+test('a held phone message is the operator\'s chat too', async () => {
+  await withApp(async (base) => {
+    const t = await (await fetch(`${base}/${SEAT}/call-context`)).text();
+    assert.match(t, /^\[2026-11-25T17:05:00Z 12:05 Tulum\] chat Shaw: held on the phone: did the fix land\?$/m);
+  });
+});
+
+test('a gateway token that contains "sk-" is blanked whole, not just its tail', async () => {
+  const tokFile = process.env.WATCH_GATEWAY_TOKEN_FILE as string;
+  writeFileSync(tokFile, SK_TOKEN + '\n');
+  try {
+    await withApp(async (base) => {
+      const t = await (await fetch(`${base}/${SEAT}/call-context`)).text();
+      assert.ok(!t.includes('R8'.repeat(10)), 'the part of the token before "sk-" was served');
+      assert.ok(t.includes('sk token [redacted'));
+    });
+  } finally {
+    writeFileSync(tokFile, TOKEN + '\n');
+  }
+});
+
+test('the route\'s redactor is a superset of the twin\'s: these secret-free shapes differ, by design', async () => {
+  const line = 'tokens: 12345, password: reset, see https://x.test/a?key=abcd ok';
+  const twin = buildCallContext({ chatAgent: 'gm', callOwner: null, journals: [], tz: 'UTC', tzLabel: 'UTC',
+    items: [{ kind: 'text', role: 'user', text: line, ts: '2026-11-25T17:00:56Z', audience: 'user' }] });
+  assert.ok(twin.includes('tokens: 12345, password: reset'));       // the twin leaves these two (no "=")
+  await withApp(async (base) => {
+    const t = await (await fetch(`${base}/${SEAT}/call-context`)).text();
+    assert.ok(t.includes('tokens: [redacted: named secret]') && t.includes('password: [redacted: named secret]'));
+    assert.ok(t.includes('?key=[redacted: URL token]') && !t.includes('tokens: 12345, password: reset'));
+  });
+});
+
+test('calls=<owner> is scoped like :id; Arturo\'s own calls need a principal that sees every agent', () => {
+  const admin = { allowedAgents: '*' } as any;
+  const some = { allowedAgents: ['dev-a'] } as any;
+  const client = { allowedAgents: '*', clientScope: 'acme' } as any;
+  const tags = (id: string) => (id === 'dev-c' ? ['client:acme'] : []);
+  assert.equal(callOwnerVisible(admin, 'dev-b', tags), true);
+  assert.equal(callOwnerVisible(some, 'dev-a', tags), true);
+  assert.equal(callOwnerVisible(some, 'dev-b', tags), false);
+  assert.equal(callOwnerVisible(client, 'dev-b', tags), false);
+  assert.equal(callOwnerVisible(client, 'dev-c', tags), true);
+  assert.equal(callOwnerVisible(admin, null, tags), true);
+  assert.equal(callOwnerVisible(some, null, tags), false);
+  assert.equal(callOwnerVisible(client, null, tags), false);
+  assert.equal(callOwnerVisible(null, null, tags), false);
 });
 
 test('the fixture route case: the same bytes the Python twin renders', async () => {

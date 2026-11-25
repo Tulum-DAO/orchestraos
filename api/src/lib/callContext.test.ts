@@ -20,7 +20,7 @@ for (const c of cases) {
   test(`call-context bytes match the Python reference: ${c.name}`, () => {
     const dir = testTmpDir('call-context-');
     mkdirSync(dir, { recursive: true });
-    for (const j of c.journals) writeFileSync(join(dir, j.name), JSON.stringify(j.doc));
+    for (const j of c.journals) writeFileSync(join(dir, j.name), j.raw ?? JSON.stringify(j.doc));
     const out = buildCallContext({
       chatAgent: c.chat_agent, callOwner: c.call_owner, items: c.items, chatError: c.chat_error ?? null,
       journals: readJournals(dir, Date.now() / 1000), exclude: c.exclude, budgetTokens: c.budget,
@@ -47,7 +47,7 @@ test('secrets are blanked before the clip, by the default shapes and by a passed
   ];
   const base = { chatAgent: 'gm', callOwner: null, items, journals: [], tz: 'UTC', tzLabel: 'UTC', operatorLabel: 'S' };
   const plain = buildCallContext(base);
-  assert.ok(!plain.includes('sk-proj_abcdefg'), 'a key cut at the clip boundary shipped as a prefix');
+  assert.ok(!plain.includes('sk-proj'), 'a key cut at the clip boundary shipped as a prefix');
   const full = buildCallContext({ ...base, redact: (t: string) => t.split(token).join('[redacted]') });
   assert.ok(!full.includes(token.slice(0, 20)), 'the install token cut at the clip boundary shipped as a prefix');
 });
