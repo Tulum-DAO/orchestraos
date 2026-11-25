@@ -9,6 +9,7 @@ import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync as writeFeedbackFile } from 'fs';
 import { loadConfig } from '../lib/config.js';
+import { setAgentHtmlHeaders } from '../lib/agentHtmlCsp.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
@@ -98,7 +99,7 @@ router.get('/proposals/:id/onepager', (req: Request, res: Response) => {
     res.status(404).json({ error: 'One-pager not found' });
     return;
   }
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  setAgentHtmlHeaders(res);   // agent-written HTML: CSP (no network, opaque origin), nosniff, no referrer — lib/agentHtmlCsp.ts
   res.send(proposals[0].onepager_html);
 });
 

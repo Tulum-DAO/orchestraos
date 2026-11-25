@@ -77,6 +77,7 @@ import { originDecision, publicOrigins } from './lib/cors-origin.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
 import { isTerminalRelay } from './lib/terminal-relay-secret.js';
 import { capabilities } from './lib/capabilities.js';
+import { baselineHeaders } from './lib/agentHtmlCsp.js';
 
 const app = express();
 
@@ -146,6 +147,10 @@ app.use((req, res, next) => cors({
 // Forensic access log. Mounted before the routes and before the body parser so a
 // request is recorded even if parsing rejects it.
 app.use(accessLog);
+// Inert security baseline on every response (CSP default-src 'none' + frame-ancestors 'self', nosniff). JSON is
+// not a document, so it costs nothing; the two routes that serve agent-written HTML set their own policy
+// (lib/agentHtmlCsp.ts). The dashboard is served elsewhere, never by this process.
+app.use(baselineHeaders);
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));

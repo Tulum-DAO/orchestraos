@@ -15,6 +15,7 @@ import DecisionQuestion from '../components/chat/DecisionQuestion';
 import { isTerminalMenu } from '../lib/decisionCard';
 import DecisionCard, { CardVerbsAnswer } from '../components/chat/DecisionCard';
 import ApprovalExtras from '../components/chat/ApprovalExtras';
+import SandboxedHtml from '../components/kit/SandboxedHtml';
 import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
 import { snoozedUntil } from '../lib/cardVerbs';
 
@@ -292,14 +293,7 @@ export default function Inbox() {
 
                 {isExpanded && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
-                    {(
-                    <iframe
-                      src={`/api/questionnaires/${q.id}/html`}
-                      className="w-full border-0"
-                      style={{ minHeight: '600px' }}
-                      title={q.title}
-                    />
-                    )}
+                    <SandboxedHtml src={`/api/questionnaires/${q.id}/html`} questionnaireId={q.id} title={q.title} minHeight="600px" />
                   </div>
                 )}
               </div>
