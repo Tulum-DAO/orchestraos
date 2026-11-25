@@ -156,3 +156,13 @@ def test_live_note_is_stamped_and_fits_one_append():
     assert len(notes) > 1
     assert all(tc.estimate_tokens(n) <= 500 for n in notes)
     assert notes[0].startswith("[2025-11-25T17:00:00Z 17:00 UTC] chat Shaw")
+
+
+def test_secret_shapes_are_blanked_before_they_reach_a_session():
+    # the JSON transcript route is not redacted (the .md export is); the voice model is a third party
+    line = tc.Line(at=T0, who="Shaw", text="use sk-proj_abcdefghijklmnop and API_TOKEN=hunter2xyz", channel="chat")
+    text = tc.render([line], budget_tokens=500, tz="UTC", tz_label="UTC")
+    notes = tc.live_notes(line, tz="UTC", tz_label="UTC")
+    for out in (text, "\n".join(notes)):
+        assert "abcdefghijklmnop" not in out and "hunter2xyz" not in out
+        assert "[redacted]" in out

@@ -19,6 +19,7 @@ import glob
 import json
 import math
 import os
+import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ SUMMARY_SHARE = 0.2               # of the budget, for the EARLIER block
 SUMMARY_ITEM_CHARS = 200
 CALL_FILES_MAX = 40               # newest journals considered (by mtime); the directory holds hundreds
 CALL_MAX_AGE_S = 14 * 86400
+_SECRET_RE = re.compile(r"(sk-)[A-Za-z0-9_-]{6,}|((?:KEY|TOKEN|SECRET|PASSWORD)[A-Z_]*=)\S+", re.I)
 _SPOKEN_ROLES_SKIP = {"tool", "system", "tool_result", "function"}
 
 
@@ -69,8 +71,15 @@ def _epoch(v) -> Optional[float]:
     return None
 
 
+def _redact(text: str) -> str:
+    """Secret shapes blanked (brain.redact's patterns): the JSON transcript route is not redacted and the session is
+    a third-party model."""
+    return _SECRET_RE.sub(lambda m: (m.group(1) + "[redacted]") if m.group(1) else (m.group(2) + "[redacted]"),
+                          text or "")
+
+
 def _clip(text: str, n: int) -> str:
-    text = " ".join(str(text or "").split())
+    text = " ".join(_redact(str(text or "")).split())
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
@@ -232,7 +241,7 @@ def live_notes(line: Line, tz: str, tz_label: str, max_tokens: int = APPEND_MAX_
     """A chat line that arrived during the call, as stamped notes that each fit one session append."""
     prefix = f"{stamp(line.at, tz, tz_label)} {_where(line)} {line.who} (typed, during this call): "
     room = max(40, max_tokens * 4 - len(prefix) - 16)
-    text = " ".join((line.text or "").split())
+    text = " ".join(_redact(line.text or "").split())
     chunks = [text[i:i + room] for i in range(0, len(text), room)] or [""]
     return [(prefix if i == 0 else f"{stamp(line.at, tz, tz_label)} (cont.) ") + c for i, c in enumerate(chunks)]
 
