@@ -171,6 +171,8 @@ def test_the_reaper_ends_only_the_orphaned_plugin_chrome(tmp_path, fake_chrome):
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     alive = json.loads(r.stdout.strip().splitlines()[-1])
+    # the orphan's own child here is `sleep` (not chrome-family), so the reaper leaves it; the driver's
+    # killpg cleans it up. A real Chrome's children are all chrome-family.
     assert alive == {"plugin_orphan": False, "outside_root": True, "live_parent": True}
     lines = [l for l in log.read_text().splitlines() if "ORPHAN" in l]
     assert len(lines) == 1 and "seat-a" in lines[0] and "why=reparented to adopter" in lines[0]

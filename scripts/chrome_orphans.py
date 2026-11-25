@@ -8,9 +8,9 @@ lingers. Those are the only processes this reports.
 
 A main Chrome process (chrome-family executable, no --type=, profile under a plugin root) is:
   ORPHAN when its parent is pid 1, is gone, or is `systemd --user` (or an extra adopter pid);
-  SPARED when its parent is the live plugin MCP, or any other live process (that is someone's
-  own Chrome, never ours to end).
-Chrome outside the plugin roots is never reported.
+  SPARED when its parent is the live plugin MCP, or any other live process (never orphan-reaped).
+Chrome outside the plugin roots is never reported. protected() is narrower: only a plugin Chrome whose
+plugin MCP is alive (parent, or ancestor through a wrapper) is exempt from the age rule.
 
 Usage: chrome_orphans.py              one line per orphan: pid<TAB>profile<TAB>why
        chrome_orphans.py --all        every plugin Chrome with its verdict and parent chain

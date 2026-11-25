@@ -60,8 +60,8 @@ if $LIST_ONLY; then
   echo "Plugin Chrome (verdict, pid, profile, why, parent chain):"
   python3 "$HERE/chrome_orphans.py" --all || echo "chrome_orphans.py failed"
 else
-  if ! ORPHAN_LIST="$(python3 "$HERE/chrome_orphans.py" 2>/dev/null)"; then
-    echo "$(ts) [reaper] WARN orphan list unavailable (chrome_orphans.py failed); no orphan reaped this run" >> "$LOG"
+  if ! ORPHAN_LIST="$(python3 "$HERE/chrome_orphans.py" 2>"$LOG.err")"; then
+    echo "$(ts) [reaper] WARN orphan list unavailable (chrome_orphans.py failed: $(tail -1 "$LOG.err" 2>/dev/null)); no orphan reaped this run" >> "$LOG"
     ORPHAN_LIST=""
   fi
   mapfile -t ORPHANS <<< "$ORPHAN_LIST"
@@ -77,14 +77,17 @@ else
   done
   if [ "${#OTREE[@]}" -gt 0 ]; then
     sleep 3
-    # re-checked at kill time: a pid freed in those 3 s and reused by something else is left alone
+    # re-checked at kill time: a pid freed in those 3 s and reused by something else is left alone.
+    # A descendant that is not chrome-family (a helper Chrome exec'd) is left too; renderers, GPU,
+    # utility and crashpad are all chrome-family and exit with the browser anyway.
     for p in "${OTREE[@]}"; do is_browser "$p" && kill -KILL "$p" 2>/dev/null; done
   fi
 fi
 
-# The age rule below never touches a plugin Chrome whose parent is alive, or anything under it:
-# that is a live seat's own browser. If the list cannot be built, say so and protect nothing (the
-# age rule then behaves as it always did).
+# The age rule below never touches a plugin Chrome whose plugin MCP is alive (parent, or ancestor
+# through a wrapper), or anything under it: that is a live seat's own browser. A plugin Chrome under
+# some OTHER live parent keeps the age rule. If the list cannot be built, say so and protect nothing
+# (the age rule then behaves as it always did).
 if PROTECT_LIST="$(python3 "$HERE/chrome_orphans.py" --protected 2>/dev/null)"; then
   PROTECT=" $(echo $PROTECT_LIST) "
 else
