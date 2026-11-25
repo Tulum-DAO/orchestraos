@@ -22,7 +22,17 @@ writeFileSync(stale, '{}\n');
 const longAgo = new Date(Date.now() - 3600_000);
 utimesSync(stale, longAgo, longAgo);
 
+// A seat as the projection actually writes it (2026-11-25: conversation_path is empty for 583 of
+// 587 online seats): only session_id + cwd. Its transcript must still be found, from the sid.
+const SID = '0c0ffee0-0000-4000-8000-000000000001';
+const seatCwd = '/work/seat-a';
+const projDir = join(dir, 'home', '.claude', 'projects', seatCwd.replace(/[/.]/g, '-'));
+mkdirSync(projDir, { recursive: true });
+writeFileSync(join(projDir, `${SID}.jsonl`), '{}\n');
+process.env.HOME = join(dir, 'home');
+
 writeFileSync(join(dir, 'state', 'agent-sessions.json'), JSON.stringify({
+  bysid: { session_id: SID, cwd: seatCwd, tmux_session: 'bysid-no-such-pane', runtime: 'claude' },
   busy: { conversation_path: fresh, tmux_session: 'busy' },
   quiet: { conversation_path: stale, tmux_session: 'quiet' },
   gone: { conversation_path: join(dir, 'does-not-exist.jsonl'), tmux_session: 'gone' },
@@ -32,6 +42,12 @@ writeFileSync(join(dir, 'state', 'agent-sessions.json'), JSON.stringify({
 process.env.ORCHESTRA_DIR = dir;
 const { isTranscriptActive, transcriptAgeMs, WORK_WINDOW_MS_FOR_TEST } =
   await import('./transcript-activity.js');
+
+test('a seat with no conversation_path is found from its session id (the real projection shape)', () => {
+  assert.equal(isTranscriptActive('bysid'), true);
+  const age = transcriptAgeMs('bysid');
+  assert.ok(age !== null && age < 60_000, `expected a fresh age, got ${age}`);
+});
 
 test('a transcript being appended to right now reads as working', () => {
   assert.equal(isTranscriptActive('busy'), true);

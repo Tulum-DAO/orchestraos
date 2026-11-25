@@ -26,6 +26,7 @@
 import { statSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { resolveTranscriptPath } from '../routes/chat-transcript.js';
 
 const HOME = process.env.HOME || homedir();
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, '.orchestra');
@@ -61,14 +62,47 @@ function sessions(): Record<string, any> {
   return sessionsCache;
 }
 
+/** Resolved paths, kept as long as the session map: one resolve per seat per TTL, not per request. */
+let resolvedCache = new Map<string, string | null>();
+let resolvedAt = 0;
+
+/**
+ * The seat's transcript file. An explicit conversation_path wins; otherwise the chat route's own
+ * resolver finds it from the seat's session (the projection leaves conversation_path empty for
+ * almost every seat, 2026-11-25). The resolved file counts only when its session IS the seat's
+ * recorded session_id: a newest-file guess in a shared project dir could be another seat's, and
+ * unknown must never read as working.
+ */
+function transcriptPath(agentId: string, entry: any): string | null {
+  const cp = entry.conversation_path;
+  if (cp && typeof cp === 'string') return cp;
+  const sid = typeof entry.session_id === 'string' ? entry.session_id : '';
+  if (!sid) return null;
+  const now = Date.now();
+  if (now - resolvedAt >= SESSIONS_TTL_MS) { resolvedCache = new Map(); resolvedAt = now; }
+  const key = `${agentId}:${sid}`;
+  if (!resolvedCache.has(key)) {
+    let path: string | null = null;
+    try {
+      const r = resolveTranscriptPath(agentId);
+      path = r.path && r.sid === sid ? r.path : null;
+    } catch {
+      path = null;               // a resolver failure is unknown, never working
+    }
+    resolvedCache.set(key, path);
+  }
+  return resolvedCache.get(key) ?? null;
+}
+
 /**
  * Milliseconds since this agent's transcript was last appended to, or null when there is
  * no usable transcript path (never indexed, or the file is gone).
  */
 export function transcriptAgeMs(agentId: string): number | null {
   const entry = sessions()[agentId];
-  const cp = entry && entry.conversation_path;
-  if (!cp || typeof cp !== 'string') return null;
+  if (!entry) return null;
+  const cp = transcriptPath(agentId, entry);
+  if (!cp) return null;
   try {
     return Date.now() - statSync(cp).mtimeMs;
   } catch {
