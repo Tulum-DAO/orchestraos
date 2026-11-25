@@ -96,3 +96,55 @@ def test_a_missing_folder_list_only_drops_the_operator_folders(tmp_path):
 def test_the_refusal_points_at_gm_never_at_a_person(guarded):
     _rc, err = run(D + ".env", guarded[1])
     assert "ask gm" in err and "operator" not in err.lower()
+
+
+# ───────── variables (codex-gm review on #633): a target the guard cannot resolve is refused ─────────
+
+OPAQUE_REFUSED = [
+    D + '"$DELETE_TARGET"',
+    DR + '"$UNSET_DIR/sub"',
+    D + '"${SOMETHING}"',
+    D + '"$(cat list.txt)"',
+    D + "$(cat list.txt)",
+    D + "`cat list.txt`",
+    "for t in a b; do " + D + '"$t"; done',
+    "X=/tmp/x " + D + '"$X/out.json"',          # a prefix assignment is not in effect for $X
+    "S=/srv/app/.env; " + D + '"$S"',           # resolved, and it is a protected name
+    "S=" + HOME + "/.secrets; " + D + '"$S/token"',
+    "export K=" + HOME + "/.ssh && " + D + '"$K/id_rsa"',
+    "S=$(mktemp -d); " + DR + '"$S"',           # value itself unknown
+]
+
+
+@pytest.mark.parametrize("cmd", OPAQUE_REFUSED)
+def test_a_delete_target_the_guard_cannot_resolve_is_refused(cmd, guarded):
+    rc, err = run(cmd, guarded[1])
+    assert rc == 2, f"{cmd!r} was allowed"
+
+
+VARS_ALLOWED = [
+    "S=/tmp/scratch; " + D + '-f "$S/out.json"',
+    "S=/tmp/scratch && " + DR + '"$S/build"',
+    "export B=/srv/work/build; " + DR + '"${B}"',
+    "S=/tmp/a; T=$S/b; " + D + '"$T/c.txt"',
+    D + '"$HOME/notes.txt"',
+    D + '"$PWD/old.log"',
+    D + '"$TMPDIR/x.json"',
+]
+
+
+@pytest.mark.parametrize("cmd", VARS_ALLOWED)
+def test_a_variable_set_earlier_in_the_command_resolves(cmd, guarded):
+    rc, err = run(cmd, guarded[1])
+    assert rc == 0, f"{cmd!r} was refused: {err}"
+
+
+def test_the_unresolved_refusal_says_how_to_fix_it(guarded):
+    _rc, err = run(D + '"$DELETE_TARGET"', guarded[1])
+    assert "cannot resolve" in err and "name the path literally" in err
+
+
+def test_a_delete_behind_a_shell_keyword_is_still_seen(guarded):
+    assert run("for f in a b; do " + D + ".env; done", guarded[1])[0] == 2
+    assert run("if true; then " + D + "server.pem; fi", guarded[1])[0] == 2
+    assert run("for d in x; do " + DR + "/; done", guarded[1])[0] == 2       # the nuclear rule too

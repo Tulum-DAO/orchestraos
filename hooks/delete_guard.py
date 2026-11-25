@@ -86,6 +86,9 @@ _WRAPPER_FLAGS_WITH_ARG = {
 #: Wrappers whose `-c` operand is a SCRIPT to be parsed as a command in its own right, not a
 #: token to step over. Without this, `bash -c '<delete of the root>'` reads as one opaque word.
 _SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+#: Shell keywords that can stand before a command word in a segment: `for ...; do rm -rf X; done`
+#: put the delete behind `do`, where reading argv[0] never saw it.
+_SHELL_KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "!", "(", "time"}
 
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _DURATION = re.compile(r"^\d+(\.\d+)?[smhd]?$")
@@ -100,8 +103,8 @@ def _command_word(argv: list[str]) -> list[str]:
     """
     i, n = 0, len(argv)
     while i < n:
-        while i < n and _ASSIGNMENT.match(argv[i]):
-            i += 1                                    # VAR=VALUE may precede a command word
+        while i < n and (_ASSIGNMENT.match(argv[i]) or argv[i] in _SHELL_KEYWORDS):
+            i += 1                                    # VAR=VALUE, or `do`/`then`/`if`..., may precede it
         if i >= n:
             break
         name = os.path.basename(argv[i])
@@ -300,13 +303,55 @@ def _file_kind(name: str) -> str | None:
     return None
 
 
-def _target_path(op: str, cwd: str | None) -> str | None:
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+#: A target still holding one of these after expansion cannot be resolved: it is refused (fail closed).
+OPAQUE = "opaque"
+
+
+def _known_vars(cwd: str | None) -> dict[str, str]:
+    """Variables whose value the guard can know: HOME, PWD (the call's cwd) and TMPDIR."""
+    known = {"HOME": HOME, "TMPDIR": os.environ.get("TMPDIR") or "/tmp"}
+    if cwd:
+        known["PWD"] = cwd
+    return known
+
+
+def _expand(op: str, env: dict[str, str]) -> str:
+    """Expand $NAME / ${NAME} from env (one pass, then once more for a value naming another);
+    returns OPAQUE when anything unresolvable is left: an unknown variable, $(...), backticks."""
+    t = op
+    for _ in range(2):
+        t = _VAR.sub(lambda m: env.get(m.group(1) or m.group(2), m.group(0)), t)
+    if "$" in t or "`" in t:
+        return OPAQUE
+    return t
+
+
+def _note_assignments(argv: list[str], env: dict[str, str]) -> None:
+    """Record `NAME=value` segments and `export NAME=value` so a later `rm "$NAME/x"` in the same
+    command resolves. A prefix assignment on a command (`X=1 rm $X`) does not count: the shell
+    expands $X before that assignment applies."""
+    words = argv[1:] if argv[:1] == ["export"] else argv
+    if not words or not all(_ASSIGNMENT.match(w) for w in words):
+        return
+    for w in words:
+        name, _, value = w.partition("=")
+        value = _expand(value, env)
+        if value is OPAQUE:
+            env.pop(name, None)
+        else:
+            env[name] = value
+
+
+def _target_path(op: str, cwd: str | None, env: dict[str, str] | None = None) -> str | None:
     t = op.strip()
     if not t:
         return None
     if t.startswith("~"):
         t = HOME + t[1:]
-    t = t.replace("$HOME", HOME).replace("${HOME}", HOME)
+    t = _expand(t, env if env is not None else _known_vars(cwd))
+    if t is OPAQUE:
+        return OPAQUE
     if not t.startswith("/"):
         if not cwd:
             return t                                   # relative and no cwd: judge the name only
@@ -318,12 +363,16 @@ def _under(p: str, root: str) -> bool:
     return p == root or p.startswith(root.rstrip("/") + "/")
 
 
-def _judge_target(op: str, cwd: str | None, recursive: bool, guarded: list[str]) -> str | None:
+def _judge_target(op: str, cwd: str | None, recursive: bool, guarded: list[str],
+                  env: dict[str, str] | None = None) -> str | None:
     if recursive and op.strip().rstrip("/") in (".", ""):
         return "a recursive delete of the current directory itself"
-    path = _target_path(op, cwd)
+    path = _target_path(op, cwd, env)
     if path is None:
         return None
+    if path is OPAQUE:
+        return ("a path the guard cannot resolve (an unset variable or a command substitution); "
+                "name the path literally, or set the variable earlier in the same command")
     kind = _file_kind(os.path.basename(path.rstrip("/")) or path)
     if kind:
         return kind
@@ -347,8 +396,11 @@ def _find_targets(args: list[str]) -> tuple[list[str], list[str]]:
     return starts or ["."], names
 
 
-def protected_file_refusal(command: str, cwd: str | None = None, _depth: int = 0) -> str | None:
-    """Return a refusal naming the target and why, or None to allow. FAIL-OPEN like rule 1."""
+def protected_file_refusal(command: str, cwd: str | None = None, _depth: int = 0,
+                           _env: dict[str, str] | None = None) -> str | None:
+    """Return a refusal naming the target and why, or None to allow. FAIL-OPEN on a parse error
+    like rule 1, but a delete target it cannot RESOLVE (a variable it does not know) is refused."""
+    env = dict(_env) if _env is not None else _known_vars(cwd)
     try:
         guarded = operator_paths()
         command = re.sub(r"<<-?\s*'(\w+)'\n.*?\n\1(\n|$)", "<<'HEREDOC'\n", command, flags=re.S)
@@ -357,10 +409,11 @@ def protected_file_refusal(command: str, cwd: str | None = None, _depth: int = 0
                 argv = shlex.split(segment)
             except ValueError:
                 continue
+            _note_assignments(argv, env)
             argv = _command_word(argv)
             if argv and argv[0] == "\x00script":
                 if _depth < 4:
-                    inner = protected_file_refusal(argv[1], cwd, _depth=_depth + 1)
+                    inner = protected_file_refusal(argv[1], cwd, _depth=_depth + 1, _env=env)
                     if inner:
                         return inner
                 continue
@@ -374,7 +427,7 @@ def protected_file_refusal(command: str, cwd: str | None = None, _depth: int = 0
                     if kind:
                         return f"`find -delete` matching {pat!r} would delete {kind}"
                 for st in starts:
-                    why = _judge_target(st, cwd, True, guarded)
+                    why = _judge_target(st, cwd, True, guarded, env)
                     if why and not why.startswith("a recursive delete of the current"):
                         return f"`find {st} -delete` reaches {why}"
                 continue
@@ -389,9 +442,10 @@ def protected_file_refusal(command: str, cwd: str | None = None, _depth: int = 0
                     continue
                 if not seen_ddash and a.startswith("-"):
                     continue
-                why = _judge_target(a, cwd, recursive, guarded)
+                why = _judge_target(a, cwd, recursive, guarded, env)
                 if why:
-                    return f"`{name} {a}` would delete {why}"
+                    verb = "targets" if why.startswith("a path the guard cannot") else "would delete"
+                    return f"`{name} {a}` {verb} {why}"
     except Exception:
         return None
     return None
