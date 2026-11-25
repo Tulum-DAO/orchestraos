@@ -1060,7 +1060,7 @@ def test_RACE2_cardbusy_never_voids_the_shared_card(env, monkeypatch, capsys):
     monkeypatch.setattr(env.__class__, "find_by_op_key", lambda self, op_key, origin=None: [])   # blind pre-read
     monkeypatch.setattr(L, "card_live_row", lambda cid: None)                                   # blind compare
     code, out, err = _run_request_inproc(["--op-key", "same"], capsys)
-    assert code == 3 and out == "" and "already carries action" in err and "voided" not in err
+    assert code == 3 and out == "" and "already carries action" in err
     assert [r["id"] for r in env.pending_to_notify()] == [winner_rid]        # still pending
     assert env.get(winner_rid)["status"] == "pending"
     assert [r["id"] for r in L.show(card_id=winner_rid)] == [pay["id"]]      # still carrying its row
@@ -1112,5 +1112,10 @@ def test_RACE2_two_concurrent_requests_different_actions_same_op_key(env, tmp_pa
     assert len(rows) == 1 and rows[0]["state"] == "asked"
     assert len([r for r in _rows() if r["card_id"]]) == 1                     # one card row in total
     loser_err = [e for (o, e), p in zip(outs, procs) if p.returncode == 3][0]
-    assert "voided" not in loser_err and "superseded" not in loser_err
+    assert "already carries action" in loser_err                             # refused, not voided
+    # Store state, not words in stderr (a runner with unarmed DDL prints a banner naming 'superseded_by'):
+    assert env.get(winner["id"])["status"] == "pending"
+    assert env.get(winner["id"]).get("retired_at") is None
     assert env.history(limit=10) == []                                       # nothing retired or discarded
+    loser_rows = [r for r in _rows() if not r["card_id"]]                   # the loser's row: not_run, no card
+    assert [r["state"] for r in loser_rows] == ["not_run"]
