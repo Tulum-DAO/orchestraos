@@ -38,6 +38,13 @@ kill_tree() {
   kill "-$sig" "$p" 2>/dev/null
 }
 
+# True when $1 is a live chrome-family process (comm is truncated to 15 chars; a prefix match).
+is_browser() {
+  local c
+  c="$(cat "/proc/$1/comm" 2>/dev/null)" || return 1
+  case "$c" in chrome*|chromium*|*headless*) return 0 ;; *) return 1 ;; esac
+}
+
 # Every descendant pid of $1 (not $1 itself), depth-first.
 tree_pids() {
   local k
@@ -53,11 +60,16 @@ if $LIST_ONLY; then
   echo "Plugin Chrome (verdict, pid, profile, why, parent chain):"
   python3 "$HERE/chrome_orphans.py" --all || echo "chrome_orphans.py failed"
 else
-  mapfile -t ORPHANS < <(python3 "$HERE/chrome_orphans.py" 2>/dev/null)
+  if ! ORPHAN_LIST="$(python3 "$HERE/chrome_orphans.py" 2>/dev/null)"; then
+    echo "$(ts) [reaper] WARN orphan list unavailable (chrome_orphans.py failed); no orphan reaped this run" >> "$LOG"
+    ORPHAN_LIST=""
+  fi
+  mapfile -t ORPHANS <<< "$ORPHAN_LIST"
   OTREE=()
   for row in "${ORPHANS[@]}"; do
     IFS=$'\t' read -r opid oprof owhy <<< "$row"
-    [ -n "$opid" ] || continue
+    # a row must be a number naming a process that is still a browser, or it is not acted on
+    [[ "$opid" =~ ^[0-9]+$ ]] && is_browser "$opid" || continue
     # the subtree is listed BEFORE the TERM: once the browser exits, its renderers are reparented
     OTREE+=("$opid" $(tree_pids "$opid"))
     echo "$(ts) [reaper] ORPHAN pid=$opid profile=$oprof why=$owhy" >> "$LOG"
@@ -65,7 +77,8 @@ else
   done
   if [ "${#OTREE[@]}" -gt 0 ]; then
     sleep 3
-    for p in "${OTREE[@]}"; do kill -KILL "$p" 2>/dev/null; done
+    # re-checked at kill time: a pid freed in those 3 s and reused by something else is left alone
+    for p in "${OTREE[@]}"; do is_browser "$p" && kill -KILL "$p" 2>/dev/null; done
   fi
 fi
 
@@ -78,7 +91,8 @@ else
   PROTECT=" "
   $LIST_ONLY || echo "$(ts) [reaper] WARN live-parent plugin Chrome list unavailable; age rule unfiltered" >> "$LOG"
 fi
-# CHROME_REAPER_PIDS_ALLOW (tests only): when set, nothing outside this pid list is eligible.
+# CHROME_REAPER_PIDS_ALLOW (tests only): when set, nothing outside this pid list is eligible. It only
+# NARROWS the age rule (the protected list still applies) and does not touch the orphan phase.
 ALLOW=" ${CHROME_REAPER_PIDS_ALLOW:-} "
 eligible() { awk -v prot="$PROTECT" -v allow="$ALLOW" \
   'index(prot, " " $1 " ") == 0 && (allow == "  " || index(allow, " " $1 " ") > 0)'; }

@@ -60,9 +60,15 @@ def _is_chrome(comm):
 
 
 def _profile(argv):
+    """The --user-data-dir value, or None. Only an absolute path with no control characters counts:
+    a relative or ~ path would be resolved in the reaper's cwd, not Chrome's, and a newline or tab
+    would let a crafted argument forge an extra output row (a kill of another pid)."""
     for a in argv:
         if a.startswith("--user-data-dir="):
-            return a.split("=", 1)[1]
+            v = a.split("=", 1)[1]
+            if not v.startswith("/") or any(ord(c) < 32 or ord(c) == 127 for c in v):
+                return None
+            return v
     return None
 
 
@@ -102,13 +108,26 @@ def classify(procs, rts, adopters=()):
     return res
 
 
+def _has_live_mcp_ancestor(pid, procs, depth=8):
+    """True when a live plugin MCP is the parent, or an ancestor through wrapper processes."""
+    ppid = procs[pid][0]
+    while depth and ppid > 1 and ppid in procs:
+        if _is_mcp(procs[ppid]):
+            return True
+        ppid, depth = procs[ppid][0], depth - 1
+    return False
+
+
 def protected(procs, rts):
-    """Pids the AGE rule must not touch: every plugin Chrome with a live parent, and everything under it
-    (renderers, GPU, utility, a crashpad handler when it sits under it)."""
+    """Pids the AGE rule must not touch: every plugin Chrome whose plugin MCP is alive (as its parent or
+    an ancestor through a wrapper), and everything under it (renderers, GPU, utility, a crashpad handler
+    when it sits under it). A plugin Chrome with some OTHER live parent is not orphan-reaped, but keeps
+    the age rule, as before: an MCP that died behind a surviving wrapper must not leak a browser forever."""
     kids = {}
     for pid, (ppid, _comm, _argv) in procs.items():
         kids.setdefault(ppid, []).append(pid)
-    out, todo = set(), [pid for pid, _prof, verdict, _why in classify(procs, rts) if verdict == "spared"]
+    out, todo = set(), [pid for pid, _prof, verdict, _why in classify(procs, rts)
+                        if verdict == "spared" and _has_live_mcp_ancestor(pid, procs)]
     while todo:
         pid = todo.pop()
         if pid not in out:

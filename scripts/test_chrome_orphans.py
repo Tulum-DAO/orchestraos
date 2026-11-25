@@ -80,6 +80,23 @@ def test_a_live_parent_plugin_chrome_and_its_children_are_protected_from_the_age
     assert co.protected(procs, [ROOT]) == {51, 52, 53}
 
 
+def test_a_plugin_chrome_under_another_live_parent_keeps_the_age_rule():
+    # not orphan-reaped (its parent is alive) but NOT protected: an MCP that died behind a surviving
+    # wrapper must not leak its browser forever
+    procs = {70: (1, "sh", ["sh", "-c", "chrome ...; :"]), 51: _chrome(70)}
+    assert _verdicts(procs) == {51: "spared"} and co.protected(procs, [ROOT]) == set()
+
+
+def test_an_mcp_behind_a_wrapper_still_protects_its_chrome():
+    procs = {50: MCP, 60: (50, "sh", ["sh", "-c", "chrome"]), 51: _chrome(60)}
+    assert co.protected(procs, [ROOT]) == {51}
+
+
+@pytest.mark.parametrize("profile", [ROOT + "/a\n4242\tx", ROOT + "/a\tb", "browser-profiles/seat", "~/x"])
+def test_a_profile_with_control_characters_or_not_absolute_is_never_reported(profile):
+    assert co.classify({51: _chrome(1, profile=profile)}, [ROOT]) == []
+
+
 # ───────── by effect: real processes, the real script ─────────
 
 REAPER = os.path.join(HERE, "chrome-reaper.sh")
@@ -190,8 +207,11 @@ def test_the_age_rule_spares_a_live_parent_plugin_chrome_and_still_reaps_the_res
     root = tmp_path / "browser-profiles"
     root.mkdir()
     q = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "start_new_session": True}
-    # plugin Chrome under a live shell parent, with a child of its own (its sleep)
-    plugin = subprocess.Popen(["sh", "-c", f'"{fake_chrome}" --headless=new --user-data-dir="{root / "seat"}"; :'], **q)
+    # plugin Chrome under a live fake plugin MCP (comm node, argv naming the MCP entry), with a child
+    mcp = fake_chrome.parent / "node"
+    mcp.write_text(f'#!/bin/sh\n"{fake_chrome}" --headless=new --user-data-dir="{root / "seat"}"\n:\n')
+    mcp.chmod(0o755)
+    plugin = subprocess.Popen([str(mcp), "/x/superpowers-chrome/1.6.1/mcp/dist/index.js"], **q)
     # a headless Chrome outside the plugin root, also with a live parent
     other = subprocess.Popen(["sh", "-c", f'"{fake_chrome}" --headless=new --user-data-dir="{tmp_path / "x"}"; :'], **q)
     try:
@@ -217,3 +237,13 @@ def test_the_age_rule_spares_a_live_parent_plugin_chrome_and_still_reaps_the_res
             except OSError:
                 pass
             h.wait()
+
+
+def test_a_failing_classifier_is_logged_and_kills_nothing(tmp_path):
+    log = tmp_path / "log"
+    env = {**os.environ, "CHROME_REAPER_PROC": str(tmp_path / "no-proc"), "CHROME_REAPER_LOG": str(log),
+           "CHROME_REAPER_PIDS_ALLOW": "999999999"}
+    subprocess.run(["bash", REAPER, "1"], env=env, check=True, timeout=30)
+    text = log.read_text()
+    assert "WARN orphan list unavailable" in text and "WARN live-parent plugin Chrome list unavailable" in text
+    assert "ORPHAN" not in text and "SIGTERM" not in text
