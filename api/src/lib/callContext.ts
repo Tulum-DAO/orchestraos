@@ -22,6 +22,10 @@ export const MIN_BUDGET_TOKENS = 500;
 export const MAX_BUDGET_TOKENS = 20000;
 const LINE_MAX_CHARS = 1200;
 const SUMMARY_SHARE = 0.2;
+// The opening is fenced as history that is over (thread_context.PAST_OPEN/PAST_CLOSE; live probes 2026-11-25: unfenced,
+// the thread ended on verbatim call dialogue and Arturo never greeted; thread off, he greeted at 1.5 s).
+export const PAST_OPEN = 'PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.';
+export const PAST_CLOSE = 'END OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet.';
 const SUMMARY_ITEM_CHARS = 200;
 const CALL_FILES_MAX = 40;
 const CALL_MAX_AGE_S = 14 * 86400;
@@ -255,6 +259,6 @@ export function buildCallContext(o: BuildOptions): string {
   if (o.items) lines = lines.concat(chatLines(o.items, o.chatAgent, op));
   else notes.push(`(${o.chatAgent} chat could not be read: ${o.chatError || 'Error'})`);
   lines = lines.concat(callLines(o.journals, o.callOwner, o.exclude ?? null, null, op));
-  return [render(lines, o.budgetTokens ?? DEFAULT_BUDGET_TOKENS, o.tz, o.tzLabel, 'THREAD', o.redact ?? redact)]
-    .concat(notes).join('\n');
+  return [PAST_OPEN, render(lines, o.budgetTokens ?? DEFAULT_BUDGET_TOKENS, o.tz, o.tzLabel, 'THREAD', o.redact ?? redact)]
+    .concat(notes, [PAST_CLOSE]).join('\n');
 }

@@ -135,6 +135,19 @@ test('a gateway token that contains "sk-" is blanked whole, not just its tail', 
   }
 });
 
+test('a token file shorter than 8 characters blanks nothing (the 8-char floor python and redactSecrets apply)', async () => {
+  const tokFile = process.env.WATCH_GATEWAY_TOKEN_FILE as string;
+  writeFileSync(tokFile, 'dream\n');
+  try {
+    await withApp(async (base) => {
+      const t = await (await fetch(`${base}/${SEAT}/call-context`)).text();
+      assert.ok(t.includes('is the dream fix in?'), 'a short token file blanked ordinary words');
+    });
+  } finally {
+    writeFileSync(tokFile, TOKEN + '\n');
+  }
+});
+
 test('the route\'s redactor is a superset of the twin\'s: these secret-free shapes differ, by design', async () => {
   const line = 'tokens: 12345, password: reset, see https://x.test/a?key=abcd ok';
   const twin = buildCallContext({ chatAgent: 'gm', callOwner: null, journals: [], tz: 'UTC', tzLabel: 'UTC',

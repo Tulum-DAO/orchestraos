@@ -9,6 +9,7 @@ turns both off.
 import asyncio
 import json
 
+from services.arturo import thread_context as tc
 from services.arturo.native import call_context
 from services.arturo.native.tests.test_native import FakeProvider, HDRS, _client, _run, _server
 
@@ -65,9 +66,10 @@ def test_the_thread_opens_the_call_in_both_prompts(tmp_path, monkeypatch):
     assert start["type"] == "session.start"
     assert asked == ["gm"]                                          # the client page's chat is gm's (10-20 ruling)
     live, backend = start["session"]["instructions"], start["session"]["delegation"]["responses"]["instructions"]
-    assert backend.rstrip().endswith("THREAD for gm: last call said hi")    # after the rules
+    fenced = f"{tc.PAST_OPEN}\nTHREAD for gm: last call said hi\n{tc.PAST_CLOSE}"
+    assert backend.rstrip().endswith(fenced)                              # after the rules
     paras = live.strip().split("\n\n")                                   # live: after the rules, before START
-    assert paras[-1].startswith("START:") and paras[-2] == "THREAD for gm: last call said hi"
+    assert paras[-1].startswith("START:") and paras[-2] == fenced
 
 
 def test_the_page_names_whose_chat_it_is(tmp_path, monkeypatch):
@@ -83,7 +85,7 @@ def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_p
         assert not [f for f in p.sent if f["type"].endswith(".append") and "dream fix" in f.get("content", "")]
         await _started(ws, p)
     p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, before_and_after)
-    notes = [f for f in p.sent if f["type"] == "session.instructions.append" and "dream fix" in f["content"]]
+    notes = [f for f in p.sent if f["type"] == "session.thinking.append" and "dream fix" in f["content"]]   # the default kind
     assert len(notes) == 1 and notes[0]["content"].startswith("[2026-11-25T17:40:00Z 12:40 Tulum] chat gm")
     rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
     assert rep["thread"]["chat"] == "gm" and rep["thread"]["feed_sent"] == 1 and rep["thread"]["opening_tokens"] > 0
@@ -219,4 +221,33 @@ def test_the_thread_goes_before_the_start_rule_so_arturo_still_greets_first():
     live = f["session"]["instructions"]
     assert live.strip().split("\n\n")[-1].startswith("START:")
     assert "THREAD: chat Shaw: hello" in live and live.index("THREAD:") < live.rindex("START:")
-    assert f["session"]["delegation"]["responses"]["instructions"].rstrip().endswith("THREAD: chat Shaw: hello")
+    assert "THREAD: chat Shaw: hello" in f["session"]["delegation"]["responses"]["instructions"]
+
+
+def test_the_past_context_boundary_sits_right_before_the_start_rule():
+    # live probes 2026-11-25: the thread on killed the greet (native-90a7e00cd3d1), off greeted at 1.5 s
+    # (native-8f4a14b348a8). The boundary says the thread is over and this call is new; START stays last. An opening
+    # from an older API route (no fence) gets the boundary added here, once.
+    from services.arturo import thread_context as tc
+    from services.arturo.native import native_config
+    for ctx in ("THREAD: call vc_x Shaw: you see that, right",
+                f"{tc.PAST_OPEN}\nTHREAD: call vc_x Shaw: you see that, right\n{tc.PAST_CLOSE}"):
+        f = native_config.session_start_frame([], context=ctx)
+        live = f["session"]["instructions"]
+        paras = live.strip().split("\n\n")
+        assert paras[-1].startswith("START:")
+        assert paras[-2].rstrip().endswith(tc.PAST_CLOSE) and paras[-2].count(tc.PAST_CLOSE) == 1
+        assert paras[-2].startswith(tc.PAST_OPEN) and paras[-2].count(tc.PAST_OPEN) == 1
+        backend = f["session"]["delegation"]["responses"]["instructions"].rstrip()
+        assert backend.endswith(tc.PAST_CLOSE) and backend.count(tc.PAST_CLOSE) == 1
+
+
+def test_the_chat_feed_defaults_to_thinking_the_kind_measured_voiced(monkeypatch):
+    # live probe 2026-11-25 native-90a7e00cd3d1: a thinking note was acked and voiced ~5 s after it was sent;
+    # instructions never completed (context_injection_incomplete). instructions stays available by env.
+    monkeypatch.delenv(call_context.FEED_KIND_ENV, raising=False)
+    assert call_context.feed_kind() == "thinking"
+    monkeypatch.setenv(call_context.FEED_KIND_ENV, "instructions")
+    assert call_context.feed_kind() == "instructions"
+    monkeypatch.setenv(call_context.FEED_KIND_ENV, "bogus")
+    assert call_context.feed_kind() == "thinking"

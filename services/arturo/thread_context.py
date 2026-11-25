@@ -35,6 +35,10 @@ DEFAULT_BUDGET_TOKENS = 6000      # opening context; GPT-Live's start frame has 
 APPEND_MAX_TOKENS = 500           # native protocol.APPEND_MAX_TOKENS
 LINE_MAX_CHARS = 1200             # one very long chat reply must not eat the whole budget
 SUMMARY_SHARE = 0.2               # of the budget, for the EARLIER block
+# The opening is fenced as history that is over (live probes 2026-11-25: unfenced, the thread ended on verbatim call
+# dialogue and Arturo never greeted, native-90a7e00cd3d1; thread off, he greeted at 1.5 s, native-8f4a14b348a8).
+PAST_OPEN = "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over."
+PAST_CLOSE = "END OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
 SUMMARY_ITEM_CHARS = 200
 CALL_FILES_MAX = 40               # newest journals considered (by mtime); the directory holds hundreds
 CALL_MAX_AGE_S = 14 * 86400
@@ -363,4 +367,4 @@ def load(chat_agent: str, call_owner: Optional[str], calls_dir, exclude: Optiona
     lines += call_lines(calls_dir, owner=call_owner, exclude=exclude, assistant_label=assistant_label,
                         operator_label=operator_label)
     text = render(lines, budget_tokens=budget_tokens, tz=tz, tz_label=tz_label)
-    return "\n".join([text] + notes)
+    return "\n".join([PAST_OPEN, text] + notes + [PAST_CLOSE])

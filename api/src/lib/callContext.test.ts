@@ -51,3 +51,13 @@ test('secrets are blanked before the clip, by the default shapes and by a passed
   const full = buildCallContext({ ...base, redact: (t: string) => t.split(token).join('[redacted]') });
   assert.ok(!full.includes(token.slice(0, 20)), 'the install token cut at the clip boundary shipped as a prefix');
 });
+
+test('the opening is fenced as past context that is over, the boundary last (live probe 2026-11-25)', async () => {
+  const { PAST_OPEN, PAST_CLOSE } = await import('./callContext.js');
+  const base = { chatAgent: 'gm', callOwner: null, journals: [], tz: 'UTC', tzLabel: 'UTC' };
+  for (const o of [{ ...base, items: [] }, { ...base, items: null, chatError: 'down' }]) {
+    const lines = buildCallContext(o).split('\n');
+    assert.equal(lines[0], PAST_OPEN);
+    assert.equal(lines[lines.length - 1], PAST_CLOSE);
+  }
+});

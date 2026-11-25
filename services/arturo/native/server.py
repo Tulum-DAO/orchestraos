@@ -640,7 +640,7 @@ class NativeCall:
 
     def _flush_chat_feed(self):
         """From _tick, after session.started: poll the chat every CHAT_POLL_S off the loop; send at most one stamped
-        note per tick as a session append (call_context.feed_kind; instructions by default)."""
+        note per tick as a session append (call_context.feed_kind; thinking by default)."""
         if self.chat_feed is None or self.driver is None or not self.session.started:
             return
         now = time.monotonic()

@@ -206,3 +206,17 @@ def test_the_install_token_is_blanked_before_the_clip(tmp_path, monkeypatch):
     line = tc.Line(at=T0, who="Shaw", text="x" * 1170 + " " + token + " tail", channel="chat")
     out = tc.render([line], budget_tokens=2000, tz="UTC", tz_label="UTC")
     assert token[:20] not in out
+
+
+def test_the_opening_is_fenced_as_past_context_that_is_over(tmp_path):
+    # live probes 2026-11-25: same build, 6K, silence uplink; thread on = no greet (native-90a7e00cd3d1), thread off =
+    # greet at 1.5 s (native-8f4a14b348a8). The thread ended on verbatim call dialogue, read as a conversation going on.
+    journal(tmp_path, "vc_prev", [("user", "you see that, right", T0 + 10), ("assistant", "yes, absolutely", T0 + 11)])
+    for fetch in (lambda a, n: [], lambda a, n: (_ for _ in ()).throw(OSError("down"))):
+        out = tc.load(chat_agent="gm", call_owner=None, calls_dir=tmp_path, fetch=fetch, tz="UTC", tz_label="UTC")
+        assert out.split("\n")[0] == tc.PAST_OPEN
+        assert out.split("\n")[-1] == tc.PAST_CLOSE                     # after the notes too: the last thing said
+    empty = tc.load(chat_agent="gm", call_owner=None, calls_dir=tmp_path / "none", fetch=lambda a, n: [],
+                    tz="UTC", tz_label="UTC")
+    assert empty.startswith(tc.PAST_OPEN) and empty.endswith(tc.PAST_CLOSE)
+    assert "NEW call" in tc.PAST_CLOSE and "nobody has spoken" in tc.PAST_CLOSE

@@ -37,14 +37,25 @@ def prompts(path=PROMPT_FILE):
     return parts
 
 
+def fenced(ctx):
+    """The thread as past context that is over, then the boundary (thread_context.PAST_OPEN/PAST_CLOSE). An opening
+    from an API route older than the fence gets it here, once: without it Arturo never greeted (probe 2026-11-25)."""
+    from services.arturo import thread_context as tc
+    if not ctx.startswith(tc.PAST_OPEN):
+        ctx = f"{tc.PAST_OPEN}\n{ctx}"
+    if not ctx.endswith(tc.PAST_CLOSE):
+        ctx = f"{ctx}\n{tc.PAST_CLOSE}"
+    return ctx
+
+
 def session_start_frame(tools, voice=None, context=""):
     """`context`: the thread above this call (call_context.opening). After the rules, but in LIVE before the closing
     START paragraph: the greet only fires when START is the last thing in the instructions (10-16 probe; the
-    2026-11-25 probe with the thread after it never greeted)."""
+    2026-11-25 probe with the thread after it never greeted), and only when the thread is fenced as over (fenced())."""
     p = prompts()
     live, backend = p["live"], p["backend"]
     if context and context.strip():
-        ctx = context.strip()
+        ctx = fenced(context.strip())
         paras = live.strip().split("\n\n")
         if paras[-1].startswith("START:"):
             live = "\n\n".join(paras[:-1] + [ctx, paras[-1]])

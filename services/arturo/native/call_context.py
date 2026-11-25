@@ -21,7 +21,8 @@ from services.arturo import thread_context
 log = logging.getLogger("arturo.native.call_context")
 
 FLAG = "ARTURO_NATIVE_THREAD_CONTEXT"          # ON unless "0": the escape hatch
-FEED_KIND_ENV = "ARTURO_NATIVE_CHAT_FEED_KIND"  # instructions (acked, unvoiced: probe 10-16) | thinking | commentary
+FEED_KIND_ENV = "ARTURO_NATIVE_CHAT_FEED_KIND"  # thinking (default: voiced ~5 s after send, probe 2026-11-25
+# native-90a7e00cd3d1, uplink audio flowing) | instructions (never completed in that probe) | commentary (untested with audio)
 FEED_KINDS = ("instructions", "thinking", "commentary")
 CHAT_POLL_S = 3.0
 FEED_MAX_NOTES = 60                             # per call: a flood of chat never floods the session
@@ -44,8 +45,8 @@ def default_chat_agent():
 
 
 def feed_kind():
-    k = os.environ.get(FEED_KIND_ENV, "instructions")
-    return k if k in FEED_KINDS else "instructions"
+    k = os.environ.get(FEED_KIND_ENV, "thinking")
+    return k if k in FEED_KINDS else "thinking"
 
 
 def calls_dir():

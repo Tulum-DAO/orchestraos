@@ -2391,7 +2391,7 @@ router.get('/:id/call-context', (req: Request, res: Response) => {
   try {
     const items = pageItemsFor(agentId, 300);            // the chat exactly as GET /:id/transcript shows it
     const [tz, tzLabel] = shawTz(dataDir());
-    const exact = [readGatewayToken()].filter(Boolean);
+    const exact = [readGatewayToken()].filter((v) => v.length >= 8);   // the 8-char floor of the twin and redactSecrets
     // ONE redaction, inside the builder, on each piece BEFORE it is clipped (a secret cut at the clip boundary would
     // otherwise ship as a near-complete prefix): this install's token by exact value FIRST (a token containing "sk-"
     // must not be half-eaten by a shape), then the twin's shapes, then the full redactor. The full redactor is a
