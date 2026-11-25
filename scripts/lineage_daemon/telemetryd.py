@@ -54,6 +54,12 @@ SLOW_POLL_S = 5.0           # == MIN_POLL_S CPU floor for the /proc-touching lan
 MIN_SLOW_POLL_S = 5.0
 
 _STREAMING_SAMPLE = {"bytes_flowing": True}
+# Verdicts that rest on the ABSENCE of screen output. A seat whose pipe is unbound (its pane
+# is piped into a sink its ring never reads, e.g. a renamed green's old sink) has no output
+# signal at all, so these would be guesses: it reads "unknown" instead. offline_crashed and
+# waiting_permission rest on /proc and hooks, not on the pipe, and stand.
+_OUTPUT_DEPENDENT = frozenset({"idle", "stalled", "computing"})
+UNKNOWN = "unknown"
 # C1 corroboration window (DEC-1788493111 §9.2.2): recent NOVEL bytes within this
 # span count a resident child's cpu/io as delegated work (the hookless
 # blocked-on-resident-MCP mid-tool-call case); a working hook corroborates
@@ -187,6 +193,17 @@ class TelemetryDaemon:
         errored) falls back to the frozen seat.hooks (never worse than pre-fix)."""
         entry = live.get(seat.session)
         return entry.get("hooks") if entry else seat.hooks
+
+    def _pipe_unbound(self, session):
+        """True when the attach sweep says `session`'s pipe is unbound. A sweep without the
+        method, or one that raises, reads as bound (the classic behaviour)."""
+        fn = getattr(self.sweep, "is_unbound", None)
+        if fn is None:
+            return False
+        try:
+            return bool(fn(session))
+        except Exception:
+            return False
 
     def _log_e1_divergence(self, seat, classic, e1, age_s, hook_ts, now):
         """E1_SHADOW: append one JSONL record where the E1 verdict differs from the
@@ -403,6 +420,8 @@ class TelemetryDaemon:
                                                 hooks.get("ts") if hooks else None, now)
                 else:
                     verdict = derive_status(sample, profile=prof, hooks=hooks)   # classic (default)
+                if verdict in _OUTPUT_DEPENDENT and self._pipe_unbound(seat.session):
+                    verdict = UNKNOWN                    # no output signal: never guess idle
                 self._status[seat.session] = self._record(seat, verdict)
                 self._degraded.pop(seat.session, None)   # recovered -> clear runtime degrade
             except Exception as e:

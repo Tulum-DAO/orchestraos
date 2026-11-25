@@ -83,6 +83,17 @@ class AttachSweep:
         self._tmux = tmux
         self._sink_dir = sink_dir
         self.attached = {}          # name -> tmux session-id currently attached
+        # session-id -> the name it was first piped under. A tmux session-id ($N) is stable
+        # across `rename-session`, and the pane's pipe keeps writing the sink of the name it
+        # was attached under. A blue-green swap spawns `<root>-gN` and renames it `<root>`,
+        # so the pipe writes `<root>-gN.pipe` while the seat's ring reads `<root>.pipe`.
+        self._piped_as = {}
+        self.unbound = set()        # live names whose pipe writes a sink their ring never reads
+
+    def is_unbound(self, name):
+        """True when `name`'s pane is piped, but into a sink other than `<name>.pipe`, so the
+        seat's ring has no output signal. Callers must not read its silence as idle."""
+        return name in self.unbound
 
     def _attach(self, name):
         sink = os.path.join(self._sink_dir, f"{name}.pipe") if _SAFE_SESSION.match(name) \
@@ -102,17 +113,30 @@ class AttachSweep:
             # name (gotcha #1: pipe-pane dropped on session recreation).
             if self.attached.get(name) == sid:
                 continue
+            origin = self._piped_as.get(sid)
+            if origin is not None and origin != name:
+                # Renamed (same pane, new name): its pipe still writes origin's sink. Never
+                # pipe-pane it again (the pane is piped already); mark the name unbound.
+                self.attached[name] = sid
+                self.unbound.add(name)
+                continue
             try:
                 self._attach(name)
             except Exception as e:                  # fail-isolation: skip ONLY this seat
                 errors[name] = str(e)
                 continue
             self.attached[name] = sid
+            self._piped_as.setdefault(sid, name)
+            self.unbound.discard(name)
             attached_now.append(name)
         # prune sessions that are gone
         pruned = [n for n in list(self.attached) if n not in current]
         for n in pruned:
             del self.attached[n]
+        self.unbound &= set(current)
+        live_sids = set(current.values())
+        for gone_sid in [x for x in self._piped_as if x not in live_sids]:
+            del self._piped_as[gone_sid]
         return {"attached": attached_now, "errors": errors, "pruned": pruned}
 
 

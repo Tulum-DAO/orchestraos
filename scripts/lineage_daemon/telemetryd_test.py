@@ -531,3 +531,39 @@ def test_slow_tick_picks_up_seats_spawned_after_boot(tmp_path):
     assert [s.session for s in d.seats] == ["gm", "planner"]
     snap = read_status_snapshot(str(tmp_path))
     assert snap is not None and "planner" in snap["seats"]
+
+
+# --- an unbound pipe is never guessed idle -----------------------------------
+
+class UnboundSweep(FakeSweep):
+    """A sweep that reports some sessions' pipes as UNBOUND (piped somewhere this
+    seat's ring does not read, e.g. a renamed green's old sink)."""
+    def __init__(self, unbound):
+        super().__init__()
+        self._unbound = set(unbound)
+    def is_unbound(self, name):
+        return name in self._unbound
+
+
+def test_unbound_pipe_reads_unknown_never_idle(tmp_path):
+    """A seat whose screen-output pipe is unbound has NO bytes signal: its silent ring
+    proves nothing, so idle/stalled/computing are guesses. It must read "unknown". A
+    bound seat on the same tick still reads idle, and a dead pane still reads offline."""
+    seats = [_seat("gm", 100, ring=FakeRing()), _seat("planner", 200, ring=FakeRing()),
+             _seat("gone", 300, ring=FakeRing())]
+    sampler = FakeSampler({100: IDLE_PROC, 200: IDLE_PROC, 300: DEAD_PROC})
+    d = _mk(tmp_path, seats, sampler, sweep=UnboundSweep({"gm", "gone"}), clock=lambda: 0.0)
+    d.tick(now=0.0)
+    snap = read_status_snapshot(str(tmp_path))["seats"]
+    assert snap["gm"]["status"] == "unknown"
+    assert snap["planner"]["status"] == "idle"
+    assert snap["gone"]["status"] == "offline_crashed"   # a real death is never masked
+
+
+def test_unbound_pipe_with_working_hook_reads_unknown_not_stalled(tmp_path):
+    hook = {"state": "working"}
+    d = _mk(tmp_path, [_seat("gm", 100, ring=FakeRing())], FakeSampler({100: IDLE_PROC}),
+            sweep=UnboundSweep({"gm"}), clock=lambda: 0.0,
+            live_resolver=lambda s: {"gm": _live(pid=100, hooks=hook)})
+    d.tick(now=0.0)
+    assert read_status_snapshot(str(tmp_path))["seats"]["gm"]["status"] == "unknown"

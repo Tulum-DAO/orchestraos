@@ -133,3 +133,21 @@ def test_attach_command_never_toggles():
     """`pipe-pane -o` is a TOGGLE: on an already-piped pane it CLOSES the pipe (measured,
     tmux 3.4). The attach must never carry it; the adapter checks #{pane_pipe} first."""
     assert "-o" not in attach_command("gm", sink_path("gm"))
+
+
+# --- a renamed session's pipe still writes the OLD name's sink ---------------
+
+def test_renamed_session_is_unbound_and_not_reattached():
+    """Blue-green swap: the green is spawned as `gm-g6` (piped into gm-g6.pipe) and tmux
+    RENAMES it to `gm`. Its pipe keeps writing gm-g6.pipe, so gm.pipe never grows. The
+    sweep must not call pipe-pane on it (the pane is already piped) and must report the
+    name as UNBOUND, so the deriver never reads its silent gm.pipe as idle."""
+    tmux = FakeTmux([("gm-g6", "$5")])
+    sweep = AttachSweep(tmux)
+    sweep.sweep()
+    assert not sweep.is_unbound("gm-g6")
+    tmux.sessions = [("gm", "$5")]                # renamed; same tmux session-id
+    sweep.sweep()
+    assert tmux.attach_calls == ["gm-g6"]         # no pipe-pane under the new name
+    assert sweep.is_unbound("gm")
+    assert not sweep.is_unbound("other")          # a name never seen is not unbound
