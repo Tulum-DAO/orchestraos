@@ -799,7 +799,8 @@ class NativeCall:
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
-                   cadence=self.cadence_report())
+                   cadence=self.cadence_report(),
+                   thread={"chat": self.chat_agent, "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent})
         try:
             self.server.write_report(self.binding.conversation_id, rep)
         except Exception as e:  # noqa: BLE001 — release capacity even if disk reporting fails
@@ -816,7 +817,8 @@ class NativeCall:
                  f"first_frame_s={rep['uplink']['first_frame_s']} no_input={self.no_input} "
                  f"in_gap_p50/p90/max={_gap_line(rep['cadence']['provider_in'])} "
                  f"out_gap_p50/p90/max={_gap_line(rep['cadence']['phone_out'])} "
-                 f"out_gaps>150ms={rep['cadence']['phone_out']['over_150ms']}")
+                 f"out_gaps>150ms={rep['cadence']['phone_out']['over_150ms']} "
+                 f"opening_tokens={self.opening_tokens} chat_feed_sent={self.feed_sent}")
         self.emit({"type": "stopped", "reason": reason, "report": {
             k: rep[k] for k in ("tool_calls", "duplicate_call_events", "spent_usd", "claims_blocked")}})
 

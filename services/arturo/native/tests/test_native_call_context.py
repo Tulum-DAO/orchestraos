@@ -84,6 +84,8 @@ def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_p
     p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, before_and_after)
     notes = [f for f in p.sent if f["type"] == "session.instructions.append" and "dream fix" in f["content"]]
     assert len(notes) == 1 and notes[0]["content"].startswith("[2026-11-25T17:40:00Z 12:40 Tulum] chat gm")
+    rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
+    assert rep["thread"]["chat"] == "gm" and rep["thread"]["feed_sent"] == 1 and rep["thread"]["opening_tokens"] > 0
 
 
 def test_a_slow_or_broken_thread_never_holds_the_call(tmp_path, monkeypatch):
