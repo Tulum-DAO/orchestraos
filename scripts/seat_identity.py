@@ -107,6 +107,17 @@ def may_retire(reg, caller, author):
         f"generation, or gm may retire it")
 
 
+def may_patch(reg, caller, author):
+    """(ok, reason) for the card PATCH verb (gm msg_b6993f91, 2026-11-25): the same circle as retire —
+    the author, its bare root or CURRENT canonical generation, or gm — may change a pending card's
+    fields. Anyone else is refused with a reason that names both seats."""
+    ok, _why = may_retire(reg, caller, author)
+    if ok:
+        return True, None
+    return False, (f"{caller} may not change a card authored by {author}: only the author, its current "
+                   f"generation, or gm may patch it")
+
+
 def may_annotate(reg, caller, author):
     """(ok, reason). ok when caller IS author, or caller is the same seat by positive evidence AND
     is the bare root or its current canonical generation. The operator is handled by the caller."""
