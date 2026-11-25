@@ -517,16 +517,22 @@ def test_router_grok_unverified_signature_holds_even_when_armed(router, monkeypa
 
 
 def test_router_grok_verified_path_checks_composer(router, monkeypatch):
-    sig = dict(rs.PROMPT_SIGNATURES["grok"], prompt_char="\u276f", verified=True)
+    # a measured-style signature: the composer is a \u276f line with the grok footer under it
+    sig = dict(rs.PROMPT_SIGNATURES["grok"], prompt_char="\u276f", verified=True,
+               idle_footer_re=r"Grok \d+(?:\.\d+)* \([^)]*\) · ")
     monkeypatch.setitem(router.PROMPT_SIGNATURES, "grok", sig)
     monkeypatch.setattr(gc, "router_idle", lambda s, signature_verified: (True, "ok"))
+    footer = "\x1b[2mGrok 1.2.3 (high) \x1b[38;5;3m·\x1b[0m auto"
 
     class Cap:
         returncode = 0
-        stdout = "history\n\u276f \n"
+        stdout = f"history\n\u276f \n\n{footer}\n"
     monkeypatch.setattr(router, "tmux", lambda *a: Cap())
     assert router.agent_is_idle("zz-grok", "grok") is True
-    Cap.stdout = "history\n\u276f hello i am typing\n"
+    Cap.stdout = f"history\n\u276f hello i am typing\n\n{footer}\n"
+    assert router.agent_is_idle("zz-grok", "grok") is False
+    # a \u276f only in scrollback, no footer under it: not a composer, not idle
+    Cap.stdout = "history\n\u276f \n\u25cf still working\n"
     assert router.agent_is_idle("zz-grok", "grok") is False
 
 
