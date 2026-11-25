@@ -67,7 +67,11 @@ def _row(row):
 def _command(repo_root: Path, data_dir: Path, rel: str, runner: str) -> str:
     """Fail OPEN at runtime: if the script is gone (checkout moved/deleted) the hook exits 0 and
     Claude proceeds; a present script runs normally and its verdict reaches Claude unchanged.
-    (A missing script under a bare interpreter call blocked every tool on a host, 2026-09-17.)"""
+    (A missing script under a bare interpreter call blocked every tool on a host, 2026-09-17.)
+
+    Exit 2 (Claude Code's "block") is passed through; any other failure (crash, traceback, kill)
+    still exits 0. The earlier `[ -f X ] && run X || exit 0` mapped EVERY non-zero exit to 0,
+    including 2, so no exit-2 guard ever blocked (found by effect 2026-11-25)."""
     script = str(Path(repo_root) / rel)
     if runner == "node":
         run = f'"{NODE}" "{script}"'
@@ -75,8 +79,8 @@ def _command(repo_root: Path, data_dir: Path, rel: str, runner: str) -> str:
         run = f'bash "{script}"'
     else:
         run = f'"{PY}" "{script}"'
-    return (f'[ -f "{script}" ] && ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run} '
-            f'|| exit 0 {MARKER}')
+    return (f'if [ -f "{script}" ]; then ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run}; '
+            f'[ $? -eq 2 ] && exit 2; fi; exit 0 {MARKER}')
 
 
 def _load(settings_path: Path):
