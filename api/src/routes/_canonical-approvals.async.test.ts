@@ -22,12 +22,11 @@ const dir = testTmpDir('canonical-async-');
 const counter = join(dir, 'calls');
 const db = join(dir, 'state', 'tasks.db');
 mkdirSync(join(dir, 'state'));
-writeFileSync(counter, '0');
+writeFileSync(counter, '');
 writeFileSync(db, 'not a real db: only its mtime and size are read\n');
 writeFileSync(join(dir, 'approval.py'), `#!/usr/bin/env python3
 import json, sys, time
-n = int(open(${JSON.stringify(counter)}).read() or 0) + 1
-open(${JSON.stringify(counter)}, "w").write(str(n))
+open(${JSON.stringify(counter)}, "a").write("call\\n")   # append-only: two runs starting together never lose a count
 time.sleep(0.4)
 row = {"from_agent": "pm-demo", "options": ["approve", "deny"], "status": "pending", "kind": None, "summary": None,
        "risk_level": None, "reversibility": None, "feature": None, "provider": None, "menu": None}
@@ -40,7 +39,7 @@ process.env.ORCHESTRA_SCRIPTS_DIR = dir;          // read at import time by _can
 process.env.ORCHESTRA_DIR = dir;
 delete process.env.APPROVAL_DB_PATH;
 
-const calls = () => Number(readFileSync(counter, 'utf-8'));
+const calls = () => readFileSync(counter, 'utf-8').split('\n').filter(Boolean).length;
 let server: Server | undefined;
 after(async () => {
   if (server) await new Promise<void>((r) => server!.close(() => r()));
