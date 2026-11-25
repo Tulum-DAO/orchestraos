@@ -1,4 +1,4 @@
-"""Arturo's "spending" tool group: the spending tracker's agent API (/home/shaw/apps/spending-tracker, README "Agent API
+"""Arturo's "spending" tool group: the spending tracker's agent API (<home>/apps/spending-tracker, README "Agent API
 + MCP") as NATIVE tools on both of Arturo's paths (the relay proxy's TOOLS mechanism and the native GPT-Live boundary).
 Arturo's Claude brain runs with --strict-mcp-config and no MCP servers, so the tracker's mcp_server.py is not the path.
 
@@ -44,7 +44,7 @@ ENABLE_ENV = "ARTURO_SPENDING_TOOLS"                 # "0" = no spending group a
 URL_ENV = "ARTURO_SPENDING_URL"
 TOKEN_FILE_ENV = "ARTURO_SPENDING_TOKEN_FILE"
 DEFAULT_URL = "http://127.0.0.1:8760"
-DEFAULT_TOKEN_FILE = "/home/shaw/apps/spending-tracker/data/agent-token"
+DEFAULT_TOKEN_FILE = os.path.expanduser("~/apps/spending-tracker/data/agent-token")   # the operator's own tracker; never a literal home
 SOURCE = "arturo"
 SCHEMA_TIMEOUT_S = 2.0
 CALL_TIMEOUT_S = 5.0
