@@ -786,6 +786,10 @@ def main(argv=None):
             v = getattr(args, k, None)
             if v is not None:
                 fields[k] = v
+        # The caller must be who --from says (interposer guard, as request/human-task/questionnaire);
+        # then the store checks that seat is the author, its current generation, or gm.
+        if not _authorship_guard(args.from_agent):
+            return 4
         ok = store.update_fields(args.id, caller=args.from_agent, **fields)
         if not ok:
             # Say why: a silent exit 4 had a client agent retry the same patch for several turns.

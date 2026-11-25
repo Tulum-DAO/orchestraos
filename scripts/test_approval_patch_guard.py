@@ -2,8 +2,9 @@
 human_task card, only the allow-listed fields change, and the UPDATE itself re-checks the row is still a pending
 human_task (a card that was answered between the check and the write stays as answered).
 
-Hermetic: tmp tasks.db via APPROVAL_DB_PATH, HOME a tmp dir, ntfy fenced; no registry beside the tmp db, so a
-caller's name is taken as its own root (the same evidence rule retire uses).
+Hermetic: tmp tasks.db via APPROVAL_DB_PATH, HOME a tmp dir, ntfy fenced, TMUX unset (the CLI's interposer guard is
+fail-open with no pane signal and is exercised in-process with a planted caller). A tmp registry beside the db
+carries the generation evidence; the no-registry case (names compared literally) has its own test.
 """
 import os, sqlite3, subprocess, sys
 
@@ -72,7 +73,8 @@ def test_author_its_generation_and_gm_may_patch(store, caller):
     assert store.get(rid)["summary"] == "moved to Friday"
 
 
-@pytest.mark.parametrize("caller", ["some-other-seat", "some-other-seat-g1", "postcall-dev-g3", "gm-g11", "operator"])
+@pytest.mark.parametrize("caller", ["some-other-seat", "some-other-seat-g1", "postcall-dev-g3", "postcall-dev-g99",
+                                    "gm-g11", "gm-g99", "operator", "shaw"])
 def test_anyone_else_may_not_patch_and_the_row_is_untouched(store, caller):
     rid = _task(store)
     before = store.get(rid)
@@ -125,3 +127,57 @@ def test_a_row_answered_between_the_check_and_the_write_is_not_changed(store, db
     monkeypatch.undo()
     row = store.get(rid)
     assert row["status"] == "answered" and row["summary"] != "late"
+
+
+def test_no_registry_compares_names_literally(tmp_path, monkeypatch):
+    """With no registry beside the db there is no evidence, so only the exact author name or gm passes."""
+    d = tmp_path / "bare"; d.mkdir()
+    s = ApprovalStore(db_path=str(d / "tasks.db")); s.migrate()
+    rid = _task(s)
+    assert s.update_fields(rid, caller="postcall-dev-g4", summary="x") is False
+    assert s.update_fields(rid, caller="gm-g12", summary="x") is False
+    assert s.update_fields(rid, caller="postcall-dev", summary="by author") is True
+    assert s.update_fields(rid, caller="gm", summary="by gm") is True
+
+
+def test_without_a_caller_the_in_process_path_still_patches(store):
+    """reshape_commitment resolves its row by author + op_key and passes no caller: unchanged by the guard."""
+    rid = store.create(from_agent="postcall-dev", question="Call Dana back", worker_kind="pane",
+                       op_key="cmt:dana", options=["done", "cant", "snooze"], kind="human_task",
+                       block_task="Call Dana back")
+    assert store.update_fields(rid, summary="plain") is True
+    assert store.reshape_commitment("postcall-dev", "cmt:dana", feature="calls", block_task="Call Dana back Friday",
+                                    summary="moved", blocks_what=None) == rid
+    row = store.get(rid)
+    assert row["summary"] == "moved" and row["question"] == "Call Dana back Friday"
+
+
+def test_a_stale_generation_is_told_why(store, db):
+    import seat_identity
+    ok, why = seat_identity.may_patch(seat_identity.registry_beside(db), "postcall-dev-g3", "postcall-dev")
+    assert not ok and "current canonical generation" in why
+    ok, why = seat_identity.may_patch(seat_identity.registry_beside(db), "some-other-seat", "postcall-dev")
+    assert not ok and "some-other-seat" in why and "postcall-dev" in why and "patch" in why
+
+
+def _main(db, monkeypatch, identities, caller, *extra):
+    """Run the CLI in-process with a planted pane identity (what the interposer guard would resolve)."""
+    import approval
+    monkeypatch.setenv("APPROVAL_DB_PATH", db)
+    monkeypatch.setattr(approval, "_caller_identities", lambda: identities)
+    return approval.main(["patch", "--id", extra[0], "--from", caller, *extra[1:]])
+
+
+def test_the_cli_refuses_a_seat_that_borrows_the_authors_name(store, db, monkeypatch, capsys):
+    rid = _task(store)
+    rc = _main(db, monkeypatch, {"some-other-seat"}, "postcall-dev", rid, "--summary", "borrowed")
+    err = capsys.readouterr().err
+    assert rc == 4 and "interposer" in err
+    assert store.get(rid)["summary"] != "borrowed"
+
+
+def test_the_cli_lets_the_seat_that_is_the_author_patch(store, db, monkeypatch, capsys):
+    rid = _task(store)
+    rc = _main(db, monkeypatch, {"postcall-dev"}, "postcall-dev", rid, "--summary", "mine")
+    assert rc == 0, capsys.readouterr().err
+    assert store.get(rid)["summary"] == "mine"
