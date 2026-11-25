@@ -51,3 +51,9 @@
 - (a)+(b) built: PR #638 (feat/native-opening-turns, worktree /home/shaw/wt/arturo-context-dev/turns): default 2500, floor re-read at 4000 if <25 turns, report thread gets turns/summarized/first/last/chat_lines/call_lines/calls. Proof native-70eb24ace3e9: 25 turns, greet 3.14 s. Not live; needs a merge card (all CI jobs green by name, after builder's privacy fix lands) + respawn GO.
 - Open question to gm: merge a call's consecutive same-speaker phrases into one turn (25 turns = only 12 min today).
 - (c) unified-conversation.jsonl stopped 2026-11-22 06:41 Tulum: find the writer that died; revive vs retire the relay block in favour of the contract. Recommendation with the latency plan, Thu 11-26 12:00 Tulum.
+
+## 22:55Z: page-thread amendment (gm msg_e7402cbb)
+- PR #644 (feat/native-page-thread, stacked on #638, worktree /home/shaw/wt/arturo-context-dev/turns): start.thread -> threads.db opening + ThreadFeed; neither -> Arturo calls only, no chat. Waiting on avatar-dev's start-frame "thread" field (contract mailed msg_ce7fd713). Then: proving session (report the turn count to gm), merge cards #638 -> #644 (all CI jobs green by name), respawn GO.
+- #637 (builder privacy fix-forward) fixture review: OK, posted. #635 waits on #637 for CI.
+- gm hasn't yet confirmed the mapping (msg_0dfcca5e) or answered the phrase-merging question (msg_04543735).
+- Session ended on a usage limit at this point.
