@@ -50,10 +50,10 @@ class _Refused(RuntimeError):
 
 @pytest.fixture(autouse=True)
 def _no_outside_effects(monkeypatch, request):
-    allowed = getattr(request.node, "postcall_allow_argv", None) or []
     real_run, real_popen = subprocess.run, subprocess.Popen
 
     def _gate(argv):
+        allowed = getattr(request.node, "postcall_allow_argv", None) or []  # read late: tests set it in-body
         argv = list(argv) if not isinstance(argv, str) else [argv]
         if not any(argv[:len(a)] == a for a in allowed):
             raise _Refused(f"postcall fence: subprocess refused: {argv[:3]}")

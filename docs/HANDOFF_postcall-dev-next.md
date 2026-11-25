@@ -8,7 +8,7 @@
 - **Goal:** One review card per real call (Pocket recordings + named-speaker segment files), listing Shaw's commitments and the participants' promises (chase items). On approval: human tasks + dispatch of approved agent work + one results line to gm.
 - **Plan Reference:** `docs/DESIGN_post-call-commitments.md` (v4.3; congruence DEC-1795627933880541 reached; gm rulings in §9).
 - **Phase:** Phase 2 of 3 (build, test/shadow only). Phase 3 = chase-task render spec with avatar-dev (spec only, do not mail avatar-dev).
-- **Current Step:** increments 1-6 are done (fence, empty call, speaker binding, effect recovery, deadlines, card shape + chase dates, answer application + dispatch authorization). 73 tests, all sabotage-proven. Next is increment 7, the shadow/live adapters + MODE file.
+- **Current Step:** increments 1-7 are done (fence, empty call, speaker binding, effect recovery, deadlines, card shape + chase dates, answer application + dispatch authorization, MODE + shadow/live adapters). 82 tests, all sabotage-proven. Next: the live task/dispatch sends, then answer reading + qack, then the sweeper.
 
 ## 2. Open Loops & Active Callbacks
 - [ ] gm is asking Shaw for a calendar ICS URL at ~/.secrets/shaw-calendar.ics.url. Read it by reference only. If it's absent, deadlines stay unknown.
@@ -23,11 +23,11 @@
 4. **Decision:** DOCS/SHARED_DECISIONS.json is kept untracked. **Rationale:** its proposal_sha256 trips the pre-push detect-secrets scan.
 
 ## 4. Declared First Effect
-`cd /home/shaw/wt/postcall-dev/program && nice -n 19 taskset -c 6,7 python3 -m pytest tests/postcall -q -p no:cacheprovider` → 73 passed
+`cd /home/shaw/wt/postcall-dev/program && nice -n 19 taskset -c 6,7 python3 -m pytest tests/postcall -q -p no:cacheprovider` → 82 passed
 
 ## 5. Next 3 Immediate Actions
 1. Done in increment 6: `ledger.plan_card` / `apply_answers` / `_decide` / `_dispatch_authorized`. Not yet wired: reading answers from tasks.db (`questionnaire_answers`, read-only), plus `qack` once they're applied.
-2. RED: the shadow adapter (writes shadow.jsonl; never calls approval.py or msg_store) and the MODE file (missing = shadow). Then the live adapter (approval.py questionnaire/human-task, msg_store send) proven once against the fenced scratch DB, asserting notified_at stays null. Live find() is a read-only SQL lookup by op_key.
+2. Done in increment 7: `effects.mode()` (MODE must read exactly `live`; anything else is shadow; POSTCALL_MODE=test for tests), `Shadow` (jsonl), and `Live` card send through the approval CLI plus a read-only find by op_key, proven against the scratch DB with notified_at null. Still to do: Live.send for `task` (approval.py human-task --feature commitment --op-key cmt) and `dispatch` (msg_store send --body-file), each RED first.
 3. Still to build: the sweeper (flock inherited by children, Pocket dir scan, live_start_ts); cross-call dedupe (§5); §2a participants (calendar overlap, speaker mapping); the calendar ICS reader; the cmt-v2 extractor prompt (headless claude -p, niced). Each one RED first, then a sabotage run.
 
 ## 6. Grounding Canary Questions (Questions Only — No Answers!)
