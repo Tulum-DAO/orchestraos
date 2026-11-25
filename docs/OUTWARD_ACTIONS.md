@@ -52,6 +52,14 @@ same action and arguments already have a pending or approved card, `request` pri
 card's id and exits 0 (idempotent re-requesters keep working). If the action is `executing`, or
 `uncertain` and not yet released, it exits 3: `<hash> is executing|uncertain: release it or wait`.
 
+A card approves exactly **one** action. A request whose `--op-key` resolves to an existing card
+that already carries a different action (or the same action with different arguments) files no row
+and exits 3: `card <id> already carries action <hash8>; file a new card with a different --op-key`.
+A card that is no longer pending (the store's re-card guard can hand a recently answered card back
+for the same op-key) is refused the same way: `op-key <k> re-card guard returned answered card <id>;
+wait <n>s or use a new --op-key`. An answer approves a row only when the card shows that row's
+action and the answer is later than the ask; one old human answer never authorises a second run.
+
 Two requests for the same action at the same moment: one card wins the ledger row; the other is
 taken out of pending in the same call (retired as "superseded by <winner>", or discarded on an
 install without the retire columns) and can never be answered. A pending approval card with no

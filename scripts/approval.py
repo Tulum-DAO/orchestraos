@@ -319,11 +319,15 @@ def _void_superseded(store, rid, from_agent, winner):
     kept in history). Either way it can never be answered or resumed."""
     if not rid or rid == winner:
         return
-    reason = f"superseded by {winner}: the same outward action is already carded"
+    reason = (f"superseded by {winner}: the same outward action is already carded" if winner
+              else "voided: the outward ledger refused this card's action")
     ok, _why = store.retire(rid, from_agent, reason, superseded_by=winner)
     if not ok:
         store.mark_discarded(rid)
-    print(f"[approval] {rid} superseded by {winner} (not pending; answer the winner)", file=sys.stderr)
+    if winner:
+        print(f"[approval] {rid} superseded by {winner} (not pending; answer the winner)", file=sys.stderr)
+    else:
+        print(f"[approval] {rid} voided (not pending): the ledger refused its action", file=sys.stderr)
 
 
 def main(argv=None):
@@ -624,6 +628,12 @@ def main(argv=None):
                 print(f"REFUSED: {action_hash[:12]} is {live['state']}: release it or wait", file=sys.stderr)
                 return 3
             action = (args.action, material, run_on, action_hash)
+        # Which card ids are already pending for this op_key BEFORE create(): if create() hands one of
+        # them back it did not make a new card, and that card is never voided below.
+        pre_existing = set()
+        if action is not None and args.op_key:
+            pre_existing = {r["id"] for r in store.find_by_op_key(args.op_key)
+                            if r.get("from_agent") == args.from_agent}
         rid = store.create(from_agent=args.from_agent, question=args.question,
                            worker_kind=args.worker_kind, op_key=args.op_key,
                            thread_key=args.thread_key, options=opts,
@@ -640,20 +650,56 @@ def main(argv=None):
                            origin=args.origin, urgency=args.urgency,
                            default_option=args.default_option)
         if action is not None:
-            # The ledger row, pointed at the id create() returned (an op_key dedupe may hand back an
-            # existing card), and evidence.action mirrored onto that card (D4) by ask() itself.
+            # The ledger row, pointed at the id create() returned, and evidence.action mirrored onto that
+            # card (D4) by ask() itself. create() may hand back an EXISTING card (op_key dedupe, or the
+            # re-card guard): a card approves exactly ONE outward action, so an existing card that already
+            # carries a different action, or one that is no longer pending, gets no ledger row and is
+            # never voided (it is legitimately there for its own action). A card this call created is
+            # voided whenever the ledger refuses its row: a pending card with no row could run unledgered.
             name, material, run_on, action_hash = action
+            created_new = rid not in pre_existing
+            card = store.get(rid) or {}
+            if card.get("status") != "pending":
+                # create()'s re-card guard (RECARD_GUARD_S) returns a RECENT same-op_key card whatever its
+                # status: an already-answered card must never carry a new action (its one answer is spent).
+                from approval_schema import RECARD_GUARD_S
+                from datetime import datetime, timezone
+                try:
+                    age = (datetime.now(timezone.utc) - datetime.fromisoformat(card["created_at"])).total_seconds()
+                except (KeyError, TypeError, ValueError):
+                    age = 0
+                wait = max(0, int(RECARD_GUARD_S - age))
+                print(f"REFUSED: op-key {args.op_key} re-card guard returned {card.get('status') or 'missing'} card "
+                      f"{rid}; wait {wait}s or use a new --op-key", file=sys.stderr)
+                return 3
+            held = outward_ledger.card_live_row(rid)
+            if held is not None and held["action_hash"] != action_hash:
+                print(f"REFUSED: card {rid} already carries action {held['action_hash'][:8]} ({held['state']}); "
+                      f"file a new card with a different --op-key", file=sys.stderr)
+                return 3
             try:
                 outward_ledger.ask(name, material, card_id=rid, actor=args.from_agent, run_on=run_on)
+            except outward_ledger.CardBusy as e:
+                if created_new:
+                    _void_superseded(store, rid, args.from_agent, None)
+                print(f"REFUSED: card {rid} already carries action {e.existing_hash[:8]} ({e.state}); file a new "
+                      f"card with a different --op-key", file=sys.stderr)
+                return 3
             except outward_ledger.DuplicateAction as e:
                 live = e.row                      # the row that holds the hash, as the ledger saw it
-                _void_superseded(store, rid, args.from_agent, live.get("card_id"))
+                if created_new:
+                    _void_superseded(store, rid, args.from_agent, live.get("card_id"))
                 if live.get("state") in ("asked", "approved") and live.get("card_id"):
                     print(f"[approval] {name} {action_hash[:12]} is already {live['state']} on card "
                           f"{live['card_id']}: no second card", file=sys.stderr)
                     print(live["card_id"])
                     return 0
                 print(f"REFUSED: {action_hash[:12]} is {e.state}: release it or wait", file=sys.stderr)
+                return 3
+            except outward_ledger.LedgerRefused as e:
+                if created_new:
+                    _void_superseded(store, rid, args.from_agent, None)
+                print(f"REFUSED: {e.reason} (state: {e.state})", file=sys.stderr)
                 return 3
         try:
             notify(rid, store=store)            # primary trigger: instant push

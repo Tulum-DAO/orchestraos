@@ -87,7 +87,14 @@ CREATE TABLE IF NOT EXISTS outward_actions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_oa_live ON outward_actions(action_hash)
   WHERE state IN ('asked','approved','executing','uncertain') AND released_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_oa_card ON outward_actions(card_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oa_card_live ON outward_actions(card_id)
+  WHERE card_id IS NOT NULL AND state IN ('asked','approved','executing');
 """
+#: a card approves exactly ONE outward action: one asked/approved/executing row per card (the index
+#: above); done / not_run / uncertain rows stay as history.
+CARD_LIVE_STATES = ("asked", "approved", "executing")
+REASON_CARD_OTHER_ACTION = "card shows another action"   # the card's evidence.action.hash is not this row's
+REASON_STALE_ANSWER = "card answered before the ask"      # an answer older than the row can never authorise it
 
 
 class LedgerRefused(Exception):
@@ -98,6 +105,15 @@ class LedgerRefused(Exception):
         self.state = state
         self.reason = reason
         super().__init__(f"{reason} (state: {state})")
+
+
+class CardBusy(LedgerRefused):
+    """ask(): the card already carries a live row for a DIFFERENT action hash."""
+
+    def __init__(self, state, reason, existing_hash, card_id):
+        super().__init__(state, reason)
+        self.existing_hash = existing_hash
+        self.card_id = card_id
 
 
 class DuplicateAction(LedgerRefused):
@@ -355,6 +371,36 @@ def _live_row(c, h):
     return dict(r) if r else None
 
 
+def _card_live_row(c, card_id):
+    if not card_id:
+        return None
+    r = c.execute("SELECT * FROM outward_actions WHERE card_id=? AND state IN ('asked','approved','executing') "
+                  "LIMIT 1", [card_id]).fetchone()
+    return dict(r) if r else None
+
+
+def card_live_row(card_id):
+    """The asked/approved/executing row this card carries, or None."""
+    c = _conn()
+    try:
+        return _card_live_row(c, card_id)
+    finally:
+        c.close()
+
+
+def _card_action_hash(card):
+    """The hash the card SHOWS (evidence.action.hash), or None when it shows no action."""
+    if not card:
+        return None
+    ev = card.get("evidence")
+    try:
+        ev = json.loads(ev) if isinstance(ev, str) else ev
+    except ValueError:
+        return None
+    act = ev.get("action") if isinstance(ev, dict) else None
+    return act.get("hash") if isinstance(act, dict) else None
+
+
 def live_row(action=None, args=None, action_hash=None):
     """The row holding this hash (asked/approved/executing/unreleased uncertain), or None."""
     h = action_hash or canonical_hash(action, args)
@@ -410,11 +456,24 @@ def ask(action, args, card_id, actor, run_on=None):
     holds the hash. `run_on` are the answers that mean run (option n for a menu card)."""
     run_on = list(run_on) if run_on else ["approve"]
     h = canonical_hash(action, args)
+    # Never attach to a card that is not pending: an answered card's one human answer is spent (the
+    # re-card guard can hand such a card back), and a missing card has nobody to ask.
+    card = _approval_store().get(card_id) if card_id else None
+    status = (card or {}).get("status") or "missing"
+    if status != "pending":
+        raise LedgerRefused(status, f"card {card_id} is {status}, not pending")
     now = _now()
     rid = _gen_id()
     c = _conn()
     try:
         c.execute("BEGIN IMMEDIATE")
+        held = _card_live_row(c, card_id)
+        if held is not None:
+            c.execute("ROLLBACK")
+            if held["action_hash"] == h:
+                return held                        # the same action on the same card: idempotent
+            raise CardBusy(held["state"], f"card {card_id} already carries action {held['action_hash'][:8]} "
+                           f"({held['state']})", held["action_hash"], card_id)
         try:
             c.execute("INSERT INTO outward_actions (id, action_hash, action, material_args, card_id, run_on, actor, "
                       "state, policy, attempt, created_at, updated_at) VALUES (?,?,?,?,?,?,?,'asked','once',1,?,?)",
@@ -460,15 +519,41 @@ def _answer_key(answer, option_n, answer_text):
     return str(answer), False
 
 
-def _apply_answer(c, row, answer, option_n=None, answer_text=None, now=None):
-    """asked -> approved | not_run from a card answer. Returns the new row or None (rowcount 0)."""
+def _ts(v):
+    try:
+        t = datetime.fromisoformat(str(v))
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _answer_blocks(row, card):
+    """Why this card's answer may not approve this row, or None. Two rules: the card must SHOW this
+    row's action (evidence.action.hash), and the answer must be LATER than the row (an answer given
+    before the ask can never authorise it)."""
+    if _card_action_hash(card) != row["action_hash"]:
+        return REASON_CARD_OTHER_ACTION
+    answered, created = _ts((card or {}).get("answered_at")), _ts(row.get("created_at"))
+    if answered is None or created is None or not answered > created:
+        return REASON_STALE_ANSWER
+    return None
+
+
+def _apply_answer(c, row, answer, option_n=None, answer_text=None, now=None, card=None):
+    """asked -> approved | not_run from a card answer. Only the row the card shows, answered after
+    the ask, can be approved (_answer_blocks); any other row is not_run. Returns the new row or None
+    (rowcount 0)."""
     now = now or _now()
     key, text_only = _answer_key(answer, option_n, answer_text)
     try:
         run_on = json.loads(row.get("run_on") or "[]")
     except ValueError:
         run_on = []
-    if key is not None and key in [str(x) for x in run_on]:
+    blocked = _answer_blocks(row, card)
+    if blocked:
+        res = c.execute("UPDATE outward_actions SET state='not_run', reason=?, finished_at=?, updated_at=? "
+                        "WHERE id=? AND state='asked'", [blocked, now, now, row["id"]])
+    elif key is not None and key in [str(x) for x in run_on]:
         res = c.execute("UPDATE outward_actions SET state='approved', approved_at=?, updated_at=? "
                         "WHERE id=? AND state='asked'", [now, now, row["id"]])
     else:
@@ -491,10 +576,11 @@ def on_card_answer(card_id, answer, option_n=None, answer_text=None):
         rows = [dict(r) for r in c.execute(
             "SELECT * FROM outward_actions WHERE card_id=? AND state='asked' AND released_at IS NULL",
             [card_id]).fetchall()]
+        card = _approval_store().get(card_id) if rows else None
         out = []
         for row in rows:
             c.execute("BEGIN IMMEDIATE")
-            new = _apply_answer(c, row, answer, option_n, answer_text)
+            new = _apply_answer(c, row, answer, option_n, answer_text, card=card)
             c.execute("COMMIT")
             if new:
                 out.append(new)
@@ -710,7 +796,8 @@ def reconcile(now=None):
                 continue
             c.execute("BEGIN IMMEDIATE")
             if verdict[0] == "answer":
-                new = _apply_answer(c, row, verdict[1], verdict[2], verdict[3], now)
+                new = _apply_answer(c, row, verdict[1], verdict[2], verdict[3], now,
+                                    card=cards.get(row.get("card_id")))
             else:
                 stamp = now or _now()
                 res = c.execute("UPDATE outward_actions SET state='not_run', reason=?, finished_at=?, updated_at=? "

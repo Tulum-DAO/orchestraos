@@ -350,7 +350,12 @@ def test_V3_terminal_card_without_an_answer_is_not_run(env, status):
 
 
 def test_V3_missing_card_is_not_run(env):
-    h = L.ask("deploy", ARGS, card_id="apr_gone", actor="deploy-bot")["action_hash"]
+    with pytest.raises(L.LedgerRefused) as e:
+        L.ask("deploy", ARGS, card_id="apr_gone", actor="deploy-bot")   # never attach to a card that is not there
+    assert "not pending" in e.value.reason
+    rid = _card(env)
+    h = L.ask("deploy", ARGS, card_id=rid, actor="deploy-bot")["action_hash"]
+    c = sqlite3.connect(env.db_path); c.execute("DELETE FROM approval_requests WHERE id=?", [rid]); c.commit(); c.close()
     L.sweep()
     assert _rows(h)[0]["state"] == "not_run" and _rows(h)[0]["reason"] == "card missing"
 
@@ -853,3 +858,193 @@ def test_C1_C2_telegram_resend_same_text_and_counter(notify_env, env, tmp_path):
     # a third call is deduped by the sidecar: no send, no count
     assert N.notify_telegram("approval:apr_9", "x", state_path=sp, send=flaky) is True
     assert len(texts) == 2 and json.load(open(_health_file()))["double_pushes"] == 1
+
+
+# --- BLOCK fix: a card approves exactly one outward action ---------------------------------------
+
+def _request_opkey(action, args, op_key):
+    cmd = [PY, APPROVAL_CLI, "request", "Do it?", "--from", "deploy-bot", "--worker-kind", "node",
+           "--action", action, "--material-args", json.dumps(args), "--op-key", op_key]
+    return subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ))
+
+
+def test_BLOCK_a_same_op_key_different_action_files_no_second_row(env):
+    """The reviewer's reproduction: create() dedupes on op_key and hands back the EXISTING card; the
+    second action must not ride on it."""
+    r1 = _request_opkey("deploy", {"target": "a", "hosts": [{"name": "h1"}]}, "same")
+    assert r1.returncode == 0, r1.stderr
+    rid = r1.stdout.strip()
+    h_deploy = L.canonical_hash("deploy", {"target": "a", "hosts": [{"name": "h1"}]})
+    r2 = _request_opkey("pay", {"amount": "1", "to": {"iban": "x"}}, "same")
+    assert r2.returncode == 3 and r2.stdout.strip() == ""
+    lines = [ln for ln in r2.stderr.splitlines() if ln.startswith("REFUSED")]
+    assert len(lines) == 1
+    assert f"card {rid} already carries action {h_deploy[:8]}" in lines[0] and "different --op-key" in lines[0]
+    h_pay = L.canonical_hash("pay", {"amount": "1", "to": {"iban": "x"}})
+    assert len(env.pending_to_notify()) == 1                 # one card, still pending (never voided)
+    assert len(L.show(card_id=rid)) == 1 and _rows(h_pay) == []
+    assert env.record_answer(rid, "approve", None) is True
+    assert [r["state"] for r in L.show(card_id=rid)] == ["approved"]
+    assert _rows(h_deploy)[0]["state"] == "approved" and _rows(h_pay) == []
+    assert _ev_action(env, rid)["hash"] == h_deploy
+
+
+def test_BLOCK_a_cli_compare_refuses_before_the_ledger_is_asked(env, monkeypatch, capsys):
+    rid = _card(env, op_key="same")
+    L.ask("pay", {"amount": "1"}, card_id=rid, actor="deploy-bot")
+
+    def never(*a, **k):
+        raise AssertionError("ask() must not be reached: the CLI compares first")
+    monkeypatch.setattr(L, "ask", never)
+    code, out, err = _run_request_inproc(["--op-key", "same"], capsys)      # action deploy on the pay card
+    assert code == 3 and out == "" and "already carries action" in err
+    assert [r["id"] for r in env.pending_to_notify()] == [rid]
+
+
+def test_BLOCK_b_same_op_key_same_action_is_idempotent(env):
+    r1 = _request_opkey("deploy", {"target": "a"}, "same")
+    r2 = _request_opkey("deploy", {"target": "a"}, "same")
+    assert r1.returncode == 0 and r2.returncode == 0
+    assert r1.stdout.strip() == r2.stdout.strip()
+    assert len(L.show(card_id=r1.stdout.strip())) == 1 and len(env.pending_to_notify()) == 1
+
+
+def test_BLOCK_c_ask_refuses_a_second_hash_on_a_card_with_a_live_row(env):
+    rid = _card(env)
+    first = L.ask("deploy", ARGS, card_id=rid, actor="deploy-bot")
+    again = L.ask("deploy", ARGS, card_id=rid, actor="deploy-bot")       # same hash: idempotent
+    assert again["id"] == first["id"] and len(L.show(card_id=rid)) == 1
+    with pytest.raises(L.CardBusy) as e:
+        L.ask("pay", {"amount": "1"}, card_id=rid, actor="deploy-bot")
+    assert e.value.state == "asked" and e.value.existing_hash == first["action_hash"]
+    assert len(L.show(card_id=rid)) == 1
+    # the index itself holds, below ask(): a raw second live row for the card is impossible
+    c = sqlite3.connect(L.db_path())
+    with pytest.raises(sqlite3.IntegrityError):
+        c.execute("INSERT INTO outward_actions (id, action_hash, action, material_args, card_id, state, created_at, "
+                  "updated_at) VALUES ('oa_raw', 'ff', 'pay', '{}', ?, 'asked', 'x', 'x')", [rid])
+    c.close()
+    # a spent row (done / not_run) is history, but the card is answered by then: a new action needs a
+    # NEW pending card, never the old one (its one human answer is spent)
+    env.record_answer(rid, "approve", None)
+    L.claim("deploy", ARGS, actor="deploy-bot")
+    L.finish(first["action_hash"], "done", "sent")
+    with pytest.raises(L.LedgerRefused) as e:
+        L.ask("pay", {"amount": "1"}, card_id=rid, actor="deploy-bot")
+    assert "not pending" in e.value.reason and len(L.show(card_id=rid)) == 1
+    rid2 = _card(env, op_key="new")
+    new = L.ask("pay", {"amount": "1"}, card_id=rid2, actor="deploy-bot")
+    assert new["state"] == "asked" and len(L.show(card_id=rid2)) == 1
+
+
+def test_BLOCK_d_answer_approves_only_the_row_the_card_shows(env):
+    rid = _card(env)
+    row = L.ask("deploy", ARGS, card_id=rid, actor="deploy-bot")
+    other = L.canonical_hash("pay", {"amount": "1"})
+    ev = json.loads(env.get(rid)["evidence"])["action"]
+    env.merge_evidence(rid, "action", dict(ev, hash=other))               # the card shows another action
+    assert env.record_answer(rid, "approve", None) is True
+    r = _rows(row["action_hash"])[0]
+    assert r["state"] != "approved" and r["state"] == "not_run" and r["reason"] == "card shows another action"
+    L.sweep()                                                              # the reconciler agrees
+    assert _rows(row["action_hash"])[0]["state"] == "not_run"
+
+
+def test_BLOCK_same_op_key_same_action_different_nested_args_is_refused(env):
+    a1 = {"target": "prod", "hosts": [{"name": "h1", "port": "22"}]}
+    a2 = {"target": "prod", "hosts": [{"name": "h1", "port": "2222"}]}
+    r1 = _request_opkey("deploy", a1, "same")
+    rid = r1.stdout.strip()
+    r2 = _request_opkey("deploy", a2, "same")
+    assert r2.returncode != 0 and r2.stdout.strip() == "" and "different --op-key" in r2.stderr
+    assert len(L.show(card_id=rid)) == 1 and _rows(L.canonical_hash("deploy", a2)) == []
+    env.record_answer(rid, "approve", None)
+    assert [r["state"] for r in L.show(card_id=rid)] == ["approved"]
+    assert _rows(L.canonical_hash("deploy", a1))[0]["state"] == "approved"
+    assert len(env.pending_to_notify()) == 0 and env.get(rid)["status"] == "answered"   # never voided
+
+
+def test_BLOCK_new_card_is_voided_when_the_ledger_refuses_for_any_reason(env, monkeypatch, capsys):
+    def refuse(*a, **k):
+        raise L.LedgerRefused("asked", "the ledger said no")
+    monkeypatch.setattr(L, "ask", refuse)
+    code, out, err = _run_request_inproc(["--op-key", "fresh"], capsys)
+    assert code == 3 and out == "" and "the ledger said no" in err and "voided" in err
+    assert env.pending_to_notify() == []
+    (card,) = env.history(limit=5)
+    assert card["status"] in ("discarded", "retired") and env.record_answer(card["id"], "approve", None) is False
+
+
+def test_BLOCK_existing_card_is_never_voided_when_the_ledger_refuses(env, monkeypatch, capsys):
+    rid = _card(env, op_key="held")
+    L.ask("pay", {"amount": "1"}, card_id=rid, actor="deploy-bot")
+    def refuse(*a, **k):
+        raise L.LedgerRefused("asked", "the ledger said no")
+    monkeypatch.setattr(L, "card_live_row", lambda cid: None)     # make the pre-compare blind
+    monkeypatch.setattr(L, "ask", refuse)
+    code, out, err = _run_request_inproc(["--op-key", "held"], capsys)
+    assert code == 3 and out == "" and "voided" not in err
+    assert [r["id"] for r in env.pending_to_notify()] == [rid]      # still pending for its own action
+    assert env.record_answer(rid, "approve", None) is True
+
+
+# --- BLOCK fix, second hole: the re-card guard hands back an ANSWERED card --------------------------
+
+def test_BLOCK2_replay_answered_card_within_the_recard_window(env):
+    """approve card A (op_key k); within RECARD_GUARD_S request --action with the same k: create()
+    returns the answered card. No row may attach to it; one old human answer never authorises a
+    second run."""
+    r1 = _request_opkey("deploy", ARGS, "k")
+    rid = r1.stdout.strip()
+    h = L.canonical_hash("deploy", ARGS)
+    assert env.record_answer(rid, "approve", None) is True
+    assert _rows(h)[0]["state"] == "approved"
+    # the SAME arguments: the hash is already approved, so the idempotent re-requester rule (V7c)
+    # answers first: that card's id, exit 0, and no new row
+    r = _request_opkey("deploy", ARGS, "k")
+    assert r.returncode == 0 and r.stdout.strip() == rid
+    # DIFFERENT arguments reach create(), whose re-card guard hands back the answered card
+    r = _request_opkey("deploy", dict(ARGS, build="43"), "k")
+    assert r.returncode == 3 and r.stdout.strip() == "", r.stderr
+    line = [ln for ln in r.stderr.splitlines() if ln.startswith("REFUSED")]
+    assert len(line) == 1 and f"op-key k re-card guard returned answered card {rid}" in line[0]
+    assert "wait" in line[0] and "new --op-key" in line[0]
+    assert len(L.show(card_id=rid)) == 1 and _rows(L.canonical_hash("deploy", dict(ARGS, build="43"))) == []
+    before = L.show()
+    assert L.sweep() == {"uncertain": [], "approved": [], "not_run": []}
+    assert L.show() == before
+    assert [r["state"] for r in _rows(h)] == ["approved"]
+    assert env.get(rid)["status"] == "answered"                               # nothing voided
+
+
+def test_BLOCK2_ask_refuses_a_card_that_is_not_pending(env):
+    rid = _card(env)
+    env.record_answer(rid, "approve", None)
+    with pytest.raises(L.LedgerRefused) as e:
+        L.ask("deploy", ARGS, card_id=rid, actor="deploy-bot")
+    assert e.value.reason == f"card {rid} is answered, not pending"
+    assert _rows() == []
+    rid2 = _card(env, op_key="d")
+    env.mark_discarded(rid2)
+    with pytest.raises(L.LedgerRefused, match="is discarded, not pending"):
+        L.ask("deploy", ARGS, card_id=rid2, actor="deploy-bot")
+
+
+def test_BLOCK2_an_answer_given_before_the_ask_never_authorises_it(env):
+    rid = _card(env)
+    h = L.ask("deploy", ARGS, card_id=rid, actor="deploy-bot")["action_hash"]
+    c = sqlite3.connect(env.db_path)
+    c.execute("UPDATE approval_requests SET status='answered', answer='approve', answered_at=? WHERE id=?",
+              ["2000-01-01T00:00:00+00:00", rid])                              # an answer older than the ask
+    c.commit(); c.close()
+    assert h in L.sweep()["not_run"]
+    assert _rows(h)[0]["reason"] == "card answered before the ask"
+    # the fast path applies the same rule
+    rid2 = _card(env, op_key="2")
+    h2 = L.ask("deploy", dict(ARGS, build="44"), card_id=rid2, actor="deploy-bot")["action_hash"]
+    c = sqlite3.connect(env.db_path)
+    c.execute("UPDATE approval_requests SET created_at='2000-01-01T00:00:00+00:00' WHERE id=?", [rid2]); c.commit(); c.close()
+    env.record_answer(rid2, "approve", None)                                   # answered_at = now, after the ask
+    assert _rows(h2)[0]["state"] == "approved"
+    L.on_card_answer(rid2, "approve")                                          # idempotent, nothing to redo
+    assert _rows(h2)[0]["state"] == "approved"
