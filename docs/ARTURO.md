@@ -184,9 +184,21 @@ The operator's facts are **server state**: `services/arturo/operator_store.py` w
 state too: `<ARTURO_STATE>/onboarding-progress.json` (`services/arturo/onboarding_progress.py`) pins
 the onboarding thread, so the dashboard in every browser opens that same thread until onboarding
 is finished (the paired phone and Mac apps do not run onboarding), and it remembers a declined team. Leaving partway and coming back resumes it where it
-stopped, with the history shown, and Arturo does not greet again. To run onboarding again, delete
+stopped, with the history shown, and Arturo does not greet again.
+
+An install from before onboarding existed has no `onboarding.json`, yet it is not a first run. The
+first time the new code finds no flag it decides once (`onboarding_progress.ensure_onboarded`, run
+by `orchestra init` / `orchestra upgrade` before any seat can be registered, again when Arturo
+starts, and on Arturo's reads): if the
+registry has a T0 seat (gm, or another manager) or `operator.json` holds a name, it writes
+`onboarding.json` as `{"reason": "upgrade-inferred", "evidence": [...], "inferred_at": ...}` and
+onboarding does not run; with none of that it records `fresh_at` in `onboarding-progress.json` and
+onboarding runs as on any new install (a team or name that appears later is the onboarding's own).
+An unreadable file is no evidence: onboarding runs and Arturo looks again next time. `orchestra
+doctor` shows the result in its `arturo:onboarding` row. To run onboarding again, delete
 `onboarding.json` and `onboarding-progress.json`, clear that key, then start a **New
-conversation**. Deleting `operator.json` as well erases the saved operator name, and that is
+conversation**; on an install with a team or a saved name, also write `{"rerun": true}` to
+`onboarding-progress.json`, or Arturo infers it is not a first run and writes the flag back. Deleting `operator.json` as well erases the saved operator name, and that is
 **a person's decision**: an agent must not do it unless the person asks for it.
 
 1. **runtime detect**: reads `/api/runtimes/available` + `/api/arturo/health`; if nothing is

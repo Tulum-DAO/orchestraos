@@ -3131,7 +3131,10 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
 
 
 def onboarded():
-    return (Path(ARTURO_STATE) / "onboarding.json").exists()
+    """onboarding.json exists, or this install plainly predates onboarding (a T0 gm, a T0 manager, a
+    saved operator name) and the flag was written now with reason "upgrade-inferred" (D-7: an upgrade
+    must not re-run the first run). services/arturo/onboarding_progress.ensure_onboarded."""
+    return _progress.ensure_onboarded(ARTURO_STATE, ORCHESTRA_DIR)["onboarded"]
 
 
 def finish_onboarding():
@@ -3142,9 +3145,7 @@ def finish_onboarding():
     if onboarded():
         turn["finished"] = True
         return "Onboarding was already finished."
-    p = Path(ARTURO_STATE) / "onboarding.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"finished_at": time.time()}) + "\n")
+    _progress.write_flag(ARTURO_STATE, {"finished_at": time.time()})
     turn["finished"] = True
     return "Onboarding finished. From here on this thread is ordinary chat."
 
@@ -9028,5 +9029,12 @@ if __name__ == "__main__":
         sweep_unredeemed_pairings()
     except Exception as e:  # noqa: BLE001 — housekeeping must never stop the proxy starting
         log.warning(f"startup pairing sweep failed: {e}")
+    try:
+        # Onboarding decided at boot, before a seat can appear (orchestra-builder D-7): an upgrade with
+        # evidence is flagged upgrade-inferred, a fresh install is marked a first run.
+        _onb_boot = _progress.ensure_onboarded(ARTURO_STATE, ORCHESTRA_DIR)
+        log.info(f"onboarding at startup: {_onb_boot['how']} {_onb_boot['evidence'] or ''}")
+    except Exception as e:  # noqa: BLE001 — /health and every turn decide again
+        log.warning(f"startup onboarding check failed: {e}")
     log.info(f"ARTURO Proxy (clone of :5052) starting on :{ARTURO_PORT} (model={LLM_MODEL}, tools={[t['function']['name'] for t in TOOLS]})")
     app.run(host="127.0.0.1", port=ARTURO_PORT, threaded=True)
