@@ -28,6 +28,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 
 from . import call_context, claim_gate, native_config, protocol, spend
+from .. import host_page, tracker_snapshot
 from .offline import LocalTransport, OfflineTools
 from .session import RUNNING, Driver, NativeSession, TransportDown
 from .tool_ledger import ToolLedger
@@ -56,6 +57,9 @@ CONTEXT_ENABLED = os.environ.get("ARTURO_NATIVE_CONTEXT", "0") == "1"
 CONTEXT_MIN_GAP_S = 2.0
 CONTEXT_MAX_SENDS = 10
 OPENING_WAIT_S = 6.0          # the thread above the call loads while the provider connects; never holds a call longer
+# Arturo used from inside another app (the finance tracker's widget; services/arturo/host_page.py): its page is sent as
+# its own appends, capped separately (a page and a filter change each resend it), plus one finances snapshot a call.
+HOST_CONTEXT_MAX_SENDS = 12
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_CALLS = int(os.environ.get("ARTURO_NATIVE_MAX_CALLS", "2"))   # review M7: concurrent calls share one daily cap
 NO_INPUT_S = 6.0           # gm msg_5b124db0: a live call this old with no input tells the client why it is silent
@@ -304,6 +308,9 @@ class NativeCall:
         self._feed_next = 0.0
         self._feed_notes = collections.deque()
         self.feed_sent = 0
+        self._host = self._host_pending = None                     # the host app's page: sent / latest wanted
+        self._host_sends = 0
+        self._snapshot = None                                      # None | "fetching" | text to send | "done"
         self.downlink = DownlinkPacer(self.binding.conversation_id)
 
     def _use(self, toolset, boundary):
@@ -545,6 +552,9 @@ class NativeCall:
         ARTURO_NATIVE_CONTEXT=1 (review r3 #3: whether GPT-Live voices a null-id instructions.append is unmeasured)."""
         if not CONTEXT_ENABLED or self.mode != "live":
             return
+        if d.get("app") is not None:
+            self._on_host_context(d)
+            return
         try:
             page, agent, device = d.get("page"), d.get("agent"), d.get("device")
             page = page if isinstance(page, str) and page in CONTEXT_PAGES else None
@@ -554,6 +564,55 @@ class NativeCall:
             return
         if page is not None:
             self._context_pending = (page, agent, device)          # coalesced: only the latest is ever sent
+
+    def _on_host_context(self, d):
+        """{type: context, app, host: {route, title?, summary?}} from a browser inside another app (the dashboard's
+        lib/nativeVoice.ts contextFrame). Bounded by host_page.pick; a bad record is ignored. In the finance tracker
+        the first one also starts the finances snapshot, off the event loop (tracker_snapshot: <= its timeout, cached)."""
+        try:
+            host = host_page.from_frame(d)
+        except Exception:  # noqa: BLE001 — a malformed client frame never ends a call
+            return
+        if host is None:
+            return
+        self._host_pending = host
+        if host["app"] == host_page.TRACKER_APP and self._snapshot is None:
+            self._snapshot = "fetching"
+            asyncio.ensure_future(self._fetch_snapshot())
+
+    async def _fetch_snapshot(self):
+        try:
+            text = await asyncio.get_running_loop().run_in_executor(None, tracker_snapshot.get)
+        except Exception:  # noqa: BLE001 — no snapshot, the page alone
+            text = None
+        self._snapshot = text or "done"
+
+    def _flush_host_context(self):
+        """From _tick, like _flush_context and sharing its gap: the host page (when it changed) as one app-sourced
+        instructions append, then the finances snapshot once. Page text is untrusted data (host_page.native_*)."""
+        if self.driver is None or not self.session.started:
+            return
+        now = time.monotonic()
+        if now - self._context_sent_at < CONTEXT_MIN_GAP_S:
+            return
+        line = None
+        if self._host_pending is not None:
+            if self._host_pending == self._host or self._host_sends >= HOST_CONTEXT_MAX_SENDS:
+                self._host_pending = None
+            else:
+                line = host_page.native_page_text(self._host_pending)
+                self._host, self._host_pending = self._host_pending, None
+                self._host_sends += 1
+        elif self._snapshot not in (None, "fetching", "done"):
+            line, self._snapshot = host_page.native_snapshot_text(self._snapshot), "done"
+        if not line:
+            return
+        try:
+            self.driver.send(protocol.instructions_append(line))
+        except TransportDown:
+            asyncio.ensure_future(self.close("connection lost"))
+            return
+        self._context_sent_at = now
 
     def _flush_context(self):
         """From _tick: after session.started, at most one append per CONTEXT_MIN_GAP_S and CONTEXT_MAX_SENDS a call
@@ -689,6 +748,7 @@ class NativeCall:
             self._check_no_input()
             self._flush_context()
             self._flush_chat_feed()
+            self._flush_host_context()
             n += 1
             if n % 20 or self.closed:
                 continue
@@ -825,7 +885,7 @@ class NativeCall:
 
 # ---- the service -------------------------------------------------------------------------------------------------
 class NativeServer:
-    def __init__(self, state_dir, executor=None, transport_factory=None, usage_store=None, verify=None):
+    def __init__(self, state_dir, executor=None, transport_factory=None, usage_store=None, verify=None, spending=None):
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.ledger = ToolLedger(self.state_dir)
@@ -833,7 +893,7 @@ class NativeServer:
         from concurrent.futures import ThreadPoolExecutor
         self.pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="native-tool")
         self.connect_pool = ThreadPoolExecutor(max_workers=MAX_CALLS + 2, thread_name_prefix="native-connect")
-        self.tools = ArturoTools(self.ledger, executor=executor, spoken_fn=self._spoken)
+        self.tools = ArturoTools(self.ledger, executor=executor, spoken_fn=self._spoken, spending=spending)
         self.tools.user_fn = self._user_words
         self.tools.thread_fn = self._thread_of
         self.offline_tools = OfflineTools(ToolLedger(self.state_dir / "offline"))
@@ -893,7 +953,9 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s %(message)s")
-    srv = NativeServer(ORCHESTRA_DIR / "state" / "arturo" / "native")
+    # The spending group loads from the tracker in the background: a tracker that is down never delays or stops this.
+    from services.arturo import spending_tools
+    srv = NativeServer(ORCHESTRA_DIR / "state" / "arturo" / "native", spending=spending_tools.SpendingTools().arm())
     log.info(f"native GPT-Live on 127.0.0.1:{a.port} (enabled={native_config.enabled()}, "
              f"claim_gate={native_config.claim_gate_enabled()}, backend={native_config.BACKEND_MODEL})")
     web.run_app(srv.app(), host="127.0.0.1", port=a.port, print=None)

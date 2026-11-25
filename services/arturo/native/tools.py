@@ -15,6 +15,10 @@ On top of the existing layer (each has a test and a sabotage):
       can kill under another name); inject_message never types a command into a pane;
   I5  the relay's G1' fence: after a tool result in a turn, only lookups run until the caller speaks again (text that
       came back in a result cannot steer an action), and execute_tool sees the fence too.
+  I6  the spending group (services/arturo/spending_tools.py, generated from the tracker's tools.json): fleet/owner
+      callers only; its lookups run under the fence, its writes do not; every call goes through the ledger (at most
+      once per call_id); a guard's confirm/allow_duplicate is honoured only on a LATER caller turn of this call whose
+      words say yes (never the model's own say-so); a successful spending write backs a "saved"/"updated" claim.
 """
 import importlib.util
 import json
@@ -142,8 +146,9 @@ class ProxyExecutor:
 
 class ArturoTools:
     def __init__(self, ledger: ToolLedger, executor=None, spoken_fn=None, clock=time.time,
-                 spawn_per_session=SPAWN_PER_SESSION, spawn_per_day=SPAWN_PER_DAY):
+                 spawn_per_session=SPAWN_PER_SESSION, spawn_per_day=SPAWN_PER_DAY, spending=None):
         self.ledger = ledger
+        self.spending = spending                 # spending_tools.SpendingTools, or None (no spending group)
         self.executor = executor or ProxyExecutor()
         self.spoken_fn = spoken_fn or (lambda conversation_id: "")
         self.user_fn = lambda conversation_id: ""
@@ -156,8 +161,16 @@ class ArturoTools:
 
     # ---- what the session declares -------------------------------------------------------------------------
     def specs(self, binding):
-        return {n: s for n, s in self.executor.specs(binding.fleet).items()
-                if n not in REFUSED_TOOLS and n not in NOT_ON_VOICE and not _KILL_NAME.search(n)}
+        out = {n: s for n, s in self.executor.specs(binding.fleet).items()
+               if n not in REFUSED_TOOLS and n not in NOT_ON_VOICE and not _KILL_NAME.search(n)}
+        if self.spending is not None and binding.fleet:
+            # private finances: verified fleet/owner callers only. A name the proxy already has is never shadowed.
+            out.update({n: s for n, s in self.spending.specs().items()
+                        if n not in out and not _KILL_NAME.search(n)})
+        return out
+
+    def _spending_read(self, name):
+        return self.spending is not None and self.spending.owns(name) and self.spending.is_read(name)
 
     def new_turn(self, conversation_id):
         """The caller spoke again: the fence lifts (the session calls this)."""
@@ -203,9 +216,11 @@ class ArturoTools:
         if name == "inject_message" and _PANE_COMMAND.match(str(args.get("message", ""))):
             return refuse("NOT_A_MESSAGE", "Typing a command into a seat is not a voice action.")
         fenced = binding.conversation_id in self._fenced
-        if fenced and name not in self.executor.non_fleet:
+        if fenced and name not in self.executor.non_fleet and not self._spending_read(name):
             return refuse("FENCED", "After a lookup in this turn, actions wait for Shaw's next words. Tell him what you "
                           "found and ask.")
+        if self.spending is not None and self.spending.owns(name):
+            return self._spending_execute(binding, tool_call_id, name, args)
         if name in SPAWN_TOOLS:
             why = self._spawn_soft_refusal(binding, args)
             if why:
@@ -240,6 +255,28 @@ class ArturoTools:
         self.trace.append({"call_id": tool_call_id, "name": name, "decision": "duplicate" if dup else "executed",
                            "ok": result.get("ok"), "conversation_id": binding.conversation_id})
         return result
+
+    def _spending_execute(self, binding, tool_call_id, name, args):
+        """One spending tool, at most once per call_id (the ledger). The confirmation scope is this call + principal;
+        the turn is the caller's current turn (new_turn), so a guard's question is answered on a later turn only."""
+        conv = binding.conversation_id
+        turn = self._turn_start.get(conv)
+
+        live = {}
+
+        def effect():
+            live["out"] = self.spending.call(name, args, scope=f"{binding.principal}|{conv}",
+                                             turn_key=("turn", turn), caller_words=self.user_fn(conv))
+            # The ledger row keeps no amount, merchant, note or date: arg keys and the outcome only (G6). A repeated
+            # call_id gets this stored stub back; the model already has the full result from the first run.
+            return self.spending.ledger_result(live["out"]), None
+
+        result, dup = self.ledger.run_once_external(tool_call_id, conv, binding.principal, name,
+                                                    self.spending.ledger_args(args), effect)
+        self._fenced.add(conv)
+        self.trace.append({"call_id": tool_call_id, "name": name, "decision": "duplicate" if dup else "executed",
+                           "ok": result.get("ok"), "conversation_id": conv})
+        return live.get("out", result)
 
     def _spawn_soft_refusal(self, binding, args):
         if not read_back(self.spoken_fn(binding.conversation_id), args):
@@ -291,6 +328,8 @@ class ArturoTools:
                              (conversation_id, since)).fetchall()
         ok = {r["name"] for r in rows if json.loads(r["result_json"]).get("ok")}
         if kind and kind[0] == "action":
+            if kind[1] in SPENDING_BACKS and self.spending is not None and any(self.spending.is_write(n) for n in ok):
+                return True
             return bool(ok & CLAIM_BACKERS.get(kind[1], frozenset()))
         return bool(ok)
 
@@ -306,6 +345,9 @@ CLAIM_BACKERS = {
     # focus_entity only moves the screen's focus: it fixes nothing (review round 4)
     "fix": frozenset({"gm_command", "inject_message", "spawn_agent", "answer_menu", "research"}),
 }
+# A successful spending WRITE ("Spent $12 at Chipotle", "Marked Rent paid") backs "I've saved / added / updated it". A
+# guard's question is not a success (ok false), so "I saved it" after a duplicate question stays unbacked.
+SPENDING_BACKS = frozenset({"save", "fix"})
 
 
 class Delivery:
