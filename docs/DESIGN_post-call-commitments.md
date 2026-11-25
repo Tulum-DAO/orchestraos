@@ -1,7 +1,7 @@
 # DESIGN: post-call commitments (phase 1 note)
 
 - Seat: postcall-dev (T1, parent gm). Branch `build/post-call-commitments`, worktree `/home/shaw/wt/postcall-dev/program`.
-- v1 written 2026-11-25 ~17:30Z. **v2 followed codex REJECT round 1 (8 findings); v3 followed codex REJECT round 2 (5 blockers, 3 should-fixes). v4 = the scope correction above; v4.1/v4.2 = codex rounds 4-5 fixes. All are addressed; see §Review.** Status: **DESIGN ONLY, no code yet.** gm approves phase 2 or sends it back.
+- v1 written 2026-11-25 ~17:30Z. **v2 followed codex REJECT round 1 (8 findings); v3 followed codex REJECT round 2 (5 blockers, 3 should-fixes). v4 = the scope correction above; v4.1/v4.2 = codex rounds 4-5 fixes; v4.3 = gm rulings. All are addressed; see §Review.** Status: **DESIGN ONLY, no code yet.** gm approves phase 2 or sends it back.
 - Program (msg_3e8d4dad, relayed in `prompts/postcall-dev.md`): when a call is ingested, put up ONE review card
   per call listing Shaw's commitments and intentions, with deadlines and the agent work that could be offloaded.
   On approval, create human tasks, dispatch approved agent work, and tell Shaw once when the results are ready.
@@ -66,8 +66,9 @@ Four facts the build depends on, found in the survey:
   - Leases are kept only to make a crashed run visible. They aren't a second concurrency mechanism.
 - **Recovery.** At the start of each sweep, every effect still in `planned` or `sent` is reconciled against the outside world before anything is retried:
   - **Cards and tasks:** a **read-only** SQL query (`sqlite3` URI `mode=ro`) against tasks.db, any status:
-    - `SELECT id,status FROM questionnaires WHERE from_agent='postcall' AND op_key=?`
-    - `SELECT id,status FROM approval_requests WHERE from_agent='postcall' AND op_key=?`
+    - `SELECT id,status FROM questionnaires WHERE from_agent=<AUTHOR> AND op_key=?`
+    - `SELECT id,status FROM approval_requests WHERE from_agent=<AUTHOR> AND op_key=?`
+    - `<AUTHOR>` is `postcall-dev` for now, and the service identity after rollout (§9 ruling 1).
   - **Patches:** a read-only read of that row's `evidence`. Equal to the payload means `confirmed`; otherwise re-apply, but only if it's still the latest `seq` (§5).
     `approval.py get` takes an id, not an op_key (`questionnaire_schema.py:245`), and `pending` covers pending rows only, so neither works for this. Reading the DB isn't writing it, so the surface-decision "never write ApprovalStore directly" rule still holds.
   - **Dispatches and result notices:** msg_store lookup by the effect id carried in the subject.
@@ -104,7 +105,7 @@ Four facts the build depends on, found in the survey:
   - `same_as_occ`: set only on re-extraction (§5)
   - `speaker`: which diarization label or turn role said the quote
   - The quote is still verbatim.
-- **Scope (v4):** Shaw's commitments and intentions, **and** each participant's promises to Shaw or his side. Promises between two other people are left out unless Shaw is the beneficiary (**gm call**).
+- **Scope (v4):** Shaw's commitments and intentions, **and** each participant's promises to Shaw or his side. Promises between two other people are **kept in the ledger as context rows (`owner=third_party`) and never put on the card** (gm ruling).
 
 ### 2a. Participants: who was on the call
 Two sources are combined, and each participant gets a trust level.
@@ -161,7 +162,7 @@ Precedence, first hit wins; `due_source` names the rule.
    - It also ignores a clock inside a weekday phrase (`commitment_miner.py:226-230`, "Friday at 2pm" → 17:00). v2 honours the clock.
 2. **Relative phrase** against the call start, using `resolve_due_ts`'s rules (17:00 default, tonight 21:00, before-weekday 09:00, in N days).
 3. **"By the next call"** with a verified counterpart, against the calendar:
-   - **Source:** none exists today. Phase 2 reads `~/.orchestra/state/calendar/shaw.ics` with our own Python reader, because `read-ics.mjs` drops attendee emails. How that file gets filled is **NEEDS-YOU**.
+   - **Source:** none exists today. gm is asking Shaw for a secret ICS URL at `~/.secrets/shaw-calendar.ics.url` (0600). Our cron reads it **by reference** (never printed or logged) and writes `~/.orchestra/state/calendar/shaw.ics`, which our own Python reader parses (`read-ics.mjs` drops attendee emails). **If the file is absent, the deadline is unknown and stays unknown.** Phase 2 doesn't wait for it.
    - **Verified** means **email only (v4):** the counterpart is a participant whose email came from the matched call event's attendee list (§2a) or a people or client contact, and that email is an ATTENDEE of a later event. **Name-only matching is dropped.** No email means the deadline is unknown.
    - **Calendar parsing:** RRULE/RDATE/EXDATE are expanded over the next 60 days (python `icalendar` + `recurring_ical_events`); overrides by `RECURRENCE-ID` win; `STATUS:CANCELLED` events and attendees with `PARTSTAT=DECLINED` are excluded; times are converted with the event's TZID.
    - The event is the earliest match, identified by `UID` + `RECURRENCE-ID`. Then `due_ts` = event start − 1 h, and `due_source` = `next call with <name> (<event>, <date>, uid <short>)`.
@@ -170,7 +171,7 @@ Precedence, first hit wins; `due_source` names the rule.
 
 ## 4. The card: one questionnaire per call (paged only beyond 19 items)
 
-- **Filed as:** `approval.py questionnaire --from postcall --feature post_call --op-key card:<call>:r<n>:p<k> --title "<call title>: N items" --summary … --questions-json @file`.
+- **Filed as:** `approval.py questionnaire --from postcall-dev --feature post_call --op-key card:<call>:r<n>:p<k> --title "<call title>: N items" --summary … --questions-json @file`.
 - **Two sections, in order (v4):** **(a) Yours**, Shaw's commitments and intentions, then **(b) Theirs**, each participant's promises, shown as `<name> owes you: <action>`. Within each section, items are ordered earliest due first.
 - **Summary**, line 1 (FOUNDATION §2): `Decide by: <earliest due_ts − 2h, else call end + 24h, Shaw-local + label> · If no answer: nothing is created or dispatched · Cost of waiting: <earliest due item> slips`.
   - Line 2: `From: <recording title> · <Shaw-local start> · <duration> · With: <participants, verified ones marked ✓>`, plus `Page k of n` when paged.
@@ -203,15 +204,15 @@ Precedence, first hit wins; `due_source` names the rule.
   - The sweeper acts on a questionnaire only when its row status is `submitted` or `resumed`, and reads only `final` answers, never drafts (`questionnaire_schema.py:74-79, 382-394`).
   - The `questionnaire_submitted` msg_store row is a wake hint, not the source of truth.
   - Once its answers are applied, the sweeper **acks** the delivery (`qack`) and the msg row, so the resume watchdog stops retrying (`questionnaire_resume.py:86-126, 267-315`).
-- **No expiry.** Questionnaires never auto-expire (`questionnaire_schema.py:8-9`), so the v1 claim of a 72 h expiry is withdrawn. A card that's still pending stays pending, and nothing happens. At 7 days the sweeper lists stale cards in one gm line; gm decides whether postcall retires them (author retire, `questionnaire_schema.py:400`).
+- **No auto-expiry; retire at 14 days (gm ruling).** Questionnaires never auto-expire (`questionnaire_schema.py:8-9`). A card still pending **14 days after its Decide-by** is retired by its author (`questionnaire_schema.py:400`) with reason `no answer`. Its items stay in the ledger as `unreviewed`, and chase items are kept for context. Nothing is created from them.
 - **No new surface:** this is the existing questionnaire lane and the H1 commitment human-task render. Chase tasks use the same render with the task text `Chase <name>: …` and `--blocks <name>`; whether H1 wants a distinct chip for them is a question for gm and avatar-dev (§9).
 
 ## 5. Dedupe across calls and reschedules (v4)
 
 **Identities, all persisted and none recomputed from LLM text:**
-- **Occurrence** `occ_<random>`: one per extracted item, stored with `(call_id, owner, deliverable, action_type, quote, span_start, span_end)`.
+- **Occurrence** `occ_<random>`: one per extracted item, stored with `(call_id, owner, deliverable, action_type, operation, quote, span_start, span_end)`.
   - The span is the character offsets of the grounded quote in the transcript.
-  - **Two commitments inside one quote** are two occurrences, distinguished by `deliverable` and `action_type`.
+  - **Two commitments inside one quote** are two occurrences, distinguished by `deliverable`, `action_type` and `operation`.
 - **Re-extraction of the same call (v4.1)** reconciles before minting anything:
   1. Every existing occurrence's stored quote **text** is relocated in the new transcript by exact normalized search, which gives its new span. Raw offsets are never compared across revisions, so a prefix inserted into the transcript can't break the match.
   2. The re-extraction prompt receives the existing occurrences (id, quote, owner, action) and must return `same_as_occ` for every item that restates one. Code accepts `same_as_occ` only when **all** of these hold: owner, `action_type`, `operation` and normalized `deliverable` are equal to the old occurrence's; the new quote overlaps the relocated old span (or the quote text is equal); and the mapping is **one-to-one**, meaning no other new item in this extraction claims the same old occurrence. If two new items claim one old occurrence, or a claim fails any field check, **every** item involved goes to the uncertain path in step 3. Nothing is merged silently.
@@ -248,7 +249,7 @@ Precedence, first hit wins; `due_source` names the rule.
 | commitment state | effect of a newer due (latest `seq` only) |
 |---|---|
 | no decision yet, question still unanswered | the new card shows it visibly as `Due changed: <old> → <new>` (questions are immutable, `questionnaire_schema.py:173`); whichever card's answer is applied first decides (above), and the latest `seq` due date is used |
-| decided `take`, human task pending | `patch` the evidence and the `Due:` line. **Gated** on the guarded-UPDATE fix (below); until it lands, record `due_pending_patch` and report it in the results notice |
+| decided `take`, human task pending | `patch` the evidence and the `Due:` line. **Gated** behind flag `POSTCALL_RESCHEDULE_PATCH` (off) until the guarded-UPDATE fix lands; while off, record `due_pending_patch` and report it in the results notice |
 | decided `assign`, awaiting results | `duenote` msg to the seat with the dispatch id + `seq`; the seat applies it only if `seq` is newer than any it has seen |
 | done or dropped < 14 days ago | not re-asked; the summary says `already done/dropped: <n>` |
 
@@ -258,7 +259,7 @@ Precedence, first hit wins; `due_source` names the rule.
 ## 6. Dispatch and results
 
 - **Applying an answer,** only after §4's status and final-answer checks:
-  - **Take it myself / Track it:** (evidence `due_ts` = the commitment's due for Shaw items, or the approved `chase_date` for chase items, §5) effect `task:<cmt>` runs `approval.py human-task --from postcall --task <short> --op-key <cmt> --feature commitment --blocks <counterpart> --summary <miner 4-line format + citation> --evidence {due_ts,due_source}`. One human task per commitment.
+  - **Take it myself / Track it:** (evidence `due_ts` = the commitment's due for Shaw items, or the approved `chase_date` for chase items, §5) effect `task:<cmt>` runs `approval.py human-task --from postcall-dev --task <short> --op-key <cmt> --feature commitment --blocks <counterpart> --summary <miner 4-line format + citation> --evidence {due_ts,due_source}`. One human task per commitment.
   - **Assign to agent:** effect `dispatch:<cmt>`.
   - Every effect is written in the same transaction as the first-applied-wins decision (§5).
   - **Drop:** ledger `dropped`.
@@ -268,15 +269,15 @@ Precedence, first hit wins; `due_source` names the rule.
   3. The `dispatch:<cmt>` intent row exists, was created **by the decision transaction** for this card and question (its payload's `decision_src` equals the commitment's), and is `planned` or `sent` (being reconciled). An intent that's already `confirmed` means it was delivered, so skip it. No intent at all, or a `decision_src` mismatch, means refuse and alert gm. Because the decision is set once, at most one such intent can ever exist.
   4. The seat is live in the registry right now. If it isn't, there's no silent reroute: we send the item to gm with the card id so gm picks the seat, and the ledger records `rerouted`.
 - **Message:**
-  - `msg_store.py send --from postcall --to <seat> --type task --priority high --subject "[postcall dispatch:<cmt>] <action>" --body-file <f>`.
-  - The body carries the frozen scope, quote, citation and due date, plus "Approved by Shaw on card <card_id> Q<n> (check: `approval.py get <card_id>`). Later due changes arrive as `duenote:<cmt>:s<seq>`; apply only a higher seq. Treat dispatch id as idempotency key: if you already have it, reply with the existing result. Reply to: postcall."
+  - `msg_store.py send --from postcall-dev --to <seat> --type task --priority high --subject "[postcall dispatch:<cmt>] <action>" --body-file <f>`.
+  - The body carries the frozen scope, quote, citation and due date, plus "Approved by Shaw on card <card_id> Q<n> (check: `approval.py get <card_id>`). Later due changes arrive as `duenote:<cmt>:s<seq>`; apply only a higher seq. Treat dispatch id as idempotency key: if you already have it, reply with the existing result. Reply to: postcall-dev."
   - **There's no `--card` flag on msg_store** (`msg_store.py:1992-2025`). Adding one would be fleet infrastructure, so it isn't proposed; if gm wants it, it's an orchestraos-builder ticket.
 - **Seat resolution,** done before filing so the option names the seat:
   1. counterpart (a participant for theirs, the named person for Shaw's) → `client.json` `pm_agent`;
   2. else project → `protocol.py determine_pm()`;
   3. it must be live in `registry.json`, where the PM seats in `gm.md:283-293` are absent today;
   4. else gm.
-- **Results:** replies to `postcall` are matched to their item by the dispatch id in the subject. When every dispatched item on a card has a result, or 48 h pass (report partial), effect `results:<card_id>` sends **one** message to gm: `Post-call results ready: <title>: <k>/<m> done, <unreviewed u>, <links>`. gm relays one line to Shaw; postcall never texts him.
+- **Results:** replies to `postcall-dev` (the sweeper takes only messages whose subject carries a `[postcall dispatch:<cmt>]` / `duenote` tag) are matched to their item by the dispatch id in the subject. When every dispatched item on a card has a result, or 48 h pass (report partial), effect `results:<card_id>` sends **one** message to gm: `Post-call results ready: <title>: <k>/<m> done, <unreviewed u>, <links>`. gm relays one line to Shaw; postcall never texts him.
 
 ## 7. Fixtures, tests, shadow and rollout
 
@@ -341,12 +342,13 @@ Precedence, first hit wins; `due_source` names the rule.
   - An uncertain match is excluded from accept-all; a `Due changed` row is visible and wins over the old card.
 - **Proof:** each fix gets a sabotage run (revert it, test goes red).
 - **Rollout gate.** These are recorded prerequisites, checked off in `state/postcall/ROLLOUT.md` by gm:
-  1. gm approves the cron line (fleet infra).
+  1. gm approves the cron line (fleet infra), at rollout, against the proven ledger.
   2. Shadow runs at least 24 h on live calls.
   3. gm reviews `shadow.jsonl` and the would-be cards.
-  4. **Shaw's validation is recorded.** The miner's kill-switch says Shaw validates its first live batch. gm files one card to Shaw linking the shadow batch, and his answer is recorded. **A waiver needs Shaw's own word on that card**; gm can't waive on its own authority.
+  4. **Shaw's validation is recorded.** The miner's kill-switch says Shaw validates its first live batch. Once the shadow ledger holds 3+ real calls, postcall-dev drafts the validation card **to gm**, gm files it, and Shaw's answer is recorded. **A waiver needs Shaw's own word**; gm can't waive on its own authority.
   5. gm writes `MODE=live`, which creates the live ledger and sets `live_start_ts`.
-  6. *(reschedule patching only)* orchestraos-builder's guarded `update_fields` has landed. Until then that one path is a no-op that gets reported (§5).
+  6. *(reschedule patching only)* orchestraos-builder's guarded `update_fields` has landed; gm queued it as LOW. Until then `POSTCALL_RESCHEDULE_PATCH` stays off and that one path is reported, not applied (§5).
+  7. Service identity: `--from` moves from `postcall-dev` to a runtime=service identity (spawn_adopt), which changes `<AUTHOR>` in recovery.
   **No generated post-call card reaches Shaw before step 5.** The only Shaw-facing card before then is the deliberate step-4 validation card that gm files.
 
 ## 8. Files and owners
@@ -363,17 +365,19 @@ Precedence, first hit wins; `due_source` names the rule.
 | `services/arturo/*`, `scripts/watch_gateway.py`, `api/**`, `dashboard/**`, `msg_store.py`, `approval.py` | **untouched** (CLI use only) | codex-arturo / orchestraos-builder / avatar-dev |
 | overlay `~/scripts/agent-orchestra/scripts/postcall/` | synced copy at rollout, via the normal overlay path | postcall-dev, after gm's go |
 
-## 9. Open questions for gm (and NEEDS-YOU)
+## 9. Rulings (gm msg_92221c61, 2026-11-25)
 
-1. **Calendar feed.** Who supplies `shaw.ics`, and how (a secret ICS URL fetched by cron, or a Calendar MCP)? Without it, "by the next call" is always "unknown". Shaw-gated if it needs his Google account.
-2. **Author identity.** `--from postcall` (a service mailbox, like commitment-miner) or `--from postcall-dev`? The skill says `--from` must be the filing seat.
-3. **Short-call floor.** Pocket minimum of 120 s, versus the miner's 5 min.
-4. **Promises between two other people** that Shaw only benefits from indirectly: left out of v4. Confirm.
-5. **No backfill.** Only calls after `live_start_ts`. Confirm.
-6. **Stale cards.** Pending 7+ days: does postcall retire its own card, or leave it?
-7. **Chase-task render.** Is the H1 commitment render fine for `Chase <name>: …` tasks, or does avatar-dev want a distinct chip? v4 uses the existing render unchanged.
-8. **Speaker identity for Pocket.** Until a calendar feed exists, most Pocket items will be ⚠ and need an answer one by one. A real fix (voice enrollment or speaker naming in pocket-service) is out of scope; flagged for gm to route if wanted.
-9. **Pasted free-text meetings** (`queue/bridged/meetings`): not covered (no speakers, no offsets). Confirm.
+1. **Author:** `--from postcall-dev` now; a runtime=service identity (spawn_adopt) is a rollout item.
+2. **Calendar:** gm asks Shaw for the ICS URL (§3). Phase 2 isn't blocked on it.
+3. **Short-call floor:** 120 s. Confirmed.
+4. **Promises between two other people:** ledger context rows only, never on the card.
+5. **No backfill:** the first run starts at activation time.
+6. **Stale cards:** retired 14 days after Decide-by, reason "no answer", chase items kept in the ledger.
+7. **Chase-task render:** phase 3 with avatar-dev. postcall-dev drafts the spec, and doesn't mail avatar-dev yet.
+8. **Pasted free-text meetings:** out of scope.
+9. **Rollout:** the cron OK comes at rollout; the update_fields guard is queued LOW to orchestraos-builder, with the reschedule path behind a flag; the validation card is drafted to gm at 3+ shadow calls.
+10. **Pocket speaker identity:** no change. Unverified items stay ⚠ until a calendar feed exists.
+11. **Congruence:** round 6 is a second Claude reviewer (codex has no credits). APPROVE there = CONSENSUS_REACHED for phase 2.
 
 ## Review
 
@@ -418,5 +422,6 @@ Precedence, first hit wins; `due_source` names the rule.
   - full field equality plus a one-to-one mapping, with double claims sent to review;
   - (should) the chase task's date is derived from each due change;
   - (nit) rollout wording.
-- **Codex round 6 (v4.2 note): NOT RUN.** `codex exec` exited with "Your workspace is out of credits" (17:45Z). agy is not used, per the role. **The last codex verdict on record is round 5's `REJECT`, whose single blocker v4.2 targets; codex hasn't confirmed that fix.**
-- **Congruence DEC-1795627933880541:** postcall-dev-claude APPROVE (v4.2); codex REJECT (round 5, v4.1). **Status: not CONSENSUS_REACHED.** gm decides whether to approve on this record or wait for codex credits.
+- **Codex round 6 (v4.2 note): NOT RUN.** `codex exec` exited with "Your workspace is out of credits" (17:45Z). agy is not used, per the role.
+- **Round 6 = a second Claude reviewer (gm ruling msg_92221c61): `APPROVE`.** It ran as a fenced read-only `claude -p` (Read/Grep/Glob only, no MCP), briefed only with the round-5 blocker and the v4.1→v4.2 diff. Verdict in `docs/design/postcall-claude-round6.md`. It noted one non-blocking gap, that `operation` was missing from the stored occurrence tuple, and that's fixed in v4.3.
+- **Congruence DEC-1795627933880541:** a second-reviewer APPROVE (round 6) on the blocker that codex's last REJECT rested on; postcall-dev APPROVE. **Per gm's ruling this = CONSENSUS_REACHED for phase 2.**
