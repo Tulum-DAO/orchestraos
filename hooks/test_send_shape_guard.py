@@ -367,7 +367,7 @@ def test_THE_SUITE_ITSELF_NEVER_WRITES_THE_PRODUCTION_LOG(tmp_path):
     Two paths had to close: in-process (the autouse fixture) and the SUBPROCESS deployed-form
     test, which re-imports the module and so reads SSG_LOG from the environment instead.
     """
-    real = os.path.expanduser("~/scripts/agent-orchestra/logs/send-shape-guard.log")
+    real = g._default_log_path()
     before = os.path.getsize(real) if os.path.exists(real) else 0
     _verdict(f"python3 {_P} --from a --to b --subject s --body x")          # ALLOW
     _verdict(f"python3 {_P} --from a --to b ; python3 {_P} --from c --to d")  # REFUSE
@@ -380,3 +380,42 @@ def test_THE_SUITE_ITSELF_NEVER_WRITES_THE_PRODUCTION_LOG(tmp_path):
     assert after == before, (
         f"the suite wrote {after - before} bytes to the PRODUCTION log — that corrupts the "
         f"denominator the log exists to provide")
+
+
+# ───────── LOG PATH: never relative to the sender's cwd (gm msg_b6993f91, 2026-11-25) ─────────
+# The default was expanduser("$ORCHESTRA_DIR/logs/..."), and expanduser does not expand $VARS:
+# every send wrote a directory literally named "$ORCHESTRA_DIR" into its cwd (~30 repos and seat
+# dirs, found from a postcall-dev worktree). Deployed form, from a scratch cwd, SSG_LOG unset.
+
+def _run_from_scratch(tmp_path, orchestra_dir=None):
+    home, cwd = tmp_path / "home", tmp_path / "cwd"
+    home.mkdir()
+    cwd.mkdir()
+    env = {k: v for k, v in os.environ.items() if k not in ("SSG_LOG", "ORCHESTRA_DIR")}
+    env["HOME"] = str(home)
+    if orchestra_dir is not None:
+        env["ORCHESTRA_DIR"] = orchestra_dir
+    subprocess.run([sys.executable, os.path.join(HERE, "send_shape_guard.py")], env=env,
+                   cwd=str(cwd), text=True, capture_output=True,
+                   input=json.dumps({"tool_name": "Bash", "tool_input": {"command":
+                       f"python3 {_P} --from a --to b --subject s --body x"}}))
+    dollar = [os.path.join(r, n) for r, ds, fs in os.walk(tmp_path) for n in ds + fs if "$" in n]
+    assert dollar == [], f"a path with a literal '$' was created: {dollar}"
+    assert os.listdir(cwd) == [], f"the guard wrote into the sender's cwd: {os.listdir(cwd)}"
+    return home
+
+
+def test_unset_ORCHESTRA_DIR_logs_under_home_dot_orchestra_not_the_cwd(tmp_path):
+    home = _run_from_scratch(tmp_path)
+    assert (home / ".orchestra" / "logs" / "send-shape-guard.log").exists()
+
+
+def test_set_ORCHESTRA_DIR_is_where_the_log_goes(tmp_path):
+    data = tmp_path / "data"
+    _run_from_scratch(tmp_path, orchestra_dir=str(data))
+    assert (data / "logs" / "send-shape-guard.log").exists()
+
+
+def test_an_unexpanded_or_relative_ORCHESTRA_DIR_falls_back_to_the_default(tmp_path):
+    home = _run_from_scratch(tmp_path, orchestra_dir="$ORCHESTRA_DIR")
+    assert (home / ".orchestra" / "logs" / "send-shape-guard.log").exists()
