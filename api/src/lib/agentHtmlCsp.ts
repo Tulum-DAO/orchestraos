@@ -4,7 +4,7 @@
  * Questionnaire pages (routes/questionnaires.ts /:id/html) and learning one-pagers
  * (routes/learning.ts /proposals/:id/onepager) are HTML an agent wrote, served same-origin and framed
  * by the dashboard. Without a policy a <script> in that HTML runs as the dashboard's origin with the
- * operator's session: it can call every /api route the operator can (Nod audit, 2026-11-25; nothing
+ * operator's session: it can call every /api route the operator can (security audit, 2026-11-25; nothing
  * exploited). The policy below lets the page keep its inline script and style (the pages are
  * self-contained) and takes the dangerous parts away: no fetch or XHR (connect-src), no form posts
  * (form-action), and `sandbox` makes the document an opaque origin even when a frame forgets its

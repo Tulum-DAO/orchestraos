@@ -1,7 +1,7 @@
 /**
  * Agent-written HTML (questionnaire pages, learning one-pagers) is served same-origin and framed by the
  * dashboard. Without a Content-Security-Policy a <script> in that HTML runs as the dashboard's origin
- * with the operator's session (Nod audit, 2026-11-25). These tests pin the policy the two routes send and
+ * with the operator's session (security audit, 2026-11-25). These tests pin the policy the two routes send and
  * the inert baseline every other API response carries.
  */
 import { test } from 'node:test';

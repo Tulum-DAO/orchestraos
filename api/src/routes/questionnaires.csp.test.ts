@@ -1,7 +1,7 @@
 /**
  * GET /api/questionnaires/:id/html serves agent-written HTML same-origin. It must carry the agent-HTML
  * Content-Security-Policy (lib/agentHtmlCsp.ts) so an inline script cannot reach the API or any host as
- * the operator, whatever frame it lands in. Found by the Nod audit, 2026-11-25.
+ * the operator, whatever frame it lands in. Found by a security audit, 2026-11-25.
  */
 import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
