@@ -93,9 +93,26 @@ def _read_deriver_snapshot():
         return None
 
 
+# KILL FILE (operator order 2026-09-19; re-raised 2026-11-25 when every working seat read IDLE in the agent rail):
+# while <data dir>/state/DERIVER_STATUS_DISABLED exists, the telemetry deriver is NEVER the status source. The
+# screen + hook detector decides; the deriver's fresh row, if any, rides along as information (deriver_state,
+# deriver_age_s) and never as `state` or `confidence`. Why a file and not an env var: the gateway, the menu bridge
+# and the API all import this module and run for days; a file is honoured per CALL by every importer at once,
+# with no restart. Why at all: the deriver reads a rotated root's lane late (minutes after a swap) and flaps
+# stalled/idle on long tool calls, and its verdict is trusted whenever status.json is under DERIVER_FRESH_S old,
+# so one wrong row makes a working seat read idle on every surface.
+DERIVER_STATUS_KILL_FILE = os.path.join(ORCH_DIR, "state", "DERIVER_STATUS_DISABLED")
+
+
+def deriver_status_disabled() -> bool:
+    """True while the kill file exists. Checked per call, never cached (see DERIVER_STATUS_KILL_FILE)."""
+    return os.path.exists(DERIVER_STATUS_KILL_FILE)
+
+
 def _deriver_lookup(session, now):
     """Return (mapped_state, deriver_state, age_s) if a FRESH deriver status
-    exists for this session, else None (=> TTL fallback)."""
+    exists for this session, else None (=> TTL fallback). Does NOT look at the kill
+    file: get_agent_status decides whether the answer may become the status."""
     snap = _read_deriver_snapshot()
     if not snap:
         return None
@@ -1906,6 +1923,11 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
     # (leg e rollback). Sits AFTER the proc 'stopped' short-circuit so kernel
     # truth still wins for a dead proc (secondary #2).
     dv = _deriver_lookup(session, now) if deriver else None
+    deriver_info = None
+    if dv is not None and deriver_status_disabled():
+        # The kill file: the deriver's row is information, never the verdict (DERIVER_STATUS_KILL_FILE).
+        deriver_info = {'deriver_state': dv[1], 'deriver_age_s': dv[2], 'deriver_status_disabled': True}
+        dv = None
     if dv is not None:
         mapped, dstate, age_s = dv
         # BUNDLE PRECONDITION: the deriver owns STATUS, but the menu-bridge,
@@ -2076,6 +2098,8 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
     # above) can never leak a chip. Fail-closed: absent unless a real idle ghost.
     if state == 'idle' and screen.get('composer_ghost'):
         out['composer_ghost'] = screen['composer_ghost']   # additive, nullable
+    if deriver_info:
+        out.update(deriver_info)    # the deriver's row as information only (DERIVER_STATUS_KILL_FILE)
     return out
 
 
