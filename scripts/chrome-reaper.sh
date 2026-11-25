@@ -38,49 +38,31 @@ kill_tree() {
   kill "-$sig" "$p" 2>/dev/null
 }
 
-# True when $1 is a live chrome-family process (comm is truncated to 15 chars; a prefix match).
-is_browser() {
-  local c
-  c="$(cat "/proc/$1/comm" 2>/dev/null)" || return 1
-  case "$c" in chrome*|chromium*|*headless*) return 0 ;; *) return 1 ;; esac
-}
-
-# Every descendant pid of $1 (not $1 itself), depth-first.
-tree_pids() {
-  local k
-  for k in $(pgrep -P "$1" 2>/dev/null); do
-    echo "$k"
-    tree_pids "$k"
-  done
-}
-
 # Orphaned plugin Chrome first, at any age.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if $LIST_ONLY; then
   echo "Plugin Chrome (verdict, pid, profile, why, parent chain):"
   python3 "$HERE/chrome_orphans.py" --all || echo "chrome_orphans.py failed"
 else
-  if ! ORPHAN_LIST="$(python3 "$HERE/chrome_orphans.py" 2>"$LOG.err")"; then
+  if ! PLAN="$(python3 "$HERE/chrome_orphans.py" --kill-plan 2>"$LOG.err")"; then
     echo "$(ts) [reaper] WARN orphan list unavailable (chrome_orphans.py failed: $(tail -1 "$LOG.err" 2>/dev/null)); no orphan reaped this run" >> "$LOG"
-    ORPHAN_LIST=""
+    PLAN=""
   fi
-  mapfile -t ORPHANS <<< "$ORPHAN_LIST"
-  OTREE=()
-  for row in "${ORPHANS[@]}"; do
-    IFS=$'\t' read -r opid oprof owhy <<< "$row"
-    # a row must be a number naming a process that is still a browser, or it is not acted on
-    [[ "$opid" =~ ^[0-9]+$ ]] && is_browser "$opid" || continue
-    # the subtree is listed BEFORE the TERM: once the browser exits, its renderers are reparented
-    OTREE+=("$opid" $(tree_pids "$opid"))
-    echo "$(ts) [reaper] ORPHAN pid=$opid profile=$oprof why=$owhy" >> "$LOG"
-    kill -TERM "$opid" 2>/dev/null
-  done
-  if [ "${#OTREE[@]}" -gt 0 ]; then
+  # Every signal goes only to a pid that is still the SAME process (start time from the plan): a pid
+  # freed and reused by another browser between listing and signalling is left alone.
+  MAINS_PLAN=(); ALL_PLAN=()
+  while IFS=$'\t' read -r kind opid ostart oprof owhy; do
+    [[ "$opid" =~ ^[0-9]+$ && "$ostart" =~ ^[0-9]+$ ]] || continue
+    ALL_PLAN+=("$opid:$ostart")
+    if [ "$kind" = O ]; then
+      MAINS_PLAN+=("$opid:$ostart")
+      echo "$(ts) [reaper] ORPHAN pid=$opid profile=$oprof why=$owhy" >> "$LOG"
+    fi
+  done <<< "$PLAN"
+  if [ "${#MAINS_PLAN[@]}" -gt 0 ]; then
+    for p in $(python3 "$HERE/chrome_orphans.py" --still "${MAINS_PLAN[@]}"); do kill -TERM "$p" 2>/dev/null; done
     sleep 3
-    # re-checked at kill time: a pid freed in those 3 s and reused by something else is left alone.
-    # A descendant that is not chrome-family (a helper Chrome exec'd) is left too; renderers, GPU,
-    # utility and crashpad are all chrome-family and exit with the browser anyway.
-    for p in "${OTREE[@]}"; do is_browser "$p" && kill -KILL "$p" 2>/dev/null; done
+    for p in $(python3 "$HERE/chrome_orphans.py" --still "${ALL_PLAN[@]}"); do kill -KILL "$p" 2>/dev/null; done
   fi
 fi
 

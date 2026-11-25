@@ -15,6 +15,8 @@ plugin MCP is alive (parent, or ancestor through a wrapper) is exempt from the a
 Usage: chrome_orphans.py              one line per orphan: pid<TAB>profile<TAB>why
        chrome_orphans.py --all        every plugin Chrome with its verdict and parent chain
        chrome_orphans.py --protected  pids the age rule must spare: live-parent plugin Chrome + subtree
+       chrome_orphans.py --kill-plan  orphans + subtrees with start times: O/T<TAB>pid<TAB>start[...]
+       chrome_orphans.py --still P:S  of pid:start pairs, the pids that are still that same browser
 
 Environment (tests): CHROME_REAPER_PROFILE_ROOTS (colon-separated roots, replaces the defaults),
 CHROME_REAPER_ADOPTERS (extra pids that count as adopters, like a test that is a subreaper),
@@ -53,6 +55,58 @@ def read_procs(proc="/proc"):
         ppid = int(stat[stat.rindex(")") + 2:].split()[1])
         out[int(name)] = (ppid, comm, argv)
     return out
+
+
+def identity(pid, proc="/proc"):
+    """(comm, start time in clock ticks since boot) of a live process, else None. The start time
+    (stat field 22) tells a process apart from a later one that reuses its pid."""
+    try:
+        with open(os.path.join(proc, str(pid), "stat"), encoding="utf-8", errors="replace") as fh:
+            stat = fh.read()
+    except OSError:
+        return None
+    rest = stat[stat.rindex(")") + 2:].split()       # rest[0] is field 3 (state)
+    if rest[0] in ("Z", "X"):
+        return None
+    return stat[stat.index("(") + 1:stat.rindex(")")], int(rest[19])
+
+
+def still_same(entries, proc="/proc"):
+    """Of "pid:start" entries, the pids that are still THAT process (same start time) and a browser."""
+    out = []
+    for e in entries:
+        pid, _, start = e.partition(":")
+        if not (pid.isdigit() and start.isdigit()):
+            continue
+        ident = identity(int(pid), proc)
+        if ident and ident[1] == int(start) and _is_chrome(ident[0]):
+            out.append(int(pid))
+    return out
+
+
+def kill_plan(procs, rts, adopters=(), proc="/proc"):
+    """Orphans and their subtrees, each with its start time, read BEFORE any signal: once a browser
+    exits its renderers are reparented and can no longer be found by walking down from it.
+    Rows: ("O", pid, start, profile, why) for an orphan, ("T", pid, start) for a descendant."""
+    kids = {}
+    for pid, (ppid, _comm, _argv) in procs.items():
+        kids.setdefault(ppid, []).append(pid)
+    rows = []
+    for pid, prof, verdict, why in classify(procs, rts, adopters):
+        if verdict != "orphan":
+            continue
+        ident = identity(pid, proc)
+        if not ident:
+            continue
+        rows.append(("O", pid, ident[1], prof, why))
+        todo = list(kids.get(pid, ()))
+        while todo:
+            k = todo.pop()
+            ki = identity(k, proc)
+            if ki:
+                rows.append(("T", k, ki[1]))
+            todo.extend(kids.get(k, ()))
+    return rows
 
 
 def _is_chrome(comm):
@@ -146,8 +200,17 @@ def _chain(pid, procs, depth=6):
 
 
 def main(argv):
-    procs = read_procs(os.environ.get("CHROME_REAPER_PROC", "/proc"))
+    proc = os.environ.get("CHROME_REAPER_PROC", "/proc")
+    if argv[:1] == ["--still"]:
+        for pid in still_same(argv[1:], proc):
+            print(pid)
+        return 0
+    procs = read_procs(proc)
     adopters = {int(p) for p in os.environ.get("CHROME_REAPER_ADOPTERS", "").split(",") if p.strip()}
+    if "--kill-plan" in argv:
+        for row in kill_plan(procs, roots(), adopters, proc):
+            print("\t".join(str(x) for x in row))
+        return 0
     if "--protected" in argv:
         for pid in sorted(protected(procs, roots())):
             print(pid)

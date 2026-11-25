@@ -97,6 +97,42 @@ def test_a_profile_with_control_characters_or_not_absolute_is_never_reported(pro
     assert co.classify({51: _chrome(1, profile=profile)}, [ROOT]) == []
 
 
+def _fake_proc(root, pid, comm, start, ppid=1, state="S", argv=("chrome",)):
+    d = root / str(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    # fields 3..22 after the comm: state ppid pgrp session tty tpgid flags minflt cminflt majflt
+    # cmajflt utime stime cutime cstime priority nice threads itrealvalue starttime
+    rest = [state, str(ppid)] + ["0"] * 17 + [str(start)]
+    (d / "stat").write_text(f"{pid} ({comm}) " + " ".join(rest) + " 0 0\n")
+    (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+
+
+def test_a_reused_browser_pid_is_spared_at_signal_time(tmp_path):
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 51, "chrome", start=1000)        # the orphan as listed
+    _fake_proc(proc, 52, "chrome", start=2000)        # pid 52 was listed at 1500, then reused
+    _fake_proc(proc, 53, "chrome", start=3000, state="Z")
+    _fake_proc(proc, 54, "bash", start=4000)
+    plan = ["51:1000", "52:1500", "53:3000", "54:4000", "55:5000", "x:1", "56"]
+    assert co.still_same(plan, str(proc)) == [51]
+    env = {**os.environ, "CHROME_REAPER_PROC": str(proc)}
+    r = subprocess.run([sys.executable, os.path.join(HERE, "chrome_orphans.py"), "--still", *plan],
+                       env=env, capture_output=True, text=True)
+    assert r.stdout.split() == ["51"]
+
+
+def test_the_kill_plan_carries_start_times_for_the_orphan_and_its_subtree(tmp_path):
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 51, "chrome", start=1000, ppid=1, argv=("chrome", f"--user-data-dir={ROOT}/seat"))
+    _fake_proc(proc, 52, "chrome", start=1001, ppid=51, argv=("chrome", "--type=renderer"))
+    _fake_proc(proc, 53, "chrome", start=1002, ppid=52, argv=("chrome", "--type=gpu-process"))
+    _fake_proc(proc, 60, "node", start=900, ppid=1, argv=MCP[2])
+    _fake_proc(proc, 61, "chrome", start=1100, ppid=60, argv=("chrome", f"--user-data-dir={ROOT}/live"))
+    rows = co.kill_plan(co.read_procs(str(proc)), [ROOT], proc=str(proc))
+    assert rows[0][:3] == ("O", 51, 1000)
+    assert sorted(r[:3] for r in rows[1:]) == [("T", 52, 1001), ("T", 53, 1002)]
+
+
 # ───────── by effect: real processes, the real script ─────────
 
 REAPER = os.path.join(HERE, "chrome-reaper.sh")
