@@ -1,6 +1,7 @@
 /**
  * The canonical pending feed is read WITHOUT blocking the event loop, once at a time, and the list routes
- * keep it only while tasks.db is unchanged (at most 3 s). Live finding (2026-11-25): every GET /api/approvals
+ * keep it only while tasks.db is unchanged (at most 3 s; with the fleet writing tasks.db, mostly the
+ * concurrent requests of one poll share a read). Live finding (2026-11-25): every GET /api/approvals
  * ran `approval.py pending --json` with execFileSync (hundreds of ms), so every other request on the API,
  * SSE flushes included, stalled for that long on each dashboard poll.
  *
@@ -15,6 +16,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
+import { execFileSync } from 'node:child_process';
 
 const dir = mkdtempSync(join(tmpdir(), 'canonical-async-'));
 const counter = join(dir, 'calls');
@@ -105,10 +107,43 @@ test('both list routes keep the loop running and share one CLI run while tasks.d
 
 test('a write to tasks.db by any process drops the kept feed at once (resolve-everywhere)', async () => {
   const base = `http://127.0.0.1:${(server!.address() as { port: number }).port}`;
+  const mod = await import('./_canonical-approvals.js');
+  await mod.readCanonicalPendingCached();          // kept, fresh
+  const t0 = Date.now();
   const before = calls();
-  appendFileSync(db, 'x');                         // what a gateway answer or the python CLI does to the db
+  appendFileSync(db, 'x');                         // a writer that touches the main file
   assert.equal((await fetch(`${base}/api/approvals/unified?type=agent`)).status, 200);
-  assert.equal(calls() - before, 1, 'a changed db stamp forced a fresh read inside the TTL');
+  assert.equal(calls() - before, 1, 'a changed db stamp forced a fresh read');
+  assert.ok(Date.now() - t0 < mod.CANONICAL_TTL_MS, 'the TTL had not expired: the stamp did it');
+});
+
+test('a WAL-only commit on a real sqlite database drops the kept feed too', async () => {
+  const mod = await import('./_canonical-approvals.js');
+  const py = (code: string) => execFileSync('python3', ['-c', code], { encoding: 'utf-8' });
+  rmSync(db, { force: true });
+  py(`import sqlite3; c=sqlite3.connect(${JSON.stringify(db)}); c.execute("pragma journal_mode=wal"); c.execute("create table t(x)"); c.commit(); c.close()`);
+  mod.invalidateCanonicalPendingCache();
+  await mod.readCanonicalPendingCached();          // kept under the fresh stamp
+  const t0 = Date.now();
+  const before = calls();
+  await mod.readCanonicalPendingCached();
+  assert.equal(calls() - before, 0, 'unchanged db: kept');
+  // keep the connection open so the WAL is not checkpointed into the main file on close: only -wal changes
+  py(`import sqlite3,time; c=sqlite3.connect(${JSON.stringify(db)}); c.execute("insert into t values(1)"); c.commit(); time.sleep(0.05)`);
+  await mod.readCanonicalPendingCached();
+  assert.equal(calls() - before, 1, 'a WAL commit changed the stamp and forced a fresh read');
+  assert.ok(Date.now() - t0 < mod.CANONICAL_TTL_MS, 'the TTL had not expired: the stamp did it');
+});
+
+test('a request arriving after a write does not join a read that started before it', async () => {
+  const mod = await import('./_canonical-approvals.js');
+  mod.invalidateCanonicalPendingCache();
+  const before = calls();
+  const first = mod.readCanonicalPendingCached();  // starts a 400 ms read under the old stamp
+  appendFileSync(db, 'y');                         // a gateway answer lands while it runs
+  const second = mod.readCanonicalPendingCached(); // sees the new stamp: must not share the stale read
+  await Promise.all([first, second]);
+  assert.equal(calls() - before, 2, 'the later request ran its own read');
 });
 
 test('an answer through this process drops the kept feed, and a failed read keeps the last good rows', async () => {

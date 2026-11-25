@@ -133,37 +133,48 @@ function tasksDbStamp(): string {
 }
 
 export const CANONICAL_TTL_MS = 3_000;
-let canonicalCache: { at: number; stamp: string; rows: CanonicalRow[] } | null = null;
-let canonicalInflight: Promise<CanonicalRow[]> | null = null;
+/** How long the last good rows may stand in for a failing CLI before the list goes empty instead. */
+export const CANONICAL_FALLBACK_MAX_AGE_MS = 60_000;
+let canonicalCache: { at: number; stamp: string; rows: CanonicalRow[]; stale: boolean } | null = null;
+let canonicalInflight: { stamp: string; promise: Promise<CanonicalRow[]> } | null = null;
 
 /**
  * Mark the kept feed stale (an answer through this process did change it; the stamp catches every other
  * writer): the next read runs the CLI, and the old rows stay only as the fallback for a failed read.
  */
 export function invalidateCanonicalPendingCache(): void {
-  if (canonicalCache) canonicalCache.at = -Infinity;
+  if (canonicalCache) canonicalCache.stale = true;   // `at` stays: it dates the rows for the fallback below
+  canonicalInflight = null;          // a read already running may predate the write: nobody else joins it
 }
 
 /**
- * The pending feed for the list routes: one `approval.py pending --json` at a time, shared by concurrent
- * requests, kept while tasks.db (and its WAL) is unchanged and for at most CANONICAL_TTL_MS. A write by
- * ANY process changes the stamp, so a gateway answer drops from the web feed on the next read (the
+ * The pending feed for the list routes: one `approval.py pending --json` at a time, shared by the
+ * concurrent requests that saw the same tasks.db stamp, and kept while tasks.db (and its WAL) is
+ * unchanged, for at most CANONICAL_TTL_MS. tasks.db has many writers across a fleet, so on a busy host
+ * the saving is mostly the concurrent requests; the point is that the event loop never blocks. A write
+ * by ANY process changes the stamp, so a gateway answer drops from the web feed on the next read (the
  * resolve-everywhere contract, api/test/unified-approvals-canonical.test.mjs c2). A failed read is never
- * kept: it returns the last good rows, or [] when there are none.
+ * kept: it returns the last good rows while they are younger than CANONICAL_FALLBACK_MAX_AGE_MS, else [].
  */
 export function readCanonicalPendingCached(): Promise<CanonicalRow[]> {
   const stamp = tasksDbStamp();
   const now = Date.now();
-  if (canonicalCache && canonicalCache.stamp === stamp && now - canonicalCache.at < CANONICAL_TTL_MS) {
+  if (canonicalCache && !canonicalCache.stale && canonicalCache.stamp === stamp && now - canonicalCache.at < CANONICAL_TTL_MS) {
     return Promise.resolve(canonicalCache.rows);
   }
-  if (canonicalInflight) return canonicalInflight;
-  canonicalInflight = (async () => {
+  if (canonicalInflight && canonicalInflight.stamp === stamp) return canonicalInflight.promise;
+  const mine: { stamp: string; promise: Promise<CanonicalRow[]> } = { stamp, promise: undefined as unknown as Promise<CanonicalRow[]> };
+  mine.promise = (async () => {
     const rows = await readCanonicalPendingAsync();
-    if (rows) canonicalCache = { at: Date.now(), stamp, rows };
-    return rows ?? canonicalCache?.rows ?? [];
-  })().finally(() => { canonicalInflight = null; });
-  return canonicalInflight;
+    if (rows) {
+      canonicalCache = { at: Date.now(), stamp, rows, stale: false };
+      return rows;
+    }
+    const fallbackFresh = canonicalCache && Date.now() - canonicalCache.at < CANONICAL_FALLBACK_MAX_AGE_MS;
+    return fallbackFresh ? canonicalCache!.rows : [];
+  })().finally(() => { if (canonicalInflight === mine) canonicalInflight = null; });
+  canonicalInflight = mine;
+  return mine.promise;
 }
 
 /** Same pending feed as readCanonicalPendingOrNull, without blocking the Node event loop. */
