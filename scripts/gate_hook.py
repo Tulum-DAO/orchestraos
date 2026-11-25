@@ -3,7 +3,7 @@
 hooks/gate-hook.py (the installed row's script) reads stdin, checks GATE_OFF with os/sys only, then calls run().
 The logic lives here, imported rather than run as __main__, so its bytecode is cached (no per-call compile).
 
-The row FAILS OPEN (PM amendment): no onFailure, the standard `[ -f ] && … || exit 0` form, timeout 600; a hook
+The row FAILS OPEN (PM amendment): no onFailure, the standard `if [ -f ]; then …; [ $? -eq 2 ] && exit 2; fi; exit 0` form, timeout 600; a hook
 that crashes, is killed or times out lets the call run. Inside the hook the per-level rule holds: under Watch
 closely a gateway that is down or an error the hook catches denies the call. A deny is one JSON object on stdout
 ({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", ...}}); an allow prints

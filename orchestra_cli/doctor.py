@@ -494,6 +494,10 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         hs = _hooks.status(settings_path=settings_path, repo_root=root)
         if hs.get("error"):
             checks.append(Check("hooks:claude", WARN, hs["error"], "fix ~/.claude/settings.json, then `orchestra init`"))
+        elif hs.get("stale"):
+            checks.append(Check("hooks:claude", WARN, f"{len(hs['stale'])} hook rows in {settings_path} use the old "
+                                "form that turns a guard's block (exit 2) into exit 0, so blocking guards do not block",
+                                "run `orchestra init` (idempotent) to rewrite them"))
         elif hs["missing"]:
             checks.append(Check("hooks:claude", WARN, f"{len(hs['missing'])} of {len(hs['installed']) + len(hs['missing'])} hook rows missing from {settings_path}",
                                 "run `orchestra init` (idempotent) to install the shipped hooks"))
