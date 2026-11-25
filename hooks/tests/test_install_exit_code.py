@@ -79,3 +79,36 @@ def test_every_shipped_row_uses_the_exit_code_preserving_form(tmp_path):
     assert cmds
     for c in cmds:
         assert "|| exit 0" not in c, c
+
+
+def test_a_bash_hook_that_does_not_parse_fails_open_instead_of_blocking(tmp_path):
+    rel = _stub(tmp_path, "hooks/broken.sh", "if then fi (\n")       # bash exits 2 on a syntax error
+    r = _run(H._command(tmp_path, tmp_path / "data", rel, "bash"))
+    assert r.returncode == 0
+
+
+def test_a_bash_guard_block_keeps_its_stderr(tmp_path):
+    rel = _stub(tmp_path, "hooks/blocker.sh", "echo 'BLOCKED by stub' >&2\nexit 2\n")
+    r = _run(H._command(tmp_path, tmp_path / "data", rel, "bash"))
+    assert r.returncode == 2 and "BLOCKED by stub" in r.stderr
+
+
+def _old_form_settings(tmp_path):
+    settings = tmp_path / "settings.json"
+    old = f'[ -f "{REPO}/hooks/send_shape_guard.py" ] && python3 "{REPO}/hooks/send_shape_guard.py" {H.OLD_FORM}'
+    settings.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": old}]}]}}))
+    return settings
+
+
+def test_status_reports_old_form_rows_as_stale(tmp_path):
+    settings = _old_form_settings(tmp_path)
+    assert H.status(settings_path=settings, repo_root=REPO)["stale"] == ["PreToolUse"]
+
+
+def test_reinstall_replaces_old_form_rows(tmp_path):
+    settings = _old_form_settings(tmp_path)
+    H.install(settings_path=settings, repo_root=REPO, data_dir=tmp_path / "data")
+    text = settings.read_text()
+    assert H.OLD_FORM not in text
+    assert H.status(settings_path=settings, repo_root=REPO)["stale"] == []

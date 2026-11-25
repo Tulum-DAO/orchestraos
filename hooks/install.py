@@ -79,8 +79,14 @@ def _command(repo_root: Path, data_dir: Path, rel: str, runner: str) -> str:
         run = f'bash "{script}"'
     else:
         run = f'"{PY}" "{script}"'
-    return (f'if [ -f "{script}" ]; then ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run}; '
+    # bash itself exits 2 on a syntax error, which would now read as a block: a script that does not
+    # parse is treated like a missing one (fail open).
+    present = f'[ -f "{script}" ] && bash -n "{script}" 2>/dev/null' if runner == "bash" else f'[ -f "{script}" ]'
+    return (f'if {present}; then ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run}; '
             f'[ $? -eq 2 ] && exit 2; fi; exit 0 {MARKER}')
+
+
+OLD_FORM = f"|| exit 0 {MARKER}"   # pre-#626 rows: they turned a guard's exit 2 into 0
 
 
 def _load(settings_path: Path):
@@ -314,18 +320,21 @@ def status(*, settings_path: Path, repo_root: Path) -> dict:
         return {"installed": [], "missing": [f"{row[0]}:{row[2]}" for row in HOOKS], "gate": "unknown",
                 "error": "settings.json not valid JSON"}
     present = set()
+    stale = []
     for ev, rules in (settings.get("hooks") or {}).items():
         for rule in rules or []:
             for h in rule.get("hooks") or []:
                 cmd = h.get("command", "")
                 if _is_ours(cmd):
+                    if OLD_FORM in cmd:
+                        stale.append(ev)
                     for row in HOOKS:
                         if row[0] == ev and row[2] in cmd:
                             present.add(f"{ev}:{row[2]}")
     want = [f"{row[0]}:{row[2]}" for row in HOOKS]
     gate = "installed" if f"PreToolUse:{GATE_SCRIPT}" in present else "absent"
     return {"installed": [w for w in want if w in present], "missing": [w for w in want if w not in present],
-            "gate": gate}
+            "gate": gate, "stale": stale}
 
 
 # ---- the status line (opt-in; writes the context reading the apps and the rotation engine read) ----
