@@ -6,8 +6,9 @@ Nod moves fast and carries copyleft parts, so an import is allowed only when it 
 licensed and kept at arm's length. This script enforces that over the whole repository:
 
   R1 ledger    integrations/nod/IMPORTS.jsonl is well formed: one JSON object per line with the
-               fields in REQUIRED, a known verdict, a take-list id, a 40-hex upstream sha and a
-               permissive license.
+               fields in REQUIRED, a known verdict, a take-list id, a 40-hex upstream sha, plain
+               relative paths (no '..' or other tricks that dodge R3), and license Apache-2.0,
+               Nod's license, which is also what the provenance header states.
   R2 tree      every ledger `local` file exists and carries the provenance header naming the same
                upstream path and sha; every tracked file that carries a provenance header is in
                the ledger. A copied file cannot hide and a ledger line cannot point at nothing.
@@ -17,7 +18,13 @@ licensed and kept at arm's length. This script enforces that over the whole repo
   R4 notice    once the ledger holds anything, NOTICE carries the Nod attribution.
   R5 boundary  a ledgered file stays a leaf: it may import the standard library, third-party
                packages, other ledgered files and the files its ledger line names in `local_deps`,
-               and nothing else from this repository. That is what keeps each import replaceable.
+               and nothing else from this repository. Computed imports (import(x), require(x),
+               importlib, eval) are refused because they cannot be checked. That is what keeps each
+               import replaceable.
+
+What this is NOT: origin detection. It enforces the record for code that declares itself (the
+header). A file copied from Nod without the header is invisible to it; review catches that. It is
+also only as blocking as the branch rules: a red check stops a merge only where the merge is gated.
 
 Provenance header (any comment style, within the first 15 lines of the file):
     Upstream: n8n-io/nod <upstream path> @ <40-hex sha> (Apache-2.0), modified: yes|no
@@ -29,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -38,7 +46,7 @@ LEDGER = Path("integrations/nod/IMPORTS.jsonl")
 REQUIRED = ("local", "upstream", "upstream_sha", "verdict", "modified", "license", "take_list_id")
 VERDICTS = {"TAKE", "ADAPT"}
 TAKE_LIST_IDS = {f"T{n}" for n in range(1, 19)}
-LICENSES = {"Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD"}
+LICENSES = {"Apache-2.0"}
 SHA = re.compile(r"^[0-9a-f]{40}$")
 HEADER = re.compile(
     r"Upstream: n8n-io/nod (?P<path>\S+) @ (?P<sha>[0-9a-f]{40}) \(Apache-2\.0\), modified: (?P<mod>yes|no)"
@@ -72,6 +80,8 @@ JS_IMPORT = re.compile(
     re.M,
 )
 PY_IMPORT = re.compile(r"^\s*(?:from\s+(\.*[\w.]*)\s+import|import\s+([\w.]+))", re.M)
+JS_DYNAMIC = re.compile(r"""(?:\brequire|\bimport)\s*\(\s*(?!['"][^'"]*['"]\s*\))""")
+PY_DYNAMIC = re.compile(r"\b(?:__import__|import_module|importlib\.import_module|runpy\.|exec|eval)\s*\(")
 
 
 def tracked_files(root: Path) -> list[str]:
@@ -123,6 +133,13 @@ def read_ledger(root: Path, problems: list[str]) -> list[dict]:
         if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
             problems.append(f"R1 {LEDGER}:{n}: local_deps must be a list of paths")
             row["local_deps"] = []
+        for key in ("local", "upstream"):
+            value = str(row[key])
+            clean = posixpath.normpath(value)
+            if (value.startswith("/") or "\\" in value or ".." in value.split("/")
+                    or clean != value or value in ("", ".")):
+                problems.append(f"R1 {LEDGER}:{n}: {key} {value!r} must be a plain relative path "
+                                f"(no '..', '.', '//', backslash or leading '/')")
         row["_line"] = n
         rows.append(row)
     seen: dict[str, int] = {}
@@ -237,6 +254,11 @@ def check_boundary(root: Path, rows: list[dict], files: list[str], problems: lis
         if not path.is_file():
             continue
         allowed = ledgered | set(row.get("local_deps", []))
+        text = path.read_text(errors="replace")
+        dynamic = JS_DYNAMIC if path.suffix in JS_SUFFIXES else PY_DYNAMIC if path.suffix == ".py" else None
+        if dynamic and dynamic.search(text):
+            problems.append(f"R5 {local}: computed import, require or eval; imported code may load "
+                            f"only literal, checkable specifiers")
         for spec in imports_of(path):
             if path.suffix in JS_SUFFIXES:
                 if not spec.startswith("."):

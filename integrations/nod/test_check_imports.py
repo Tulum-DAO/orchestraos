@@ -159,3 +159,61 @@ def test_cli_exit_codes(tmp_path, capsys):
     (tmp_path / "integrations/nod/IMPORTS.jsonl").write_text("nope\n")
     assert ci.main(["--root", str(tmp_path)]) == 1
     assert "R1" in capsys.readouterr().out
+
+
+# Review of PR #612 (codex-gm): each reproduced bypass now has a red test.
+
+@pytest.mark.parametrize("upstream", [
+    "src/providers/x/../local-speech/phonemizer.ts",
+    "./src/providers/local-speech/phonemizer-worker.ts",
+    "src//providers/local-speech/phonemizer-worker.ts",
+    "/src/providers/local-speech/phonemizer-worker.ts",
+])
+def test_review_r3_traversal_in_upstream_is_refused(tmp_path, upstream):
+    root = tree(tmp_path, {"services/ph.ts": header(upstream, comment="//")}, [row("services/ph.ts", upstream)])
+    assert any(p.startswith("R1") and "plain relative path" in p for p in problems(root))
+
+
+def test_review_local_path_traversal_is_refused(tmp_path):
+    root = tree(tmp_path, {"scripts/a.py": header("src/server/redaction.ts") + "import re\n"},
+                [row("scripts/../scripts/a.py", "src/server/redaction.ts")])
+    assert any("plain relative path" in p for p in problems(root))
+
+
+@pytest.mark.parametrize("lic", ["MIT", "BSD-3-Clause", "ISC"])
+def test_review_license_must_match_the_apache_header(tmp_path, lic):
+    root = tree(tmp_path, {"scripts/a.py": header("src/server/redaction.ts") + "import re\n"},
+                [row("scripts/a.py", "src/server/redaction.ts", license=lic)])
+    assert any(p.startswith("R1") and "license" in p for p in problems(root))
+
+
+@pytest.mark.parametrize("code", [
+    "const local = './lib/utils';\nconst m = await import(local);\n",
+    "const m = require(name);\n",
+    "const m = await import(`./lib/${x}`);\n",
+])
+def test_review_r5_computed_js_import_is_refused(tmp_path, code):
+    up = "src/web/components/attachment-frame.tsx"
+    files = {"dashboard/src/Frame.tsx": header(up, comment="//") + code,
+             "dashboard/src/lib/utils.ts": "export const cn = () => '';\n"}
+    root = tree(tmp_path, files, [row("dashboard/src/Frame.tsx", up, take_list_id="T2")])
+    assert any(p.startswith("R5") and "computed import" in p for p in problems(root))
+
+
+@pytest.mark.parametrize("code", [
+    "import importlib\nm = importlib.import_module('scripts.fleet')\n",
+    "m = __import__('scripts.fleet')\n",
+])
+def test_review_r5_computed_python_import_is_refused(tmp_path, code):
+    root = tree(tmp_path, {"scripts/a.py": header("src/server/redaction.ts") + code},
+                [row("scripts/a.py", "src/server/redaction.ts")])
+    assert any(p.startswith("R5") and "computed import" in p for p in problems(root))
+
+
+def test_review_literal_dynamic_import_of_a_declared_dep_still_passes(tmp_path):
+    up = "src/web/components/attachment-frame.tsx"
+    files = {"dashboard/src/Frame.tsx": header(up, comment="//") + "const m = await import('./lib/utils');\n",
+             "dashboard/src/lib/utils.ts": "export const cn = () => '';\n"}
+    root = tree(tmp_path, files, [row("dashboard/src/Frame.tsx", up, take_list_id="T2",
+                                      local_deps=["dashboard/src/lib/utils.ts"])])
+    assert problems(root) == []

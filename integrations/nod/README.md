@@ -24,13 +24,17 @@ Nod is a research preview that changes daily, and it ships copyleft parts. So ev
 ## The rules
 | Rule | What it refuses |
 |---|---|
-| R1 ledger | a malformed line, an unknown verdict or take-list id, a short sha, or a license outside Apache-2.0 / MIT / BSD / ISC / 0BSD |
+| R1 ledger | a malformed line, an unknown verdict or take-list id, a short sha, a path with `..`, `.`, `//`, a backslash or a leading `/`, or a license other than Apache-2.0 (Nod's license, which the header states) |
 | R2 tree | a ledger line with no file; a file with the Nod header but no ledger line; a header that disagrees with its line |
 | R3 excluded | anything from Nod's GPL speech code, its unofficial WhatsApp client, or their patches, and any import of `@spelling-creator/spellophone`, `@whiskeysockets/baileys`, `libsignal`, `@audio/decode-webm` or Pi's bundled OAuth logins (`@earendil-works/pi-ai/oauth`, `lazy-oauth`, `bun-oauth`) |
 | R4 notice | a non-empty ledger without the Nod attribution in `NOTICE` |
-| R5 boundary | an imported file that reaches into this repository beyond other imported files and its declared `local_deps`. Imported code stays a leaf, so replacing or dropping it touches one place |
+| R5 boundary | an imported file that reaches into this repository beyond other imported files and its declared `local_deps`, or that uses a computed import (`import(x)`, `require(x)`, `importlib`, `__import__`, `eval`). Imported code stays a leaf, so replacing or dropping it touches one place |
 
 Things that were rebuilt from Nod's ideas, rather than copied, need no ledger line. They carry no Nod code.
+
+## Limits
+- **Provenance, not origin detection.** The check enforces the record for code that declares itself with the header. A file copied from Nod without the header is invisible to it. Review is what catches that.
+- **Only as blocking as the merge rules.** A failing `integrations-nod` job turns the PR red. On this repository `main` has no required-status-check protection, so the red check alone does not stop a merge. Merges are gated by the operator's decision.
 
 ## Staying current with Nod
 A watcher (planned) compares each ledgered file's `upstream_sha` with Nod's `main` and reports changes, security fixes and license changes. A bump is its own branch: reapply local changes, run the component's tests and this check, and update the ledger line in the same PR.
