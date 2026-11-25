@@ -46,3 +46,8 @@
 - main is RED after #627 on operator-identifier-scan + scripts-top (privacy: "Tulum" city-clock in fixtures/tests, /home/shaw in spending_tools.py). orchestraos-builder owns the fix-forward; I review its fixture for twin equivalence (HIGH, tonight). Do NOT push a parallel fix.
 - Commits need `Signed-off-by` (dco job): use `git commit -s`.
 - Merge cards name every CI job green on the PR head, by job name (gm rule); wait for the run, never merge on an empty rollup.
+
+## 22:40Z: Shaw order, 25 stamped turns (gm msg_3a7542b2)
+- (a)+(b) built: PR #638 (feat/native-opening-turns, worktree /home/shaw/wt/arturo-context-dev/turns): default 2500, floor re-read at 4000 if <25 turns, report thread gets turns/summarized/first/last/chat_lines/call_lines/calls. Proof native-70eb24ace3e9: 25 turns, greet 3.14 s. Not live; needs a merge card (all CI jobs green by name, after builder's privacy fix lands) + respawn GO.
+- Open question to gm: merge a call's consecutive same-speaker phrases into one turn (25 turns = only 12 min today).
+- (c) unified-conversation.jsonl stopped 2026-11-22 06:41 Tulum: find the writer that died; revive vs retire the relay block in favour of the contract. Recommendation with the latency plan, Thu 11-26 12:00 Tulum.
