@@ -101,7 +101,12 @@ class LedgerRefused(Exception):
 
 
 class DuplicateAction(LedgerRefused):
-    """ask()/claim_direct(): a live-or-uncertain row already holds this hash."""
+    """ask()/claim_direct(): a live-or-uncertain row already holds this hash. `row` is that row (so
+    the caller never has to read it again, which could race a second time)."""
+
+    def __init__(self, state, reason, row=None):
+        super().__init__(state, reason)
+        self.row = row or {}
 
 
 def _now():
@@ -309,6 +314,38 @@ def _after_uncertain(row):
     _file_uncertain_card(row)
 
 
+def _health_dir():
+    import approval_config
+    return approval_config.orchestra_dir() / "state" / "usage" / "health"
+
+
+def count_double_push(action):
+    """C2: every double push (the one resend of an uncertain notify.*) adds one to the day's health
+    counter, <ORCHESTRA_DIR>/state/usage/health/<YYYY-MM-DD>.json (the install's local day):
+    {"double_pushes": n, "by_channel": {"ntfy": n, "telegram": n}}. Read-modify-write; a first
+    send never touches the file. Best effort: a failure is one stderr line."""
+    channel = action.split(".", 1)[1] if action.startswith("notify.") else action
+    try:
+        d = _health_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / (datetime.now().strftime("%Y-%m-%d") + ".json")
+        try:
+            doc = json.loads(path.read_text())
+            if not isinstance(doc, dict):
+                doc = {}
+        except (OSError, ValueError):
+            doc = {}
+        doc["double_pushes"] = int(doc.get("double_pushes") or 0) + 1
+        by = doc.get("by_channel") if isinstance(doc.get("by_channel"), dict) else {}
+        by[channel] = int(by.get(channel) or 0) + 1
+        doc["by_channel"] = by
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc))
+        os.replace(tmp, path)
+    except Exception as e:  # noqa: BLE001
+        print(f"[outward_ledger] health counter for {channel} failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 # --- reads --------------------------------------------------------------------------------------
 
 def _live_row(c, h):
@@ -386,7 +423,7 @@ def ask(action, args, card_id, actor, run_on=None):
             live = _live_row(c, h)
             c.execute("ROLLBACK")
             raise DuplicateAction(live["state"] if live else "none",
-                                  f"{h[:12]} already has a live row ({live['state'] if live else '?'})")
+                                  f"{h[:12]} already has a live row ({live['state'] if live else '?'})", live)
         c.execute("COMMIT")
         row = _row(c, h)
     finally:
@@ -519,7 +556,7 @@ def claim_direct(action, args, actor, policy="once", pid=None, pid_start=None, h
                 print(f"[outward_ledger] {action} {h[:12]}: {REASON_RESEND} (attempt 2 of 2)", file=sys.stderr)
             else:
                 c.execute("ROLLBACK")
-                raise DuplicateAction(live["state"], f"{h[:12]} is {live['state']}")
+                raise DuplicateAction(live["state"], f"{h[:12]} is {live['state']}", live)
         try:
             c.execute("INSERT INTO outward_actions (id, action_hash, action, material_args, actor, state, policy, "
                       "attempt, claimed_by, claimed_pid, claimed_pid_start, claimed_host, created_at, approved_at, "
@@ -533,6 +570,8 @@ def claim_direct(action, args, actor, policy="once", pid=None, pid_start=None, h
         row = _row(c, h, attempt)
     finally:
         c.close()
+    if attempt == 2:
+        count_double_push(action)                 # C2: the resend is a double push, counted once
     return row
 
 

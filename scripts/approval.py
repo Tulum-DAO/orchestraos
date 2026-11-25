@@ -311,6 +311,21 @@ def _patch_refusal(store, rid, fields):
     return f"card {rid} could not be changed"
 
 
+def _void_superseded(store, rid, from_agent, winner):
+    """The request race: this card was created, then the outward ledger refused its row because
+    `winner` already holds the action. A pending approval card with no ledger row is a card that
+    could run outside the ledger, so it is taken out of pending here, in the same call. Retire it
+    as superseded by the winner when the retire columns are armed; else discard it (terminal,
+    kept in history). Either way it can never be answered or resumed."""
+    if not rid or rid == winner:
+        return
+    reason = f"superseded by {winner}: the same outward action is already carded"
+    ok, _why = store.retire(rid, from_agent, reason, superseded_by=winner)
+    if not ok:
+        store.mark_discarded(rid)
+    print(f"[approval] {rid} superseded by {winner} (not pending; answer the winner)", file=sys.stderr)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -631,7 +646,8 @@ def main(argv=None):
             try:
                 outward_ledger.ask(name, material, card_id=rid, actor=args.from_agent, run_on=run_on)
             except outward_ledger.DuplicateAction as e:
-                live = outward_ledger.live_row(action_hash=action_hash) or {}
+                live = e.row                      # the row that holds the hash, as the ledger saw it
+                _void_superseded(store, rid, args.from_agent, live.get("card_id"))
                 if live.get("state") in ("asked", "approved") and live.get("card_id"):
                     print(f"[approval] {name} {action_hash[:12]} is already {live['state']} on card "
                           f"{live['card_id']}: no second card", file=sys.stderr)

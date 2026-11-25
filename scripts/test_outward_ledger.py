@@ -706,3 +706,150 @@ def test_cli_show_sweep_release_finish(env):
     assert r.returncode == 3 and "not_run" in r.stderr
     r = subprocess.run([PY, CLI, "sweep"], capture_output=True, text=True, env=e)
     assert r.returncode == 0 and set(json.loads(r.stdout)) >= {"uncertain", "approved", "not_run"}
+
+
+# --- follow-ups: the request race, a card with no ledger row, C1/C2 ----------------------------
+
+def _run_request_inproc(argv_extra, capsys):
+    """approval.main() in this process (deterministic; the ledger seams can be patched)."""
+    import approval
+    code = approval.main(["request", "Deploy build 42?", "--from", "deploy-bot", "--worker-kind", "node",
+                          "--action", "deploy", "--material-args", json.dumps(ARGS)] + argv_extra)
+    out = capsys.readouterr()
+    return code, out.out.strip(), out.err
+
+
+def test_race_loser_card_is_voided_and_points_at_the_winner(env, monkeypatch, capsys):
+    """Two requests for the same action pass the pre-check together: the loser's card must not stay
+    pending with no ledger row (it could run outside the ledger). Deterministic: the pre-check is
+    made blind so create() runs, then ask() is refused by the winner's row."""
+    winner = _card(env, op_key="winner")
+    h = L.ask("deploy", ARGS, card_id=winner, actor="deploy-bot")["action_hash"]
+    monkeypatch.setattr(L, "live_row", lambda **k: None)
+    code, out, err = _run_request_inproc(["--op-key", "loser"], capsys)
+    assert code == 0 and out == winner
+    assert f"superseded by {winner}" in err
+    pending = env.pending_to_notify()
+    assert [r["id"] for r in pending] == [winner]
+    loser = [r for r in env.history(limit=10) if r["id"] != winner]
+    assert len(loser) == 1 and loser[0]["status"] in ("discarded", "retired")
+    assert env.record_answer(loser[0]["id"], "approve", None) is False      # can never be answered
+    rows = _rows(h)
+    assert len(rows) == 1 and rows[0]["card_id"] == winner
+
+
+def test_race_loser_is_retired_as_superseded_when_the_retire_columns_are_armed(env, monkeypatch, capsys):
+    monkeypatch.setenv("APPROVAL_DDL_ARMED", "m20261010_card_retire")
+    env.migrate()
+    winner = _card(env, op_key="winner")
+    L.ask("deploy", ARGS, card_id=winner, actor="deploy-bot")
+    monkeypatch.setattr(L, "live_row", lambda **k: None)
+    code, out, err = _run_request_inproc(["--op-key", "loser"], capsys)
+    assert code == 0 and out == winner
+    loser = [r for r in env.history(limit=10) if r["id"] != winner][0]
+    assert loser["status"] == "retired" and loser["superseded_by"] == winner
+    assert "superseded by" in (loser["retire_reason"] or "")
+
+
+def test_race_loser_is_voided_even_when_the_winner_is_executing(env, monkeypatch, capsys):
+    winner = _card(env, op_key="winner")
+    L.ask("deploy", ARGS, card_id=winner, actor="deploy-bot")
+    env.record_answer(winner, "approve", None)
+    L.claim("deploy", ARGS, actor="deploy-bot")
+    monkeypatch.setattr(L, "live_row", lambda **k: None)
+    code, out, err = _run_request_inproc(["--op-key", "loser"], capsys)
+    assert code == 3 and out == "" and "release it or wait" in err and "superseded by" in err
+    assert env.pending_to_notify() == []
+
+
+CHILD_REQUEST = """
+import os, sys, time
+sys.path.insert(0, {here!r})
+import approval
+while not os.path.exists({flag!r}):
+    time.sleep(0.005)
+sys.exit(approval.main(["request", "Deploy build 42?", "--from", "deploy-bot", "--worker-kind", "node",
+                        "--action", "deploy", "--material-args", {args!r}, "--op-key", {opk!r}]))
+"""
+
+
+def test_race_two_concurrent_requests_leave_one_pending_card_and_one_row(env, tmp_path):
+    flag = str(tmp_path / "go")
+    procs = [subprocess.Popen([PY, "-c", CHILD_REQUEST.format(here=HERE, flag=flag, args=json.dumps(ARGS),
+                                                              opk=f"k{i}")],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=dict(os.environ))
+             for i in range(2)]
+    time.sleep(1.5)                                        # both past their imports, parked on the flag
+    open(flag, "w").close()
+    outs = [p.communicate(timeout=60) for p in procs]
+    assert all(p.returncode == 0 for p in procs), outs
+    ids = {o.strip() for o, _ in outs}
+    assert len(ids) == 1                                   # both printed the WINNER's id
+    (winner,) = ids
+    assert [r["id"] for r in env.pending_to_notify()] == [winner]
+    h = L.canonical_hash("deploy", ARGS)
+    rows = _rows(h)
+    assert len(rows) == 1 and rows[0]["card_id"] == winner and rows[0]["state"] == "asked"
+    for r in env.history(limit=10):
+        if r["id"] != winner:
+            assert r["status"] in ("discarded", "retired")
+            assert env.record_answer(r["id"], "approve", None) is False
+
+
+def test_approving_a_card_with_no_ledger_row_never_lets_claim_succeed(env):
+    rid = _card(env)                                       # a plain card: no --action, no ledger row
+    assert env.record_answer(rid, "approve", None) is True
+    with pytest.raises(L.LedgerRefused) as e:
+        L.claim("deploy", ARGS, actor="deploy-bot")
+    assert e.value.state == "none" and "not approved" in e.value.reason
+    assert _rows() == []
+
+
+def _health_file():
+    from datetime import datetime
+    return os.path.join(os.environ["ORCHESTRA_DIR"], "state", "usage", "health",
+                        datetime.now().strftime("%Y-%m-%d") + ".json")
+
+
+def test_C1_C2_ntfy_resend_carries_the_same_card_id_and_buttons_and_counts_once(notify_env, env, monkeypatch):
+    N = notify_env
+    sent = []
+
+    def flaky(url, headers, data):
+        sent.append(json.loads(data))
+        if len(sent) == 1:
+            raise OSError("reset after write")           # during send: uncertain
+        return 200
+    monkeypatch.setattr(N, "_http_post", flaky)
+    rid = _card(env)
+    with pytest.raises(OSError):
+        N.notify(rid, store=env)
+    assert not os.path.exists(_health_file())             # a first send never touches the counter
+    N.notify(rid, store=env)                               # the one resend
+    assert len(sent) == 2
+    assert sent[0]["title"] == sent[1]["title"] and rid in sent[0]["title"]
+    assert sent[0]["actions"] == sent[1]["actions"]
+    assert all(json.loads(a["body"])["id"] == rid for a in sent[1]["actions"])
+    assert sent[0] == sent[1]
+    health = json.load(open(_health_file()))
+    assert health == {"double_pushes": 1, "by_channel": {"ntfy": 1}}
+
+
+def test_C1_C2_telegram_resend_same_text_and_counter(notify_env, env, tmp_path):
+    N = notify_env
+    sp = str(tmp_path / "tg.json")
+    texts = []
+
+    def flaky(t):
+        texts.append(t)
+        if len(texts) == 1:
+            raise RuntimeError("net down")
+        return True
+    assert N.notify_telegram("approval:apr_9", "APPROVAL apr_9: hi", state_path=sp, send=flaky) is False
+    assert not os.path.exists(_health_file())
+    assert N.notify_telegram("approval:apr_9", "APPROVAL apr_9: hi", state_path=sp, send=flaky) is True
+    assert texts == ["APPROVAL apr_9: hi", "APPROVAL apr_9: hi"]
+    assert json.load(open(_health_file())) == {"double_pushes": 1, "by_channel": {"telegram": 1}}
+    # a third call is deduped by the sidecar: no send, no count
+    assert N.notify_telegram("approval:apr_9", "x", state_path=sp, send=flaky) is True
+    assert len(texts) == 2 and json.load(open(_health_file()))["double_pushes"] == 1
