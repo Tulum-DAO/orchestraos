@@ -13,6 +13,10 @@ export ARTURO_NATIVE_SESSION_MAX_USD="${ARTURO_NATIVE_SESSION_MAX_USD:-0.50}"
 # spoken (idle + delegation pending). Undo: ARTURO_NATIVE_CONTEXT=0.
 export ARTURO_NATIVE_CONTEXT="${ARTURO_NATIVE_CONTEXT:-1}"
 export VOICE_DAILY_CAP_MIN="${VOICE_DAILY_CAP_MIN:-60}"             # same daily cap as the relay (run.sh)
+# The knowledge tool reads the facts store (2026-11-25: native never did; ARTURO_FACTS_RECALL also starts a thread).
+export ARTURO_KNOWLEDGE_FACTS="${ARTURO_KNOWLEDGE_FACTS:-1}"
+# A call opens with the thread above it and hears the chat during it (call_context). Undo: ARTURO_NATIVE_THREAD_CONTEXT=0.
+export ARTURO_NATIVE_THREAD_CONTEXT="${ARTURO_NATIVE_THREAD_CONTEXT:-1}"
 unset ARTURO_STREAM_RELAY ARTURO_WARM_VOICES_CACHE ARTURO_FACTS_RECALL
-echo "native run.sh: :${ARTURO_NATIVE_PORT:-5076} enabled=$ARTURO_NATIVE_GPTLIVE claim_gate=$ARTURO_NATIVE_CLAIM_GATE session_max_usd=$ARTURO_NATIVE_SESSION_MAX_USD context=$ARTURO_NATIVE_CONTEXT daily_cap_min=$VOICE_DAILY_CAP_MIN"
+echo "native run.sh: :${ARTURO_NATIVE_PORT:-5076} enabled=$ARTURO_NATIVE_GPTLIVE claim_gate=$ARTURO_NATIVE_CLAIM_GATE session_max_usd=$ARTURO_NATIVE_SESSION_MAX_USD context=$ARTURO_NATIVE_CONTEXT thread=$ARTURO_NATIVE_THREAD_CONTEXT knowledge_facts=$ARTURO_KNOWLEDGE_FACTS daily_cap_min=$VOICE_DAILY_CAP_MIN"
 exec python3 -m services.arturo.native.server

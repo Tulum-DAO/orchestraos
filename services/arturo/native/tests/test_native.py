@@ -75,7 +75,8 @@ class FakeExecutor:
 
     non_fleet = NON_FLEET
 
-    def __call__(self, name, args, principal, fenced=False, user_turns=None):
+    def __call__(self, name, args, principal, fenced=False, user_turns=None, call=None):
+        self.call_seen = call
         self.calls.append((name, dict(args), principal))
         self.fenced_seen = fenced
         self.user_turns_seen = user_turns
@@ -354,9 +355,12 @@ def _server(tmp_path, monkeypatch, enabled=True, verified=True, usage=None, exec
     else:
         monkeypatch.delenv(native_config.FLAG, raising=False)
     FakeProvider.instances = []
-    return srv.NativeServer(tmp_path / "native", executor=executor or FakeExecutor(),
-                            transport_factory=FakeProvider, usage_store=usage or FakeUsage(),
-                            verify=lambda headers: verified)
+    s = srv.NativeServer(tmp_path / "native", executor=executor or FakeExecutor(),
+                         transport_factory=FakeProvider, usage_store=usage or FakeUsage(),
+                         verify=lambda headers: verified)
+    s.thread_loader = lambda agent: ""                  # never the live API or the live call journals
+    s.chat_feed_factory = lambda agent: None
+    return s
 
 
 async def _client(server):

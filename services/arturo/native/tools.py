@@ -132,8 +132,11 @@ class ProxyExecutor:
             out[name] = (fn.get("description", ""), fn.get("parameters") or {"type": "object", "properties": {}})
         return out
 
-    def __call__(self, name, args, principal, fenced=False, user_turns=None):
+    def __call__(self, name, args, principal, fenced=False, user_turns=None, call=None):
         turn = {"principal": principal, "voice": True, "fenced": bool(fenced)}
+        for k in ("conversation_id", "thread_id"):            # gm_command tags its message to gm with these
+            if call and call.get(k):
+                turn[k] = str(call[k])
         return self.mod._as_turn(turn, self.mod.execute_tool, name, args, user_turns=user_turns)
 
 
@@ -144,6 +147,7 @@ class ArturoTools:
         self.executor = executor or ProxyExecutor()
         self.spoken_fn = spoken_fn or (lambda conversation_id: "")
         self.user_fn = lambda conversation_id: ""
+        self.thread_fn = lambda conversation_id: ""   # the chat thread the call was placed from (the server sets it)
         self._fenced = set()                     # conversations whose current turn has had a tool result
         self._turn_start = {}                    # conversation -> when the caller's current turn began (new_turn)
         self.clock = clock
@@ -212,7 +216,9 @@ class ArturoTools:
 
         def effect():
             text = str(self.executor(name, args, binding.principal, fenced=fenced,
-                                     user_turns=[self.user_fn(binding.conversation_id)]))
+                                     user_turns=[self.user_fn(binding.conversation_id)],
+                                     call={"conversation_id": binding.conversation_id,
+                                           "thread_id": self.thread_fn(binding.conversation_id)}))
             ok = action_ok(name, text)
             seat = args.get("session_name") if (name == "spawn_agent" and ok) else None
             # one receipt per spawn: a seat name can be reused (killed last week, spawned again today)

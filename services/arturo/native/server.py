@@ -15,6 +15,7 @@ withdrawn?} / barge / tools / tick / notice / refused / stopped.
 import argparse
 import asyncio
 import base64
+import collections
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
-from . import claim_gate, native_config, protocol, spend
+from . import call_context, claim_gate, native_config, protocol, spend
 from .offline import LocalTransport, OfflineTools
 from .session import RUNNING, Driver, NativeSession, TransportDown
 from .tool_ledger import ToolLedger
@@ -54,6 +55,7 @@ CONTEXT_DEVICES = {"iphone", "ipad", "quest", "watch", "mac"}
 CONTEXT_ENABLED = os.environ.get("ARTURO_NATIVE_CONTEXT", "0") == "1"
 CONTEXT_MIN_GAP_S = 2.0
 CONTEXT_MAX_SENDS = 10
+OPENING_WAIT_S = 6.0          # the thread above the call loads while the provider connects; never holds a call longer
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_CALLS = int(os.environ.get("ARTURO_NATIVE_MAX_CALLS", "2"))   # review M7: concurrent calls share one daily cap
 NO_INPUT_S = 6.0           # gm msg_5b124db0: a live call this old with no input tells the client why it is silent
@@ -294,6 +296,14 @@ class NativeCall:
         self._context = None                                       # last screen context sent to GPT-Live
         self._context_pending = None                               # latest wanted, not yet sent
         self._context_sent_at, self._context_sends = 0.0, 0
+        # The thread above this call and the chat that arrives during it (call_context; Shaw 2026-11-25).
+        self.chat_agent = call_context.default_chat_agent()
+        self.opening_tokens = 0
+        self.chat_feed = None
+        self._feed_future = None
+        self._feed_next = 0.0
+        self._feed_notes = collections.deque()
+        self.feed_sent = 0
         self.downlink = DownlinkPacer(self.binding.conversation_id)
 
     def _use(self, toolset, boundary):
@@ -421,6 +431,9 @@ class NativeCall:
                         continue
                     k = d.get("type")
                     if k == "start" and self.t0 is None:
+                        agent = d.get("agent")
+                        if isinstance(agent, str) and _AGENT_ID_RE.fullmatch(agent):
+                            self.chat_agent = agent          # the chat of the page the call was placed from
                         if d.get("mode") == "offline":
                             self.mode = "offline"
                             self._use(self.server.offline_tools, self.server.offline_tools)
@@ -478,6 +491,9 @@ class NativeCall:
             raise
 
     async def _open(self):
+        threaded = call_context.enabled()
+        opening_fut = (asyncio.get_running_loop().run_in_executor(
+            self.server.connect_pool, self.server.thread_loader, self.chat_agent) if threaded else None)
         if self.mode == "offline":
             from .simulator import OfflineProvider
             self.transport = LocalTransport(self)
@@ -497,12 +513,25 @@ class NativeCall:
         self.driver = Driver(self.session, self.transport, _Observer(self))
         self.t0 = time.monotonic()
         self.spend.start()
-        self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding)))
+        opening = ""
+        if opening_fut is not None:
+            try:
+                opening = await asyncio.wait_for(asyncio.shield(opening_fut), OPENING_WAIT_S) or ""
+            except Exception as e:  # noqa: BLE001 — timeout or a loader error: the call starts without its thread
+                log.warning(f"native {self.binding.conversation_id}: opening context skipped: {e!r}")
+        self.opening_tokens = call_context.thread_context.estimate_tokens(opening)
+        self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding), context=opening))
+        if threaded:
+            try:
+                self.chat_feed = self.server.chat_feed_factory(self.chat_agent)
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"native {self.binding.conversation_id}: chat feed off: {e!r}")
         if self.provider is not None:
             asyncio.ensure_future(self.provider.start())
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
-                 f"claim_gate={'on' if self.gate.enabled else 'off'}")
+                 f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent} "
+                 f"opening_tokens={self.opening_tokens}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -549,6 +578,31 @@ class NativeCall:
             return
         self._context, self._context_pending = key, None
         self._context_sent_at, self._context_sends = now, self._context_sends + 1
+
+    def _flush_chat_feed(self):
+        """From _tick, after session.started: poll the chat every CHAT_POLL_S off the loop; send at most one stamped
+        note per tick as a session append (call_context.feed_kind; instructions by default)."""
+        if self.chat_feed is None or self.driver is None or not self.session.started:
+            return
+        now = time.monotonic()
+        if self._feed_future is None and now >= self._feed_next:
+            self._feed_future = self.server.connect_pool.submit(self.chat_feed.poll)
+            self._feed_next = now + call_context.CHAT_POLL_S
+        if self._feed_future is not None and self._feed_future.done():
+            try:
+                self._feed_notes.extend(self._feed_future.result() or [])
+            except Exception:  # noqa: BLE001 — the next poll tries again
+                pass
+            self._feed_future = None
+        if not self._feed_notes:
+            return
+        note = self._feed_notes.popleft()
+        try:
+            self.driver.send(protocol._append(call_context.feed_kind(), note))
+        except TransportDown:
+            asyncio.ensure_future(self.close("connection lost"))
+            return
+        self.feed_sent += 1
 
     def _offline_push(self, frame):
         if self.closed:
@@ -634,6 +688,7 @@ class NativeCall:
             self._check_barge()
             self._check_no_input()
             self._flush_context()
+            self._flush_chat_feed()
             n += 1
             if n % 20 or self.closed:
                 continue
@@ -778,6 +833,7 @@ class NativeServer:
         self.connect_pool = ThreadPoolExecutor(max_workers=MAX_CALLS + 2, thread_name_prefix="native-connect")
         self.tools = ArturoTools(self.ledger, executor=executor, spoken_fn=self._spoken)
         self.tools.user_fn = self._user_words
+        self.tools.thread_fn = self._thread_of
         self.offline_tools = OfflineTools(ToolLedger(self.state_dir / "offline"))
         self.transport_factory = transport_factory or OpenAITransport
         if usage_store is None:
@@ -785,10 +841,16 @@ class NativeServer:
             usage_store = voice_usage.UsageStore()
         self.usage_store = usage_store
         self._verify = verify
+        self.thread_loader = call_context.opening                   # (agent) -> the thread above a call
+        self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
 
     def _spoken(self, conversation_id):
         call = self.calls.get(conversation_id)
         return call.session.spoken_turn if call else ""
+
+    def _thread_of(self, conversation_id):
+        call = self.calls.get(conversation_id)
+        return f"{call.chat_agent} chat" if call else ""
 
     def _user_words(self, conversation_id):
         call = self.calls.get(conversation_id)

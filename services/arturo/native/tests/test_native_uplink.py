@@ -40,8 +40,11 @@ class DeafProvider(FakeProvider):
 def _server(tmp_path, monkeypatch, factory):
     monkeypatch.setenv(native_config.FLAG, "1")
     FakeProvider.instances = []
-    return srv.NativeServer(tmp_path / "native", executor=FakeExecutor(), transport_factory=factory,
-                            usage_store=FakeUsage(), verify=lambda headers: True)
+    s = srv.NativeServer(tmp_path / "native", executor=FakeExecutor(), transport_factory=factory,
+                         usage_store=FakeUsage(), verify=lambda headers: True)
+    s.thread_loader = lambda agent: ""                  # never the live API or the live call journals
+    s.chat_feed_factory = lambda agent: None
+    return s
 
 
 async def _open(c):
