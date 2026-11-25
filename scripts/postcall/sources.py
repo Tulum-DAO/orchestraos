@@ -39,6 +39,19 @@ def load_pocket(rec_dir):
     )
 
 
+def shaw_location():
+    """Shaw's current zone record (FOUNDATION §1: the single source of truth for his timezone)."""
+    path = os.environ.get("SHAW_LOCATION_FILE") or os.path.expanduser("~/.orchestra/state/shaw-location.json")
+    with open(path) as f:
+        return json.load(f)
+
+
+def call_end(call):
+    import datetime as dt
+    start = dt.datetime.fromisoformat(call.created_at.replace("Z", "+00:00"))
+    return (start + dt.timedelta(seconds=call.duration_s)).isoformat()
+
+
 def _conversation_category(cat):
     # Same predicate as dream/pocket-extract.py:34-39, so both pipelines agree on what a call is.
     cat = (cat or "uncategorized").lower()

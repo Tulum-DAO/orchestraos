@@ -125,3 +125,23 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     if dst_adjusted:
         source += " (DST-adjusted)"
     return Due(when.isoformat(timespec="seconds"), source)
+
+
+def _add_business_days(day, n):
+    while n:
+        day += dt.timedelta(days=1)
+        if day.weekday() < 5:
+            n -= 1
+    return day
+
+
+def chase_date(their_due_ts, call_start, tz):
+    """When Shaw chases a participant's promise (design §4): their due + 1 business day at 10:00 when
+    known, else the call date + 2 business days at 10:00, in the zone at the call."""
+    zone = ZoneInfo(tz)
+    if their_due_ts:
+        base, n = dt.datetime.fromisoformat(their_due_ts).astimezone(zone).date(), 1
+    else:
+        base, n = _parse_utc(call_start).astimezone(zone).date(), 2
+    when, _ = _localize(_add_business_days(base, n), 10, 0, tz)
+    return when.isoformat(timespec="seconds")

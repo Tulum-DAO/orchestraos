@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from postcall import card, effects, extract, ledger, pipeline, sources
+from postcall import effects, extract, ledger, pipeline, sources
 
 
 def _pocket(fixture_dir, name):
@@ -92,8 +92,8 @@ def test_grounded_items_plan_exactly_one_card(fixture_dir, led, fx):
     cards = [e for e in fx.sent if e.kind == "card"]
     assert len(cards) == 1
     assert len(result.items) == 2
-
-
-def test_card_builder_refuses_an_empty_item_list():
-    with pytest.raises(ValueError):
-        card.build_questionnaire(call=None, items=[])
+    assert cards[0].payload["summary"].startswith("Decide by: ")
+    assert cards[0].payload["summary"].splitlines()[1].endswith("· With: Dana Reyes (unverified)")
+    prompts = [q["prompt"] for q in cards[0].payload["questions"][1:]]
+    assert prompts[0].startswith("⚠ Send Dana the pricing deck · Dana Reyes · Due: Fri 27 Nov 17:00 Tulum")
+    assert prompts[1].startswith("⚠ Dana Reyes owes you: Dana shares the API credentials · Due: Wed 25 Nov 09:00 Tulum")

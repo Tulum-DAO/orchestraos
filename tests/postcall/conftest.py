@@ -23,6 +23,8 @@ os.environ["NTFY_TOKEN_FILE"] = os.path.join(_FENCE, "no-such-dir", "ntfy-token"
 os.environ["MSG_DB_PATH"] = os.path.join(_FENCE, "messages.db")
 os.environ["POSTCALL_MODE"] = "test"
 os.environ["POSTCALL_STATE_DIR"] = os.path.join(_FENCE, "postcall-state")
+os.environ["SHAW_LOCATION_FILE"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                                                "shaw-location.json")
 for _k in [k for k in os.environ if k.startswith("TELEGRAM_")]:
     del os.environ[_k]
 
