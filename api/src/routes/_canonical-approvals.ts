@@ -19,7 +19,7 @@
  *   APPROVAL_DB_PATH      — inherited by the python child (execFile inherits env),
  *                           so the canonical read/write hit the scratch tasks.db.
  */
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
@@ -121,6 +121,24 @@ export function answerRefusalStatus(result: AnswerResult): number {
  */
 export function readCanonicalPending(): CanonicalRow[] {
   return readCanonicalPendingOrNull() ?? [];
+}
+
+/** Same pending feed as readCanonicalPendingOrNull, without blocking the Node event loop. */
+export function readCanonicalPendingAsync(): Promise<CanonicalRow[] | null> {
+  return new Promise((resolve) => {
+    execFile('python3', [APPROVAL_CLI, 'pending', '--json'], {
+      timeout: 5000,
+      encoding: 'utf-8',
+    }, (err, out) => {
+      if (err) { resolve(null); return; }
+      try {
+        const rows = JSON.parse(String(out).trim());
+        resolve(Array.isArray(rows) ? rows : null);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
 }
 
 /** The pending rows, or null when they could not be read (a timeout, a crash, bad JSON). An authorization
