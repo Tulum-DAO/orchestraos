@@ -2,13 +2,13 @@
  "_doc": "call-context: the Python loader (services/arturo/thread_context.py) and the API builder (api/src/lib/callContext.ts) produce these exact bytes. Regenerate only from the Python reference.",
  "cases": [
   {
-   "name": "chat and calls interleave, stamped in Tulum",
+   "name": "chat and calls interleave, stamped in Local",
    "chat_agent": "gm",
    "call_owner": null,
    "exclude": "vc_now",
    "budget": 2000,
    "tz": "America/Cancun",
-   "tz_label": "Tulum",
+   "tz_label": "Local",
    "items": [
     {
      "kind": "text",
@@ -118,7 +118,7 @@
     }
    ],
    "operator_label": "Shaw",
-   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, Tulum time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw: typed before the call\n[2025-11-25T17:00:05Z 12:00 Tulum] chat gm: gm answers\n[2025-11-25T17:01:40Z 12:01 Tulum] call vc_prev Shaw: spoken line one\n[2025-11-25T17:01:41Z 12:01 Tulum] call vc_prev Arturo: spoken reply\n[2025-11-25T17:06:40Z 12:06 Tulum] chat Shaw: typed after\n[2025-11-25T17:06:50Z 12:06 Tulum] chat Shaw: held on the phone, not yet delivered\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, Local time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Local] chat Shaw: typed before the call\n[2025-11-25T17:00:05Z 12:00 Local] chat gm: gm answers\n[2025-11-25T17:01:40Z 12:01 Local] call vc_prev Shaw: spoken line one\n[2025-11-25T17:01:41Z 12:01 Local] call vc_prev Arturo: spoken reply\n[2025-11-25T17:06:40Z 12:06 Local] chat Shaw: typed after\n[2025-11-25T17:06:50Z 12:06 Local] chat Shaw: held on the phone, not yet delivered\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
   },
   {
    "name": "budget summarizes the older calls; secrets never pass",
@@ -707,7 +707,7 @@
    "exclude": null,
    "budget": 2000,
    "tz": "America/Cancun",
-   "tz_label": "Tulum",
+   "tz_label": "Local",
    "items": [
     {
      "kind": "text",
@@ -748,7 +748,7 @@
     }
    ],
    "operator_label": "Shaw",
-   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, Tulum time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw: is the dream fix in?\n[2025-11-25T17:00:30Z 12:00 Tulum] chat zz-callctx-fixture: Yes, merged at 06:09Z.\n[2025-11-25T17:01:00Z 12:01 Tulum] call vc_routecase1 Shaw: the fixture call, spoken\n[2025-11-25T17:01:05Z 12:01 Tulum] call vc_routecase1 zz-callctx-fixture: heard it\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, Local time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 12:00 Local] chat Shaw: is the dream fix in?\n[2025-11-25T17:00:30Z 12:00 Local] chat zz-callctx-fixture: Yes, merged at 06:09Z.\n[2025-11-25T17:01:00Z 12:01 Local] call vc_routecase1 Shaw: the fixture call, spoken\n[2025-11-25T17:01:05Z 12:01 Local] call vc_routecase1 zz-callctx-fixture: heard it\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
   },
   {
    "name": "an empty thread says so",
