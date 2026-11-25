@@ -39,8 +39,15 @@ test('the budget clamps to 500..20000 and defaults to 6000', () => {
   assert.equal(clampBudget('abc'), 6000);
 });
 
-test('a planted secret never reaches the output', () => {
-  const c = cases.find((x: any) => x.name.startsWith('budget summarizes'));
-  assert.ok(!c.expected.includes('abcdefghijklmnop') && !c.expected.includes('hunter2xyz'));
-  assert.ok(c.expected.includes('[redacted]'));
+test('secrets are blanked before the clip, by the default shapes and by a passed redactor', () => {
+  const token = 'gwtok_' + 'Q7'.repeat(20);
+  const items = [
+    { kind: 'text', role: 'user', text: 'x'.repeat(1190) + ' sk-proj_abcdefghijklmnop' + 'y'.repeat(40), ts: '2026-11-25T17:00:00Z', audience: 'user' },
+    { kind: 'text', role: 'user', text: 'x'.repeat(1170) + ' ' + token + ' tail', ts: '2026-11-25T17:00:01Z', audience: 'user' },
+  ];
+  const base = { chatAgent: 'gm', callOwner: null, items, journals: [], tz: 'UTC', tzLabel: 'UTC', operatorLabel: 'S' };
+  const plain = buildCallContext(base);
+  assert.ok(!plain.includes('sk-proj_abcdefg'), 'a key cut at the clip boundary shipped as a prefix');
+  const full = buildCallContext({ ...base, redact: (t: string) => t.split(token).join('[redacted]') });
+  assert.ok(!full.includes(token.slice(0, 20)), 'the install token cut at the clip boundary shipped as a prefix');
 });

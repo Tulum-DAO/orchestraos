@@ -196,3 +196,13 @@ def test_the_operator_is_named_by_their_own_name_else_operator(tmp_path, monkeyp
     (tmp_path / "state" / "arturo").mkdir(parents=True)
     (tmp_path / "state" / "arturo" / "operator.json").write_text(json.dumps({"facts": {"name": {"value": "Ada"}}}))
     assert tc.operator_name() == "Ada"
+
+
+def test_the_install_token_is_blanked_before_the_clip(tmp_path, monkeypatch):
+    token = "gwtok_" + "Q7" * 20
+    (tmp_path / "tok").write_text(token + "\n")
+    monkeypatch.setenv("WATCH_GATEWAY_TOKEN_FILE", str(tmp_path / "tok"))
+    monkeypatch.setattr(tc, "_EXACT", {"loaded": False, "values": []})
+    line = tc.Line(at=T0, who="Shaw", text="x" * 1170 + " " + token + " tail", channel="chat")
+    out = tc.render([line], budget_tokens=2000, tz="UTC", tz_label="UTC")
+    assert token[:20] not in out

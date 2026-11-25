@@ -1,7 +1,8 @@
 /**
  * GET /api/agents/:id/call-context: the opening context of a call with this agent, from the real routes against a temp
  * data dir and a temp Claude log. Loopback only and never through a proxy; the starting call left out; a previous call
- * still marked live included; a planted secret never served; the budget clamped.
+ * still marked live included; this install's gateway token never served, even cut at the clip boundary; the budget
+ * clamped; and the shared fixture's route case served byte for byte as the Python twin renders it.
  *
  * Run: npx tsx --test src/routes/call-context.route.test.ts   (from api/)
  */
@@ -10,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SEAT = 'zz-callctx-seat';
@@ -27,8 +28,18 @@ process.env.ORCHESTRA_DIR = orch;
 if (!process.env.ORCHESTRA_CONFIG) {
   process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
 }
-writeFileSync(join(orch, 'registry.json'), JSON.stringify({ agents: { [SEAT]: {} } }));
+const FIX = JSON.parse(readFileSync(new URL('../../../contract/call-context-cases.json', import.meta.url), 'utf-8'))
+  .cases.find((c: any) => c.route);
+const FSID = '55555555-2222-4333-8444-0000000000c2';
+const fproj = join(home, '.claude', 'projects', '-fixture');
+mkdirSync(fproj, { recursive: true });
+writeFileSync(join(orch, 'registry.json'), JSON.stringify({ agents: { [SEAT]: {}, [FIX.chat_agent]: {} } }));
 writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({ session_id: SID, cwd: '/repo' }));
+writeFileSync(join(orch, 'state', 'agents', `${FIX.chat_agent}.json`), JSON.stringify({ session_id: FSID, cwd: '/fixture' }));
+// This install's gateway token, under the temp data dir only (never the live config's).
+const TOKEN = 'gwtok_' + 'Q7'.repeat(20);
+writeFileSync(join(orch, 'state', 'watch-gateway-token'), TOKEN + '\n');
+process.env.WATCH_GATEWAY_TOKEN_FILE = join(orch, 'state', 'watch-gateway-token');
 writeFileSync(join(orch, 'state', 'shaw-location.json'), JSON.stringify({ tz: 'America/Cancun', label: 'Tulum' }));
 mkdirSync(join(orch, 'state', 'arturo'), { recursive: true });
 writeFileSync(join(orch, 'state', 'arturo', 'operator.json'), JSON.stringify({ facts: { name: { value: 'Shaw' } } }));
@@ -38,9 +49,18 @@ const epoch = (s: string) => Date.parse(at(s)) / 1000;
 const user = (uuid: string, text: string, ts: string) => JSON.stringify({ type: 'user', uuid, timestamp: at(ts), message: { role: 'user', content: text } });
 const reply = (uuid: string, text: string, ts: string) => JSON.stringify({ type: 'assistant', uuid, timestamp: at(ts),
   message: { id: `m-${uuid}`, role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] } });
+// The token straddles the 1200-character clip: redacted before the clip, or a near-complete prefix would ship.
+const straddle = 'x'.repeat(1170) + ' ' + TOKEN + ' tail';
 writeFileSync(join(projects, `${SID}.jsonl`), [
   user('a1', 'is the dream fix in? my token is sk-proj_abcdefghijklmnop', '00:00'), reply('a2', 'Yes, merged at 06:09Z.', '00:30'),
+  user('a3', straddle, '00:40'), user('a4', `again ${TOKEN}`, '00:50'),
 ].join('\n') + '\n');
+// The fixture's route case: its chat as a Claude log, its journals beside the others.
+const iso = (ts: string) => ts.replace(/(\.\d{3})?Z$/, '.000Z');
+writeFileSync(join(fproj, `${FSID}.jsonl`), FIX.items.map((it: any, i: number) => JSON.stringify(it.role === 'user'
+  ? { type: 'user', uuid: `f${i}`, timestamp: iso(it.ts), message: { role: 'user', content: it.text } }
+  : { type: 'assistant', uuid: `f${i}`, timestamp: iso(it.ts), message: { id: `m-f${i}`, role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: it.text }] } })).join('\n') + '\n');
+for (const j of FIX.journals) writeFileSync(join(orch, 'state', 'voice-calls', j.name), JSON.stringify(j.doc));
 const journal = (call_id: string, extra: Record<string, unknown>) =>
   writeFileSync(join(orch, 'state', 'voice-calls', `${call_id}.json`), JSON.stringify({ call_id, ...extra }));
 journal('vc_prev00001', { agent: SEAT, status: 'live', started_at: epoch('10:00'),
@@ -49,7 +69,7 @@ journal('vc_now000001', { agent: SEAT, status: 'live', started_at: epoch('20:00'
   turns: [{ role: 'user', text: 'the call now starting', ts: epoch('20:00') }] });
 journal('vc_arturo001', { started_at: epoch('05:00'), turns: [{ role: 'user', text: 'an Arturo call', ts: epoch('05:00') }] });
 
-const { default: transcriptRouter } = await import('./chat-transcript.js');
+const { default: transcriptRouter, directLoopback } = await import('./chat-transcript.js');
 
 async function withApp(fn: (base: string) => Promise<void>) {
   const app = express();
@@ -71,6 +91,15 @@ test('the chat and the agent\'s earlier calls, stamped, oldest first; the starti
     assert.ok(t.indexOf('Yes, merged') < t.indexOf('remember the roadmap call'));
     assert.ok(!t.includes('the call now starting') && !t.includes('an Arturo call'));
     assert.ok(!t.includes('abcdefghijklmnop'));
+    assert.ok(!t.includes(TOKEN.slice(0, 20)), 'the gateway token (or a prefix of it) was served');
+    assert.ok(t.includes('again [redacted'));
+  });
+});
+
+test('the fixture route case: the same bytes the Python twin renders', async () => {
+  await withApp(async (base) => {
+    const t = await (await fetch(`${base}/${FIX.chat_agent}/call-context?budget=${FIX.budget}`)).text();
+    assert.equal(t, FIX.expected);
   });
 });
 
@@ -81,10 +110,26 @@ test('calls=arturo merges Arturo\'s own calls with this chat', async () => {
   });
 });
 
+const PROXY_HEADERS: Record<string, string> = {
+  'X-Forwarded-For': '203.0.113.9', 'X-Forwarded-Host': 'box.ts.net', 'X-Forwarded-Proto': 'https',
+  Forwarded: 'for=203.0.113.9', 'X-Real-IP': '203.0.113.9', 'Tailscale-Funnel-Request': '?1',
+  'Tailscale-User-Login': 'someone@example.com', 'X-Orchestra-Peer': 'mac',
+};
+
+test('only a direct caller on this box: every proxy header and a non-loopback address refused', () => {
+  const req = (addr: string, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: addr }, headers });
+  assert.equal(directLoopback(req('127.0.0.1')), true);
+  assert.equal(directLoopback(req('::ffff:127.0.0.1')), true);
+  assert.equal(directLoopback(req('100.64.0.7')), false);
+  assert.equal(directLoopback(req('203.0.113.9')), false);
+  for (const [h, v] of Object.entries(PROXY_HEADERS)) assert.equal(directLoopback(req('127.0.0.1', { [h.toLowerCase()]: v })), false, h);
+});
+
 test('through a proxy it does not exist; bad parameters are refused', async () => {
   await withApp(async (base) => {
-    assert.equal((await fetch(`${base}/${SEAT}/call-context`, { headers: { 'X-Forwarded-For': '203.0.113.9' } })).status, 404);
-    assert.equal((await fetch(`${base}/${SEAT}/call-context`, { headers: { 'Tailscale-Funnel-Request': '?1' } })).status, 404);
+    for (const [h, v] of Object.entries(PROXY_HEADERS)) {
+      assert.equal((await fetch(`${base}/${SEAT}/call-context`, { headers: { [h]: v } })).status, 404, h);
+    }
     assert.equal((await fetch(`${base}/${SEAT}/call-context?exclude=../../x`)).status, 400);
     assert.equal((await fetch(`${base}/${SEAT}/call-context?calls=../x`)).status, 400);
   });
@@ -93,6 +138,7 @@ test('through a proxy it does not exist; bad parameters are refused', async () =
 test('a tiny budget is clamped up, not honoured to nothing', async () => {
   await withApp(async (base) => {
     const t = await (await fetch(`${base}/${SEAT}/call-context?budget=1`)).text();
-    assert.ok(t.includes('RECENT (verbatim):') && t.includes('noted'));
+    // honoured, a budget of 1 keeps nothing verbatim; clamped to 500 the newest call line is there in full
+    assert.match(t, new RegExp(`^\\[[^\\]]+\\] call vc_prev00001 ${SEAT}: noted$`, 'm'));
   });
 });

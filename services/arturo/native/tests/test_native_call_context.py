@@ -173,3 +173,38 @@ def test_run_sh_turns_on_the_thread_and_the_knowledge_facts_but_no_proxy_daemon(
     assert 'export ARTURO_KNOWLEDGE_FACTS="${ARTURO_KNOWLEDGE_FACTS:-1}"' in sh
     assert 'export ARTURO_NATIVE_THREAD_CONTEXT="${ARTURO_NATIVE_THREAD_CONTEXT:-1}"' in sh
     assert "unset ARTURO_STREAM_RELAY ARTURO_WARM_VOICES_CACHE ARTURO_FACTS_RECALL" in sh
+
+
+def test_the_opening_comes_from_the_api_route_and_falls_back_to_the_python_twin(tmp_path, monkeypatch):
+    # the route redacts with the full redactor and this install's token; the twin is the same contract, offline
+    monkeypatch.delenv(call_context.FLAG, raising=False)
+    asked = []
+    out = call_context.opening("gm", route=lambda agent, budget: asked.append((agent, budget)) or "FROM ROUTE",
+                               load=lambda **k: "FROM TWIN", directory=tmp_path)
+    assert out == "FROM ROUTE" and asked == [("gm", call_context.budget_tokens())]
+
+    def down(agent, budget):
+        raise OSError("api down")
+    seen = {}
+    out = call_context.opening("gm", route=down, load=lambda **k: seen.update(k) or "FROM TWIN", directory=tmp_path)
+    assert out == "FROM TWIN" and seen["chat_agent"] == "gm" and seen["call_owner"] is None
+
+
+def test_the_route_is_asked_for_arturos_calls_with_the_budget(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return "THREAD …".encode()
+    monkeypatch.setattr(call_context.urllib.request, "urlopen",
+                        lambda url, timeout: seen.update(url=url, timeout=timeout) or _Resp())
+    monkeypatch.setenv("ORCH_API_URL", "http://127.0.0.1:8888")
+    assert call_context.fetch_route("gm", 6000) == "THREAD …"
+    assert seen["url"] == "http://127.0.0.1:8888/api/agents/gm/call-context?calls=arturo&budget=6000"
+    assert seen["timeout"] <= 5

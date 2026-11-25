@@ -19,7 +19,7 @@ import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction
 import { refable, partAt } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff, callsDir, CALL_ID_RE } from '../lib/agentCalls.js';
-import { buildCallContext, readJournals, clampBudget, shawTz, operatorName } from '../lib/callContext.js';
+import { buildCallContext, readJournals, clampBudget, shawTz, operatorName, redact } from '../lib/callContext.js';
 import { isLoopback } from '../lib/access-log.js';
 import { redactSecrets } from '../lib/redactSecrets.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
@@ -2246,6 +2246,23 @@ export function chatItemsFor(agentId: string, limit = 2000): any[] {
   } catch { return []; }
 }
 
+/** The items the chat page shows for this agent's newest `limit`: the same assembly as GET /:id/transcript with no
+ *  cursor (held operator messages merged, wake replies dropped, notices and call markers placed), so the call
+ *  context's Python twin, which reads that route, sees the same chat. [] when nothing resolves. */
+export function pageItemsFor(agentId: string, limit = 300): any[] {
+  try {
+    const { path, sid } = resolveTranscriptPath(agentId);
+    if (!path) return [];
+    const current = path;
+    cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+    let segs: Segment[];
+    try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
+    const win = chatWindow(agentId, segs, limit, null);
+    if (!win) return [];
+    return withCalls(agentId, win, limit, null, finishWindow(withNotices(agentId, win, limit, null), agentId, true)).items;
+  } catch { return []; }
+}
+
 // GET /api/agents/:id/transcript?limit= -> v2 envelope
 // { agent_id, session_id, grammar_version, items, render_items }
 // GET /api/agents/:id/transcript?before=<cursor>&limit= -> the page just older than the cursor (a
@@ -2345,9 +2362,14 @@ router.get('/:id/transcript.md', (req: Request, res: Response) => {
 // plus the owner's calls, oldest first, every line stamped, newest verbatim within the budget, older summarized.
 // Loopback only (a voice engine on this box), never through a proxy; scoped like transcript.md (router.param above);
 // every piece through the same secret redactor. `calls` defaults to this agent; "arturo" = Arturo's own calls.
-const FORWARDED = ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-funnel-request'];
+const FORWARDED = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip',
+  'tailscale-funnel-request', 'tailscale-user-login', 'x-orchestra-peer'];
+/** A request from a process on this box, not relayed by any proxy (exported for its test). */
+export function directLoopback(req: { socket?: { remoteAddress?: string }; headers: Record<string, unknown> }): boolean {
+  return isLoopback(req.socket?.remoteAddress) && !FORWARDED.some((h) => req.headers[h] !== undefined);
+}
 router.get('/:id/call-context', (req: Request, res: Response) => {
-  if (!isLoopback(req.socket?.remoteAddress) || FORWARDED.some((h) => req.headers[h] !== undefined)) {
+  if (!directLoopback(req)) {
     res.status(404).type('text/plain').send('Not found.');
     return;
   }
@@ -2358,15 +2380,17 @@ router.get('/:id/call-context', (req: Request, res: Response) => {
   const exQ = typeof req.query.exclude === 'string' ? req.query.exclude : '';
   if (exQ && !CALL_ID_RE.test(exQ)) { res.status(400).type('text/plain').send('bad exclude'); return; }
   try {
-    // The chat as the page shows it: a wake's silent/emoji answer is never sent, so never context either.
-    const items = chatItemsFor(agentId, 300).filter((it) => !it?.wake_reply);
+    const items = pageItemsFor(agentId, 300);            // the chat exactly as GET /:id/transcript shows it
     const [tz, tzLabel] = shawTz(dataDir());
+    const exact = [readGatewayToken()].filter(Boolean);
+    // ONE redaction, inside the builder, on each piece BEFORE it is clipped (a secret cut at the clip boundary would
+    // otherwise ship as a near-complete prefix): the twin's own shapes, then the full redactor and this install's token.
     const text = buildCallContext({
       chatAgent: agentId, callOwner: owner, items, journals: readJournals(callsDir(dataDir()), Date.now() / 1000),
       exclude: exQ || null, budgetTokens: clampBudget(req.query.budget), tz, tzLabel, operatorLabel: operatorName(dataDir()),
+      redact: (t: string) => redactSecrets(redact(t), exact).text,
     });
-    res.status(200).type('text/plain; charset=utf-8').set('Cache-Control', 'no-store')
-      .send(redactSecrets(text, [readGatewayToken()].filter(Boolean)).text);
+    res.status(200).type('text/plain; charset=utf-8').set('Cache-Control', 'no-store').send(text);
   } catch (err) {
     console.error('[call-context]', String(err).slice(0, 200));
     res.status(500).type('text/plain').send('Could not build the call context.');

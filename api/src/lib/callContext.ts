@@ -5,9 +5,14 @@
  * including previous calls, and timestamps of every message sent and every phrase spoken" — for ANY agent).
  *
  * The TS twin of services/arturo/thread_context.py. The two produce the SAME BYTES for the same inputs; a shared
- * fixture (contract/fixtures/call-context/) pins both suites. Change one, change both.
+ * fixture (contract/call-context-cases.json) pins both suites. Change one, change both.
  *
- * Python counts code points, so lengths and slices here do too (cp*), never UTF-16 units.
+ * Same bytes for secret-free input. Secrets: each twin redacts every piece BEFORE clipping it (a secret cut at the
+ * clip boundary would otherwise ship as a prefix); the route passes the full redactor plus this install's token.
+ *
+ * Python counts code points, so lengths and slices here do too (cp*), never UTF-16 units. Whitespace is Python's
+ * str.isspace() set (WS below), not JS \s (which adds U+FEFF and lacks U+0085 and \x1c-\x1f). A time is an epoch
+ * number or a full ISO date-time with a zone (never a date alone, never a boolean), kept to the millisecond.
  */
 import fs from 'fs';
 import path from 'path';
@@ -27,7 +32,14 @@ export interface Line { at: number; who: string; text: string; channel: 'chat' |
 
 const cpLen = (s: string) => Array.from(s).length;
 const cpSlice = (s: string, a: number, b?: number) => Array.from(s).slice(a, b).join('');
-const squash = (s: string) => s.split(/\s+/).filter(Boolean).join(' ');
+const WS = '\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
+const WS_RUN = new RegExp(`[${WS}]+`, 'g');
+const WS_EDGES = new RegExp(`^[${WS}]+|[${WS}]+$`, 'g');
+const squash = (s: string) => s.split(WS_RUN).filter(Boolean).join(' ');
+const strip = (s: string) => s.replace(WS_EDGES, '');
+const NUM_RE = /^-?\d+(\.\d+)?$/;
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+const toMs = (x: number) => Math.floor(x * 1000) / 1000;
 
 export const estimateTokens = (text: string) => Math.ceil(cpLen(text || '') / 4);
 
@@ -38,21 +50,22 @@ export function clampBudget(v: unknown): number {
 }
 
 export function epoch(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string' && v.trim()) {
-    const s = v.trim();
-    if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return Number(s);
-    const ms = Date.parse(s);
-    return Number.isNaN(ms) ? null : ms / 1000;
-  }
-  return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? toMs(v) : null;
+  if (typeof v !== 'string') return null;
+  const t = strip(v);
+  if (NUM_RE.test(t)) return toMs(Number(t));
+  if (!ISO_RE.test(t)) return null;
+  const ms = Date.parse(t);
+  return Number.isNaN(ms) ? null : toMs(ms / 1000);
 }
 
 export const redact = (text: string) =>
   (text || '').replace(SECRET_RE, (_m, sk, kv) => (sk ? `${sk}[redacted]` : `${kv}[redacted]`));
 
-function clip(text: string, n: number): string {
-  const t = squash(redact(String(text || '')));
+export type Redactor = (s: string) => string;
+
+function clip(text: string, n: number, red: Redactor): string {
+  const t = squash(red(String(text || '')));
   return cpLen(t) <= n ? t : cpSlice(t, 0, n - 1) + '…';
 }
 
@@ -62,7 +75,8 @@ export function chatLines(items: any[], agentLabel: string, operatorLabel = 'Ope
   const out: Line[] = [];
   for (const it of items || []) {
     if (!it || typeof it !== 'object' || it.kind !== 'text' || it.audience !== 'user' || it.machine) continue;
-    const text = String(it.text || '').trim();
+    if (typeof it.text !== 'string') continue;
+    const text = strip(it.text);
     const at = epoch(it.ts);
     if (!text || at === null || (since !== null && at <= since)) continue;
     out.push({ at, who: it.role === 'user' ? operatorLabel : agentLabel, text, channel: 'chat', call_id: '' });
@@ -105,7 +119,8 @@ export function callLines(journals: Journal[], owner: string | null, exclude: st
     for (const t of Array.isArray(doc.turns) ? doc.turns : []) {
       if (!t || typeof t !== 'object') continue;
       const role = String(t.role || '');
-      const text = String(t.text || '').trim();
+      if (typeof t.text !== 'string') continue;
+      const text = strip(t.text);
       if (!text || SPOKEN_ROLES_SKIP.has(role)) continue;
       const at = epoch(t.ts) ?? start;
       if (at === null) continue;
@@ -137,10 +152,10 @@ export function stamp(at: number, tz: string, tzLabel: string): string {
 
 const where = (l: Line) => (l.channel === 'call' ? `call ${l.call_id}` : 'chat');
 
-export const formatLine = (l: Line, tz: string, tzLabel: string) =>
-  `${stamp(l.at, tz, tzLabel)} ${where(l)} ${l.who}: ${clip(l.text, LINE_MAX_CHARS)}`;
+export const formatLine = (l: Line, tz: string, tzLabel: string, red: Redactor = redact) =>
+  `${stamp(l.at, tz, tzLabel)} ${where(l)} ${l.who}: ${clip(l.text, LINE_MAX_CHARS, red)}`;
 
-function summaries(dropped: Line[], tz: string, tzLabel: string): string[] {
+function summaries(dropped: Line[], tz: string, tzLabel: string, red: Redactor): string[] {
   const groups: [string, Line[]][] = [];
   for (const l of dropped) {
     const key = l.channel === 'call' ? l.call_id : 'chat';
@@ -149,7 +164,7 @@ function summaries(dropped: Line[], tz: string, tzLabel: string): string[] {
   }
   return groups.map(([key, ls]) => {
     const first = ls[0];
-    const gist = clip(ls.slice(-2).map((l) => `${l.who}: ${l.text}`).join(' / '), SUMMARY_ITEM_CHARS);
+    const gist = clip(ls.slice(-2).map((l) => `${l.who}: ${l.text}`).join(' / '), SUMMARY_ITEM_CHARS, red);
     return key === 'chat'
       ? `- ${stamp(first.at, tz, tzLabel)} chat, ${ls.length} message(s) not shown; last: ${gist}`
       : `- ${stamp(first.at, tz, tzLabel)} call ${key}, ${ls.length} phrase(s) not shown; ${gist}`;
@@ -157,7 +172,7 @@ function summaries(dropped: Line[], tz: string, tzLabel: string): string[] {
 }
 
 export function render(lines: Line[], budgetTokens = DEFAULT_BUDGET_TOKENS, tz = 'UTC', tzLabel = 'UTC',
-  title = 'THREAD'): string {
+  title = 'THREAD', red: Redactor = redact): string {
   const head = `${title}: everything above this call, oldest first. Every line is [UTC time, ${tzLabel} time] then `
     + 'chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.';
   if (!lines.length) return `${head}\n(no earlier chat or calls in this thread)`;
@@ -166,7 +181,7 @@ export function render(lines: Line[], budgetTokens = DEFAULT_BUDGET_TOKENS, tz =
   let room = budgetTokens - estimateTokens(head) - summaryCap;
   const kept: string[] = [];
   for (let i = sorted.length - 1; i >= 0; i--) {
-    const s = formatLine(sorted[i], tz, tzLabel);
+    const s = formatLine(sorted[i], tz, tzLabel, red);
     const cost = estimateTokens(s) + 1;
     if (cost > room) break;
     kept.push(s);
@@ -176,7 +191,7 @@ export function render(lines: Line[], budgetTokens = DEFAULT_BUDGET_TOKENS, tz =
   const dropped = sorted.slice(0, sorted.length - kept.length);
   const parts = [head];
   if (dropped.length) {
-    const summ = summaries(dropped, tz, tzLabel);
+    const summ = summaries(dropped, tz, tzLabel, red);
     const block: string[] = [];
     let used = 0;
     for (let i = summ.length - 1; i >= 0; i--) {
@@ -206,7 +221,7 @@ export function operatorName(dataDir: string): string {
   try {
     const d = JSON.parse(fs.readFileSync(path.join(dataDir, 'state', 'arturo', 'operator.json'), 'utf-8'));
     const v = d?.facts?.name?.value;
-    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'string' && strip(v)) return strip(v);
   } catch { /* absent */ }
   return 'Operator';
 }
@@ -214,6 +229,7 @@ export function operatorName(dataDir: string): string {
 export interface BuildOptions {
   chatAgent: string; callOwner: string | null; items: any[] | null; journals: Journal[]; exclude?: string | null;
   budgetTokens?: number; tz: string; tzLabel: string; operatorLabel?: string; chatError?: string | null;
+  redact?: Redactor;          // every piece, before it is clipped; default the twin's own shapes
 }
 
 /** The whole opening context (thread_context.load with its inputs already read). */
@@ -224,5 +240,6 @@ export function buildCallContext(o: BuildOptions): string {
   if (o.items) lines = lines.concat(chatLines(o.items, o.chatAgent, op));
   else notes.push(`(${o.chatAgent} chat could not be read: ${o.chatError || 'Error'})`);
   lines = lines.concat(callLines(o.journals, o.callOwner, o.exclude ?? null, null, op));
-  return [render(lines, o.budgetTokens ?? DEFAULT_BUDGET_TOKENS, o.tz, o.tzLabel)].concat(notes).join('\n');
+  return [render(lines, o.budgetTokens ?? DEFAULT_BUDGET_TOKENS, o.tz, o.tzLabel, 'THREAD', o.redact ?? redact)]
+    .concat(notes).join('\n');
 }

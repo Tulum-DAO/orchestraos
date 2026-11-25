@@ -3,8 +3,8 @@ your own messages ... you can't even remember the last call"; one surface, text 
 
   opening(agent)  the thread above this call: `agent`'s chat (the page the call was placed from; Arturo's dashboard
                   thread is gm's chat, 2026-10-20 ruling) merged with Arturo's own earlier calls, every line stamped,
-                  newest verbatim within a token budget (services/arturo/thread_context.py, the same contract as the
-                  API's GET /api/agents/:id/call-context).
+                  newest verbatim within a token budget. From the API's GET /api/agents/:id/call-context (the full
+                  redactor and this install's token), else its Python twin services/arturo/thread_context.py.
   ChatFeed        chat lines newer than the call's start, as stamped notes that each fit one session append.
 
 Neither ever raises into a call: an unreadable source is an empty opening or no notes.
@@ -12,6 +12,8 @@ Neither ever raises into a call: an unreadable source is an empty opening or no 
 import logging
 import os
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from services.arturo import thread_context
@@ -53,10 +55,25 @@ def calls_dir():
     return Path(os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/.orchestra")) / "state" / "voice-calls"
 
 
-def opening(agent, load=None, directory=None):
-    """The opening context text, or "" (flag off, or nothing could be read)."""
+def fetch_route(agent, budget, timeout=4.0):
+    """GET the API's call-context for `agent`'s chat and Arturo's calls (loopback, as a process on this box)."""
+    url = (f"{thread_context.api_base()}/api/agents/{urllib.parse.quote(str(agent), safe='')}/call-context"
+           f"?calls=arturo&budget={int(budget)}")
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return resp.read().decode("utf-8")
+
+
+def opening(agent, load=None, directory=None, route=None):
+    """The opening context text, or "" (flag off, or nothing could be read): the API route first, the twin if the
+    API cannot answer."""
     if not enabled():
         return ""
+    try:
+        text = (route or fetch_route)(agent, budget_tokens())
+        if text and text.strip():
+            return text
+    except Exception as e:  # noqa: BLE001 — the twin reads the same sources
+        log.info(f"native: call-context route for {agent!r} unavailable ({e!r}); using the twin")
     try:
         return (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
                                              budget_tokens=budget_tokens())

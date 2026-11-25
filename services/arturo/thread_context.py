@@ -55,27 +55,60 @@ def estimate_tokens(text: str) -> int:
     return math.ceil(len(text or "") / 4)
 
 
+_NUM_RE = re.compile(r"-?\d+(\.\d+)?")
+_ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})")
+
+
+def _ms(x: float) -> float:
+    return math.floor(x * 1000) / 1000
+
+
 def _epoch(v) -> Optional[float]:
+    """An epoch number or a full ISO date-time WITH a zone, kept to the millisecond; anything else (a date alone, a
+    boolean, "inf", "1_000") is None. The API twin parses exactly these (callContext.ts epoch)."""
+    if isinstance(v, bool):
+        return None
     if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str) and v.strip():
-        s = v.strip()
+        return _ms(float(v)) if math.isfinite(v) else None
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if _NUM_RE.fullmatch(s):
+        return _ms(float(s))
+    if not _ISO_RE.fullmatch(s):
+        return None
+    try:
+        return _ms(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+_EXACT = {"loaded": False, "values": []}
+
+
+def _exact_secrets() -> list:
+    """This install's own gateway token, by reference (never printed): blanked by exact value like the API does."""
+    if not _EXACT["loaded"]:
+        _EXACT["loaded"] = True
+        path = os.environ.get("WATCH_GATEWAY_TOKEN_FILE") or os.path.join(
+            os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/.orchestra"), "state", "watch-gateway-token")
         try:
-            return float(s)
-        except ValueError:
+            with open(path, encoding="utf-8") as fh:
+                v = fh.read().strip()
+            if len(v) >= 8:
+                _EXACT["values"] = [v]
+        except OSError:
             pass
-        try:
-            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return None
-    return None
+    return _EXACT["values"]
 
 
 def _redact(text: str) -> str:
-    """Secret shapes blanked (brain.redact's patterns): the JSON transcript route is not redacted and the session is
-    a third-party model."""
-    return _SECRET_RE.sub(lambda m: (m.group(1) + "[redacted]") if m.group(1) else (m.group(2) + "[redacted]"),
-                          text or "")
+    """Secret shapes blanked (brain.redact's patterns) and the install's token by exact value, on every piece BEFORE it
+    is clipped: the JSON transcript route is not redacted and the session is a third-party model."""
+    text = text or ""
+    for v in _exact_secrets():
+        text = text.replace(v, "[redacted]")
+    return _SECRET_RE.sub(lambda m: (m.group(1) + "[redacted]") if m.group(1) else (m.group(2) + "[redacted]"), text)
 
 
 def _clip(text: str, n: int) -> str:
@@ -92,7 +125,9 @@ def chat_lines(items: Iterable[dict], agent_label: str, operator_label: str = "O
     for it in items or []:
         if not isinstance(it, dict) or it.get("kind") != "text" or it.get("audience") != "user" or it.get("machine"):
             continue
-        text = (it.get("text") or "").strip()
+        if not isinstance(it.get("text"), str):
+            continue
+        text = it["text"].strip()
         at = _epoch(it.get("ts"))
         if not text or at is None or (since is not None and at <= since):
             continue
@@ -139,7 +174,9 @@ def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, a
             if not isinstance(t, dict):
                 continue
             role = str(t.get("role") or "")
-            text = (t.get("text") or "").strip()
+            if not isinstance(t.get("text"), str):
+                continue
+            text = t["text"].strip()
             if not text or role in _SPOKEN_ROLES_SKIP:
                 continue
             at = _epoch(t.get("ts"))
