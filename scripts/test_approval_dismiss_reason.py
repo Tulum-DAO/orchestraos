@@ -30,6 +30,9 @@ def fenced(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("NTFY_TOKEN_FILE", "/nonexistent/ntfy-token-for-tests")
     monkeypatch.delenv("APPROVAL_DDL_ARMED", raising=False)
+    # No live tmux here: the bridge row's pane reads as present and capturable unless a test says otherwise.
+    import scripts.watch_gateway as G
+    monkeypatch.setattr(G, "_pane_readable", lambda session: "ok")
 
 
 @pytest.fixture
@@ -284,16 +287,81 @@ def test_a_headless_seats_card_is_not_mistaken_for_an_on_screen_menu_and_gets_it
 
 
 def test_an_unreadable_pane_refuses_the_dismiss_instead_of_calling_the_menu_gone(box, monkeypatch):
+    """The real failure path: a tmux capture that fails or times out returns None (it never raises), so the menu
+    reader must not be asked at all; the gate reads the capture itself first."""
     import scripts.watch_gateway as G
     rid = _bridge_menu(box.ledger)
-
-    def boom(session):
-        raise RuntimeError("tmux capture-pane timed out")
-    monkeypatch.setattr(G, "_current_menu", boom)
+    monkeypatch.setattr(G, "_pane_readable", lambda session: "unreadable")
+    monkeypatch.setattr(G, "_current_menu", lambda session: pytest.fail("the menu reader ran on an unreadable pane"))
     assert G._on_screen_menu(box.ledger.get(rid)) == "unreadable"
     st, d = box.call("POST", f"/approvals/{rid}/discard", body={"reason": "old"})
     assert st == 423 and d["ok"] is False and "Could not check codex-gm's screen" in d["error"] and "not proof" in d["why"]
+    assert d["agent"] == "codex-gm" and d["id"] == rid
     assert box.ledger.get(rid)["status"] == "pending" and not box.sent
+
+
+def test_a_menu_reader_that_cannot_run_is_unreadable_not_off(box, monkeypatch, capsys):
+    """agent-status failing to load (or raising) is the one way the reader itself fails: still not an empty screen,
+    and the cause is logged so a 423 that never clears can be read in the gateway log."""
+    import scripts.watch_gateway as G
+    rid = _bridge_menu(box.ledger)
+
+    def boom(session, question):
+        raise ImportError("No module named 'agent_status'")
+    monkeypatch.setattr(G, "_ledger_menu_matches", boom)
+    assert G._on_screen_menu(box.ledger.get(rid)) == "unreadable"
+    assert box.call("POST", f"/approvals/{rid}/discard")[0] == 423
+
+
+def test_a_gone_session_reads_off_so_a_retired_seats_card_stays_dismissable(box, monkeypatch):
+    import scripts.watch_gateway as G
+    rid = _bridge_menu(box.ledger)
+    monkeypatch.setattr(G, "_pane_readable", lambda session: "gone")
+    monkeypatch.setattr(G, "_current_menu", lambda session: {"question": "Which build?", "options": []})   # never consulted
+    assert G._on_screen_menu(box.ledger.get(rid)) == "off"
+    st, d = box.call("POST", f"/approvals/{rid}/discard", body={"reason": "seat retired"})
+    assert (st, d["applied"]) == (200, True) and box.ledger.get(rid)["status"] == "discarded"
+
+
+class _Run:
+    def __init__(self, rc, out=""):
+        self.returncode, self.stdout = rc, out
+
+
+@pytest.mark.parametrize("has_session_rc, capture, want", [(1, None, "gone"), (0, None, "unreadable"), (0, "", "ok"),
+                                                         (0, "> \n", "ok")],
+                         ids=["no-such-session", "capture-failed", "empty-screen", "composer"])
+def test_pane_readable_reads_tmux_itself(monkeypatch, has_session_rc, capture, want):
+    """_pane_readable asks tmux has-session (exact name) then captures the visible screen: a None capture is
+    'unreadable', never an empty screen; a session tmux does not have is 'gone'."""
+    import scripts.watch_gateway as G
+    monkeypatch.undo()                                   # the autouse stub: this test wants the real function
+    import scripts.watch_gateway as G2
+    calls = []
+
+    def fake_tmux(*args, timeout=5):
+        calls.append(args)
+        if args[0] == "has-session":
+            assert args[2] == "=codex-gm", "an exact session name, never a prefix"
+            return _Run(has_session_rc)
+        return _Run(0 if capture is not None else 1, capture or "")
+    monkeypatch.setattr(G2, "_tmux", fake_tmux)
+    assert G2._pane_readable("codex-gm") == want
+    assert G2._pane_readable("") == "gone" and G2._pane_readable(None) == "gone"
+    if has_session_rc != 0:
+        assert all(a[0] == "has-session" for a in calls), "a gone session is never captured"
+
+
+def test_pane_readable_treats_a_tmux_timeout_as_unreadable(monkeypatch):
+    import subprocess
+    import scripts.watch_gateway as G
+    monkeypatch.undo()
+    import scripts.watch_gateway as G2
+
+    def slow(*args, timeout=5):
+        raise subprocess.TimeoutExpired(cmd="tmux", timeout=timeout)
+    monkeypatch.setattr(G2, "_tmux", slow)
+    assert G2._pane_readable("codex-gm") == "unreadable"
 
 
 def test_an_agents_own_menu_card_is_dismissed_like_any_other(box):

@@ -11551,20 +11551,44 @@ DISCARD_SURFACES = DISCARD_SURFACES_DEVICE + DISCARD_SURFACES_FLEET
 DISMISS_ON_THE_PANE = "dismiss it on the pane"
 
 
+def _pane_readable(session):
+    """'gone' | 'unreadable' | 'ok' for the session a menu bridge row names, read from tmux itself: 'gone' when tmux
+    has no such session (a retired seat: nothing can be on its screen), 'unreadable' when the session exists but its
+    visible screen could not be captured (the capture failed or timed out, which returns None, never raises), else
+    'ok'. The menu reader below only runs on 'ok', so a failed capture is never mistaken for an empty screen."""
+    if not session:
+        return "gone"
+    try:
+        if _tmux("has-session", "-t", f"={session}").returncode != 0:
+            return "gone"
+        return "ok" if _capture_pane(session, lines=0) is not None else "unreadable"
+    except Exception as e:  # noqa: BLE001 — tmux itself failing (a timeout) is not an empty screen
+        print(f"[watch_gateway] discard: could not read {session}'s pane: {e!r}", file=sys.stderr)
+        return "unreadable"
+
+
 def _on_screen_menu(row):
     """'on' | 'off' | 'unreadable' for a menu bridge row: whether its menu is STILL on the agent's screen. Only the
     bridge's own rows (origin 'menu_bridge') are looked at; a headless seat's card and an agent's written decision are
     always 'off'. 'on' = the pane's current menu matches the row's question (_ledger_menu_matches, version-tolerant);
-    'off' = the pane shows nothing or another menu (dismissing is right, and what reconcile_orphans would do);
-    'unreadable' = the pane could not be read (a tmux capture that failed or timed out): NOT evidence the menu is gone,
-    the same stance reconcile_orphans takes, so the caller refuses rather than tells the agent to stop waiting.
-    Reads the pane (ps + tmux capture): call it off the event loop."""
+    'off' = the pane shows nothing or another menu, or tmux has no such session any more (dismissing is right, and
+    what reconcile_orphans would do; a retired seat's card stays dismissable); 'unreadable' = the session exists but
+    its screen could not be captured (_pane_readable: a failed or timed-out capture returns None, it never raises), or
+    the menu reader itself failed: NOT evidence the menu is gone, the same stance reconcile_orphans takes, so the
+    caller refuses rather than tells the agent to stop waiting. Reads the pane (ps + tmux capture): call it off the
+    event loop."""
     if row.get("origin") != "menu_bridge":
         return "off"
+    session = row.get("session") or row.get("from_agent")
+    readable = _pane_readable(session)
+    if readable == "gone":
+        return "off"
+    if readable == "unreadable":
+        return "unreadable"
     try:
-        return "on" if _ledger_menu_matches(row.get("session") or row.get("from_agent"), row.get("question")) else "off"
-    except Exception as e:  # noqa: BLE001 — an unreadable pane is not an empty one
-        print(f"[watch_gateway] discard: could not read the pane for {row.get('id')}: {e}", file=sys.stderr)
+        return "on" if _ledger_menu_matches(session, row.get("question")) else "off"
+    except Exception as e:  # noqa: BLE001 — a menu reader that cannot run (its module failed to load) is not an empty screen
+        log.warning(f"discard: the menu reader failed for {row.get('id')} ({session}): {e!r}; answering unreadable")
         return "unreadable"
 
 
