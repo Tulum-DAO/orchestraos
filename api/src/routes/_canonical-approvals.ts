@@ -21,12 +21,14 @@
  */
 import { execFile, execFileSync } from 'child_process';
 import { join } from 'path';
+import { statSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 const SCRIPTS = process.env.ORCHESTRA_SCRIPTS_DIR || join(CODE_ROOT, 'scripts');   // code, not data (lib/codeRoot.ts)
 const APPROVAL_CLI = join(SCRIPTS, 'approval.py');
+const TASKS_DB = process.env.APPROVAL_DB_PATH || join(ORCHESTRA, 'state', 'tasks.db');   // same default as approval_config.db_path()
 
 export interface CanonicalRow {
   id: string;
@@ -123,6 +125,47 @@ export function readCanonicalPending(): CanonicalRow[] {
   return readCanonicalPendingOrNull() ?? [];
 }
 
+/** mtime+size of tasks.db and its WAL/SHM: any writer (the API, a gateway answer, the python CLI) changes it. */
+function tasksDbStamp(): string {
+  return [TASKS_DB, `${TASKS_DB}-wal`, `${TASKS_DB}-shm`].map((f) => {
+    try { const st = statSync(f); return `${st.mtimeMs}:${st.size}`; } catch { return '-'; }
+  }).join('|');
+}
+
+export const CANONICAL_TTL_MS = 3_000;
+let canonicalCache: { at: number; stamp: string; rows: CanonicalRow[] } | null = null;
+let canonicalInflight: Promise<CanonicalRow[]> | null = null;
+
+/**
+ * Mark the kept feed stale (an answer through this process did change it; the stamp catches every other
+ * writer): the next read runs the CLI, and the old rows stay only as the fallback for a failed read.
+ */
+export function invalidateCanonicalPendingCache(): void {
+  if (canonicalCache) canonicalCache.at = -Infinity;
+}
+
+/**
+ * The pending feed for the list routes: one `approval.py pending --json` at a time, shared by concurrent
+ * requests, kept while tasks.db (and its WAL) is unchanged and for at most CANONICAL_TTL_MS. A write by
+ * ANY process changes the stamp, so a gateway answer drops from the web feed on the next read (the
+ * resolve-everywhere contract, api/test/unified-approvals-canonical.test.mjs c2). A failed read is never
+ * kept: it returns the last good rows, or [] when there are none.
+ */
+export function readCanonicalPendingCached(): Promise<CanonicalRow[]> {
+  const stamp = tasksDbStamp();
+  const now = Date.now();
+  if (canonicalCache && canonicalCache.stamp === stamp && now - canonicalCache.at < CANONICAL_TTL_MS) {
+    return Promise.resolve(canonicalCache.rows);
+  }
+  if (canonicalInflight) return canonicalInflight;
+  canonicalInflight = (async () => {
+    const rows = await readCanonicalPendingAsync();
+    if (rows) canonicalCache = { at: Date.now(), stamp, rows };
+    return rows ?? canonicalCache?.rows ?? [];
+  })().finally(() => { canonicalInflight = null; });
+  return canonicalInflight;
+}
+
 /** Same pending feed as readCanonicalPendingOrNull, without blocking the Node event loop. */
 export function readCanonicalPendingAsync(): Promise<CanonicalRow[] | null> {
   return new Promise((resolve) => {
@@ -216,6 +259,7 @@ export function canonicalAnswer(
   const args = canonicalAnswerArgv(id, answer, text, extra, opts);
   try {
     const out = execFileSync('python3', args, { timeout: 15000, encoding: 'utf-8' });
+    invalidateCanonicalPendingCache();
     return JSON.parse(out.trim());
   } catch (err: any) {
     return answerFailure(err, id);

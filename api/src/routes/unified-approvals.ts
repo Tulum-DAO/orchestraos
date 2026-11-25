@@ -23,7 +23,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
 import {
   readCanonicalPending,
-  readCanonicalPendingAsync,
+  readCanonicalPendingCached,
   readCanonicalPendingOrNull,
   canonicalAnswer,
   answerPeer,
@@ -376,17 +376,6 @@ router.get('/', async (req: Request, res: Response) => {
 export interface ApprovalList { items: UnifiedApproval[]; total: number; canonicalIds: Set<string> }
 
 /** Everything the operator sees, filtered by ?type, ?urgency and ?status. */
-const CANONICAL_TTL_MS = 3_000;
-let canonicalCache: { at: number; rows: CanonicalRow[] } | null = null;
-
-export async function cachedCanonicalPending(): Promise<CanonicalRow[]> {
-  const now = Date.now();
-  if (canonicalCache && now - canonicalCache.at < CANONICAL_TTL_MS) return canonicalCache.rows;
-  const rows = (await readCanonicalPendingAsync()) ?? [];
-  canonicalCache = { at: now, rows };
-  return rows;
-}
-
 async function listItems(req: Request): Promise<ApprovalList> {
   const typeFilter = (req.query.type as string) || 'all';
   const urgencyFilter = req.query.urgency as string | undefined;
@@ -425,7 +414,7 @@ async function listItems(req: Request): Promise<ApprovalList> {
     if (!statusFilter || statusFilter === 'pending') {
       // W5: gate BEFORE normalizing — a multipart && !walk_complete row never
       // reaches the client raw (see gateMenuRowsForClient above).
-      const canonical = gateMenuRowsForClient(await cachedCanonicalPending(), req);
+      const canonical = gateMenuRowsForClient(await readCanonicalPendingCached(), req);
       // canonical WINS on collision — index its ids AND op_keys.
       const canonicalKeys = new Set<string>();
       for (const r of canonical) {
@@ -544,7 +533,7 @@ router.get('/stats', async (req: Request, res: Response) => {
   }
 
   // Agent approvals: canonical pending UNION filesystem residuals + archive.
-  const canonical = await cachedCanonicalPending();
+  const canonical = await readCanonicalPendingCached();
   const canonicalKeys = new Set<string>();
   for (const r of canonical) {
     canonicalKeys.add(r.id);
