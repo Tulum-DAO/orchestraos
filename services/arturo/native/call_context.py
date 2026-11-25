@@ -11,6 +11,7 @@ Neither ever raises into a call: an unreadable source is an empty opening or no 
 """
 import logging
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -32,9 +33,13 @@ def enabled():
     return os.environ.get(FLAG, "1") != "0"
 
 
-# The opening's size on a native call: the largest budget whose greet lands under 3 s (live calibration 2026-11-25,
-# fenced thread, socket open -> first word: 6000 -> 4.3 s, 3000 -> 3.01 s, 1500 -> 2.44 s). The rest is behind tools.
-DEFAULT_BUDGET_TOKENS = 1500
+# The opening's size on a native call. Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across
+# chat and calls, every one stamped, and that overrides the under-3 s greet bar. Measured on the real gm thread:
+# 1500 tokens -> 15 verbatim turns, 2000 -> 22, 2500 -> 32, 4000 -> 59 (greet: 1500 -> 2.44 s, 3000 -> 3.01 s).
+# When long chat replies leave the default short of MIN_TURNS, the opening is read once more at FLOOR_BUDGET_TOKENS.
+DEFAULT_BUDGET_TOKENS = 2500
+MIN_TURNS = 25
+FLOOR_BUDGET_TOKENS = 4000
 
 
 def budget_tokens():
@@ -70,21 +75,55 @@ def fetch_route(agent, budget, timeout=4.0):
 
 def opening(agent, load=None, directory=None, route=None):
     """The opening context text, or "" (flag off, or nothing could be read): the API route first, the twin if the
-    API cannot answer."""
+    API cannot answer. Short of MIN_TURNS at the default size, it is read once more at FLOOR_BUDGET_TOKENS (an
+    explicit ARTURO_NATIVE_CONTEXT_TOKENS is taken as meant)."""
     if not enabled():
         return ""
+    budget = budget_tokens()
+    text = _read(agent, budget, load, directory, route)
+    if (not os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") and budget < FLOOR_BUDGET_TOKENS
+            and describe(text)["turns"] < MIN_TURNS):
+        more = _read(agent, FLOOR_BUDGET_TOKENS, load, directory, route)
+        if describe(more)["turns"] > describe(text)["turns"]:
+            text = more
+    return text
+
+
+def _read(agent, budget, load=None, directory=None, route=None):
     try:
-        text = (route or fetch_route)(agent, budget_tokens())
+        text = (route or fetch_route)(agent, budget)
         if text and text.strip():
             return text
     except Exception as e:  # noqa: BLE001 — the twin reads the same sources
         log.info(f"native: call-context route for {agent!r} unavailable ({e!r}); using the twin")
     try:
         return (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
-                                             budget_tokens=budget_tokens())
+                                             budget_tokens=budget)
     except Exception as e:  # noqa: BLE001 — a call without its thread is still a call
         log.warning(f"native: opening context for {agent!r} failed: {e!r}")
         return ""
+
+
+_STAMP_RE = re.compile(r"^\[(\S+Z) ")
+_CALL_RE = re.compile(r"\] call (vc_[A-Za-z0-9_-]+)")
+
+
+def describe(text):
+    """What an opening carried, for the call report (so "he could not recall X" is answerable from the file): the
+    verbatim turns, the summarized items, the first/last verbatim stamp (UTC), chat vs call lines, the call ids."""
+    turns, summarized, chat_n, call_n, calls = [], 0, 0, 0, set()
+    for line in (text or "").splitlines():
+        calls.update(_CALL_RE.findall(line))
+        if line.startswith("- ["):
+            summarized += 1
+        elif _STAMP_RE.match(line):
+            turns.append(_STAMP_RE.match(line).group(1))
+            if "] chat " in line:
+                chat_n += 1
+            elif "] call " in line:
+                call_n += 1
+    return {"turns": len(turns), "summarized": summarized, "first": turns[0] if turns else None,
+            "last": turns[-1] if turns else None, "chat_lines": chat_n, "call_lines": call_n, "calls": sorted(calls)}
 
 
 class ChatFeed:

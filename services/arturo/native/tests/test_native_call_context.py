@@ -184,7 +184,7 @@ def test_the_opening_comes_from_the_api_route_and_falls_back_to_the_python_twin(
     asked = []
     out = call_context.opening("gm", route=lambda agent, budget: asked.append((agent, budget)) or "FROM ROUTE",
                                load=lambda **k: "FROM TWIN", directory=tmp_path)
-    assert out == "FROM ROUTE" and asked == [("gm", call_context.budget_tokens())]
+    assert out == "FROM ROUTE" and asked[0] == ("gm", call_context.budget_tokens())   # (0 turns: one floor re-read)
 
     def down(agent, budget):
         raise OSError("api down")
@@ -253,13 +253,63 @@ def test_the_chat_feed_defaults_to_thinking_the_kind_measured_voiced(monkeypatch
     assert call_context.feed_kind() == "thinking"
 
 
-def test_the_opening_budget_defaults_to_the_measured_greet_floor(monkeypatch):
-    # live calibration 2026-11-25, fenced thread, silence uplink (socket open -> first greet word):
-    # 6000 -> 4.3 s (native-240ee40aec3e), 3000 -> 3.01 s (native-aa57cc77994a), 1500 -> 2.44 s (native-22588f39755c).
-    # The default is the largest budget whose greet lands under 3 s; the rest of the thread is behind tools.
+def test_the_opening_budget_defaults_to_25_stamped_turns(monkeypatch):
+    # Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across chat and calls, stamped; this
+    # overrides the under-3 s greet bar. Measured on the real gm thread: 2000 -> 22 verbatim turns, 2500 -> 32.
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
-    assert call_context.budget_tokens() == call_context.DEFAULT_BUDGET_TOKENS == 1500
+    assert call_context.budget_tokens() == call_context.DEFAULT_BUDGET_TOKENS == 2500
+    assert call_context.MIN_TURNS == 25 and call_context.FLOOR_BUDGET_TOKENS == 4000
     monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "6000")
     assert call_context.budget_tokens() == 6000
     monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "junk")
-    assert call_context.budget_tokens() == 1500
+    assert call_context.budget_tokens() == 2500
+
+
+def _opening(n_verbatim, n_summ=0):
+    from services.arturo import thread_context as tc
+    lines = [tc.PAST_OPEN, "THREAD: header"]
+    if n_summ:
+        lines += ["EARLIER (summarized):"] + [f"- [2026-11-25T10:0{i}:00Z 05:0{i} ET] call vc_old{i}, 3 phrase(s) not shown; x"
+                                             for i in range(n_summ)]
+    lines.append("RECENT (verbatim):")
+    for i in range(n_verbatim):
+        where = "chat" if i % 2 else f"call vc_c{i % 3}"
+        lines.append(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} ET] {where} Operator: line {i}")
+    return "\n".join(lines + [tc.PAST_CLOSE])
+
+
+def test_the_opening_is_described_by_turns_span_and_sources():
+    d = call_context.describe(_opening(6, n_summ=2))
+    assert d["turns"] == 6 and d["summarized"] == 2
+    assert d["first"] == "2026-11-25T17:00:00Z" and d["last"] == "2026-11-25T17:05:00Z"
+    assert d["chat_lines"] == 3 and d["call_lines"] == 3
+    assert d["calls"] == ["vc_c0", "vc_c1", "vc_c2", "vc_old0", "vc_old1"]
+    assert call_context.describe("") == {"turns": 0, "summarized": 0, "first": None, "last": None,
+                                         "chat_lines": 0, "call_lines": 0, "calls": []}
+
+
+def test_an_opening_short_of_25_turns_is_asked_again_at_the_floor(monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    asked = []
+
+    def route(agent, budget):
+        asked.append(budget)
+        return _opening(12 if budget < 4000 else 30)
+    out = call_context.opening("gm", route=route)
+    assert asked == [2500, 4000] and call_context.describe(out)["turns"] == 30
+    asked.clear()
+    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(26))
+    assert asked == [2500]                                           # enough: one read, no second trip
+    asked.clear()
+    monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "1500")       # an explicit setting is taken as meant
+    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(5))
+    assert asked == [1500]
+
+
+def test_the_call_report_says_what_the_opening_carried(tmp_path, monkeypatch):
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: _opening(7, n_summ=1))
+    rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
+    th = rep["thread"]
+    assert th["turns"] == 7 and th["summarized"] == 1 and th["chat_lines"] == 3 and th["call_lines"] == 4
+    assert th["first"] == "2026-11-25T17:00:00Z" and th["last"] == "2026-11-25T17:06:00Z"
+    assert "vc_old0" in th["calls"] and th["opening_tokens"] > 0

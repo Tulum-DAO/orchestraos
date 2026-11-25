@@ -303,6 +303,7 @@ class NativeCall:
         # The thread above this call and the chat that arrives during it (call_context; Shaw 2026-11-25).
         self.chat_agent = call_context.default_chat_agent()
         self.opening_tokens = 0
+        self.opening_info = call_context.describe("")
         self.chat_feed = None
         self._feed_future = None
         self._feed_next = 0.0
@@ -527,6 +528,7 @@ class NativeCall:
             except Exception as e:  # noqa: BLE001 — timeout or a loader error: the call starts without its thread
                 log.warning(f"native {self.binding.conversation_id}: opening context skipped: {e!r}")
         self.opening_tokens = call_context.thread_context.estimate_tokens(opening)
+        self.opening_info = call_context.describe(opening)
         self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding), context=opening))
         if threaded:
             try:
@@ -538,7 +540,7 @@ class NativeCall:
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
                  f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent} "
-                 f"opening_tokens={self.opening_tokens}")
+                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -860,7 +862,8 @@ class NativeCall:
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
                    cadence=self.cadence_report(),
-                   thread={"chat": self.chat_agent, "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent})
+                   thread={"chat": self.chat_agent, "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent,
+                           **self.opening_info})
         try:
             self.server.write_report(self.binding.conversation_id, rep)
         except Exception as e:  # noqa: BLE001 — release capacity even if disk reporting fails
