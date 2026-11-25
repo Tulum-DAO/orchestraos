@@ -250,6 +250,153 @@ def nuclear_refusal(command: str, cwd: str | None = None, _depth: int = 0) -> st
     return None
 
 
+# ── Rule 2: protected FILES, decided on each delete target (never on the command text) ──────────
+#
+# A delete of a secret or credential file, a key or media file, or anything inside a folder the
+# operator listed, is refused; the seat moves it aside instead. Same parsing as rule 1: only a
+# segment that INVOKES rm / unlink / shred / find -delete counts, wrappers are stepped through and a
+# quoted heredoc is text. A command that only MENTIONS such a file (a commit message, an echo, a
+# message body) is not a delete and is allowed: the text-matching guard this replaces refused those.
+
+#: Folders whose contents are secrets wherever they sit.
+SECRET_DIRS = tuple(os.path.join(HOME, d) for d in (".secrets", ".ssh", ".gnupg"))
+#: Key and media extensions refused anywhere, /tmp included (a recording or a key is not a build artifact).
+KEY_EXT = (".pem", ".key", ".p12", ".pfx")
+MEDIA_EXT = (".mp3", ".wav", ".ogg", ".mp4", ".mov", ".avi", ".mkv", ".flac", ".aac", ".m4a", ".webm")
+_KEY_PREFIXES = ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
+_ENV_TEMPLATES = (".example", ".sample", ".template", ".dist")
+_DELETERS = {"rm", "unlink", "shred"}
+
+
+def operator_paths() -> list[str]:
+    """Absolute folders the operator protects, one per line in <data dir>/delete-guard-protected-paths
+    ($DELETE_GUARD_PATHS_FILE overrides; # comments and blank lines skipped). Kept out of the repo:
+    which folders matter is the operator's, not the project's."""
+    f = os.environ.get("DELETE_GUARD_PATHS_FILE") or os.path.join(
+        os.environ.get("ORCHESTRA_DIR") or os.path.join(HOME, ".orchestra"), "delete-guard-protected-paths")
+    out = []
+    try:
+        with open(f, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    p = os.path.normpath(os.path.expanduser(line))
+                    if os.path.isabs(p):
+                        out.append(p)
+    except OSError:
+        pass
+    return out
+
+
+def _file_kind(name: str) -> str | None:
+    """Why a file NAME (glob allowed) is protected, or None."""
+    low = name.lower()
+    if low == ".env" or low.endswith(".env") or (low.startswith(".env.") and not low.endswith(_ENV_TEMPLATES)):
+        return "an environment/secrets file"
+    if "credentials" in low or low.startswith(_KEY_PREFIXES) or low.endswith(KEY_EXT):
+        return "a credential or key file"
+    if low.endswith(MEDIA_EXT):
+        return "a media file"
+    return None
+
+
+def _target_path(op: str, cwd: str | None) -> str | None:
+    t = op.strip()
+    if not t:
+        return None
+    if t.startswith("~"):
+        t = HOME + t[1:]
+    t = t.replace("$HOME", HOME).replace("${HOME}", HOME)
+    if not t.startswith("/"):
+        if not cwd:
+            return t                                   # relative and no cwd: judge the name only
+        t = os.path.join(cwd, t)
+    return os.path.normpath(t)
+
+
+def _under(p: str, root: str) -> bool:
+    return p == root or p.startswith(root.rstrip("/") + "/")
+
+
+def _judge_target(op: str, cwd: str | None, recursive: bool, guarded: list[str]) -> str | None:
+    if recursive and op.strip().rstrip("/") in (".", ""):
+        return "a recursive delete of the current directory itself"
+    path = _target_path(op, cwd)
+    if path is None:
+        return None
+    kind = _file_kind(os.path.basename(path.rstrip("/")) or path)
+    if kind:
+        return kind
+    for root in SECRET_DIRS:
+        if _under(path, root) or (recursive and os.path.isabs(path) and _under(root, path)):
+            return f"inside the secrets folder {root}"
+    for root in guarded:
+        if _under(path, root) or (recursive and os.path.isabs(path) and _under(root, path)):
+            return f"inside the protected folder {root}"
+    return None
+
+
+def _find_targets(args: list[str]) -> tuple[list[str], list[str]]:
+    """(start paths, -name/-path patterns) of a `find ... -delete`."""
+    starts, i = [], 0
+    while i < len(args) and not (args[i].startswith("-") or args[i] in ("(", "!", ")")):
+        starts.append(args[i])
+        i += 1
+    names = [args[j + 1] for j in range(i, len(args) - 1)
+             if args[j] in ("-name", "-iname", "-path", "-ipath", "-wholename")]
+    return starts or ["."], names
+
+
+def protected_file_refusal(command: str, cwd: str | None = None, _depth: int = 0) -> str | None:
+    """Return a refusal naming the target and why, or None to allow. FAIL-OPEN like rule 1."""
+    try:
+        guarded = operator_paths()
+        command = re.sub(r"<<-?\s*'(\w+)'\n.*?\n\1(\n|$)", "<<'HEREDOC'\n", command, flags=re.S)
+        for segment in _segments(command):
+            try:
+                argv = shlex.split(segment)
+            except ValueError:
+                continue
+            argv = _command_word(argv)
+            if argv and argv[0] == "\x00script":
+                if _depth < 4:
+                    inner = protected_file_refusal(argv[1], cwd, _depth=_depth + 1)
+                    if inner:
+                        return inner
+                continue
+            if not argv:
+                continue
+            name = os.path.basename(argv[0])
+            if name == "find" and "-delete" in argv[1:]:
+                starts, patterns = _find_targets(argv[1:])
+                for pat in patterns:
+                    kind = _file_kind(os.path.basename(pat))
+                    if kind:
+                        return f"`find -delete` matching {pat!r} would delete {kind}"
+                for st in starts:
+                    why = _judge_target(st, cwd, True, guarded)
+                    if why and not why.startswith("a recursive delete of the current"):
+                        return f"`find {st} -delete` reaches {why}"
+                continue
+            if name not in _DELETERS:
+                continue
+            flags = [a for a in argv[1:] if a.startswith("-") and a != "--"]
+            recursive = name == "rm" and _is_recursive(flags)
+            seen_ddash = False
+            for a in argv[1:]:
+                if a == "--":
+                    seen_ddash = True
+                    continue
+                if not seen_ddash and a.startswith("-"):
+                    continue
+                why = _judge_target(a, cwd, recursive, guarded)
+                if why:
+                    return f"`{name} {a}` would delete {why}"
+    except Exception:
+        return None
+    return None
+
+
 def main() -> int:
     import json
     import sys
@@ -260,11 +407,19 @@ def main() -> int:
     if payload.get("tool_name") != "Bash":
         return 0
     command = (payload.get("tool_input") or {}).get("command", "") or ""
-    reason = nuclear_refusal(command, payload.get("cwd") or None)
-    if not reason:
-        return 0
-    sys.stderr.write(f"BLOCKED (delete-guard/nuclear): {reason}\n")
-    return 2
+    cwd = payload.get("cwd") or None
+    reason = nuclear_refusal(command, cwd)
+    if reason:
+        sys.stderr.write(f"BLOCKED (delete-guard/nuclear): {reason}\n")
+        return 2
+    reason = protected_file_refusal(command, cwd)
+    if reason:
+        sys.stderr.write(
+            f"BLOCKED (delete-guard/protected-file): {reason}. NOTHING WAS DELETED.\n"
+            f"Move it aside instead: mv <path> ~/.trash-safety/ (it can be restored from there). "
+            f"If it really has to be deleted, ask gm.\n")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
