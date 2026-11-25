@@ -68,8 +68,8 @@ INJECTED_RE = re.compile(
 # - "[LONG-MSG chip-dodge] ..." is the gateway's wrapper around the operator's OWN long chat message: the
 #   head of the text plus a pointer to the full body, which sits in an ephemeral /tmp file this collector
 #   does not read. The banner head is kept as the text and the turn stays "shaw".
-# - A bare "continue" is either the operator or the automatic continue reply; the text can't tell them
-#   apart, so it keeps whatever the metadata says.
+# - A bare "continue" is labelled "unknown" (turn_author): it is either the operator or the automatic
+#   continue reply, and neither the text nor the metadata can tell them apart.
 
 
 def turn_author(o, text):
@@ -91,6 +91,8 @@ def turn_author(o, text):
         return "injected"
     if source is None and not origin:
         return "unknown"                         # an older transcript: no origin fields to read
+    if text.strip().lower() == "continue":
+        return "unknown"                         # the operator, or the automatic continue reply
     return "shaw"
 
 

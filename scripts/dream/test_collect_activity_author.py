@@ -46,7 +46,7 @@ TURNS = [
 EXPECT = {"u-typed": "shaw", "u-hook": "hook", "u-headless": "headless", "u-sidechain": "subagent",
           "u-notify": "system", "u-suggest": "model-suggestion", "u-init": "injected", "u-stop": "injected",
           "u-old": "unknown", "u-longmsg": "shaw", "u-hydrate": "injected", "u-approval": "injected",
-          "u-voice": "injected", "u-inbox": "injected", "u-resumed": "injected", "u-continue": "shaw"}
+          "u-voice": "injected", "u-inbox": "injected", "u-resumed": "injected", "u-continue": "unknown"}
 
 
 def write_transcript(root, turns, lead=()):
