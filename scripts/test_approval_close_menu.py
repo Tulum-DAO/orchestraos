@@ -64,7 +64,7 @@ def store(db, home):
     s = ApprovalStore(db_path=db); s.migrate(); return s
 
 
-def _bridge_card(store, session="builder", key="9f7a7ac91937fe45"):
+def _bridge_card(store, session="builder", key="feedfacefeedface"):
     op = f"menu:{session}:{key}"
     q = "Close :7373 now?"
     return store.create(from_agent=session, question=q, worker_kind="pane", kind="menu",
