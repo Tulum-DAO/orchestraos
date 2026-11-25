@@ -3,7 +3,7 @@
 Port of ten-levels-of-jev src/core/client.ts to stdlib Python.
 
 Providers:
-  typesafe    POST https://api.typesafe.ai/v1/systemone      key TYPESAFE_API_KEY    model jev-latest
+  typesafe    POST https://api.typesafe.ai/v1/systemone      key TYPESAFE_API_KEY    model jev-1.14.0 (pinned)
   openrouter  POST https://openrouter.ai/api/alpha/decisions  key OPENROUTER_API_KEY  model ~typesafe/jev-latest
   mock        deterministic offline MockJev (no network, cost 0)
 
@@ -37,7 +37,11 @@ ENDPOINTS = {
     "openrouter": "https://openrouter.ai/api/alpha/decisions",
     "typesafe": "https://api.typesafe.ai/v1/systemone",
 }
-DEFAULT_MODELS = {"openrouter": "~typesafe/jev-latest", "typesafe": "jev-latest"}
+# The typesafe default is PINNED to the tested model id, not the moving "jev-latest" alias: a guard
+# that gates tool calls must not change judgment because the vendor moved an alias. A response for
+# an exact id must come from that id (see check_served_model). Moving the pin is a reviewed change.
+PINNED_MODEL = "jev-1.14.0"
+DEFAULT_MODELS = {"openrouter": "~typesafe/jev-latest", "typesafe": PINNED_MODEL}
 KEY_ENV = {"openrouter": "OPENROUTER_API_KEY", "typesafe": "TYPESAFE_API_KEY"}
 
 RETRY_STATUSES = {429, 502, 503, 529}
@@ -64,6 +68,22 @@ class JevTransportError(JevError):
 
 class ContractError(JevError):
     """The provider answered with something that breaks the wire contract."""
+
+
+class ModelMismatchError(ContractError):
+    """An exact model id was requested and a different one answered."""
+
+
+def is_alias(model: str) -> bool:
+    """A moving name ("jev-latest", "~typesafe/jev-latest") rather than one exact model id."""
+    return model.startswith("~") or model.endswith("latest")
+
+
+def check_served_model(requested: str, served: str) -> None:
+    """Refuse an answer from a model other than the exact one asked for. An alias request has
+    nothing to compare against and is accepted as served."""
+    if not is_alias(requested) and served != requested:
+        raise ModelMismatchError(f"Requested model {requested!r} but {served!r} answered; refused.")
 
 
 class JevHTTPError(JevError):
@@ -332,6 +352,7 @@ class JevClient:
             except ValueError:
                 raise ContractError("Invalid response JSON.")
             validate_response(response, request["questions"])
+            check_served_model(requested, response["model"])
             out = self._with_meta(request, request_text, response, text, requested, started, attempt)
             self._emit({"kind": "response", "result": out})
             return out

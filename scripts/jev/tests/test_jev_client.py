@@ -15,7 +15,7 @@ Q = {"n": noul("Is it?"), "c": choice("Which?", {"a": "A", "b": "B"}), "s": scor
 
 def good_response(**over):
     body = {
-        "model": "jev-1.13.0",
+        "model": jc.PINNED_MODEL,
         "answers": {
             "n": {"type": "noul", "noul": 0.9},
             "c": {"type": "choice", "choice": "a", "probabilities": {"a": 0.8, "b": 0.2}, "confidence": 0.8},
@@ -174,9 +174,9 @@ def test_live_success_sends_bearer_and_keeps_extensions(fake):
     c = live(srv.url)
     r = c.system_one({"x": 1}, Q)
     assert srv.requests[0]["auth"] == f"Bearer {KEY}"
-    assert srv.requests[0]["body"]["model"] == "jev-latest"
+    assert srv.requests[0]["body"]["model"] == "jev-1.14.0", "the pinned id, never the moving alias"
     assert r["answers"]["c"]["choice"] == "a" and r["provider_extension"] == {"kept": True}
-    assert r["meta"]["attempts"] == 1 and r["meta"]["resolved_model"] == "jev-1.13.0"
+    assert r["meta"]["attempts"] == 1 and r["meta"]["resolved_model"] == "jev-1.14.0"
     assert r["meta"]["cost"] == {"amount": None, "source": "unknown"}
     assert KEY not in json.dumps(r) and KEY not in repr(c)
 
@@ -268,3 +268,30 @@ def test_retry_after_parsing():
     assert jc.retry_after_ms("soon") == 0
     future = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() + 30))
     assert 25_000 < jc.retry_after_ms(future) <= 31_000
+
+
+# ---------------------------------------------------------------- model pin
+
+def test_a_different_served_model_is_refused_for_an_exact_request(fake):
+    srv = fake((200, good_response(model="jev-1.15.0"), {}, 0))
+    with pytest.raises(jc.ModelMismatchError) as e:
+        live(srv.url).system_one("s", Q)
+    assert isinstance(e.value, jc.ContractError) and isinstance(e.value, jc.JevError), "hooks treat it as a failed call"
+    assert len(srv.requests) == 1, "a mismatch is not retried"
+
+
+def test_an_exact_request_answered_by_that_model_is_accepted(fake):
+    srv = fake((200, good_response(model="jev-1.13.0"), {}, 0))
+    r = live(srv.url).system_one("s", Q, model="jev-1.13.0")
+    assert r["meta"]["requested_model"] == r["meta"]["resolved_model"] == "jev-1.13.0"
+
+
+def test_an_alias_request_accepts_whatever_model_serves_it(fake):
+    srv = fake((200, good_response(model="jev-1.15.0"), {}, 0), (200, good_response(model="x-9"), {}, 0))
+    assert live(srv.url).system_one("s", Q, model="jev-latest")["meta"]["resolved_model"] == "jev-1.15.0"
+    jc.JevClient(provider="openrouter", api_key=KEY, base_url=srv.url).system_one("s", Q)
+
+
+def test_alias_detection():
+    assert jc.is_alias("jev-latest") and jc.is_alias("~typesafe/jev-latest")
+    assert not jc.is_alias(jc.PINNED_MODEL) and not jc.is_alias("jev-1.13.0")
