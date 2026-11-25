@@ -3,6 +3,7 @@ caught even when no shape knows them, and the CLI is a plain stdin -> stdout fil
 
 Fake tokens are assembled at run time ("gh" + "p_" + ...) so no token-shaped literal sits in this
 file for a secret scanner to flag."""
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -177,3 +178,35 @@ def test_the_env_path_skip_is_only_for_path_valued_names():
 def test_a_placeholder_function_labels_what_was_removed():
     r = R.Redactor(placeholder=lambda kind: f"[{kind}]")
     assert r.redact("x " + _tok("gh", "p_", A36) + " Authorization: Bearer abc") == "x [github] Authorization: Bearer [auth-header]"
+
+
+# --- the architecture refresh: every dumped section goes through the redactor ------------------
+
+def _fake_bin(d, name, out):
+    p = d / name
+    p.write_text("#!/bin/sh\ncat <<'EOF_FAKE'\n" + out + "\nEOF_FAKE\n")
+    p.chmod(0o755)
+
+
+def test_refresh_architecture_redacts_a_sentinel_in_every_dumped_section(tmp_path):
+    gh = _tok("gh", "p_", A36)
+    tg = _tok("123456789", ":", "AAH", A36)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_bin(bin_dir, "crontab", f"# a comment\n*/5 * * * * env GITHUB_TOKEN={gh} run-thing\n0 1 * * * curl https://api.telegram.org/bot{tg}/x")
+    _fake_bin(bin_dir, "tmux", f"svc-{gh}: 1 windows")
+    _fake_bin(bin_dir, "ss", "LISTEN 0 128 127.0.0.1:8888 users:((\"node\",pid=1))")
+    doc = tmp_path / "docs" / "ARCHITECTURE.md"
+    doc.parent.mkdir()
+    doc.write_text("# Architecture\n\nbody\n\n---\n\n## LIVE STATUS (auto-updated old)\nstale\n")
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "ORCHESTRA_DIR": str(tmp_path / "data"),
+           "ARCH_DOC": str(doc), "HOME": str(tmp_path)}
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "refresh-architecture.sh")], env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = doc.read_text()
+    assert gh not in out and tg not in out
+    assert out.count(P) == 3, out
+    assert "### Crons (2 active)" in out and "stale" not in out and out.count("## LIVE STATUS") == 1
+    assert "127.0.0.1:8888" in out, "ordinary lines pass through"
+    assert list((doc.parent / "architecture-backups").glob("ARCHITECTURE-*.md")), "the old doc was backed up"

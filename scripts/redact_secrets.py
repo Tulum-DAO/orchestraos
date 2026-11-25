@@ -34,7 +34,7 @@ MIN_KNOWN_VALUE = 8          # shorter known values would also hit ordinary word
 # No bare `pwd` (the shell's working directory) and no session ids (they are UUIDs, not secrets).
 _CRED_WORD = (r"(?:token(?!s)|secret|passw(?:or)?d|passphrase|api[_-]?key|apikey|access[_-]?key"
               r"|private[_-]?key|client[_-]?secret|credentials?|signing[_-]?key)")
-_B = r"(?<![A-Za-z0-9_-])"   # left boundary for prefixed tokens
+_B = r"(?<![A-Za-z0-9_])"    # left boundary for prefixed tokens (a hyphen before is fine: svc-ghp_...)
 _E = r"(?![A-Za-z0-9_-])"    # right boundary
 
 
