@@ -63,10 +63,12 @@ def _wire(A, monkeypatch, tmp_path, *, deriver_status, kill_file):
     now = _time.time()
     monkeypatch.setattr(A, "_read_deriver_snapshot",
                         lambda: {"seats": {"kf-sess": {"status": deriver_status, "ts": now}}})
+    # The kill file is found under the module's data dir (ORCH_DIR exists on every version of this module, so on a
+    # version without the kill file these tests fail on BEHAVIOUR, not on wiring, and the control still passes).
     state_dir = tmp_path / "data" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(A, "ORCH_DIR", str(tmp_path / "data"))
     kf = state_dir / "DERIVER_STATUS_DISABLED"
-    monkeypatch.setattr(A, "DERIVER_STATUS_KILL_FILE", str(kf))
     if kill_file:
         kf.write_text("operator order 2026-09-19\n")
     return A.get_agent_status("kf-sess")
@@ -89,10 +91,10 @@ def test_CONTROL_without_the_kill_file_the_fresh_deriver_is_the_status_as_before
 def test_the_file_is_read_per_call_so_a_long_lived_importer_honours_it_without_a_restart(A, monkeypatch, tmp_path):
     st = _wire(A, monkeypatch, tmp_path, deriver_status="stalled", kill_file=False)
     assert st["state"] == "stalled" and st["confidence"] == "deriver"
-    open(A.DERIVER_STATUS_KILL_FILE, "w").write("now\n")           # the operator drops the file: next call obeys
+    open(A.deriver_status_kill_file(), "w").write("now\n")        # the operator drops the file: next call obeys
     st = A.get_agent_status("kf-sess")
     assert st["state"] == "working" and st["confidence"] == "hook" and st["deriver_state"] == "stalled"
-    os.remove(A.DERIVER_STATUS_KILL_FILE)                            # and lifts it: next call trusts the deriver again
+    os.remove(A.deriver_status_kill_file())                          # and lifts it: next call trusts the deriver again
     assert A.get_agent_status("kf-sess")["confidence"] == "deriver"
 
 
@@ -102,6 +104,21 @@ def test_deriver_false_still_skips_the_deriver_entirely(A, monkeypatch, tmp_path
     assert st["confidence"] != "deriver" and "deriver_state" not in st
 
 
-def test_the_kill_file_lives_under_the_data_dir_state(A):
-    assert A.DERIVER_STATUS_KILL_FILE == os.path.join(A.ORCH_DIR, "state", "DERIVER_STATUS_DISABLED")
-    assert A.deriver_status_disabled() in (True, False)
+def test_the_kill_file_is_read_under_the_data_dirs_state_per_call(A, monkeypatch, tmp_path):
+    """The path follows ORCH_DIR at call time (not a constant frozen at import), and the check is a plain exists()."""
+    monkeypatch.setattr(A, "ORCH_DIR", str(tmp_path / "d1"))
+    assert A.deriver_status_kill_file() == str(tmp_path / "d1" / "state" / "DERIVER_STATUS_DISABLED")
+    assert A.deriver_status_disabled() is False
+    os.makedirs(tmp_path / "d1" / "state")
+    (tmp_path / "d1" / "state" / "DERIVER_STATUS_DISABLED").write_text("")
+    assert A.deriver_status_disabled() is True
+    monkeypatch.setattr(A, "ORCH_DIR", str(tmp_path / "d2"))          # another data dir: its own file, none here
+    assert A.deriver_status_disabled() is False
+
+
+def test_with_the_kill_file_a_pane_that_cannot_be_captured_still_carries_the_deriver_info(A, monkeypatch, tmp_path):
+    _wire(A, monkeypatch, tmp_path, deriver_status="idle", kill_file=True)
+    monkeypatch.setattr(A, "get_tmux_output", lambda s, *a, **k: None)
+    st = A.get_agent_status("kf-sess")
+    assert st["state"] == "unknown" and st["confidence"] == "process"
+    assert st.get("deriver_state") == "idle" and st.get("deriver_status_disabled") is True

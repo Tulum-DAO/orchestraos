@@ -94,19 +94,25 @@ def _read_deriver_snapshot():
 
 
 # KILL FILE (operator order 2026-09-19; re-raised 2026-11-25 when every working seat read IDLE in the agent rail):
-# while <data dir>/state/DERIVER_STATUS_DISABLED exists, the telemetry deriver is NEVER the status source. The
-# screen + hook detector decides; the deriver's fresh row, if any, rides along as information (deriver_state,
-# deriver_age_s) and never as `state` or `confidence`. Why a file and not an env var: the gateway, the menu bridge
-# and the API all import this module and run for days; a file is honoured per CALL by every importer at once,
-# with no restart. Why at all: the deriver reads a rotated root's lane late (minutes after a swap) and flaps
-# stalled/idle on long tool calls, and its verdict is trusted whenever status.json is under DERIVER_FRESH_S old,
-# so one wrong row makes a working seat read idle on every surface.
-DERIVER_STATUS_KILL_FILE = os.path.join(ORCH_DIR, "state", "DERIVER_STATUS_DISABLED")
+# while <data dir>/state/DERIVER_STATUS_DISABLED exists, the telemetry deriver is never THIS module's verdict:
+# get_agent_status (what the gateway's /agents, the menu bridge and every other importer of this file report) is
+# decided by the screen + hook detector, and the deriver's fresh row, if any, rides along as information
+# (deriver_state, deriver_age_s, deriver_status_disabled), never as `state` or `confidence`. It does not reach
+# the other path the deriver takes to a screen: the API's status stream re-broadcasts telemetryd's status.json
+# and the dashboard lays that over /api/agents rows (dashboard liveStatusOverlay); that is the dashboard's own
+# switch. Why a file and not an env var: the gateway and the menu bridge import this module and run for days; a
+# file is honoured per CALL by every importer at once, with no restart. Why at all: the deriver reads a rotated
+# root's lane late (minutes after a swap) and flaps stalled/idle on long tool calls, and its verdict is trusted
+# whenever status.json is under DERIVER_FRESH_S old, so one wrong row makes a working seat read idle.
+# The path follows this module's ORCH_DIR (the data dir as it was resolved at import: ORCH_DIR, else
+# orchestra_cli.settings.data_dir(), which reads ORCHESTRA_DIR); under the supervisor both name one directory.
+def deriver_status_kill_file() -> str:
+    return os.path.join(ORCH_DIR, "state", "DERIVER_STATUS_DISABLED")
 
 
 def deriver_status_disabled() -> bool:
-    """True while the kill file exists. Checked per call, never cached (see DERIVER_STATUS_KILL_FILE)."""
-    return os.path.exists(DERIVER_STATUS_KILL_FILE)
+    """True while the kill file exists. Checked per call, never cached (see deriver_status_kill_file)."""
+    return os.path.exists(deriver_status_kill_file())
 
 
 def _deriver_lookup(session, now):
@@ -1925,7 +1931,7 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
     dv = _deriver_lookup(session, now) if deriver else None
     deriver_info = None
     if dv is not None and deriver_status_disabled():
-        # The kill file: the deriver's row is information, never the verdict (DERIVER_STATUS_KILL_FILE).
+        # The kill file: the deriver's row is information, never the verdict (deriver_status_kill_file).
         deriver_info = {'deriver_state': dv[1], 'deriver_age_s': dv[2], 'deriver_status_disabled': True}
         dv = None
     if dv is not None:
@@ -1973,6 +1979,7 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
             'activity': 'Could not capture tmux output',
             'process': proc, 'screen': {}, 'is_noise': [],
             'confidence': 'process', 'state_age_s': None,
+            **(deriver_info or {}),           # the deriver's row still rides along as information
         }
 
     screen = parse_status(raw, runtime=proc.get('runtime'))
@@ -2099,7 +2106,7 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
     if state == 'idle' and screen.get('composer_ghost'):
         out['composer_ghost'] = screen['composer_ghost']   # additive, nullable
     if deriver_info:
-        out.update(deriver_info)    # the deriver's row as information only (DERIVER_STATUS_KILL_FILE)
+        out.update(deriver_info)    # the deriver's row as information only (deriver_status_kill_file)
     return out
 
 

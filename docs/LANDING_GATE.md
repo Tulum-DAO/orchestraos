@@ -24,9 +24,13 @@ carried 19 operator identifiers onto `main`, which turned every other PR's check
 
 ## 3. Head-matched merge
 
-- Merge with the full sha of the reviewed, green head: `gh pr merge <n> --squash --match-head-commit <sha>`.
-  If the head moved, stop: re-review, re-run, re-request.
-- Never rebase or push to a branch under an open merge request; report instead.
+- Merge with the full sha of the reviewed, green head: `gh pr merge <n> --squash --match-head-commit <sha>`
+  (a squash, so `main` carries one signed-off commit per PR; the PR keeps the commit history). If the head
+  moved, the merge is refused: stop, re-review, re-run, re-request.
+- Any push to the branch (a fix, a fold, `git rebase --signoff` to repair a red `dco`) makes a **new head**.
+  That is normal review work, and it restarts this gate for that head: a new run, a delta verdict, and a new
+  landing note. What is never done is pushing to the branch *between* the landing note and the merge, or
+  merging a head other than the one the note names.
 
 ## 4. The scans are part of the gate, not a courtesy
 
@@ -37,11 +41,17 @@ merge, not on a branch you tested earlier.
 
 ## 5. What a landing note looks like
 
+A real one (PR #637, landed 2026-11-25; the job names are the workflow's, read off run 45713480796):
+
 ```
-PR #639 at 5a1ed463: dco ✓, operator-identifier-scan ✓, secret-scan ✓, secret-fallback-scan ✓,
-python-tests (scripts-top) ✓, python-tests (scripts-lineage-daemon) ✓, …, api-typecheck ✓,
-dashboard-build ✓ (run 45712345678). Verdict: MERGE-OK by <reviewer> at 5a1ed463 (comment link).
-Merge: gh pr merge 639 --squash --match-head-commit 5a1ed463…
+PR #637 at 981e72f4: dco ✓, operator-identifier-scan ✓, secret-scan ✓, secret-fallback-scan ✓, contract-ts ✓,
+api-typecheck ✓, dashboard-build ✓, push-relay ✓, python-tests (root) ✓, python-tests (scripts-top) ✓,
+python-tests (scripts-lineage-daemon) ✓, python-tests (scripts-identity-store) ✓,
+python-tests (scripts-focus-registry) ✓, python-tests (orchestra-cli) ✓, python-tests (services-arturo) ✓,
+python-tests (services-egress-proxy) ✓, python-tests (contract) ✓, python-tests (hooks) ✓,
+python-tests (plugins) ✓ (run 45713480796). Verdict: MERGE-OK by the independent reviewer at 981e72f4
+(PR comment). Merge: gh pr merge 637 --squash --match-head-commit 981e72f4ee82f8fe94860b881955d33a4596b3a2
 ```
 
 The PR template's checklist points here; the template is where a contributor first meets these rules.
+[CONTRIBUTING.md](../CONTRIBUTING.md) is the process this gate sits at the end of.

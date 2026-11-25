@@ -34,9 +34,16 @@ Under `orchestra up` the gateway is a supervised child (`kind=service`): the sup
 and relaunches it the moment it exits. So the whole restart is one signal:
 
 ```bash
-pid=$(pgrep -f 'scripts/watch_gateway.py' | head -1)      # the one under your install's supervisor
+# The gateway of THIS install: its environment names your data dir. Never a bare `pgrep | head -1`: on a host
+# with more than one install (a staging copy, a test box) that can signal another install's gateway.
+gw_pid() { for p in $(pgrep -f 'scripts/watch_gateway.py'); do
+             tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qx "ORCHESTRA_DIR=$ORCHESTRA_DIR" && echo "$p"; done; }
+pid=$(gw_pid); [ -n "$pid" ] && [ "$(echo "$pid" | wc -l)" = 1 ] || { echo "expected exactly one gateway, got: $pid"; exit 1; }
 kill -TERM "$pid"
 ```
+
+`ORCHESTRA_DIR` is the data dir the supervisor started this install with (`orchestra up` exports it to every
+child; on a systemd install it is in the unit's environment).
 
 - **SIGTERM, nothing else.** aiohttp stops accepting, finishes the handlers in flight (an inject completes
   its Enter and its verify) and exits; measured 12 s of drain on a busy gateway. Never `kill -9`, never
@@ -53,7 +60,7 @@ kill -TERM "$pid"
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9091/health      # 200
 ss -ltn | grep -c '127.0.0.1:9091'                                          # 1 listener
-new=$(pgrep -f 'scripts/watch_gateway.py' | head -1); ps -o ppid= -p "$new"  # the supervisor's pid
+new=$(gw_pid); ps -o ppid= -p "$new"                                         # the supervisor's pid
 tr '\0' '\n' < /proc/$new/environ | grep -c -E '^(MENU_SUBMIT_ARMED|WATCH_GATEWAY_TOKEN_FILE)='   # 2
 ```
 
