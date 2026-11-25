@@ -1,4 +1,4 @@
-"""E1 — typed-fact schema for the brain fact bus (DEC-1786917201, spec §2.1).
+"""E1 — typed-fact schema for the brain fact bus (spec §2.1).
 
 One normalized shape for every miner's output:
   {fact_id, ts, kind, text, actor, confidence, entities, lanes[],
@@ -7,7 +7,7 @@ One normalized shape for every miner's output:
 fact_id derives from provenance_hash(provenance, text) — the idempotency key:
 re-ingesting the same source row is a no-op by construction.
 Free-text answers (A1/A2 contract) ride in text + provenance.answer_text —
-never dropped. Lanes default to ["unrouted"] (fail-open, gm binding).
+never dropped. Lanes default to ["unrouted"] (fail-open, binding).
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ _REQUIRED = ("fact_id", "ts", "kind", "text", "actor", "confidence",
 # no RNG). LLM override is reserved for genuinely-ambiguous cases at distill
 # time only; the backfill NEVER consults it.
 #
-# SAFETY ASYMMETRY (build-gate #2, orchestra-builder g37): a fluid fact
+# SAFETY ASYMMETRY (build-gate #2, review): a fluid fact
 # mis-tagged durable pollutes recall ~forever, while a durable fact mis-tagged
 # slow merely decays a little too fast. So uncertainty ALWAYS defaults to
 # 'standard' (slow) — we NEVER default to durable/immutable on a guess.

@@ -8,8 +8,8 @@ import os
 
 from services.arturo.facts_recall import K, MAX_CHARS, SNIPPET_CHARS, _connect_ro
 
-L2_FLAG = "ARTURO_WORLDVIEW_L2"   # P1.d (DEC-1789388743247449): FLAG-INERT until the
-                                  # gm-gated P1.e flip — default off = legacy facts path
+L2_FLAG = "ARTURO_WORLDVIEW_L2"   # flag-inert until it is turned on
+                                  # on purpose — default off = legacy facts path
                                   # byte-identical, zero reads of beliefs/statements.
 
 # Subject-key for the fluid pass: the first copula splits a short state-assertion into (subject, predicate).

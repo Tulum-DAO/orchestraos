@@ -1,7 +1,7 @@
-"""E1 — the brain fact bus: facts.db writer/reader (DEC-1786917201).
+"""E1 — the brain fact bus: facts.db writer/reader.
 
 PURE-ADDITIVE + INERT: nothing consumes this until the post-arm wiring DEC.
-Guardrails (gm, binding):
+Guardrails (binding):
   - EVERY write runs under an exclusive flock on the bus's OWN lockfile
     (facts.lock next to the db — registry_lock.py pattern, its own file).
   - Ingest is idempotent by provenance hash (fact_id) — INSERT OR IGNORE.
@@ -26,7 +26,7 @@ _LIVE_REDACTOR = os.path.expanduser("~/scripts/agent-orchestra/scripts/brain/red
 
 
 def _scrubber():
-    """The LIVE tree's scrub_fact_text (the same wide filter the 10-09 purge used; gm msg_570b48a2), loaded by file
+    """The LIVE tree's scrub_fact_text (the same wide filter the 10-09 purge used), loaded by file
     path like ingest_run's worldview hook: cron code is brain-e1, the redactor lives on the live tree. Raises if it
     cannot load, so ingest refuses rather than storing secrets unredacted. REDACT_SECRETS_PATH overrides (tests)."""
     import importlib.util  # noqa: PLC0415

@@ -1,9 +1,9 @@
-"""E1 — lane context read API: the PM contract (DEC-1786917201, spec §E2).
+"""E1 — lane context read API: the PM contract (spec §E2).
 
 get_context(lane, kinds, since, limit) -> {
     "api_version": 1,                 # consumers capability-gate on this (D5 analog)
     "freshness": {content_hash, last_source_event_ts, ingest_lag_s,
-                  ok, error, sources},   # LOAD-BEARING, on EVERY read (gm binding)
+                  ok, error, sources},   # LOAD-BEARING, on EVERY read (binding)
     "facts": [ranked typed facts],
 }
 

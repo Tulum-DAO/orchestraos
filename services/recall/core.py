@@ -1,7 +1,6 @@
 """Fleet semantic-recall core — the ONE library seam behind the recall service and the CLI fallback.
 
-Card apr_66a2607d (Shaw pick, 2026-09-21) / DEC-1790043459282600 (CONSENSUS_REACHED). Option 1 of
-.workspace/proposals/fleet-semantic-recall-options.md: every runtime (claude / gemini / codex) gets the
+The chosen design (2026-09-21): every runtime (claude / gemini / codex) gets the
 same three bounded, cited blocks Arturo gets in a voice turn — FACTS (facts.db keyword), WORLDVIEW
 (L2 beliefs + fluid synthesis, L1 citation), RECALL (vector over docs) — by importing Arturo's
 facts_recall / semantic_recall / semantic_memory as LIBRARIES. Nothing here touches Arturo's read path.
@@ -102,7 +101,7 @@ DEFAULT_SWEEP_UTC_HOUR = 9           # 04:00 Tulum (UTC-5, no DST): the dream/in
 SWEEP_NICE = 10
 SWEEP_CHILD_ARGV = [sys.executable, str(Path(__file__).resolve().parent / "sweep_child.py")]   # patchable in tests
 SWEEP_CHILD_TIMEOUT_S = 3600
-DEFAULT_SWEEP_LOAD_MAX = float(os.cpu_count() or 4)   # gm msg_5682f7fa: core count (8 here), same rule as the brain-voice watchdog; a fixed 4 deferred every tick at load 5-8
+DEFAULT_SWEEP_LOAD_MAX = float(os.cpu_count() or 4)   # core count (8 here), same rule as the brain-voice watchdog; a fixed 4 deferred every tick at load 5-8
 
 
 def _load_1m():
@@ -110,7 +109,7 @@ def _load_1m():
         return float(os.getloadavg()[0])
     except Exception:  # noqa: BLE001
         return 0.0
-STATS_THRESHOLD_PCT = 5.0            # gm R1: budget-exceeded above 5 percent of real calls => build 1b
+STATS_THRESHOLD_PCT = 5.0            # review R1: budget-exceeded above 5 percent of real calls => build 1b
 DEFAULT_EXCLUDE_PREFIXES = ("burst", "test", "gemini-test", "codex-test", "devex-review", "seed:")
 
 
@@ -420,7 +419,7 @@ class Recall:
         self._log_call(out, text, vector)
         return out
 
-    # ------------------------------------------------------------ per-call load log (gm R1, msg_ec056d42)
+    # ------------------------------------------------------------ per-call load log (review R1)
     def _ensure_calls_table(self):
         """Service-owned, additive table in semantic-memory.db; the library's tables are untouched."""
         scripts = str(ORCHESTRA_DIR / "scripts")
@@ -519,7 +518,7 @@ class Recall:
 
     # ------------------------------------------------------------ nightly sweep (step 5 / condition 5)
     def _sweep_impl(self):
-        """Run the sweep in a SHORT-LIVED CHILD (gm msg_1e4549d0 option b): the child loads its own
+        """Run the sweep in a SHORT-LIVED CHILD (option b): the child loads its own
         embedder, sweeps, prints one JSON line, exits — the resident heap never grows (the in-process
         sweep of 2026-09-22 left the service at 553 MB flat). Test seams: sweep_resolve / sweep_scope_for
         are passed to the child as files; embed_fn (tests' fake embedder) => --fake-embed."""
@@ -585,7 +584,7 @@ class Recall:
         return st
 
     def _skip(self, reason, now, detail="", due=False):
-        """Record WHY a tick did not sweep. gm msg_f17e63a8: a DUE sweep that does not run must name itself —
+        """Record WHY a tick did not sweep. A DUE sweep that does not run must name itself —
         an embedder-still-loading skip used to be indistinguishable from a tick with nothing to do (deferred
         stayed 0, nothing logged), which is a monitor lying by omission. Every reason is counted; only the
         DUE ones are logged, because only they mean something wanted to happen and did not."""
@@ -615,7 +614,7 @@ class Recall:
         if self._emb_state != "ready":              # DUE but the embedder is not up: named, counted, logged
             return self._skip("embedder_not_ready", now, f" state={self._emb_state}", due=True)
         load = _load_1m()
-        if load >= self.sweep_load_max:            # gm G4: never add embedding work to a loaded box; retry next tick
+        if load >= self.sweep_load_max:            # never add embedding work to a loaded box; retry next tick
             with self._lock:
                 self.sweep_deferred += 1
             return self._skip("load", now, f" 1-min load {load:.1f} >= {self.sweep_load_max:.0f}", due=True)
@@ -643,7 +642,7 @@ class Recall:
 
 
 def stats(sm_db, hours=24, exclude_prefixes=DEFAULT_EXCLUDE_PREFIXES, now=None):
-    """Budget-exceeded rate per block over REAL calls in the window (gm R1 read). Read-only."""
+    """Budget-exceeded rate per block over REAL calls in the window (review R1). Read-only."""
     now = time.time() if now is None else now
     since = now - hours * 3600.0
     out = {"window_h": hours, "since": since, "calls": 0, "real_calls": 0, "degraded": 0, "queue": 0,
