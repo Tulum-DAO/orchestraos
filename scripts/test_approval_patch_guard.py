@@ -20,6 +20,9 @@ def fenced(tmp_path, monkeypatch):
     monkeypatch.setenv("NTFY_TOKEN_FILE", NO_NTFY)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("APPROVAL_DDL_ARMED", raising=False)
+    # patch runs the interposer guard: no inherited pane identity (test_approval.py's _no_inherited_tmux_identity)
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
 
 
 REG_DDL = """
@@ -181,3 +184,11 @@ def test_the_cli_lets_the_seat_that_is_the_author_patch(store, db, monkeypatch, 
     rc = _main(db, monkeypatch, {"postcall-dev"}, "postcall-dev", rid, "--summary", "mine")
     assert rc == 0, capsys.readouterr().err
     assert store.get(rid)["summary"] == "mine"
+
+
+def test_the_cli_tells_a_stale_generation_why(store, db, monkeypatch, capsys):
+    """The REFUSED line itself carries the specific reason (the _patch_refusal caller= wiring)."""
+    rid = _task(store)
+    rc = _main(db, monkeypatch, None, "postcall-dev-g3", rid, "--summary", "late")
+    err = capsys.readouterr().err
+    assert rc == 4 and "REFUSED" in err and "current canonical generation" in err

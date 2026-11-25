@@ -115,7 +115,7 @@ def may_patch(reg, caller, author):
     if ok:
         return True, None
     if why and "may not retire" not in why:
-        return False, why          # the specific reason (a stale generation, no such generation) stands
+        return False, why          # a stale but real generation keeps its specific reason
     return False, (f"{caller} may not patch a card authored by {author}: only the author, its current "
                    f"generation, or gm may patch it")
 
