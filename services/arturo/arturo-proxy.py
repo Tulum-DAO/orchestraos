@@ -1348,6 +1348,12 @@ def clean_cc_output(text):
 
 KNOWLEDGE_DIR = ORCHESTRA_DIR / "state" / "knowledge"
 
+def _knowledge_reads_facts():
+    """The knowledge tool reads the facts store under ARTURO_KNOWLEDGE_FACTS=1 (its own flag: native voice sets it
+    without starting the cache-warm thread ARTURO_FACTS_RECALL also starts) or ARTURO_FACTS_RECALL=1 (as before)."""
+    return os.environ.get("ARTURO_KNOWLEDGE_FACTS") == "1" or os.environ.get("ARTURO_FACTS_RECALL") == "1"
+
+
 def _knowledge_lookup(query, category=None):
     """Instant local knowledge lookup. <10ms. No SSH, no GM."""
     query_lower = query.lower().strip()
@@ -1489,6 +1495,21 @@ def _knowledge_lookup(query, category=None):
             except Exception:
                 pass
 
+    # TIME QUESTIONS (2026-11-25: "what happened last night" was scored as keywords and surfaced last week): time
+    # words make a window; its facts come newest first, each with its time, topic matches first.
+    if category is None and _knowledge_reads_facts():
+        try:
+            from services.arturo import facts_recall as _frt
+            _hours = _frt.time_window_hours(query)
+            if _hours:
+                _rf = _frt.recent_facts(_hours, keywords=_frt.topic_keywords(query), k=12)
+                if _rf:
+                    results.append(f"[RECENT — the last {_hours:g} h, newest first]\n" + "\n".join(
+                        f"  - [{(_f.get('ts') or '')[:16]}Z {_f.get('kind', 'fact')}] "
+                        f"{' '.join((_f.get('text') or '').split())[:220]}" for _f in _rf))
+        except Exception:
+            pass
+
     # BRAIN-FACT BLEND (hotfix 2026-09-14 — the operator live-test: knowledge('Noah') /
     # knowledge('last conversation with Alex') returned stale curated info and
     # never reached state/brain/facts.db, the ~29k-fact daily-refreshed brain).
@@ -1498,8 +1519,8 @@ def _knowledge_lookup(query, category=None):
     # scored, noise-filtered facts_recall.query_sources path (fast, read-only) — the
     # SAME merged sources as the passive FACTS block, so a fact written on the
     # dashboard surfaces on every path Arturo answers from.
-    # Gated on ARTURO_FACTS_RECALL (same flag as the passive facts seam).
-    if category in (None, "people", "projects") and os.environ.get("ARTURO_FACTS_RECALL") == "1":
+    # Gated on ARTURO_KNOWLEDGE_FACTS or ARTURO_FACTS_RECALL (_knowledge_reads_facts).
+    if category in (None, "people", "projects") and _knowledge_reads_facts():
         try:
             try:
                 import facts_recall as _fr
@@ -1524,7 +1545,7 @@ def _knowledge_lookup(query, category=None):
         # there either: say so plainly (never a traceback). Flag off, the store was never read, so
         # the answer must not blame it.
         _facts = (_source_health.source_status(_source_health.source_path(ORCHESTRA_DIR, "facts"))
-                  if os.environ.get("ARTURO_FACTS_RECALL") == "1" else None)
+                  if _knowledge_reads_facts() else None)
         if _facts is not None and not _facts.readable:
             return (f"No knowledge source for '{query}': the facts store (facts/facts_db.json) is {_facts.state}. "
                     "This may require a deeper investigation — consider using gm_command or read_file.")
@@ -1983,6 +2004,19 @@ TOOLS = [
                     "conversation_id": {"type": "string", "description": "Specific agent-to-agent message thread ID (optional — if omitted, returns the agent's chat and inbox)."},
                 },
                 "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recent_work",
+            "description": "What happened in the fleet in the last N hours, newest first, every line timestamped: facts and decisions from the daily fact store, commits in the repos, and voice calls. Use for 'what happened last night / today / in the past day', 'what did we get done', 'catch me up'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {"type": "number", "description": "How far back, in hours (default 24, max 168)."},
+                },
             },
         },
     },
@@ -2791,6 +2825,77 @@ def _deep_turn(conversation_id, principal, untrusted=False):
     t = _voice_turn(conversation_id, principal)
     t.update(voice=False, deep=True, untrusted=bool(untrusted))
     return t
+
+
+RECENT_WORK_MAX = 15        # lines per section
+
+
+def _work_repos():
+    """The repos whose commits recent_work lists: $ARTURO_WORK_REPOS (':'-separated) else this checkout."""
+    env = (os.environ.get("ARTURO_WORK_REPOS") or "").strip()
+    return [r for r in env.split(":") if r] if env else [str(_REPO_ROOT)]
+
+
+def _git_since(repo, hours):
+    """[(iso time, short sha, subject)] newest first; [] when the path is not a repo or git fails."""
+    try:
+        r = subprocess.run(["git", "-C", repo, "log", f"--since={int(hours)} hours ago", "--no-merges",
+                            f"-n{RECENT_WORK_MAX}", "--format=%cI%x09%h%x09%s"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for ln in (r.stdout or "").splitlines() if r.returncode == 0 else []:
+        parts = ln.split("\t", 2)
+        if len(parts) == 3:
+            out.append(tuple(parts))
+    return out
+
+
+def _recent_work(hours):
+    """recent_work: the last `hours` of facts, commits and calls, newest first, every line stamped."""
+    try:
+        hours = max(1.0, min(float(hours or 24), 168.0))
+    except (TypeError, ValueError):
+        hours = 24.0
+    parts = [f"RECENT WORK — the last {hours:g} h, newest first (times UTC)."]
+    try:
+        from services.arturo import facts_recall as _frw
+        facts = _frw.recent_facts(hours, k=RECENT_WORK_MAX)
+    except Exception as e:  # noqa: BLE001
+        facts, parts = [], parts + [f"(facts store could not be read: {type(e).__name__})"]
+    if facts:
+        parts.append("Facts and decisions:")
+        parts += [f"  - [{(f.get('ts') or '')[:16]}Z {f.get('kind', 'fact')}] "
+                  f"{' '.join((f.get('text') or '').split())[:220]}" for f in facts]
+    for repo in _work_repos():
+        commits = _git_since(repo, hours)
+        if commits:
+            parts.append(f"Commits in {Path(repo).name}:")
+            parts += [f"  - [{iso[:16]}] {sha} {subj[:160]}" for iso, sha, subj in commits]
+    cutoff = time.time() - hours * 3600
+    calls = []
+    try:
+        for f in Path(VOICE_CALLS_DIR).glob("vc_*.json"):
+            if f.stat().st_mtime < cutoff:
+                continue
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            st = _thread_ctx._epoch(d.get("started_at"))
+            if st and st >= cutoff:
+                calls.append((st, d.get("call_id") or f.stem, len(d.get("turns") or []), d.get("agent") or "Arturo"))
+    except OSError:
+        pass
+    if calls:
+        parts.append("Voice calls:")
+        for st, cid, n, who in sorted(calls, reverse=True)[:RECENT_WORK_MAX]:
+            parts.append(f"  - [{datetime.fromtimestamp(st, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M')}Z] {cid} "
+                         f"with {who}, {n} turns")
+    if len(parts) == 1:
+        parts.append("Nothing recorded in that window.")
+    return "\n".join(parts)
 
 
 GM_ASK_WAIT_S = 25          # gm D2 (msg_09a35684): a bounded wait, then a promise, never silence
@@ -5165,6 +5270,9 @@ def _execute_tool_raw(name, args, user_turns=None):
             return f"Message sent to {to_agent}: [{msg_id}] {subject}. Router will deliver when {to_agent} is idle."
         except Exception as e:
             return f"Failed to send message: {e}"
+
+    elif name == "recent_work":
+        return _recent_work(args.get("hours", 24))
 
     elif name == "read_agent_conversation":
         agent_id = args.get("agent_id", "")
