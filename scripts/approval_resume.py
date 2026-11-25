@@ -649,6 +649,9 @@ def deliver_discarded(row, store):
     body = (f"[APPROVAL DISCARDED {row['id']}] Your request '{row['question']}' was "
             f"DISMISSED without an answer. Do not keep waiting on it; proceed per "
             f"your own judgment or re-raise if it still matters.")
+    summary = row.get("summary") or ""
+    if "— DISMISSED " in summary:          # where / who / why, as the dismiss recorded it
+        body += "\n\n" + summary[summary.rfind("— DISMISSED "):].strip()
     _msg_store().send(from_agent="approval-loop", to_agent=row["from_agent"],
                       type="approval_discarded",
                       subject=f"Approval {row['id']} discarded",

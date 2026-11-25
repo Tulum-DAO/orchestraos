@@ -11542,18 +11542,42 @@ async def handle_questionnaire_discard(request):
     return _json({"ok": True, "applied": ok, "id": qid})
 
 
+DISCARD_SURFACES = ("web", "phone", "watch", "gateway", "agent_cli", "quest")
+
+
+def discard_fields(data):
+    """The optional body of POST /approvals/{id}/discard: {surface, by, reason}, each a trimmed string or
+    None; surface only from the known set; reason capped at 500 characters. Anything else is ignored."""
+    out = {"surface": None, "by": None, "reason": None}
+    if not isinstance(data, dict):
+        return out
+    for k, cap in (("surface", 32), ("by", 64), ("reason", 500)):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            out[k] = v.strip()[:cap]
+    if out["surface"] not in DISCARD_SURFACES:
+        out["surface"] = None
+    return out
+
+
 async def handle_approval_discard(request):
     """R8: guarded pending->discarded for approvals/decisions (the questionnaire
     discard's sibling). Saves to history + fires ONE honest notify to the emitter
-    so a parked agent never waits forever on a dismissed ask."""
+    so a parked agent never waits forever on a dismissed ask. Takes EVERY card kind
+    (approval, human_task, menu; operator order 2026-11-25) and an optional body
+    {surface, by, reason} that goes onto the card's history line."""
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     rid = request.match_info["id"]
+    try:
+        fields = discard_fields(await request.json()) if request.can_read_body else discard_fields(None)
+    except Exception:  # noqa: BLE001 — an empty or non-JSON body is a plain dismiss
+        fields = discard_fields(None)
     store = ApprovalStore(); store.migrate()
     row = store.get(rid)
     if not row:
         return _json({"ok": False, "error": "not found"}, status=404)
-    ok = store.discard(rid)
+    ok = store.discard(rid, **fields)
     if ok:
         try:
             import asyncio

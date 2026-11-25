@@ -1109,24 +1109,39 @@ class ApprovalStore:
         finally:
             c.close()
 
-    def mark_discarded(self, rid):
+    def mark_discarded(self, rid, surface=None, by=None, reason=None):
         """DEC-1786664626 Q3 + the operator F2: the operator dismissed a decision WITHOUT
         answering -> terminal 'discarded', SAVED to history (never deleted).
         Only a still-'pending' row can be discarded (an answered one goes to
-        history via its answer). Idempotent: returns False if not pending."""
+        history via its answer). Idempotent: returns False if not pending.
+
+        Every card kind (approval, human_task, menu) takes it (operator order 2026-11-25,
+        gm msg_b083c465). When the caller says where/who/why, a history line goes onto the
+        summary (as retire does; no new column), and the attribution columns are stamped
+        when they are armed (PRAGMA-guarded, fail-open like record_answer)."""
+        now = _now()
         c = self._conn()
         try:
+            sets = ["status='discarded'", "answered_at=?", "discarded_at=?"]
+            vals = [now, now]
+            if surface or by or reason:
+                who = f" by {by}" if by else ""
+                where = f" via {surface}" if surface else ""
+                line = f"\n\n— DISMISSED {now[:19]}Z{where}{who}" + (f": {reason}" if reason else "")
+                sets.append("summary=COALESCE(summary, question, '') || ?"); vals.append(line)
+                cols = {r[1] for r in c.execute("PRAGMA table_info(approval_requests)").fetchall()}
+                if "answer_surface" in cols and "answered_by" in cols:
+                    sets += ["answer_surface=?", "answered_by=?"]; vals += [surface or "unknown", by]
             res = c.execute(
-                "UPDATE approval_requests SET status='discarded', answered_at=?, discarded_at=? "
-                "WHERE id=? AND status='pending'", [_now(), _now(), rid])
+                f"UPDATE approval_requests SET {', '.join(sets)} WHERE id=? AND status='pending'", vals + [rid])
             c.commit()
             return res.rowcount > 0
         finally:
             c.close()
-    def discard(self, rid):
+    def discard(self, rid, surface=None, by=None, reason=None):
         """R8 name for mark_discarded (questionnaire-era gateway + tests call
         store.discard). One implementation, two names."""
-        return self.mark_discarded(rid)
+        return self.mark_discarded(rid, surface=surface, by=by, reason=reason)
     def answered_unacked(self):
         c = self._conn()
         try:

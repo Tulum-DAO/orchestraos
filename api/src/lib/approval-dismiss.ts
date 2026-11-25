@@ -3,26 +3,30 @@
  * which iOS already uses. The gateway keeps the card in history as 'discarded' and tells the asking agent
  * not to keep waiting on it, so the web adds no state change of its own here.
  *
- * Used for menus that are not on an agent's screen (an agent's own written decisions). A menu that IS on
- * screen is dismissed with Escape through /api/agents/:id/agent-key instead, so the pane and the card agree.
+ * Every card kind takes it (approval, task for you, menu; operator order 2026-11-25). A menu that IS on an
+ * agent's screen is dismissed with Escape through /api/agents/:id/agent-key instead, so the pane and the card agree.
  */
 import { readGatewayToken } from './gateway-token.js';
 import { gatewayUrl } from './gateway-url.js';
 
 export interface DismissDeps {
   token: () => string;
-  post: (url: string, token: string) => Promise<{ status: number; body: any }>;
+  /** `body` is the JSON the gateway reads (where / who / why); '{}' when the caller said nothing. */
+  post: (url: string, token: string, body?: string) => Promise<{ status: number; body: any }>;
   base: () => string;
 }
 
 export interface DismissResult { status: number; body: Record<string, unknown> }
 
-export async function dismissCard(id: string, deps: DismissDeps): Promise<DismissResult> {
+/** Where, who and why a card was dismissed; each optional. One shape for the web, iOS and the gateway. */
+export interface DismissFields { surface?: string; by?: string; reason?: string }
+
+export async function dismissCard(id: string, deps: DismissDeps, fields: DismissFields = {}): Promise<DismissResult> {
   const token = deps.token();
   if (!token) return { status: 502, body: { error: 'gateway token unavailable', id } };
   let r: { status: number; body: any };
   try {
-    r = await deps.post(`${deps.base()}/approvals/${encodeURIComponent(id)}/discard`, token);
+    r = await deps.post(`${deps.base()}/approvals/${encodeURIComponent(id)}/discard`, token, JSON.stringify(fields));
   } catch (err: any) {
     return { status: 502, body: { error: 'gateway unreachable', detail: err?.message, id } };
   }
@@ -39,11 +43,11 @@ export function defaultDismissDeps(): DismissDeps {
   return {
     token: readGatewayToken,
     base: () => gatewayUrl(),
-    post: async (url, token) => {
+    post: async (url, token, body = '{}') => {
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: '{}',
+        body,
         signal: AbortSignal.timeout(10000),
       });
       return { status: resp.status, body: await resp.json().catch(() => ({})) };

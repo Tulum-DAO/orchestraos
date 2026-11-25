@@ -53,3 +53,18 @@ test('the id is escaped into the gateway path', async () => {
   await dismissCard('apr_x/../y', d);
   assert.equal(d.calls[0], 'http://gw.example/approvals/apr_x%2F..%2Fy/discard tok');
 });
+
+test('where, who and why ride to the gateway as the discard body (every card kind, one shape)', async () => {
+  const bodies: string[] = [];
+  const d: DismissDeps & { calls: string[] } = {
+    calls: [],
+    token: () => 'tok',
+    base: () => 'http://gw.example',
+    post: async (url, _t, body) => { bodies.push(body ?? ''); return { status: 200, body: { ok: true, applied: true } }; },
+  };
+  const r = await dismissCard('apr_task0001', d, { surface: 'web', by: 'operator', reason: 'old, remove' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(bodies[0]), { surface: 'web', by: 'operator', reason: 'old, remove' });
+  await dismissCard('apr_task0001', d);
+  assert.equal(bodies[1], '{}', 'no fields: the body stays an empty object, as before');
+});
