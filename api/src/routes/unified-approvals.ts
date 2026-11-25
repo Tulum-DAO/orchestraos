@@ -183,6 +183,10 @@ export interface UnifiedApproval {
   op_key?: string | null;
   /** A snoozed task for you (kind 'human_task'): when it comes back (ISO); null otherwise. */
   snoozed_until?: string | null;
+  /** The canonical row's parsed evidence object, when it has one (additive). An outward-action card
+   *  carries `evidence.action` = {hash, action, state, reason, updated_at}: the same truth the phone
+   *  and watch read from the gateway poll. Absent when the row has no (or invalid) evidence. */
+  evidence?: Record<string, unknown>;
 }
 
 function normalizeProposal(p: any): UnifiedApproval {
@@ -280,6 +284,18 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
   if (riskLevel === 'high') urgency = 'critical';
   else if (riskLevel === 'low') urgency = 'low';
 
+  // Additive passthrough of the row's evidence (outward-action ledger V7a): a JSON object is handed
+  // through parsed; anything absent or unparseable omits the key, so every other row is unchanged.
+  let evidence: Record<string, unknown> | undefined;
+  if (typeof r.evidence === 'string' && r.evidence) {
+    try {
+      const parsed = JSON.parse(r.evidence);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) evidence = parsed;
+    } catch {
+      /* not JSON: omitted */
+    }
+  }
+
   return {
     id: r.id,
     type: 'agent',
@@ -304,6 +320,7 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
     op_key: r.op_key ?? null,
     // A snoozed task for you: when it comes back, so the dashboard can say so and draw it last (as the phone does).
     snoozed_until: r.snoozed_until ?? null,
+    ...(evidence !== undefined ? { evidence } : {}),
   };
 }
 

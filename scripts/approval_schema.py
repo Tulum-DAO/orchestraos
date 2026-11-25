@@ -239,6 +239,18 @@ def _gate_row_locked(c, rid, cols) -> bool:
     return is_gate_row(dict(zip(want, tuple(r))))
 
 
+def _ledger_answer_hook(rid, answer, option_n=None, answer_text=None):
+    """Outward-action ledger fast path (V3): tell the ledger a card was answered, AFTER the
+    answer-once UPDATE committed. Never raises to the answerer: the answer is already durable,
+    and outward_ledger.sweep() reconciles the same thing from the card row later."""
+    try:
+        import outward_ledger
+        outward_ledger.on_card_answer(rid, answer, option_n=option_n, answer_text=answer_text)
+    except Exception as e:  # noqa: BLE001 — the ledger is a view of the answer, never a gate on it
+        print(f"[approval_schema] outward ledger hook for {rid} failed ({type(e).__name__}): {e}",
+              file=sys.stderr)
+
+
 class ApprovalStore:
     def __init__(self, db_path=None):
         # Resolved per construction, so a monkeypatched ORCHESTRA_DIR actually isolates.
@@ -350,7 +362,13 @@ class ApprovalStore:
                seat_id=None, run_id=None, generation=None, seat_epoch=None,
                provider=None, provider_session_id=None, process_instance_id=None,
                process_lease_id=None, origin=None,
-               block_task=None, blocks_what=None, urgency=None, default_option=None):
+               block_task=None, blocks_what=None, urgency=None, default_option=None,
+               report=None):
+        # `report` (optional dict): filled with {"inserted": bool} so a caller can tell a card this call
+        # made from one the op_key dedupe or the re-card guard handed back. The return value is
+        # unchanged (the id either way).
+        if report is not None:
+            report["inserted"] = False
         # §1.1/§4 identity kwargs are ALL optional + provenance-only. `provider`
         # is recorded, NEVER branched on. A value the caller passes (an adapter
         # that captured it from its runtime) always wins. What it leaves empty of
@@ -398,6 +416,8 @@ class ApprovalStore:
                 if row:
                     return row["id"]
             rid = _gen_id()
+            if report is not None:
+                report["inserted"] = True
             now = _now()
             exp = (datetime.now(timezone.utc) + timedelta(hours=EXPIRY_HOURS)).isoformat()
             c.execute(
@@ -481,6 +501,41 @@ class ApprovalStore:
             vals.append(rid)
             c.execute(f"UPDATE approval_requests SET {', '.join(sets)} WHERE id=?", vals)
             c.commit()
+            return True
+        finally:
+            c.close()
+
+    def merge_evidence(self, rid, key, value):
+        """Read-merge-write of ONE top-level `evidence` key, on ANY status (outward-action ledger
+        V2; update_fields stays pending+human_task-only). Under BEGIN IMMEDIATE so two writers
+        cannot lose each other's key. Every other key is written back exactly as read: the ledger
+        writes only `action`; `assist`, `due_ts`, `due_source` and the done-brief keys are never
+        touched (contract E1: evidence is additive, never a new column). Returns True iff a row
+        was written; False for a missing id or an evidence value that is not a JSON object."""
+        if not isinstance(key, str) or not key:
+            return False
+        c = self._conn()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT evidence FROM approval_requests WHERE id=?", [rid]).fetchone()
+            if row is None:
+                c.execute("ROLLBACK")
+                return False
+            raw = row["evidence"]
+            if raw in (None, ""):
+                ev = {}
+            else:
+                try:
+                    ev = json.loads(raw)
+                except (TypeError, ValueError):
+                    c.execute("ROLLBACK")
+                    return False
+                if not isinstance(ev, dict):
+                    c.execute("ROLLBACK")
+                    return False
+            ev[key] = value
+            c.execute("UPDATE approval_requests SET evidence=? WHERE id=?", [json.dumps(ev), rid])
+            c.execute("COMMIT")
             return True
         finally:
             c.close()
@@ -602,9 +657,11 @@ class ApprovalStore:
                 f"UPDATE approval_requests SET {', '.join(sets)} "
                 "WHERE id=? AND status='pending'", vals + [rid])
             c.commit()
-            return res.rowcount > 0
         finally:
             c.close()
+        if res.rowcount > 0:
+            _ledger_answer_hook(rid, answer, option_n, answer_text)
+        return res.rowcount > 0
     def record_batch_answer(self, rid, answers, surface=None, answered_by=None,
                             device=None):
         """§1.1(b) condition-6 (DEC-1787700374): DURABLE-FIRST multi-part SUBMIT.
@@ -642,9 +699,11 @@ class ApprovalStore:
                     "WHERE id=? AND status='pending'",
                     [answer_text, _now(), rid])
             c.commit()
-            return res.rowcount > 0
         finally:
             c.close()
+        if res.rowcount > 0:
+            _ledger_answer_hook(rid, "batch", None, answer_text)
+        return res.rowcount > 0
     def pending_menu_row_for_session(self, session):
         """§1.1(b) condition-6: the newest still-PENDING kind='menu' ledger row
         for `session` — the durable anchor a multi-part submit persists onto.
