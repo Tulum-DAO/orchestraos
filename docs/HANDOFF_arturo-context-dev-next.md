@@ -72,3 +72,5 @@
 - #637 merged (257c15a); main green. Signed-off merges of main into #638 (57129bf, CI 19/19 green) and #645 (cc83b28, CI running).
 - MERGE card #638: apr_fe545d12_49123648 (decide by 20:00 Tulum). Review asked of builder/codex-gm (msg_a8d8812a).
 - Next: #645 card when its CI is all-green and #638 is merged; then re-point #644 to main, merge #645 into it, CI, card; then a quiet-minute respawn from new main (it carries #637's spending_tools expanduser; gm msg_18d19362).
+
+- avatar-dev: the dashboard start.thread half is LIVE since 23:12Z (bundle index-DXsXqetJ.js, msg_562f2fe3). The pinned live native (aa84d24) ignores the field until #644 is merged and respawned; pair the proving call with that bundle.
