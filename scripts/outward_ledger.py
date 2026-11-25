@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The outward-action ledger (NB-05/06): an approved outward action runs exactly what the card
+"""The outward-action ledger: an approved outward action runs exactly what the card
 showed, once.
 
 Rule

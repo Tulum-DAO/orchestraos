@@ -1,4 +1,4 @@
-"""NB-05/06 outward-action ledger (scripts/outward_ledger.py).
+"""The outward-action ledger (scripts/outward_ledger.py).
 
 An approved outward action runs exactly what the card showed, once. An interrupted one becomes
 `uncertain` and is never re-run automatically; a changed material argument after approval is

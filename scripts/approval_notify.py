@@ -102,7 +102,7 @@ def build_payload(row, token):
         })
     return {**base, "actions": actions}
 
-# --- Outward-action ledger (NB-06, docs/OUTWARD_ACTIONS.md V6) ---------------------------------
+# --- Outward-action ledger (docs/OUTWARD_ACTIONS.md, notify policy) ---------------------------------
 # The first ntfy push and the first Telegram ping are outward actions with no card of their own:
 # each is claimed (claim_direct) before the network call and finished after it, so a notifier
 # killed between claim and send leaves an `uncertain` row instead of a silent duplicate. A
