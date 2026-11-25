@@ -134,3 +134,46 @@ def test_cli_filters_stdin_with_a_known_value_file(tmp_path):
                        input=src, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     assert r.stdout == f"a {P} b {P} c\n"
+
+
+# --- review round 1 ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text,secret", [
+    ("Authorization: Bearer abc", "abc"),
+    ("Authorization: Basic x", " x"),
+    ('curl -H "authorization: token q1"', "q1"),
+    ("GET /v1?page=2&token=ab&x=1", "token=ab&"),
+])
+def test_in_an_auth_header_or_credential_parameter_any_length_is_redacted(text, secret):
+    out = R.redact(text)
+    assert secret not in out and P in out, out
+
+
+def test_prose_that_mentions_a_scheme_word_survives():
+    for text in ("the bearer of bad news", "Basic setup steps follow", "Token based auth is described below"):
+        assert R.redact(text) == text
+
+
+@pytest.mark.parametrize("text,keep", [
+    ('password: "correct horse battery staple"', 'password: "'),  # pragma: allowlist secret (fake test fixture)
+    ("db_password = 'two words'", "db_password = '"),  # pragma: allowlist secret (fake test fixture)
+    ('{"client_secret": "has spaces in it", "n": 1}', '{"client_secret": "'),  # pragma: allowlist secret (fake test fixture)
+    ('password: "short"', 'password: "'),  # pragma: allowlist secret (fake test fixture)
+])
+def test_a_quoted_credential_value_is_one_value_spaces_and_all(text, keep):
+    out = R.redact(text)
+    assert out.startswith(keep + P), out
+    for word in ("horse", "staple", "words", "spaces", "short"):
+        assert word not in out
+
+
+def test_the_env_path_skip_is_only_for_path_valued_names():
+    env = {"DB_PASSWORD": "/starts-with-slash-secret", "API_TOKEN": "~tilde-secret-value",  # pragma: allowlist secret (fake test fixture)
+           "GOOGLE_APPLICATION_CREDENTIALS": "/srv/key.json", "TLS_KEY_FILE": "/etc/tls/key.pem",
+           "SECRETS_DIR": "/run/secrets", "TOKEN_PATH": "~/.cache/tok"}
+    assert sorted(R.known_values_from_env(env)) == ["/starts-with-slash-secret", "~tilde-secret-value"]
+
+
+def test_a_placeholder_function_labels_what_was_removed():
+    r = R.Redactor(placeholder=lambda kind: f"[{kind}]")
+    assert r.redact("x " + _tok("gh", "p_", A36) + " Authorization: Bearer abc") == "x [github] Authorization: Bearer [auth-header]"
