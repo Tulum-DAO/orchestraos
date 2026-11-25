@@ -491,3 +491,40 @@ def test_other_schemes_are_refused(url):
         return resp, proxy.opened
     resp, opened = run(go())
     assert resp.startswith(b"HTTP/1.1 403 ") and b"is not allowed" in resp and opened == []
+
+
+# --------------------------------------------------------------------------------------------
+# Other spellings of a refused address, through the real system resolver (numeric forms and
+# /etc/hosts only, so still offline)
+
+@pytest.mark.parametrize("host", [
+    "0x7f000001", "2130706433", "127.1", "0177.0.0.1", "0x7f.0.0.1", "0", "localhost.",
+    "LOCALHOST", "0251.0376.0251.0376", "0x64646464", "::ffff:7f00:1",
+])
+def test_other_spellings_of_a_refused_address_are_refused(host):
+    verdict = run(ep.check_host(host, ep.Policy()))
+    assert verdict.startswith("refused: destination ") and "is not a public address" in verdict
+
+
+# --------------------------------------------------------------------------------------------
+# Redirects are not followed by the proxy: the browser's follow-up request is checked afresh
+
+def test_redirect_to_a_private_address_is_passed_back_and_the_follow_up_refused():
+    async def go():
+        async def handle(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/\r\n"
+                         b"Content-Length: 0\r\n\r\n")
+            writer.close()
+        up = await asyncio.start_server(handle, FAKE_PUBLIC, 0)
+        uport = up.sockets[0].getsockname()[1]
+        proxy, _, server, port = await start_proxy(TABLE)
+        first = await exchange(port, get(f"public.test:{uport}"))
+        follow = await exchange(port, get("169.254.169.254", "/latest/"))
+        server.close()
+        up.close()
+        return first, follow, proxy.opened
+    first, follow, opened = run(go())
+    assert first.startswith(b"HTTP/1.1 302 ") and b"Location: http://169.254.169.254/" in first
+    assert follow.startswith(b"HTTP/1.1 403 ")
+    assert [a for a, _ in opened] == [FAKE_PUBLIC]
