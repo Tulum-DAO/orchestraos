@@ -4,8 +4,9 @@ When the ACTIVE shared login is out (a 5-hour, weekly or monthly-spend window ex
 limit_event names it from the transcript rows), move every seat on the shared config dir to the
 other enrolled login, the same move the dashboard's account button makes. Conditions, each one a
 test (test_limit_switch.py):
-  1. trigger: an open Claude episode on the active login for one of those windows, AND the other
-     login's usage reading (usage_poll, fresh) is under 80% on both its 5-hour and weekly windows;
+  1. trigger: the active login's fresh usage reading is at 95% of its 5-hour window (or its weekly
+     window is used up), BEFORE seats hit the banner; only without a fresh reading, an open banner
+     episode on the active login. AND the other login's fresh reading is under 80% on both windows;
   2. never while a human is attached to a Claude seat mid-typing (tmux client attached AND the
      composer holds text, or cannot be read): the switch waits for the next run;
   3. at most one switch per 10 minutes, and never back: the login switched away from is parked
@@ -30,6 +31,7 @@ from datetime import datetime, timezone
 import limit_event as LE
 
 TRIGGER_WINDOWS = ("monthly-spend", "weekly", "5-hour")   # most severe first
+SWITCH_AT_5H_PCT = 95.0       # the operator's rule: switch at 95% of the 5-hour window, before the banner
 HEADROOM_PCT = 80.0
 MIN_GAP_S = 600
 USAGE_FRESH_S = 30 * 60
@@ -58,6 +60,16 @@ class LiveDeps:
 
     def __init__(self, paths, mail_fn):
         self.paths, self.mail = paths, mail_fn
+
+    def refresh_usage(self):
+        """Run usage_poll once so the reading is fresh on every watcher run (its own cron is */5)."""
+        cmd = os.environ.get("LIMIT_SWITCH_USAGE_POLL")
+        if not cmd:
+            return
+        try:
+            subprocess.run(cmd.split(), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     def usage(self, account):
         try:
@@ -164,14 +176,45 @@ def tick(paths, episodes, active, now, log, deps, state):
         if mail:
             deps.mail("gm", mail[0], mail[1], mail[2])
 
-    live = [(k, e) for k, e in episodes.items()
-            if not k.startswith("_") and e.get("open") and e.get("runtime") == "claude"
-            and e.get("account") == active and e.get("window") in TRIGGER_WINDOWS
-            and not (e.get("reset_at") and now >= int(e["reset_at"]))]
-    if not live:
+    # PRIMARY trigger (the operator, 2026-11-25): the active login's own usage reading. At 95% of its
+    # 5-hour window (or a weekly window used up) switch BEFORE any seat hits the banner. The episode
+    # (banner) trigger is only the fallback for when there is no fresh reading.
+    if hasattr(deps, "refresh_usage"):
+        deps.refresh_usage()
+    au = deps.usage(active)
+    fresh = bool(au) and now - float(au.get("as_of") or 0) <= USAGE_FRESH_S
+    aw = (au or {}).get("windows") or {}
+    a5, aweek = (aw.get("5h") or {}).get("used_pct"), (aw.get("weekly") or {}).get("used_pct")
+    others = {}
+    for acct in deps.enrolled():
+        if acct != active:
+            ow = (deps.usage(acct) or {}).get("windows") or {}
+            others[acct] = {"5h": (ow.get("5h") or {}).get("used_pct"),
+                            "weekly": (ow.get("weekly") or {}).get("used_pct")}
+    check = {"ts": stamp, "kind": "switch_check", "active": active, "active_fresh": fresh,
+             "active_5h": a5, "active_weekly": aweek, "others": others}
+    key = ep = None
+    if fresh and a5 is not None and (a5 >= SWITCH_AT_5H_PCT or (aweek is not None and aweek >= 100)):
+        window = "5-hour" if a5 >= SWITCH_AT_5H_PCT else "weekly"
+        reset = (aw.get("5h" if window == "5-hour" else "weekly") or {}).get("resets_at")
+        key = f"poll|{active}|{window}|{reset}"
+        ep = {"window": window, "reset_at": reset, "spend_capped": False}
+        check["decision"] = f"trigger: {active} {window} at {a5 if window == '5-hour' else aweek:.0f}%"
+    elif not fresh:
+        live = [(k, e) for k, e in episodes.items()
+                if not k.startswith("_") and e.get("open") and e.get("runtime") == "claude"
+                and e.get("account") == active and e.get("window") in TRIGGER_WINDOWS
+                and not (e.get("reset_at") and now >= int(e["reset_at"]))]
+        if live:
+            live.sort(key=lambda ke: TRIGGER_WINDOWS.index(ke[1]["window"]))
+            key, ep = live[0]
+            check["decision"] = f"trigger (fallback, no fresh reading): banner {ep['window']}"
+    if key is None:
+        check["decision"] = (f"no switch: {active} 5-hour {a5:.0f}% < {SWITCH_AT_5H_PCT:.0f}%"
+                             if fresh and a5 is not None else "no switch: no fresh reading, no banner episode")
+        log(check)
         return None
-    live.sort(key=lambda ke: TRIGGER_WINDOWS.index(ke[1]["window"]))
-    key, ep = live[0]
+    log(check)
     ev = LE.LimitEvent("claude", ep["window"], ep.get("reset_at"), ep.get("spend_capped", False),
                        account=active)
     line = LE.describe(ev)

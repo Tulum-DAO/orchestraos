@@ -113,19 +113,23 @@ def test_3_at_most_one_switch_per_ten_minutes():
 
 
 def test_3_never_switches_back_to_the_parked_login_before_its_reset():
-    d = Fake(usage={"strategysimple": {"as_of": NOW, "windows": {"5h": {"used_pct": 0.0}, "weekly": {"used_pct": 0.0}}},
-                    "default": {"as_of": NOW - 60, "windows": {"5h": {"used_pct": 20.0}, "weekly": {"used_pct": 42.0}}}})
+    d = Fake(usage={"strategysimple": {"as_of": NOW, "windows": {"5h": {"used_pct": 96.0, "resets_at": RESET},
+                                                                 "weekly": {"used_pct": 40.0}}},
+                    "default": {"as_of": NOW, "windows": {"5h": {"used_pct": 20.0}, "weekly": {"used_pct": 42.0}}}})
     st = {}
-    _tick(_ep(), d, st)                                   # strategysimple -> default, parks strategysimple
+    assert _tick({}, d, st)[0] == "switched"                 # strategysimple -> default, parks strategysimple
     assert st["parked"]["strategysimple"] == RESET
-    later = NOW + 1200                                     # default now hits a limit, before RESET
-    res, log, st = _tick(_ep(account="default", reset=later + 3600), d, st, active="default", now=later)
+    later = NOW + 1200                                       # default now at 96%, before RESET
+    d._usage = {"strategysimple": {"as_of": later, "windows": {"5h": {"used_pct": 0.0}, "weekly": {"used_pct": 0.0}}},
+                "default": {"as_of": later, "windows": {"5h": {"used_pct": 96.0, "resets_at": later + 3600},
+                                                            "weekly": {"used_pct": 50.0}}}}
+    res, log, st = _tick({}, d, st, active="default", now=later)
     assert res == "refused" and d.switched == ["default"]
     assert "parked until" in [r for r in log if r["kind"] == "switch_refused"][0]["reason"]
-    # after the parked login's reset it is a candidate again (with a fresh reading)
-    d._usage["strategysimple"]["as_of"] = RESET
-    res, _, st = _tick(_ep(account="default", reset=RESET + 7200, window="weekly"), d, st,
-                       active="default", now=RESET + 60)
+    # after the parked login's reset it is a candidate again
+    for u in d._usage.values():
+        u["as_of"] = RESET + 60
+    res, _, st = _tick({}, d, st, active="default", now=RESET + 60)
     assert res == "switched" and d.switched == ["default", "strategysimple"]
 
 
@@ -192,3 +196,60 @@ def test_human_typing_reader_ignores_dim_ghost_text(monkeypatch):
     assert deps.human_typing("gm") == "gm: attached and typing"
     calls["screen"] = "a menu, no prompt\n"
     assert "no composer" in deps.human_typing("gm")                 # cannot tell = hold
+
+
+# --- the operator's rule (2026-11-25): switch at 95% of the 5-hour window, before the banner ------
+
+def _reading(five, week=40.0, age=60, reset=RESET):
+    return {"as_of": NOW - age, "windows": {"5h": {"used_pct": five, "resets_at": reset},
+                                            "weekly": {"used_pct": week, "resets_at": NOW + 5 * 86400}}}
+
+
+def _poll_fake(active_5h, other_5h=20.0, other_week=42.0, **kw):
+    return Fake(usage={"strategysimple": _reading(active_5h),
+                       "default": _reading(other_5h, other_week)}, **kw)
+
+
+def test_95_at_94_percent_does_not_switch_and_logs_both_logins():
+    d = _poll_fake(94.0)
+    res, log, _ = _tick({}, d)
+    assert res is None and d.switched == []
+    chk = [r for r in log if r["kind"] == "switch_check"][0]
+    assert chk["active_5h"] == 94.0 and chk["others"]["default"]["5h"] == 20.0
+    assert chk["decision"].startswith("no switch")
+
+
+def test_95_at_95_percent_switches_before_any_banner():
+    d = _poll_fake(95.0)
+    res, log, st = _tick({}, d)                       # no episode at all: no seat has hit the banner
+    assert res == "switched" and d.switched == ["default"]
+    done = [r for r in log if r["kind"] == "switch_done"][0]
+    assert done["window"] == "5-hour" and done["reset_at"] == RESET
+    assert st["parked"]["strategysimple"] == RESET
+
+
+def test_95_with_the_other_login_at_80_or_more_refuses_and_mails_high():
+    d = _poll_fake(96.0, other_5h=80.0)
+    res, log, _ = _tick({}, d)
+    assert res == "refused" and d.switched == []
+    assert [m[1] for m in d.mails] == ["high"]
+
+
+def test_95_a_fresh_reading_under_95_overrides_a_banner_episode():
+    d = _poll_fake(60.0)
+    assert _tick(_ep(), d)[0] is None and d.switched == []
+
+
+def test_95_banner_episode_is_the_fallback_when_the_reading_is_stale():
+    d = Fake(usage={"strategysimple": _reading(60.0, age=3600), "default": _reading(20.0)})
+    res, log, _ = _tick(_ep(), d)
+    assert res == "switched"
+    assert "fallback" in [r for r in log if r["kind"] == "switch_check"][0]["decision"]
+
+
+def test_95_refreshes_the_reading_every_run():
+    d = _poll_fake(10.0)
+    calls = []
+    d.refresh_usage = lambda: calls.append(1)
+    _tick({}, d)
+    assert calls == [1]
