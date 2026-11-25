@@ -18,7 +18,10 @@ import { tagAudience, tagSynthetics } from '../lib/audience.js';
 import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
 import { refable, partAt } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices } from '../services/conversation-store.js';
-import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff } from '../lib/agentCalls.js';
+import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff, callsDir, CALL_ID_RE } from '../lib/agentCalls.js';
+import { buildCallContext, readJournals, clampBudget, shawTz, operatorName } from '../lib/callContext.js';
+import { isLoopback } from '../lib/access-log.js';
+import { redactSecrets } from '../lib/redactSecrets.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
@@ -2334,6 +2337,39 @@ router.get('/:id/transcript.md', (req: Request, res: Response) => {
       .send(markdown);
   } catch (err) {
     res.status(500).type('text/plain').send(`Could not export: ${String(err).slice(0, 200)}`);
+  }
+});
+
+// GET /api/agents/:id/call-context?budget=<tokens>&calls=<owner|arturo>&exclude=<call id> -> what a call with this agent
+// knows at start (lib/callContext.ts; the Python twin services/arturo/thread_context.py, same bytes): the agent's chat
+// plus the owner's calls, oldest first, every line stamped, newest verbatim within the budget, older summarized.
+// Loopback only (a voice engine on this box), never through a proxy; scoped like transcript.md (router.param above);
+// every piece through the same secret redactor. `calls` defaults to this agent; "arturo" = Arturo's own calls.
+const FORWARDED = ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-funnel-request'];
+router.get('/:id/call-context', (req: Request, res: Response) => {
+  if (!isLoopback(req.socket?.remoteAddress) || FORWARDED.some((h) => req.headers[h] !== undefined)) {
+    res.status(404).type('text/plain').send('Not found.');
+    return;
+  }
+  const agentId = String(req.params.id);
+  const callsQ = typeof req.query.calls === 'string' ? req.query.calls : '';
+  if (callsQ && callsQ !== 'arturo' && !isSafeAgentId(callsQ)) { res.status(400).type('text/plain').send('bad calls'); return; }
+  const owner = callsQ === 'arturo' ? null : (callsQ || agentId);
+  const exQ = typeof req.query.exclude === 'string' ? req.query.exclude : '';
+  if (exQ && !CALL_ID_RE.test(exQ)) { res.status(400).type('text/plain').send('bad exclude'); return; }
+  try {
+    // The chat as the page shows it: a wake's silent/emoji answer is never sent, so never context either.
+    const items = chatItemsFor(agentId, 300).filter((it) => !it?.wake_reply);
+    const [tz, tzLabel] = shawTz(dataDir());
+    const text = buildCallContext({
+      chatAgent: agentId, callOwner: owner, items, journals: readJournals(callsDir(dataDir()), Date.now() / 1000),
+      exclude: exQ || null, budgetTokens: clampBudget(req.query.budget), tz, tzLabel, operatorLabel: operatorName(dataDir()),
+    });
+    res.status(200).type('text/plain; charset=utf-8').set('Cache-Control', 'no-store')
+      .send(redactSecrets(text, [readGatewayToken()].filter(Boolean)).text);
+  } catch (err) {
+    console.error('[call-context]', String(err).slice(0, 200));
+    res.status(500).type('text/plain').send('Could not build the call context.');
   }
 });
 

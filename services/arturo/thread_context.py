@@ -85,7 +85,7 @@ def _clip(text: str, n: int) -> str:
 
 # --- sources --------------------------------------------------------------------------------------------------------
 
-def chat_lines(items: Iterable[dict], agent_label: str, operator_label: str = "Shaw",
+def chat_lines(items: Iterable[dict], agent_label: str, operator_label: str = "Operator",
                since: Optional[float] = None) -> list:
     """The chat as the operator sees it: text items tagged for the user, not machine turns (mail, approvals, relay)."""
     out = []
@@ -115,7 +115,7 @@ def _journal_files(calls_dir, now: float) -> list:
 
 
 def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, assistant_label: Optional[str] = None,
-               operator_label: str = "Shaw", now: Optional[float] = None) -> list:
+               operator_label: str = "Operator", now: Optional[float] = None) -> list:
     """Every spoken phrase of the owner's calls. owner None = Arturo's own calls (journals with no `agent`), else the
     calls placed with that agent. A file still marked live counts (the previous call may finalize seconds after the
     next starts); `exclude` is the call now starting."""
@@ -276,14 +276,29 @@ def shaw_tz(orch_dir: Optional[str] = None) -> tuple:
     return "UTC", "UTC"
 
 
+def operator_name(orch_dir: Optional[str] = None) -> str:
+    """The operator's own name (operator_store: <data dir>/state/arturo/operator.json), else "Operator"."""
+    roots = [orch_dir, os.environ.get("ORCHESTRA_DIR"), os.path.expanduser("~/.orchestra")]
+    for root in [r for r in roots if r]:
+        try:
+            with open(os.path.join(root, "state", "arturo", "operator.json"), encoding="utf-8") as fh:
+                name = (((json.load(fh) or {}).get("facts") or {}).get("name") or {}).get("value")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        except (OSError, ValueError, AttributeError):
+            continue
+    return "Operator"
+
+
 def load(chat_agent: str, call_owner: Optional[str], calls_dir, exclude: Optional[str] = None,
          fetch: Optional[Callable] = None, budget_tokens: int = DEFAULT_BUDGET_TOKENS, tz: Optional[str] = None,
-         tz_label: Optional[str] = None, chat_limit: int = 300, operator_label: str = "Shaw",
+         tz_label: Optional[str] = None, chat_limit: int = 300, operator_label: Optional[str] = None,
          assistant_label: Optional[str] = None) -> str:
     """The opening context for a call: `chat_agent`'s chat (the page the call was placed from) merged with the
     `call_owner`'s calls (None = Arturo's own). The same function serves every agent's call."""
     if tz is None or tz_label is None:
         tz, tz_label = shaw_tz()
+    operator_label = operator_label or operator_name()
     lines, notes = [], []
     try:
         items = (fetch or fetch_transcript)(chat_agent, chat_limit)

@@ -2978,7 +2978,8 @@ def _agent_chat_for_turn(agent_id):
     except Exception as e:  # noqa: BLE001 — the inbox still answers
         return f"({agent_id} chat could not be read: {type(e).__name__})"
     tz, label = _thread_ctx.shaw_tz(str(ORCHESTRA_DIR))
-    lines = _thread_ctx.chat_lines(items, agent_label=agent_id)
+    lines = _thread_ctx.chat_lines(items, agent_label=agent_id,
+                                   operator_label=_thread_ctx.operator_name(str(ORCHESTRA_DIR)))
     return _thread_ctx.render(lines, budget_tokens=READ_CHAT_BUDGET_TOKENS, tz=tz, tz_label=label,
                                   title=f"{agent_id.upper()} CHAT")
 

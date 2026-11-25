@@ -48,7 +48,7 @@ def test_chat_lines_keep_only_what_the_operator_sees():
         chat_item("assistant", "hmm", T0 + 9, kind="thinking"),
         chat_item("user", "approval card answered", T0 + 10, machine="approval"),
     ]
-    lines = tc.chat_lines(items, agent_label="gm")
+    lines = tc.chat_lines(items, agent_label="gm", operator_label="Shaw")
     assert [(l.who, l.text) for l in lines] == [("Shaw", "ship it"), ("gm", "shipping now")]
     assert [l.channel for l in lines] == ["chat", "chat"]
     assert lines[0].at == pytest.approx(T0)
@@ -59,9 +59,9 @@ def test_chat_lines_keep_only_what_the_operator_sees():
 def test_call_lines_pick_the_owners_calls_and_stamp_every_phrase(tmp_path):
     journal(tmp_path, "vc_a", [("user", "hi arturo", T0), ("assistant", "hey", T0 + 2)])
     journal(tmp_path, "vc_b", [("user", "hi gm", T0 + 3), ("gm", "yo", T0 + 4)], agent="gm")
-    arturo = tc.call_lines(tmp_path, owner=None, assistant_label="Arturo")
+    arturo = tc.call_lines(tmp_path, owner=None, assistant_label="Arturo", operator_label="Shaw")
     assert [(l.who, l.text, l.call_id) for l in arturo] == [("Shaw", "hi arturo", "vc_a"), ("Arturo", "hey", "vc_a")]
-    gm = tc.call_lines(tmp_path, owner="gm", assistant_label="gm")
+    gm = tc.call_lines(tmp_path, owner="gm", assistant_label="gm", operator_label="Shaw")
     assert [(l.who, l.text) for l in gm] == [("Shaw", "hi gm"), ("gm", "yo")]
     assert all(l.channel == "call" for l in arturo + gm)
 
@@ -85,8 +85,8 @@ def test_unreadable_journal_is_skipped_not_fatal(tmp_path):
 def test_merged_thread_is_time_ordered_with_a_stamp_on_every_line(tmp_path):
     journal(tmp_path, "vc_a", [("user", "call line", T0 + 10), ("assistant", "call reply", T0 + 11)])
     chat = tc.chat_lines([chat_item("user", "typed before", T0), chat_item("assistant", "typed after", T0 + 20)],
-                         agent_label="gm")
-    text = tc.render(chat + tc.call_lines(tmp_path, owner=None), budget_tokens=2000, tz="America/Cancun",
+                         agent_label="gm", operator_label="Shaw")
+    text = tc.render(chat + tc.call_lines(tmp_path, owner=None, operator_label="Shaw"), budget_tokens=2000, tz="America/Cancun",
                      tz_label="Tulum")
     order = [text.index(s) for s in ("typed before", "call line", "call reply", "typed after")]
     assert order == sorted(order)
@@ -166,3 +166,33 @@ def test_secret_shapes_are_blanked_before_they_reach_a_session():
     for out in (text, "\n".join(notes)):
         assert "abcdefghijklmnop" not in out and "hunter2xyz" not in out
         assert "[redacted]" in out
+
+
+# --- the shared contract with the API builder (api/src/lib/callContext.ts) ------------------------------------------
+
+_CASES = json.loads((__import__("pathlib").Path(__file__).resolve().parents[2] / "contract" /
+                     "call-context-cases.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("case", _CASES, ids=[c["name"] for c in _CASES])
+def test_the_shared_call_context_cases(case, tmp_path):
+    for j in case["journals"]:
+        (tmp_path / j["name"]).write_text(json.dumps(j["doc"]))
+
+    def fetch(agent, limit):
+        if case["items"] is None:
+            raise OSError("down")
+        return case["items"]
+    out = tc.load(chat_agent=case["chat_agent"], call_owner=case["call_owner"], calls_dir=tmp_path,
+                  exclude=case["exclude"], fetch=fetch, budget_tokens=case["budget"], tz=case["tz"],
+                  tz_label=case["tz_label"], operator_label=case["operator_label"])
+    assert out == case["expected"]
+
+
+def test_the_operator_is_named_by_their_own_name_else_operator(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    monkeypatch.setattr(tc.os.path, "expanduser", lambda p: str(tmp_path / "nohome"))
+    assert tc.operator_name() == "Operator"
+    (tmp_path / "state" / "arturo").mkdir(parents=True)
+    (tmp_path / "state" / "arturo" / "operator.json").write_text(json.dumps({"facts": {"name": {"value": "Ada"}}}))
+    assert tc.operator_name() == "Ada"
