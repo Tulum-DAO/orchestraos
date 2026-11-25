@@ -251,3 +251,15 @@ def test_the_chat_feed_defaults_to_thinking_the_kind_measured_voiced(monkeypatch
     assert call_context.feed_kind() == "instructions"
     monkeypatch.setenv(call_context.FEED_KIND_ENV, "bogus")
     assert call_context.feed_kind() == "thinking"
+
+
+def test_the_opening_budget_defaults_to_the_measured_greet_floor(monkeypatch):
+    # live calibration 2026-11-25, fenced thread, silence uplink (socket open -> first greet word):
+    # 6000 -> 4.3 s (native-240ee40aec3e), 3000 -> 3.01 s (native-aa57cc77994a), 1500 -> 2.44 s (native-22588f39755c).
+    # The default is the largest budget whose greet lands under 3 s; the rest of the thread is behind tools.
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    assert call_context.budget_tokens() == call_context.DEFAULT_BUDGET_TOKENS == 1500
+    monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "6000")
+    assert call_context.budget_tokens() == 6000
+    monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "junk")
+    assert call_context.budget_tokens() == 1500

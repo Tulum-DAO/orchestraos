@@ -32,12 +32,16 @@ def enabled():
     return os.environ.get(FLAG, "1") != "0"
 
 
+# The opening's size on a native call: the largest budget whose greet lands under 3 s (live calibration 2026-11-25,
+# fenced thread, socket open -> first word: 6000 -> 4.3 s, 3000 -> 3.01 s, 1500 -> 2.44 s). The rest is behind tools.
+DEFAULT_BUDGET_TOKENS = 1500
+
+
 def budget_tokens():
     try:
-        return max(500, min(int(os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") or thread_context.DEFAULT_BUDGET_TOKENS),
-                            20000))
+        return max(500, min(int(os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") or DEFAULT_BUDGET_TOKENS), 20000))
     except ValueError:
-        return thread_context.DEFAULT_BUDGET_TOKENS
+        return DEFAULT_BUDGET_TOKENS
 
 
 def default_chat_agent():
