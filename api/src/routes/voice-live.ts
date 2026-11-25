@@ -48,6 +48,7 @@ import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: sha
 import { gatewayWsUrl, gatewayUrl } from '../lib/gateway-url.js';
 import { dataDir } from '../lib/config.js';
 import { tailscaleOperator, isLoopback } from '../lib/tailscale-identity.js';
+import { comboProxyVouched, comboProxyAdmin } from '../lib/combo-vouch.js';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { principal } from '../lib/principal.js';
 import { canPrincipalSeeAgent, defaultResolveTags } from '../lib/agent-scope.js';
@@ -65,16 +66,20 @@ export type CredentialCheck = 'ok' | 'absent' | 'invalid' | 'expired';
 /** The Tailscale identity Serve stamps: ok, no login header, a login but not from loopback (so not Serve's), or a
  *  login that is not on the allowlist. */
 export type TailscaleCheck = 'ok' | 'absent' | 'not-loopback' | 'not-allowed';
+/** The front login proxy's vouch (lib/combo-vouch): ok, no vouch headers, a wrong secret or non-loopback peer, or a
+ *  vouched user whose role is not admin. */
+export type ComboCheck = 'ok' | 'absent' | 'invalid' | 'not-admin';
 
 export interface BrowserAuth {
   ok: boolean;
   /** Who, when any credential names someone: the session's user, the token's subject or the Tailscale login. */
   user: string | null;
   /** The credential that let the request in. */
-  via: 'cookie' | 'token' | 'tailscale' | null;
+  via: 'cookie' | 'token' | 'tailscale' | 'combo' | null;
   cookie: CredentialCheck;
   token: CredentialCheck;
   tailscale: TailscaleCheck;
+  combo: ComboCheck;
 }
 
 // Same HMAC scheme as combo-proxy.js's makeSessionToken/verifySessionToken —
@@ -132,10 +137,20 @@ function checkTailscale(req: IncomingMessage): { check: TailscaleCheck; user: st
   return tailscaleOperator(req) ? { check: 'ok', user: login } : { check: 'not-allowed', user: null };
 }
 
-/** The browser's credentials, in the order they are accepted (cookie, then JWT, then Tailscale login); the checks
- *  stop at the first that passes, and a refusal reports all three, so the log can say what was missing. */
+/** The front login proxy admits a tailnet user with no cookie and vouches on the upgrade with its shared secret plus
+ *  x-orchestra-user / x-orchestra-role (the same predicate the /ready routes accept). Loopback + secret + admin. */
+function checkCombo(req: IncomingMessage): { check: ComboCheck; user: string | null } {
+  const h = (n: string) => { const v = req.headers[n]; return String((Array.isArray(v) ? v[0] : v) || '').trim(); };
+  if (!h('x-orchestra-proxy-auth') && !h('x-orchestra-user')) return { check: 'absent', user: null };
+  if (!comboProxyVouched(req)) return { check: 'invalid', user: null };
+  return comboProxyAdmin(req) ? { check: 'ok', user: h('x-orchestra-user') } : { check: 'not-admin', user: null };
+}
+
+/** The browser's credentials, in the order they are accepted (cookie, then JWT, then Tailscale login, then the login
+ *  proxy's vouch); the checks stop at the first that passes, and a refusal reports all four, so the log can say what
+ *  was missing. */
 export function browserAuth(req: IncomingMessage): BrowserAuth {
-  const out: BrowserAuth = { ok: false, user: null, via: null, cookie: 'absent', token: 'absent', tailscale: 'absent' };
+  const out: BrowserAuth = { ok: false, user: null, via: null, cookie: 'absent', token: 'absent', tailscale: 'absent', combo: 'absent' };
   const cookie = checkOrchestraSession(getCookie(req, 'orchestra_session'));
   out.cookie = cookie.check;
   out.user = cookie.user;
@@ -148,6 +163,9 @@ export function browserAuth(req: IncomingMessage): BrowserAuth {
   out.tailscale = ts.check;
   out.user = out.user ?? ts.user;
   if (ts.check === 'ok') return { ...out, ok: true, via: 'tailscale', user: ts.user ?? out.user };
+  const combo = checkCombo(req);
+  out.combo = combo.check;
+  if (combo.check === 'ok') return { ...out, ok: true, via: 'combo', user: combo.user };
   return out;
 }
 
@@ -273,7 +291,7 @@ export function bridgeBrowserSocket(httpServer: HttpServer, gatewayWsUrl: string
       const auth = browserAuth(req);
       who.user = auth.user;
       if (!auth.ok) {
-        log('refused-auth', { status: 401, reason: `cookie:${auth.cookie},token:${auth.token},tailscale:${auth.tailscale}` });
+        log('refused-auth', { status: 401, reason: `cookie:${auth.cookie},token:${auth.token},tailscale:${auth.tailscale},combo:${auth.combo}` });
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
         socket.destroy();
         return;

@@ -26,6 +26,13 @@ const dir = testTmpDir('voice-ws-log-');
 const tokenFile = join(dir, 'watch-gateway-token');
 writeFileSync(tokenFile, BEARER + '\n');
 process.env.WATCH_GATEWAY_TOKEN_FILE = tokenFile;
+// The front login proxy's vouch: its shared secret in a 0600 file, the same one the API reads (lib/combo-vouch).
+const PROXY_SECRET = 'test-only-proxy-secret-fedcba9876543210';  // pragma: allowlist secret
+const proxyFile = join(dir, 'orchestra-proxy-auth.secret');
+writeFileSync(proxyFile, PROXY_SECRET + '\n', { mode: 0o600 });
+process.env.ORCHESTRA_PROXY_AUTH_FILE = proxyFile;
+const vouch = (over: Record<string, string> = {}) =>
+  ({ 'x-orchestra-proxy-auth': PROXY_SECRET, 'x-orchestra-user': 'vouched-operator', 'x-orchestra-role': 'admin', ...over });
 
 // The stand-in gateway: /live and /arturo/gptlive/ws, or a pre-upgrade refusal when `refuseWith` is set.
 let refuseWith = 0;
@@ -135,12 +142,12 @@ for (const [name, path, upstreamPath] of routes) {
     const none = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin() })).status, 401));
     assert.equal(none.length, 1);
     const l0 = exactlyOne(none, 'refused-auth');
-    assert.ok(l0.includes('reason=cookie:absent,token:absent,tailscale:absent'), l0);
+    assert.ok(l0.includes('reason=cookie:absent,token:absent,tailscale:absent,combo:absent'), l0);
     assert.ok(l0.includes('status=401'));
     assert.ok(!l0.includes('user='), 'no user is known on a refusal with no identity');
 
     const bad = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), cookie })).status, 401));
-    assert.ok(exactlyOne(bad, 'refused-auth').includes('cookie:invalid,token:absent,tailscale:absent'), bad[0]);
+    assert.ok(exactlyOne(bad, 'refused-auth').includes('cookie:invalid,token:absent,tailscale:absent,combo:absent'), bad[0]);
     neverACredential(bad, cookie.slice('orchestra_session='.length), PLANTED, 'user=');
 
     const expired = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), cookie: sessionCookie({ u: PLANTED, exp: Date.now() - 1000 }) })).status, 401));
@@ -149,7 +156,7 @@ for (const [name, path, upstreamPath] of routes) {
 
     const badJwt = jwt({ sub: PLANTED }, 'not-the-secret');
     const tok = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), authorization: `Bearer ${badJwt}` })).status, 401));
-    assert.ok(exactlyOne(tok, 'refused-auth').includes('cookie:absent,token:invalid,tailscale:absent'), tok[0]);
+    assert.ok(exactlyOne(tok, 'refused-auth').includes('cookie:absent,token:invalid,tailscale:absent,combo:absent'), tok[0]);
     neverACredential(tok, badJwt, PLANTED, 'user=');
 
     const oldJwt = jwt({ sub: PLANTED, exp: Math.floor(Date.now() / 1000) - 10 });
@@ -205,6 +212,29 @@ for (const [name, path, upstreamPath] of routes) {
     assert.match(c, / ms=\d+/);
     assert.ok(c.includes('user=sample-operator'), c);
     neverACredential(lines);
+  });
+
+  test(`${name}: the login proxy's vouch (secret + admin, from loopback) dials; a bare user header is refused-auth`, async () => {
+    // The dashboard behind the front login proxy has NO cookie: the proxy vouches with its secret on the upgrade too.
+    const lines = await captured(async () => {
+      const r = await connect(path, { origin: sameOrigin(), ...vouch() });
+      assert.deepEqual([r.code, r.reason], [1000, 'idle']);
+    });
+    const d = exactlyOne(lines, 'dialed');
+    assert.ok(d.includes('via=combo'), d);
+    assert.ok(d.includes('user=vouched-operator'), d);
+    neverACredential(lines, PROXY_SECRET);
+    // Without the secret the user header proves nothing (an incomplete vouch is invalid, not absent); with the
+    // secret but not admin, still refused.
+    const bare = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), 'x-orchestra-user': 'vouched-operator', 'x-orchestra-role': 'admin' })).status, 401));
+    assert.ok(exactlyOne(bare, 'refused-auth').includes('combo:invalid'), bare[0]);
+    neverACredential(bare, 'user=');
+    const wrong = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), ...vouch({ 'x-orchestra-proxy-auth': 'not-the-secret' }) })).status, 401));
+    assert.ok(exactlyOne(wrong, 'refused-auth').includes('combo:invalid'), wrong[0]);
+    neverACredential(wrong, PROXY_SECRET, 'user=');
+    const viewer = await captured(async () => assert.equal((await connect(path, { origin: sameOrigin(), ...vouch({ 'x-orchestra-role': 'viewer' }) })).status, 401));
+    assert.ok(exactlyOne(viewer, 'refused-auth').includes('combo:not-admin'), viewer[0]);
+    neverACredential(viewer, PROXY_SECRET, 'user=');
   });
 
   test(`${name}: a JWT session names the token's subject; a Tailscale operator names the login`, async () => {
