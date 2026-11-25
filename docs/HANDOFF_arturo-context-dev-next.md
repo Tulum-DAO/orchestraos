@@ -62,3 +62,8 @@
 - msg_5bfe3426: (1) TURN = EXCHANGE: merge consecutive same-speaker phrases within one call into one stamped turn (stamp = first phrase), both twins + the fixture, its own small PR after #637 lands; report the span 25 merged turns cover on the real thread. (2) GO: respawn arturo-native:0.0 at the next quiet minute on the CURRENT pinned checkout with ARTURO_NATIVE_CONTEXT_TOKENS=2500 (rollback = the same command without the var); report the pid, healthz, and the first real call's START turns=. (3) Answer: the thread-source amendment is CODE (PR #644), not a flag. Until it's live, a standalone-page call reads gm chat + Arturo calls (current pinned build).
 - msg_ff784fd1: mapping 1-6 CONFIRMED; turn=exchange applies to the page thread too; mapping 4 is the acceptable interim.
 - msg_1d4fa8e0 (avatar-dev): the dashboard half is r35, after r34 (tonight); it mails the bundle hash + md5s when r35 is live, and the proving call pairs with that.
+
+## 23:10Z: done after the limit lifted
+- Respawned the native at 2500 (gm GO msg_5bfe3426): pid 4106439, same pinned worktree, env ARTURO_NATIVE_CONTEXT_TOKENS=2500. Rollback = the same command without the var. Still owed: the first real call's START line to gm.
+- Turn = exchange: PR #645 (feat/turn-is-exchange, worktree /home/shaw/wt/arturo-context-dev/merge, built on #637's branch). Last 25 merged turns on web_ypc88hel span 52 min.
+- Merge order: #637 -> #638 -> #645 -> #644 (rebase #644 onto #645), with cards; then a respawn from the new main. #644 needs avatar-dev r35.
