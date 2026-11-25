@@ -74,3 +74,9 @@
 - Next: #645 card when its CI is all-green and #638 is merged; then re-point #644 to main, merge #645 into it, CI, card; then a quiet-minute respawn from new main (it carries #637's spending_tools expanduser; gm msg_18d19362).
 
 - avatar-dev: the dashboard start.thread half is LIVE since 23:12Z (bundle index-DXsXqetJ.js, msg_562f2fe3). The pinned live native (aa84d24) ignores the field until #644 is merged and respawned; pair the proving call with that bundle.
+
+## 23:50Z: review round (Claude reviewers; codex out of credits)
+- #638: MERGE-OK at 57129bf; fixes in 700a51d (floor re-read only with an EARLIER block and a first read of 2 s or less; junk env; anchored describe). Card apr_fe545d12 noted; CI re-running on 700a51d. Merge only after Shaw approves AND every job is green on 700a51d.
+- #645: card apr_f7e96424_50102779 (cc83b28, 19/19 green, MERGE-OK). Follow-up: a long merged turn keeps its head (consider keeping the tail).
+- #644: BLOCK fixed in 8ba9370 (thread_readable mirrors _thread_refusal; role-based feed; "earlier" grouping; fullmatch). Re-review running. Then merge #645 into #644 and re-point its base to main after #638 merges, then CI, then the card.
+- Shaw's new due dates (gm msg_c6dacdfa): 25-turn own-thread opening live 23:00 Tulum tonight; latency plan 08:00 11-26; #634/#635 card 10:00 11-26.
