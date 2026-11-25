@@ -78,6 +78,7 @@ import { wsOriginDecision } from './lib/ws-origin.js';
 import { isTerminalRelay } from './lib/terminal-relay-secret.js';
 import { capabilities } from './lib/capabilities.js';
 import { baselineHeaders } from './lib/agentHtmlCsp.js';
+import { apiCompression } from './lib/compress.js';
 
 const app = express();
 
@@ -151,6 +152,9 @@ app.use(accessLog);
 // not a document, so it costs nothing; the two routes that serve agent-written HTML set their own policy
 // (lib/agentHtmlCsp.ts). The dashboard is served elsewhere, never by this process.
 app.use(baselineHeaders);
+// gzip for the JSON the dashboard reads per seat (lib/compress.ts): never an event stream, never
+// the media route. Mounted before the routes so every JSON body a route sends goes through it.
+app.use(apiCompression());
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));
