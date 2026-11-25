@@ -255,3 +255,36 @@ test('SABOTAGE perf: each new image is checked once per stamp; a held one not at
   stampImages([...items, ...missing], 'gm', refsFor);
   assert.equal(_fileChecks() - before, 0, 'the next poll answers every miss from the cache');
 });
+
+// #601 delta review finding 2: the walk's budget counted every distinct path, so 1000 newer paths that cannot be shown
+// (not there, or outside the roots) hid the thumbnails of images already shown (999 -> 1/8, 1000 -> 0/8).
+test('SABOTAGE budget: 8 images already shown keep their ids behind 1000 newer paths under the roots that are not there', () => {
+  _resetMisses();
+  const dir = join(PROJECT, 'budget-held');
+  mkdirSync(dir, { recursive: true });
+  const store = new MediaStore(join(testTmpDir('images-budget-a-'), 'ids.json'), 500);
+  const refsFor = stamperFor({ store, roots: () => [PROJECT] });
+  const real = bigWindow(dir, 8);
+  const shown = idsOf(stampImages(real, 'gm', refsFor));
+  assert.equal(shown.filter(Boolean).length, 8);
+  const missing = Array.from({ length: 1000 }, (_, i) => ({ kind: 'text', role: 'assistant', text: `gone ${join(dir, `gone-${i}.png`)}`, uuid: `g${i}` }));
+  const out = idsOf(stampImages([...real, ...missing], 'gm', refsFor));
+  assert.deepEqual(out.slice(0, 8), shown, 'the 8 keep the ids they had');
+  assert.equal(out.slice(8).filter(Boolean).length, 0);
+  assert.deepEqual(idsOf(stampImages([...real, ...missing], 'gm', refsFor)), out, 'and on the next poll');
+});
+
+test('SABOTAGE budget: 1000 newer paths outside the roots cost no budget: 8 real images never shown before get ids at once', () => {
+  _resetMisses();
+  const dir = join(PROJECT, 'budget-prose');
+  mkdirSync(dir, { recursive: true });
+  const store = new MediaStore(join(testTmpDir('images-budget-b-'), 'ids.json'), 500);
+  const refsFor = stamperFor({ store, roots: () => [PROJECT] });
+  const real = bigWindow(dir, 8);
+  const prose = Array.from({ length: 1000 }, (_, i) => ({ kind: 'text', role: 'assistant', text: `frame /tmp/frames/f${i}.png`, uuid: `p${i}` }));
+  const before = _fileChecks();
+  const out = idsOf(stampImages([...real, ...prose], 'gm', refsFor));
+  assert.equal(out.slice(0, 8).filter(Boolean).length, 8, 'all 8 shown on the first stamp');
+  assert.equal(out.slice(8).filter(Boolean).length, 0);
+  assert.equal(_fileChecks() - before, 8, 'only the 8 were opened');
+});

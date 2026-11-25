@@ -10,7 +10,7 @@ import { closeSync, existsSync, linkSync, mkdirSync, readFileSync, readSync, ren
 import { join } from 'node:path';
 import { testTmpDir } from './testTmp.js';
 import {
-  MEDIA_ID, MediaStore, agentMediaRoots, imageRefsFor, openImage, resolveImageFile, sniffImage, underRoot, _resetMisses,
+  MEDIA_ID, MediaStore, agentMediaRoots, imageRefsFor, itemTime, openImage, resolveImageFile, sniffImage, underRoot, _resetMisses,
 } from './mediaStore.js';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
@@ -226,4 +226,76 @@ test('stamping mints only for a file that exists and passes; a miss is re-checke
   // A minted path is answered from the table even once the file is gone (the route refuses it then).
   renameSync(ok, join(f.project, 'shots', 'gone-away.png'));
   assert.equal(imageRefsFor('gm', [ok], deps)[0]?.id, store.has('gm', ok));
+});
+
+// #601 delta review finding 1: "at the cap the row referenced longest ago goes" had no test outside a full window.
+test('SABOTAGE evict order: at the cap the row referenced longest ago goes, never the one referenced last', () => {
+  const s = new MediaStore(join(testTmpDir('media-evict-'), 'ids.json'), 5);
+  const T = Date.parse('2026-11-22T00:00:00Z');
+  const ids = [1, 2, 3, 4, 5].map((i) => s.mint('gm', `/p/a${i}.png`, { refAt: T + i })!);
+  // a5 is read a few hundred times (the route serving it): a use never makes an older reference newer.
+  for (let i = 0; i < 300; i++) s.lookup(ids[4]);
+  // A limit/poll window naming only a6: every held row is unprotected, and only a1 may go.
+  const a6 = s.mint('gm', '/p/a6.png', { refAt: T + 6, protect: new Set(['/p/a6.png']) });
+  assert.ok(a6);
+  assert.equal(s.countFor('gm'), 5);
+  assert.equal(s.has('gm', '/p/a1.png'), null, 'a1, referenced longest ago, went');
+  for (let i = 2; i <= 5; i++) assert.equal(s.has('gm', `/p/a${i}.png`), ids[i - 1], `a${i} stays`);
+  // Then a2, a3 ... in that order, whatever was looked up in between.
+  s.lookup(ids[1]);
+  assert.ok(s.mint('gm', '/p/a7.png', { refAt: T + 7 }));
+  assert.equal(s.has('gm', '/p/a2.png'), null);
+  assert.equal(s.has('gm', '/p/a3.png'), ids[2]);
+});
+
+test('SABOTAGE evict order: "last referenced" never moves backwards, so an older page naming a row again does not rewind it', () => {
+  const s = new MediaStore(join(testTmpDir('media-rewind-'), 'ids.json'), 3);
+  const T = Date.parse('2026-11-22T00:00:00Z');
+  const H = 3_600_000;
+  const [c1, c2, c3] = [1, 2, 3].map((i) => s.mint('gm', `/p/c${i}.png`, { refAt: T + 3 * H + i })!);
+  // An older page (T+1h) names c3 again: its row keeps the newer time.
+  assert.equal(s.has('gm', '/p/c3.png', T + H), c3);
+  assert.equal(s.lookup(c3)?.seen, T + 3 * H + 3);
+  // c4 arrives at the live end: c1 goes, c3 stays.
+  assert.ok(s.mint('gm', '/p/c4.png', { refAt: T + 4 * H }));
+  assert.equal(s.has('gm', '/p/c1.png'), null, 'c1 went');
+  assert.equal(s.has('gm', '/p/c3.png'), c3, 'c3 kept its id');
+  // And a newer reference does move a row on: c2, the oldest left (T+3h), referenced again at T+5h, so at the
+  // next mint c3 goes and c2 stays.
+  assert.equal(s.has('gm', '/p/c2.png', T + 5 * H), c2);
+  assert.ok(s.mint('gm', '/p/c5.png', { refAt: T + 6 * H }));
+  assert.equal(s.has('gm', '/p/c3.png'), null, 'c3 went');
+  assert.equal(s.has('gm', '/p/c2.png'), c2, 'c2, moved on, stays');
+  assert.equal(s.lookup(c2)?.seen, T + 5 * H);
+});
+
+test('SABOTAGE evict order: the eviction order survives a save and load, and a row with no time counts as oldest', () => {
+  const dir = testTmpDir('media-reload-');
+  const file = join(dir, 'ids.json');
+  const s = new MediaStore(file, 3);
+  const T = Date.parse('2026-11-22T00:00:00Z');
+  const none = s.mint('gm', '/p/none.png')!;
+  const old = s.mint('gm', '/p/old.png', { refAt: T })!;
+  const young = s.mint('gm', '/p/young.png', { refAt: T + 2 })!;
+  s.lookup(none);   // used last: still the oldest by reference
+  s.flush();
+  const r = new MediaStore(file, 3);
+  assert.ok(r.mint('gm', '/p/x.png', { refAt: T + 3 }));
+  assert.equal(r.lookup(none), null, 'the row with no time went first');
+  assert.ok(r.mint('gm', '/p/y.png', { refAt: T + 4 }));
+  assert.equal(r.lookup(old), null);
+  assert.ok(r.lookup(young));
+});
+
+test('itemTime: ISO strings and ms pass through, seconds (Arturo\'s turns) become ms, anything else is undefined', () => {
+  assert.equal(itemTime('2026-11-22T00:00:00Z'), Date.parse('2026-11-22T00:00:00Z'));
+  assert.equal(itemTime(1_763_769_600_000), 1_763_769_600_000);
+  assert.equal(itemTime(1_763_769_600), 1_763_769_600_000);
+  assert.equal(itemTime(1_763_769_600.5), 1_763_769_600_500);
+  assert.equal(itemTime(0), 0);
+  assert.equal(itemTime(''), undefined);
+  assert.equal(itemTime('yesterday'), undefined);
+  assert.equal(itemTime(NaN), undefined);
+  assert.equal(itemTime(null), undefined);
+  assert.equal(itemTime(undefined), undefined);
 });
