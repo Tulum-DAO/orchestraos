@@ -18,9 +18,10 @@ With --mail it also sends:
     also forwarded to the fallback seat with the limited seat's baton path.
 5-hour hits are logged and shown on the seat row only (gm ruling).
 
---auto-switch is reserved: the fleet-wide login switch is armed only by an approved card, after
-24 h of correct window naming in this log. Until then it refuses and the log carries
-`switch_decision` lines (what it would have done, and why).
+--auto-switch arms the fleet-wide Claude login switch (limit_switch.py: trigger, human-typing
+hold, 10-minute gap, no switching back, one-line undo mail, nudge of banner-stuck seats, refusal
+mail when the other login has no headroom). Without it the log carries `switch_decision` lines
+only (what it would do, and why).
 """
 from __future__ import annotations
 
@@ -275,7 +276,7 @@ def switch_decision(paths, ev):
     return {"would_switch": bool(best), "from": ev.account, "to": best, "reason": why}
 
 
-def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None):
+def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None, switch_deps=None):
     now = now or time.time()
     cursors = _read_json(paths.cursors, {})
     episodes = _read_json(paths.episodes, {})
@@ -291,6 +292,7 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None)
         if ep is None:
             ep = episodes[key] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                                   "account": ev.account, "first_seen": ev.ts or stamp, "seats": [],
+                                  "spend_capped": ev.spend_capped,
                                   "owners_told": [], "open": True}
             _append(paths.log, {"ts": stamp, "kind": "episode_open", "key": key, "line": line,
                                 "runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
@@ -298,7 +300,8 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None)
                                 "spend_capped": ev.spend_capped, "source": ev.source, "text": ev.text[:300]})
             dec = switch_decision(paths, ev)
             if dec is not None:
-                _append(paths.log, dict(dec, ts=stamp, kind="switch_decision", key=key, armed=False))
+                _append(paths.log, dict(dec, ts=stamp, kind="switch_decision", key=key,
+                                        armed=switch_deps is not None))
             if mail_fn and _mail_worthy(ev, episodes):
                 mail_fn("gm", "high", f"usage limit: {line}",
                         f"{line}\nFirst seen {ev.ts or stamp} on {ev.seat}.\n"
@@ -332,6 +335,15 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None)
                     mail_fn(owner, "medium", f"back: {', '.join(ep['seats'])} can work again",
                             f"The {ep['window']} limit episode on {ep['account']} is over "
                             f"({', '.join(ep['seats'])}). Orders can go back to the seat.\n")
+
+    if switch_deps is not None:          # --auto-switch: the fleet-wide login switch (limit_switch.py)
+        import limit_switch as LS
+        st_path = os.path.join(paths.state_dir, "switch.json")
+        st = LS.load_state(st_path)
+        LS.tick(paths, episodes, claude_account_at(paths, None), now,
+                lambda row: _append(paths.log, row), switch_deps, st)
+        LS.prune_told(st, episodes)
+        _write_json(st_path, st)
 
     _write_json(paths.seat_rows, {"as_of": stamp, "seats": rows})
     _write_sidecar(paths, rows, now)
@@ -425,14 +437,16 @@ def main(argv=None):
     ap.add_argument("--mail", action="store_true", help="send the mails (default: log only)")
     ap.add_argument("--backfill", action="store_true",
                     help="read fresh files from their start instead of their end on first sight")
-    ap.add_argument("--auto-switch", action="store_true", help="reserved; refuses until armed by card")
+    ap.add_argument("--auto-switch", action="store_true",
+                    help="ARM the fleet-wide Claude login switch (limit_switch.py; its mails always go to gm)")
     a = ap.parse_args(argv)
+    paths = Paths()
+    deps = None
     if a.auto_switch:
-        print("refused: the fleet-wide login switch is armed only by an approved card "
-              "(after 24 h of correct window naming); this run logs switch_decision lines only",
-              file=sys.stderr)
-        return 2
-    res = run_once(Paths(), mail_fn=send_mail if a.mail else None, start_at_end=not a.backfill)
+        import limit_switch as LS
+        deps = LS.LiveDeps(paths, send_mail)
+    res = run_once(paths, mail_fn=send_mail if a.mail else None, start_at_end=not a.backfill,
+                   switch_deps=deps)
     print(json.dumps(res))
     return 0
 

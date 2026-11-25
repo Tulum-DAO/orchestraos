@@ -194,6 +194,3 @@ def test_sidecar_has_initiatives_shape_and_marks_the_limited_owners_items(tree):
     assert json.load(open(tree.initiatives))["items"][0]["note"] == ""   # main file untouched
 
 
-def test_auto_switch_flag_refuses_until_armed(capsys):
-    assert LW.main(["--auto-switch"]) == 2
-    assert "armed only by an approved card" in capsys.readouterr().err

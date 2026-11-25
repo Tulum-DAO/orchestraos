@@ -73,6 +73,8 @@ _HIT = re.compile(_PREFIX + r"You'?ve hit your (?P<w>session|weekly|usage) limit
                   r"(?:\s*·\s*resets\s+" + _WHEN + r"\s*" + _TZ + r")?", re.I)
 _ORG_CAP = re.compile(_PREFIX + r"Your organization'?s usage credit cap is reached", re.I)
 _AUTO = re.compile(_PREFIX + r"Usage limit reached\s*·\s*continuing automatically at\s+" + _WHEN, re.I)
+_AUTO_RESETS = re.compile(_PREFIX + r"Usage limit reached\s*·\s*limit resets\s+" + _WHEN, re.I)
+_CONTINUING = re.compile(_PREFIX + r"Continuing automatically at\s+" + _WHEN, re.I)
 _CLAUDE_PIPE = re.compile(_PREFIX + r"Claude AI usage limit reached\b(?:\|(?P<epoch>\d+))?", re.I)
 _CODEX_CREDITS = re.compile(_PREFIX + r"Your workspace is out of credits\b", re.I)
 _CODEX_LIMIT = re.compile(_PREFIX + r"Usage limit reached\.\s*You'?ve reached your usage limit", re.I)
@@ -141,7 +143,7 @@ def _line_event(line: str, now: datetime, host_tz) -> LimitEvent | None:
     if m:
         epoch = int(m.group("epoch") or 0)
         return LimitEvent("claude", "unknown", epoch if epoch > 10**9 else None, text=line.strip())
-    m = _AUTO.match(line)
+    m = _AUTO.match(line) or _AUTO_RESETS.match(line) or _CONTINUING.match(line)
     if m:
         return LimitEvent("claude", "unknown", _reset_epoch(m, _local_tz(host_tz), now), text=line.strip())
     if _CODEX_CREDITS.match(line):

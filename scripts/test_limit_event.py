@@ -113,6 +113,16 @@ def test_banner_lines(text, runtime, window, spend, reset):
     assert ev.source == "pane"
 
 
+def test_auto_continue_two_line_form_seen_2026_11_25():
+    screen = ("  ⚠ Usage limit reached · limit resets 9:30pm\n"
+              "    Continuing automatically at 9:30pm · esc to cancel\n")
+    ev = LE.from_text(screen, now=NOW_PM, host_tz="America/Cancun")
+    assert ev.runtime == "claude" and ev.window == "unknown"
+    assert ev.reset_at == _epoch("2026-11-26T02:30:00+00:00")
+    assert LE.from_text("  ⚠ Usage limit reached · limit resets 9:30pm", now=NOW_PM,
+                        host_tz="America/Cancun").reset_at == _epoch("2026-11-26T02:30:00+00:00")
+
+
 def test_headless_result_pipe_form_carries_the_reset_epoch():
     ev = LE.from_text("Claude AI usage limit reached|1762300800")
     assert (ev.runtime, ev.window, ev.reset_at) == ("claude", "unknown", 1762300800)
