@@ -308,34 +308,25 @@ def test_spawn_agent_says_could_not_verify_on_an_unknown_registration(mod, monke
     assert "could not verify" in out.lower() and "not registered" not in out.lower()
 
 
-def test_gm_command_without_the_gm_relay_says_so_plainly(mod, monkeypatch, tmp_path):
-    # S4: jarvis-gm-query.sh is CODE and does not ship in every install. It used to be looked for under
-    # the DATA dir and every call came back "GM error: ... No such file". Absent => one plain line, no run.
-    monkeypatch.setenv("ORCHESTRA_ROOT", str(tmp_path / "checkout-without-relay"))
-    ran = []
-    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: ran.append(a) or None)
-    out = mod.execute_tool("gm_command", {"prompt": "what is the fleet status"})
-    assert "not installed" in out and "jarvis-gm-query.sh" in out
-    assert not ran
-
-
-def test_gm_command_runs_the_relay_from_the_checkout(mod, monkeypatch, tmp_path):
+def test_gm_command_runs_no_relay_script_and_asks_through_the_store(mod, monkeypatch, tmp_path):
+    # The pane-scrape relay (jarvis-gm-query.sh) is gone (2026-11-25, gm D2): it handed a call Codex's preamble as
+    # the answer. gm_command now asks gm through the message store (test_gm_command_ask.py); no subprocess, ever.
     code = tmp_path / "checkout"
     code.mkdir()
     (code / "jarvis-gm-query.sh").write_text("#!/bin/sh\necho ok\n")
     monkeypatch.setenv("ORCHESTRA_ROOT", str(code))
-    seen = {}
+    ran = []
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: ran.append(a) or None)
 
-    class _R:
-        returncode, stdout, stderr = 0, "fleet is fine", ""
-
-    def _run(argv, **k):
-        seen["argv"] = argv
-        return _R()
-    monkeypatch.setattr(mod.subprocess, "run", _run)
+    class _S:
+        def send(self, **kw):
+            raise OSError("no store here")
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "msg_store", types.SimpleNamespace(MessageStore=_S))
     out = mod.execute_tool("gm_command", {"prompt": "what is the fleet status"})
-    assert seen["argv"][:2] == ["bash", str(code / "jarvis-gm-query.sh")]
-    assert "fleet is fine" in out
+    assert not ran
+    assert out.startswith("Could not reach gm")
 
 
 def test_a_commissioned_claude_seat_is_spawned_on_opus_5_5_1m(mod, monkeypatch):

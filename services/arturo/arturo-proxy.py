@@ -2793,6 +2793,70 @@ def _deep_turn(conversation_id, principal, untrusted=False):
     return t
 
 
+GM_ASK_WAIT_S = 25          # gm D2 (msg_09a35684): a bounded wait, then a promise, never silence
+GM_ASK_POLL_S = 1.0
+GM_ASK_DEDUPE_S = 600       # the same question again in the same call is not re-sent (no retry storm)
+_GM_ASKED = {}              # (call, normalized question) -> (msg id, when)
+_GM_ASKED_LOCK = _threading.Lock()
+
+
+def _gm_ask_now():
+    return time.time()
+
+
+def _gm_ask_sleep(s):
+    time.sleep(s)
+
+
+def _ask_brain(prompt, question):
+    """gm_command: ONE msg_store message to VOICE_BRAIN_SESSION (gm) with the call and thread in the subject, so gm's
+    reply lands in that thread; gm's reply in the message's conversation within GM_ASK_WAIT_S is the answer, else
+    the caller hears that gm has it and the answer comes to the chat. Replaced the pane scrape (jarvis-gm-query.sh),
+    which on 2026-11-25 handed a call Codex's preamble as the answer and does not ship in this tree."""
+    turn = _TEAM_TURN.get() or {}
+    call = str(turn.get("conversation_id") or turn.get("cid") or "")
+    thread = str(turn.get("thread_id") or "")
+    key = (call, " ".join(str(question).lower().split()))
+    promise = (f"gm has it; the answer comes to your chat. Tell the operator that in a few words and move on.")
+    now = _gm_ask_now()
+    with _GM_ASKED_LOCK:
+        for k in [k for k, v in _GM_ASKED.items() if now - v[1] > GM_ASK_DEDUPE_S]:
+            del _GM_ASKED[k]
+        prior = _GM_ASKED.get(key) if call else None
+    if prior:
+        return f"That question already went to gm ({prior[0]}); {promise}"
+    try:
+        if str(_REPO_ROOT) not in _sys.path:
+            _sys.path.insert(0, str(_REPO_ROOT))
+        from msg_store import MessageStore
+        store = MessageStore()
+        tag = " ".join(x for x in (f"thread {thread}" if thread else "", f"call {call}" if call else "") if x)
+        subject = f"[voice{(' ' + tag) if tag else ''}] {' '.join(str(question).split())[:70]}"
+        body = (f"{prompt}\n\nAnswer with a msg_store reply to this message. A reply within {GM_ASK_WAIT_S} s is "
+                f"spoken in the call; later, put the answer in the operator's chat"
+                f"{(' (thread ' + thread + ')') if thread else ''}.")
+        mid = store.send(from_agent="arturo", to_agent=VOICE_BRAIN_SESSION, type="task", subject=subject, body=body,
+                         priority="high", metadata={"voice_call": call, "thread_id": thread})
+        with _GM_ASKED_LOCK:
+            _GM_ASKED[key] = (mid, now)
+        conv = (store.get(mid) or {}).get("conversation_id")
+    except Exception as e:  # noqa: BLE001 — said plainly, never a stack to the caller
+        log.warning(f"gm_command: could not send to {VOICE_BRAIN_SESSION}: {e}")
+        return "Could not reach gm just now (the message store refused it). Tell the operator plainly; do not retry."
+    deadline = now + GM_ASK_WAIT_S
+    while conv and _gm_ask_now() < deadline:
+        try:
+            for m in store.thread(conv):
+                if m.get("id") != mid and m.get("from_agent") == VOICE_BRAIN_SESSION and (m.get("body") or "").strip():
+                    answer = m["body"].strip()
+                    return "gm says:\n" + (answer[:3000] + "\n... (truncated)" if len(answer) > 3000 else answer)
+        except Exception as e:  # noqa: BLE001 — the promise still stands
+            log.warning(f"gm_command: reading the reply failed: {e}")
+            break
+        _gm_ask_sleep(GM_ASK_POLL_S)
+    return promise
+
+
 READ_CHAT_BUDGET_TOKENS = 1500
 
 
@@ -4785,7 +4849,6 @@ def _execute_tool_raw(name, args, user_turns=None):
 
     elif name == "gm_command":
         prompt = args.get("prompt", "")
-        timeout = min(args.get("timeout", 60), 120)
         if not prompt:
             return "ERROR: gm_command called with empty prompt. The AI did not provide a query. This is a bug — retry or rephrase."
 
@@ -4806,32 +4869,7 @@ def _execute_tool_raw(name, args, user_turns=None):
         # (2) tag provenance so gm can never mistake a voice-relayed query for the operator's typed input.
         prompt = f"[via {_aname()} voice — relay of the operator's spoken request] {prompt}"
 
-        # Use dedicated jarvis-gm for voice/chat queries (doesn't block main GM)
-        # Falls back to main GM via gm-converse.sh if jarvis-gm unavailable
-        # jarvis-gm-query.sh is CODE (the checkout), never under ORCHESTRA_DIR (the DATA dir), and it does
-        # not ship in every install: absent => say so plainly instead of a "No such file" GM error (S4).
-        gm_script = str(Path(os.environ.get("ORCHESTRA_ROOT") or _REPO_ROOT) / "jarvis-gm-query.sh")
-        if not os.path.isfile(gm_script):
-            return ("The GM relay is not installed on this system (jarvis-gm-query.sh), so I can't pass this "
-                    "to the GM. Tell the operator that plainly; do not retry.")
-        try:
-            r = subprocess.run(
-                ["bash", gm_script, prompt, str(timeout)],
-                capture_output=True, text=True, timeout=timeout + 10,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                response = r.stdout.strip()
-                # Truncate if too long for voice context
-                if len(response) > 3000:
-                    response = response[:3000] + "\n... (truncated)"
-                return f"GM response:\n{response}"
-            else:
-                error = r.stderr.strip() or r.stdout.strip() or "No response"
-                return f"GM error: {error[:500]}"
-        except subprocess.TimeoutExpired:
-            return f"GM timed out after {timeout}s. The query may be too complex for voice. Try breaking it down."
-        except Exception as e:
-            return f"GM error: {e}"
+        return _ask_brain(prompt, args.get("prompt", ""))
 
     elif name == "read_file" and _secret_path(args.get("path", "")):
         # Secrets stay host-side (the lethal trifecta's first rule): no turn, voice or deep run reads them back.
