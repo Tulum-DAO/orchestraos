@@ -594,3 +594,49 @@ def test_renamed_green_streams_through_the_root_seat_ring_end_to_end(tmp_path):
     snap = read_status_snapshot(str(tmp_path))["seats"]["gm"]
     assert snap["status"] == "streaming"
     tmux.close()
+
+
+# --- (c) status.json carries only the current seat set -----------------------
+
+def test_a_seat_dropped_from_the_seat_set_leaves_status_json(tmp_path):
+    """A seat the registry refresh drops (retired, or a green alias gone at its swap)
+    must leave status.json, not be re-stamped fresh on every write forever."""
+    wal = tmp_path / "wal"; wal.mkdir()
+    gm, green = _seat("gm", 100), _seat("gm-g6", 200)
+    sampler = FakeSampler({100: IDLE_PROC, 200: IDLE_PROC})
+    sets = iter([None, [gm]])
+    d = TelemetryDaemon(
+        seats=[gm, green], mux=FakeMux(), sweep=FakeSweep(), sampler=sampler,
+        flag_store=FakeFlags(), snapshot_base=str(tmp_path), wal_dir=str(wal),
+        lock_path=str(tmp_path / "t.lock"), clock=lambda: 0.0,
+        seats_refresh=lambda: next(sets))
+    d.tick(now=0.0)
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm", "gm-g6"}
+    d.tick(now=SLOW_POLL_S + 1.0)                      # refresh drops the green alias
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm"}
+
+
+class RetiringSweep(FakeSweep):
+    def __init__(self, retired):
+        super().__init__()
+        self.retired = set(retired)
+    def is_retired(self, name):
+        return name in self.retired
+
+
+def test_a_renamed_away_alias_is_trimmed_and_its_sink_not_drained(tmp_path):
+    """The seat set can lag the swap (it refreshes on a registry change). A green alias
+    the sweep reports retired (its pane now runs as the root) is dropped from status.json
+    at once, and its ring is NOT drained: it reads the very file the root's ring now
+    resolves to, and draining it would steal the root's output."""
+    alias_ring = FakeRing()
+    seats = [_seat("gm", 100, ring=FakeRing()), _seat("gm-g6", 200, ring=alias_ring)]
+    sweep = RetiringSweep(())
+    d = _mk(tmp_path, seats, FakeSampler({100: IDLE_PROC, 200: IDLE_PROC}), sweep=sweep)
+    d.tick(now=0.0)
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm", "gm-g6"}
+    sweep.retired = {"gm-g6"}                          # the swap renamed gm-g6 -> gm
+    alias_ring.feed(b"the root's output")
+    d.tick(now=SLOW_POLL_S + 1.0)
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm"}
+    assert alias_ring.read_all() == b"the root's output"   # left for the root's ring

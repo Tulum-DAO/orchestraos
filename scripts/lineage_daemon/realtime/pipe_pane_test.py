@@ -360,3 +360,23 @@ def test_a_map_with_no_server_id_is_not_trusted_once_the_server_is_known(tmp_pat
     assert tmux.attach_calls == ["gm"]                # a fresh pane, not seat5's
     assert not sweep.is_unbound("gm")
     tmux.close()
+
+
+# --- (c) a renamed-away alias is retired; a dead pane is not -----------------
+
+def test_a_name_renamed_away_is_retired_a_dead_one_is_not():
+    """After the swap `gm-g6` is not a seat that died: its pane lives on as `gm`. The
+    sweep reports the alias RETIRED (telemetryd drops its row and stops draining its
+    sink). A session that simply vanished is not retired (it must still read offline),
+    and a name a new session takes again is live again."""
+    tmux = FakeTmux([("gm-g6", "$5"), ("crashy", "$6")])
+    sweep = AttachSweep(tmux)
+    sweep.sweep()
+    tmux.sessions = [("gm", "$5")]                 # renamed; crashy's pane gone
+    sweep.sweep()
+    assert sweep.is_retired("gm-g6")
+    assert not sweep.is_retired("gm")
+    assert not sweep.is_retired("crashy")
+    tmux.sessions = [("gm", "$5"), ("gm-g6", "$8")]   # a new green reuses the alias
+    sweep.sweep()
+    assert not sweep.is_retired("gm-g6")

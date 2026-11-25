@@ -205,6 +205,32 @@ class TelemetryDaemon:
         except Exception:
             return False
 
+    def _retired(self, session):
+        """True when the attach sweep says `session` was renamed away (a green alias after
+        its swap: its pane is the root seat now). Absent method / error => not retired."""
+        fn = getattr(self.sweep, "is_retired", None)
+        if fn is None:
+            return False
+        try:
+            return bool(fn(session))
+        except Exception:
+            return False
+
+    def _active_seats(self):
+        """The current seat set minus renamed-away aliases. The seat list can lag a swap
+        (it refreshes on a registry change); an alias's ring reads the very file the
+        root's ring now resolves to, so it must not be drained, classified or published."""
+        return [s for s in self.seats if not self._retired(s.session)]
+
+    def _trim(self):
+        """status.json carries only the active seat set: a row whose seat is gone (dropped
+        by the refresh, or a retired alias) is removed, never re-stamped fresh."""
+        keep = {s.session for s in self._active_seats()}
+        for cache in (self._status, self._last_bytes_ts, self._tails, self._last_novel_ts,
+                      self._degraded):
+            for k in [k for k in cache if k not in keep]:
+                del cache[k]
+
     def _log_e1_divergence(self, seat, classic, e1, age_s, hook_ts, now):
         """E1_SHADOW: append one JSONL record where the E1 verdict differs from the
         live classic verdict — the empirical divergence log for gm's gate (cond 3).
@@ -305,7 +331,7 @@ class TelemetryDaemon:
         content also drives the token delta + the C1 corroboration timestamp.
         PER-SEAT CONTAINED: one seat's ring/classify/append error is logged +
         marked degraded + skipped — never crashes the tick."""
-        for seat in self.seats:
+        for seat in self._active_seats():
             if seat.ring is None:
                 continue
             try:
@@ -361,15 +387,16 @@ class TelemetryDaemon:
         # time fields) in ONE batched call, then sample the resolved pids so a rotated
         # seat is scanned at its new live pid and does not falsely read offline_crashed
         # on the dead old pid.
+        seats = self._active_seats()
         live = self._resolve_live()
-        live_pids = {seat.session: self._pick_pid(seat, live) for seat in self.seats}
+        live_pids = {seat.session: self._pick_pid(seat, live) for seat in seats}
         try:
-            proc = self.sampler.sample([live_pids[s.session] for s in self.seats])
+            proc = self.sampler.sample([live_pids[s.session] for s in seats])
         except Exception as e:
             _LOG.warning("telemetry /proc sample failed (%s); slow classify skipped",
                          type(e).__name__)
             proc = {}
-        for seat in self.seats:
+        for seat in seats:
             try:
                 ps = proc[live_pids[seat.session]]
                 hooks = self._pick_hooks(seat, live)     # live hook, not frozen seat.hooks
@@ -436,7 +463,7 @@ class TelemetryDaemon:
         # merge the durable lane's per-seat degrade (lineage_root -> session)
         deg_lin = getattr(self.mux, "degraded_lineages", None) or {}
         if deg_lin:
-            lin2sess = {s.lineage_root: s.session for s in self.seats}
+            lin2sess = {s.lineage_root: s.session for s in seats}
             for root, reason in deg_lin.items():
                 sess = lin2sess.get(root)
                 if sess:
@@ -462,6 +489,7 @@ class TelemetryDaemon:
             self._last_slow = now
             self._slow(now)
             did_slow = True
+        self._trim()
         # Sub-second FAST (the operator amend) writes status.json every 0.5s. Writing the
         # WHOLE cache unconditionally at 2Hz over-costs CPU at fleet scale, so a
         # FAST tick writes ONLY when a status/degraded transition actually

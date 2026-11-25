@@ -148,6 +148,13 @@ class AttachSweep:
         self._sinks = None          # session-id -> sink path; loaded lazily (INERT construction)
         self._server = None
         self.unbound = set()        # live names whose pipe has no sink their ring can read
+        self.retired = set()        # names whose pane now runs under ANOTHER live name
+
+    def is_retired(self, name):
+        """True when `name` is gone because its pane was RENAMED (a green alias after its
+        swap), not because it died: the seat is the new name now. A vanished pane is not
+        retired (it must still read offline); a name a new session takes is live again."""
+        return name in self.retired
 
     def is_unbound(self, name):
         """True when `name`'s pane is piped, but into no sink `<name>.pipe` resolves to, so
@@ -312,8 +319,12 @@ class AttachSweep:
         self.unbound = unbound
         # prune sessions that are gone
         pruned = [n for n in list(self.attached) if n not in current]
+        live_now = set(current.values())
         for n in pruned:
+            if self.attached[n] in live_now:        # same pane, new name: renamed away
+                self.retired.add(n)
             del self.attached[n]
+        self.retired -= set(current)
         if self._dump() != before:
             try:
                 self._save()
