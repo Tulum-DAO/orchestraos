@@ -416,6 +416,7 @@ def test_set_ORCHESTRA_DIR_is_where_the_log_goes(tmp_path):
     assert (data / "logs" / "send-shape-guard.log").exists()
 
 
-def test_an_unexpanded_or_relative_ORCHESTRA_DIR_falls_back_to_the_default(tmp_path):
-    home = _run_from_scratch(tmp_path, orchestra_dir="$ORCHESTRA_DIR")
+@pytest.mark.parametrize("value", ["$ORCHESTRA_DIR", "data", "   "])
+def test_an_unexpanded_or_relative_ORCHESTRA_DIR_falls_back_to_the_default(tmp_path, value):
+    home = _run_from_scratch(tmp_path, orchestra_dir=value)
     assert (home / ".orchestra" / "logs" / "send-shape-guard.log").exists()

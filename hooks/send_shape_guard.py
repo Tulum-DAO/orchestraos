@@ -63,7 +63,10 @@ def _default_log_path() -> str:
     d = (os.environ.get("ORCHESTRA_DIR") or "").strip()
     if not d or "$" in d or not os.path.isabs(os.path.expanduser(d)):
         d = "~/.orchestra"
-    return os.path.join(os.path.expanduser(d), "logs", "send-shape-guard.log")
+    path = os.path.join(os.path.expanduser(d), "logs", "send-shape-guard.log")
+    # No HOME and no passwd entry leaves "~" literal: log nowhere rather than into the cwd
+    # (record() swallows the failed makedirs("")).
+    return path if os.path.isabs(path) else ""
 
 
 LOG_PATH = os.environ.get("SSG_LOG") or _default_log_path()
