@@ -487,6 +487,7 @@ def test_the_seat_message_tools_reach_the_store(P, monkeypatch, tool, args):
         def inbox(self, agent, tenant_id=None):
             return []
     monkeypatch.setitem(sys.modules, "msg_store", types.SimpleNamespace(MessageStore=_Store))
+    monkeypatch.setattr(P._thread_ctx, "fetch_transcript", lambda agent, limit: [])   # never the live API
     tok = P._TEAM_TURN.set(_record(P, principal="fleet"))
     try:
         out = P.execute_tool(tool, args)

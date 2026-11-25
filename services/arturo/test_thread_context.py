@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-import thread_context as tc
+from services.arturo import thread_context as tc
 
 T0 = 1_764_090_000.0      # 2025-11-25T17:00:00Z, any fixed epoch
 

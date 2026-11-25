@@ -362,6 +362,7 @@ def _record_spawned_this_turn(session_name):
 # in-flight TEXT response, but ONLY before the partial has committed a side-effecting tool
 # dispatch (cancel cannot un-run execute_tool). Lock is held only for tiny flag ops.
 from services.arturo import thread_store as _thread_store   # G20 durable thread archive
+from services.arturo import thread_context as _thread_ctx   # an agent's chat + calls, every line stamped
 from services.arturo import thread_delete as _thread_delete   # a deleted chat's other traces, and its facts
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
@@ -1974,12 +1975,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_agent_conversation",
-            "description": "Read the message thread between agents. Use when the operator asks 'what are X and Y talking about?' or 'what did agent X say to agent Y?'. Can also read an agent's inbox to see all pending messages.",
+            "description": "Read an agent's CHAT (what the operator and the agent said to each other on the dashboard, newest last, every line timestamped) plus its pending inbox. Use for 'what is gm saying', 'what did I tell X', 'what did agent X say'. With conversation_id, reads that agent-to-agent message thread instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "agent_id": {"type": "string", "description": "Agent whose inbox or conversations to read."},
-                    "conversation_id": {"type": "string", "description": "Specific conversation thread ID to read (optional — if omitted, returns inbox summary)."},
+                    "conversation_id": {"type": "string", "description": "Specific agent-to-agent message thread ID (optional — if omitted, returns the agent's chat and inbox)."},
                 },
                 "required": ["agent_id"],
             },
@@ -2790,6 +2791,27 @@ def _deep_turn(conversation_id, principal, untrusted=False):
     t = _voice_turn(conversation_id, principal)
     t.update(voice=False, deep=True, untrusted=bool(untrusted))
     return t
+
+
+READ_CHAT_BUDGET_TOKENS = 1500
+
+
+def _agent_chat_for_turn(agent_id):
+    """The agent's chat as the dashboard shows it (newest verbatim, stamped, secret shapes blanked) for a verified
+    fleet/owner caller, fenced or not: the fence limits what a turn may DO, and this is who may READ. Anyone else:
+    "" (the inbox summary alone, as before). An unreadable API is a line saying so."""
+    turn = _TEAM_TURN.get()
+    p = (turn or {}).get("principal") or ""
+    if not (p == "fleet" or p.startswith("owner:")):
+        return ""
+    try:
+        items = _thread_ctx.fetch_transcript(agent_id, 300)
+    except Exception as e:  # noqa: BLE001 — the inbox still answers
+        return f"({agent_id} chat could not be read: {type(e).__name__})"
+    tz, label = _thread_ctx.shaw_tz(str(ORCHESTRA_DIR))
+    lines = _thread_ctx.chat_lines(items, agent_label=agent_id)
+    return _thread_ctx.render(lines, budget_tokens=READ_CHAT_BUDGET_TOKENS, tz=tz, tz_label=label,
+                                  title=f"{agent_id.upper()} CHAT")
 
 
 def _bound_tools(turn=None, use_current=True):
@@ -5131,7 +5153,8 @@ def _execute_tool_raw(name, args, user_turns=None):
                 parts = [f"Inbox for {agent_id}: {len(pending)} pending messages"]
                 for m in pending[:5]:
                     parts.append(f"  [{m.get('priority','?')}] from {m.get('from_agent','?')}: {m.get('subject','')[:60]}")
-                return "\n".join(parts)
+                chat = _agent_chat_for_turn(agent_id)
+                return "\n".join(([chat, ""] if chat else []) + parts)
         except Exception as e:
             return f"Failed to read messages: {e}"
 
