@@ -2,7 +2,7 @@
 
   * scripts/ goes on sys.path so `import jev` resolves to THIS tree's package (asserted).
   * Every Jev env var is cleared; JEV_DOTENV points at a missing file so the real
-    ~/scripts/agent-orchestra/.env key can never be read; JEV_STATE_DIR / JEV_LOG go to tmp.
+    ~/.orchestra/.env key can never be read; JEV_STATE_DIR / JEV_LOG go to tmp.
   * Outbound sockets are refused except to loopback (the fake provider server).
 """
 import os

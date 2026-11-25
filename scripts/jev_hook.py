@@ -26,7 +26,9 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ORCH = os.environ.get("ORCHESTRA_DIR") or os.path.dirname(HERE)
+# The install's data dir (state/, logs/, .env), never the code checkout: the public tree runs from its own
+# checkout while the data lives in ~/.orchestra, the same convention as every other public script.
+ORCH = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/.orchestra")
 EVENTS = ("pre-tool-use", "post-tool-use", "stop", "user-prompt-submit")
 
 

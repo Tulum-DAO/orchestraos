@@ -12,7 +12,7 @@ Selection order: explicit provider= > test isolation (pytest -> mock unless JEV_
 closed (raises); nothing silently falls back to the mock.
 
 Credentials come from the environment first, then from the gitignored orchestra .env
-(JEV_DOTENV, else $ORCHESTRA_DIR/.env, else ~/scripts/agent-orchestra/.env). Seats do not
+(JEV_DOTENV, else $ORCHESTRA_DIR/.env, else ~/.orchestra/.env). Seats do not
 carry the key in their own env. Keys are never logged, printed, or put in results.
 """
 from __future__ import annotations
@@ -103,7 +103,7 @@ def dotenv_path() -> str:
     explicit = os.environ.get("JEV_DOTENV")
     if explicit:
         return explicit
-    base = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")
+    base = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/.orchestra")
     return os.path.join(base, ".env")
 
 

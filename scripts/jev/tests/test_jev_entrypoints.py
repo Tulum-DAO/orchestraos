@@ -191,3 +191,28 @@ def test_config_write_roots_extend_gate_b(env, tmp_path):
     assert "outside the workspace roots" in run([HOOK, "pre-tool-use"], env, ev).stdout
     write_config(env, {"gates": ["B"], "write_roots": [str(tmp_path / "worktrees")]})
     assert "outside the workspace roots" not in run([HOOK, "pre-tool-use"], env, ev).stdout
+
+
+def test_without_orchestra_dir_the_data_dir_is_home_dot_orchestra_not_the_checkout(env, tmp_path, monkeypatch):
+    """The public tree runs from its own checkout; state, logs and .env live in ~/.orchestra. With no
+    ORCHESTRA_DIR the hook must read ~/.orchestra/state/jev/config.json and log under ~/.orchestra/logs,
+    exactly where the private tree's hook reads and writes today (same files, by symlink)."""
+    home = tmp_path / "home"
+    orch = home / ".orchestra"
+    for k in ("ORCHESTRA_DIR", "JEV_LOG", "JEV_STATE_DIR", "JEV_DOTENV"):
+        env.pop(k)
+    env.update({"JEV_BACKEND": "mock", "JEV_HOOK_ALLOW_MOCK": "1", "HOME": str(home)})
+    env.pop("TMUX_PANE", None)
+    (orch / "state" / "jev").mkdir(parents=True)
+    (orch / "state" / "jev" / "config.json").write_text(json.dumps({"gates": ["A"]}))
+    assert "deny" in run([HOOK, "pre-tool-use"], env, bash_event("rm -rf /var/lib/postgres/data")).stdout
+    assert (orch / "logs" / "jev-decisions.jsonl").exists(), "decision log goes to ~/.orchestra/logs"
+    (orch / "state" / "jev" / "DISABLED").write_text("")
+    assert run([HOOK, "pre-tool-use"], env, bash_event("rm -rf /var/lib/postgres/data")).stdout == ""
+
+    from jev import client, compact
+    for k in ("ORCHESTRA_DIR", "JEV_DOTENV", "JEV_STATE_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    assert client.dotenv_path() == str(orch / ".env")
+    assert compact.state_dir() == str(orch / "state" / "jev" / "compact")

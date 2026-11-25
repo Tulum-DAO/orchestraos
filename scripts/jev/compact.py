@@ -291,7 +291,7 @@ def state_dir() -> str:
     explicit = os.environ.get("JEV_STATE_DIR")
     if explicit:
         return explicit
-    base = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")
+    base = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/.orchestra")
     return os.path.join(base, "state", "jev", "compact")
 
 
