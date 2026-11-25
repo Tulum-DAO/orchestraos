@@ -67,3 +67,8 @@
 - Respawned the native at 2500 (gm GO msg_5bfe3426): pid 4106439, same pinned worktree, env ARTURO_NATIVE_CONTEXT_TOKENS=2500. Rollback = the same command without the var. Still owed: the first real call's START line to gm.
 - Turn = exchange: PR #645 (feat/turn-is-exchange, worktree /home/shaw/wt/arturo-context-dev/merge, built on #637's branch). Last 25 merged turns on web_ypc88hel span 52 min.
 - Merge order: #637 -> #638 -> #645 -> #644 (rebase #644 onto #645), with cards; then a respawn from the new main. #644 needs avatar-dev r35.
+
+## 23:30Z
+- #637 merged (257c15a); main green. Signed-off merges of main into #638 (57129bf, CI 19/19 green) and #645 (cc83b28, CI running).
+- MERGE card #638: apr_fe545d12_49123648 (decide by 20:00 Tulum). Review asked of builder/codex-gm (msg_a8d8812a).
+- Next: #645 card when its CI is all-green and #638 is merged; then re-point #644 to main, merge #645 into it, CI, card; then a quiet-minute respawn from new main (it carries #637's spending_tools expanduser; gm msg_18d19362).
