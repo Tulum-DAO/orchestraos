@@ -59,10 +59,17 @@ def _fact(ts, surface, agent, kind, text, actor="shaw"):
 INJECTED_RE = re.compile(
     r"^(Stop hook feedback:|<task-notification>|<local-command-|<cross-session-message|"
     r"Another Claude session sent a message|You are [\w.-]+\. Read /tmp/agent-|"
-    r"\[(QUEUE-DIGEST|ROTATION|LINEAGE|WAL DELTA|pulse|LONG-MSG|fwd from|cron|DECISION ANSWERED|"
+    r"You are [\w.-]+, resumed \(session |ingest your hydrate|Check your inbox|Voice call ended:|"
+    r"\[(QUEUE-DIGEST|ROTATION|LINEAGE|WAL DELTA|pulse|fwd from|cron|DECISION ANSWERED|APPROVAL RESOLVED |"
     r"Usage limit reached|Earlier usage-limit notes)|"
     r"You are (a|an|the) |# You are |You extract |Distill this |Classify each |"
     r"From the (meeting/)?conversation transcript)")
+# NOT injected, on purpose:
+# - "[LONG-MSG chip-dodge] ..." is the gateway's wrapper around the operator's OWN long chat message: the
+#   head of the text plus a pointer to the full body, which sits in an ephemeral /tmp file this collector
+#   does not read. The banner head is kept as the text and the turn stays "shaw".
+# - A bare "continue" is either the operator or the automatic continue reply; the text can't tell them
+#   apart, so it keeps whatever the metadata says.
 
 
 def turn_author(o, text):
@@ -82,11 +89,14 @@ def turn_author(o, text):
         return "system"
     if INJECTED_RE.match(text.lstrip()):
         return "injected"
+    if source is None and not origin:
+        return "unknown"                         # an older transcript: no origin fields to read
     return "shaw"
 
 
 def transcript_ref(path):
-    """<project dir>/<session file>: stable, and carries no host path."""
+    """<project dir>/<session file>: stable across machines' home dirs. The project dir name is the
+    encoded working dir, so it still names the user; the rows are private data."""
     return "/".join(os.path.normpath(path).split(os.sep)[-2:])
 
 

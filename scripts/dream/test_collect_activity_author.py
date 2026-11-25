@@ -35,10 +35,18 @@ TURNS = [
     turn("u-init", "You are example-seat. Read /tmp/agent-init-example-seat.md and follow it.", **TYPED),
     turn("u-stop", "Stop hook feedback:\ncontinue", **TYPED),
     turn("u-old", "an older transcript line with no origin fields"),
+    turn("u-longmsg", "[LONG-MSG chip-dodge] Voice notes for the client call: lead with pricing", **TYPED),
+    turn("u-hydrate", "ingest your hydrate digest at /tmp/x.md", **TYPED),
+    turn("u-approval", "[APPROVAL RESOLVED apr_1] approved: ship it", **TYPED),
+    turn("u-voice", "Voice call ended: the caller asked for the status of the build", **TYPED),
+    turn("u-inbox", "Check your inbox: 2 new messages", **TYPED),
+    turn("u-resumed", "You are example-seat, resumed (session 0000). Carry on.", **TYPED),
+    turn("u-continue", "continue", **TYPED),
 ]
 EXPECT = {"u-typed": "shaw", "u-hook": "hook", "u-headless": "headless", "u-sidechain": "subagent",
           "u-notify": "system", "u-suggest": "model-suggestion", "u-init": "injected", "u-stop": "injected",
-          "u-old": "shaw"}
+          "u-old": "unknown", "u-longmsg": "shaw", "u-hydrate": "injected", "u-approval": "injected",
+          "u-voice": "injected", "u-inbox": "injected", "u-resumed": "injected", "u-continue": "shaw"}
 
 
 def write_transcript(root, turns, lead=()):
@@ -71,7 +79,7 @@ def test_citation_is_transcript_and_message_uuid(tmp_path):
     f = by_uuid(C.extract_transcript_facts(write_transcript(tmp_path, TURNS), "example-seat"))["u-typed"]
     assert f["citation"] == {"transcript": f"{PROJECT}/{SESSION}", "uuid": "u-typed", "part": 0}
     assert f["source_key"] == "cli:u-typed:0"
-    assert str(tmp_path) not in json.dumps(f)          # no host path in the row
+    assert str(tmp_path) not in json.dumps(f)          # no path above the project dir in the row
 
 
 def test_citation_survives_lines_added_before_the_turn(tmp_path):
