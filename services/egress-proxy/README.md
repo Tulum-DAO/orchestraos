@@ -23,13 +23,14 @@ one line each.
 
 ## Pointing Chrome at it
 
-Start Chrome (or Chromium, headless or not) with all four of these flags:
+Start Chrome (or Chromium, headless or not) with all five of these flags:
 
 ```
 --proxy-server=http://127.0.0.1:3128
 --proxy-bypass-list=<-loopback>
 --disable-quic
 --force-webrtc-ip-handling-policy=disable_non_proxied_udp
+"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
 ```
 
 | Flag | Why |
@@ -38,18 +39,28 @@ Start Chrome (or Chromium, headless or not) with all four of these flags:
 | `--proxy-bypass-list=<-loopback>` | By default Chrome connects to `localhost` and `127.0.0.1` directly and skips the proxy. `<-loopback>` removes that built-in exception, so loopback requests also go through the proxy, which refuses them. |
 | `--disable-quic` | QUIC (HTTP/3) is UDP and would not go through an HTTP proxy. |
 | `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` | Stops WebRTC from opening UDP paths that skip the proxy. |
+| `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1` | Chrome's own resolver answers "not found" for every name, so a page cannot make the browser look up a name it chose. The proxy still does the real resolving. Give the proxy address as the IP `127.0.0.1`, not `localhost`. |
 
 Adding this proxy does not change any existing browser tool configuration. Wiring it in is a
 separate step.
 
-**Known gap: DNS lookups by the browser.** Chrome cannot reach a private address with these
-flags. But a page-chosen hostname can still reach a DNS resolver as a lookup, which is a
-one-way way to leak data, not a way into private space. In a headless Chromium run with these
-flags, the net-log showed `<img>`, `fetch()` and `<link rel=prefetch>` hostnames going to
-Chrome's host resolver. `<link rel=dns-prefetch>`, `preconnect` and plain links did not. Those
-lookups failed inside the sandbox, and whether any DNS packet left the host was not measured.
-The old `--dns-prefetch-disable` switch is absent from current Chromium builds, so it is not
-listed here.
+**Why the resolver rule.** Even with a fixed proxy, Chrome sends some page-chosen hostnames
+to its own host resolver. A DNS lookup is a one-way way to leak data out of the page, though
+not a way into private space. This was measured in headless Chromium 157 with `--log-net-log`.
+The test page used `dns-prefetch`, `preconnect`, `prefetch`, a link, an `<img>`, `fetch()` and
+a WebSocket, each pointing at its own probe hostname. The table counts
+`HOST_RESOLVER_MANAGER_REQUEST` events:
+
+| Flags | Probe names looked up | Lookups of real names |
+|---|---|---|
+| first four flags only | 3 (`img`, `fetch`, `prefetch`) | 10 |
+| + `--dns-prefetch-disable` (no longer in Chromium) | 3 | 10 |
+| + disabling `LocalNetworkAccessChecks`, `UseDnsHttpsSvcb`, `HappyEyeballsV3`, `AsyncDns` or the predictor features | 3 | 10 |
+| + `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1` | **0** | 0 (all 10 become `~notfound`) |
+
+With the rule in place, HTTP and HTTPS pages still load through the proxy, and loopback,
+`localhost` and metadata URLs still get the proxy's 403. Without `EXCLUDE 127.0.0.1`, Chrome
+cannot reach the proxy at all.
 
 ## What it decides, and how
 
