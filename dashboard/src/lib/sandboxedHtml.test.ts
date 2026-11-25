@@ -22,6 +22,10 @@ test('the frame policy fetches nothing, posts no form, sets no base and frames n
   assert.equal(d['base-uri'], "'none'");
   assert.equal(d['frame-src'], "'none'");
   assert.equal(d['script-src'], "'unsafe-inline'");
+  // No remote image: an image tag is a GET the page controls, so `img-src https:` would let an inline script
+  // carry typed answers out in a URL (connect-src 'none' does not govern image loads). data: only.
+  assert.equal(d['img-src'], 'data:');
+  for (const dir of ['img-src', 'font-src', 'style-src']) assert.ok(!/\bhttps:(\s|$)/.test(d[dir] + ' '), `${dir} allows any https host`);
 });
 
 test('the policy, the storage stand-in and the bridge come before anything of the page, doctype or not', () => {

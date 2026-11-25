@@ -20,10 +20,10 @@
  */
 
 /** The frame's own policy, the API's header for these pages: inline script and style (the pages are single files),
- *  Google Fonts (three pages use them), https and data: images; nothing fetched (connect-src 'none'), no form
+ *  Google Fonts (three pages use them), data: images only (a remote image is a GET the page controls); nothing fetched (connect-src 'none'), no form
  *  posted, no base, no nested frame. */
 export const FRAME_POLICY = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
-  + "img-src https: data:; font-src https://fonts.gstatic.com data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'";
+  + "img-src data:; font-src https://fonts.gstatic.com data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'";
 
 export const SANDBOX = 'allow-scripts allow-forms';
 
