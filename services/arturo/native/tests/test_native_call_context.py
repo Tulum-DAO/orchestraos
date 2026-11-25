@@ -65,8 +65,9 @@ def test_the_thread_opens_the_call_in_both_prompts(tmp_path, monkeypatch):
     assert start["type"] == "session.start"
     assert asked == ["gm"]                                          # the client page's chat is gm's (10-20 ruling)
     live, backend = start["session"]["instructions"], start["session"]["delegation"]["responses"]["instructions"]
-    for text in (live, backend):
-        assert text.rstrip().endswith("THREAD for gm: last call said hi")   # after the rules, never before
+    assert backend.rstrip().endswith("THREAD for gm: last call said hi")    # after the rules
+    paras = live.strip().split("\n\n")                                   # live: after the rules, before START
+    assert paras[-1].startswith("START:") and paras[-2] == "THREAD for gm: last call said hi"
 
 
 def test_the_page_names_whose_chat_it_is(tmp_path, monkeypatch):
@@ -208,3 +209,14 @@ def test_the_route_is_asked_for_arturos_calls_with_the_budget(monkeypatch):
     assert call_context.fetch_route("gm", 6000) == "THREAD …"
     assert seen["url"] == "http://127.0.0.1:8888/api/agents/gm/call-context?calls=arturo&budget=6000"
     assert seen["timeout"] <= 5
+
+
+def test_the_thread_goes_before_the_start_rule_so_arturo_still_greets_first():
+    # live probe 2026-11-25 (native-5f12346ce59e): with the thread after the START rule, Arturo never greeted;
+    # 10-16 probe: the greet only fires when START is the LAST thing in the live instructions.
+    from services.arturo.native import native_config
+    f = native_config.session_start_frame([], context="THREAD: chat Shaw: hello")
+    live = f["session"]["instructions"]
+    assert live.strip().split("\n\n")[-1].startswith("START:")
+    assert "THREAD: chat Shaw: hello" in live and live.index("THREAD:") < live.rindex("START:")
+    assert f["session"]["delegation"]["responses"]["instructions"].rstrip().endswith("THREAD: chat Shaw: hello")

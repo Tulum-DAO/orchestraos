@@ -38,11 +38,19 @@ def prompts(path=PROMPT_FILE):
 
 
 def session_start_frame(tools, voice=None, context=""):
-    """`context`: the thread above this call (call_context.opening), after both prompts so the rules come first."""
+    """`context`: the thread above this call (call_context.opening). After the rules, but in LIVE before the closing
+    START paragraph: the greet only fires when START is the last thing in the instructions (10-16 probe; the
+    2026-11-25 probe with the thread after it never greeted)."""
     p = prompts()
     live, backend = p["live"], p["backend"]
     if context and context.strip():
-        live, backend = f"{live}\n\n{context.strip()}", f"{backend}\n\n{context.strip()}"
+        ctx = context.strip()
+        paras = live.strip().split("\n\n")
+        if paras[-1].startswith("START:"):
+            live = "\n\n".join(paras[:-1] + [ctx, paras[-1]])
+        else:
+            live = f"{live}\n\n{ctx}"
+        backend = f"{backend}\n\n{ctx}"
     return protocol.validate_client(protocol.session_start(
         instructions=live, tools=tools, backend_model=BACKEND_MODEL, backend_instructions=backend,
         voice=voice or VOICE, tool_choice="auto", parallel_tool_calls=False))
