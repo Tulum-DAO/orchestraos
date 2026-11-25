@@ -352,12 +352,18 @@ class _Holder:
             ac.mark_call(agent, conversation_id)   # its supervisor neither rotates nor restarts while it is live
         # voice mode: the agent's recent conversation, read and scrubbed ONCE (a reconnect reuses it; it goes to OpenAI)
         self._agent_context = ""
+        self._agent_context_source = None   # which path gave it (agent_call.call_context): route|twin|voice_context|...
         self._chat_watch = None       # voice mode: the agent's own chat mirrored into the call (_agent_chat_watch)
         self._voice_turns = {}        # voice mode: requests said on the call and handed to the session (key -> count)
         if self.agent_voice:
             try:
-                self._agent_context = manager.scrub(ac.voice_context(agent) or "")
+                if hasattr(ac, "call_context"):    # the same thread as Arturo's: its chat + its own calls, stamped
+                    text, self._agent_context_source = ac.call_context(agent, exclude=conversation_id)
+                else:
+                    text, self._agent_context_source = ac.voice_context(agent), "voice_context"
+                self._agent_context = manager.scrub(text or "")
             except Exception as e:  # noqa: BLE001 — the call runs without it
+                self._agent_context_source = "none"
                 log.warning(f"relay {conversation_id}: agent context unreadable for {agent}: {e!r}")
         self.sock = None
         self.gate = ptt_stream.UplinkGate()
@@ -806,6 +812,10 @@ class _Holder:
 
     def close(self):
         if self.agent_mode or self.agent_voice:
+            if self.agent_voice:
+                from services.arturo import thread_context as _tc
+                log.info(f"relay {self.cid}: END agent={self.agent} context_source={self._agent_context_source} "
+                         f"opening_tokens={_tc.estimate_tokens(self._agent_context)}")
             if self.agent_mode:
                 self._oa_cancel_force()
             try:

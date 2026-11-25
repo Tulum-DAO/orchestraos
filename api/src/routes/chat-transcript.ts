@@ -19,7 +19,7 @@ import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction
 import { refable, partAt } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices, storePath } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff, CALL_ID_RE } from '../lib/agentCalls.js';
-import { buildCallContext, readJournals, clampBudget, shawTz, operatorName, redact } from '../lib/callContext.js';
+import { buildCallContext, readJournals, clampBudget, shawTz, operatorName, redact, callLines, estimateTokens } from '../lib/callContext.js';
 import { isLoopback } from '../lib/access-log.js';
 import { redactSecrets } from '../lib/redactSecrets.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
@@ -2490,7 +2490,7 @@ router.get('/:id/transcript.md', (req: Request, res: Response) => {
   }
 });
 
-// GET /api/agents/:id/call-context?budget=<tokens>&calls=<owner|arturo>&exclude=<call id> -> what a call with this agent
+// GET /api/agents/:id/call-context?budget=<tokens>&calls=<owner|arturo>&exclude=<call id>[&meta=1] -> what a call with this agent
 // knows at start (lib/callContext.ts; the Python twin services/arturo/thread_context.py, same bytes): the agent's chat
 // plus the owner's calls, oldest first, every line stamped, newest verbatim within the budget, older summarized.
 // Loopback only (a voice engine on this box), never through a proxy; scoped like transcript.md (router.param above);
@@ -2510,7 +2510,8 @@ export function directLoopback(req: { socket?: { remoteAddress?: string }; heade
   return isLoopback(req.socket?.remoteAddress) && !FORWARDED.some((h) => req.headers[h] !== undefined);
 }
 router.get('/:id/call-context', (req: Request, res: Response) => {
-  if (!directLoopback(req)) {
+  // meta=1 carries counts, never text: the dashboard reads it through its proxy, under the same scope checks below
+  if (req.query.meta !== '1' && !directLoopback(req)) {
     res.status(404).type('text/plain').send('Not found.');
     return;
   }
@@ -2529,11 +2530,21 @@ router.get('/:id/call-context', (req: Request, res: Response) => {
     // otherwise ship as a near-complete prefix): this install's token by exact value FIRST (a token containing "sk-"
     // must not be half-eaten by a shape), then the twin's shapes, then the full redactor. The full redactor is a
     // superset of the twin's, so on secret-shaped text the route's bytes differ from the twin's, by design.
+    const journals = readJournals(callsDir(dataDir()), Date.now() / 1000);
     const text = buildCallContext({
-      chatAgent: agentId, callOwner: owner, items, journals: readJournals(callsDir(dataDir()), Date.now() / 1000),
+      chatAgent: agentId, callOwner: owner, items, journals,
       exclude: exQ || null, budgetTokens: clampBudget(req.query.budget), tz, tzLabel, operatorLabel: operatorName(dataDir()),
       redact: (t: string) => redactSecrets(redact(exact.reduce((x, v) => x.split(v).join('[redacted]'), t)), exact).text,
     });
+    if (req.query.meta === '1') {
+      // What the call will know, before it is placed (the dashboard's recall state): whose chat, whose calls, how many
+      // of those calls, and the opening's size. The same inputs as the text, so the numbers are the text's.
+      const previous = new Set(callLines(journals, owner, exQ || null).map((l) => l.call_id)).size;
+      res.status(200).set('Cache-Control', 'no-store').json({
+        chat: agentId, calls: owner ?? 'arturo', previous_calls: previous, opening_tokens: estimateTokens(text),
+      });
+      return;
+    }
     res.status(200).type('text/plain; charset=utf-8').set('Cache-Control', 'no-store').send(text);
   } catch (err) {
     console.error('[call-context]', String(err).slice(0, 200));

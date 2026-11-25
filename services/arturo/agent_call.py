@@ -10,7 +10,9 @@ varied acknowledgement. A turn that runs long says so once and its words are spo
 no cut-off. While the call is live the seat's supervisor neither rotates nor restarts its CLI (the call marker).
 
 The switch, per seat, off unless set: <data dir>/state/agent-calls.json
-    {"seats": {"<seat>": {"on": true, "ack_after_s": 3.0}}}
+    {"seats": {"<seat>": {"on": true, "ack_after_s": 3.0, "context_tokens": 1500}}}
+context_tokens (optional): the size of the thread a call with the seat opens with (call_context: its own chat and its
+own previous calls, the same contract as Arturo's), else ARTURO_AGENT_CONTEXT_TOKENS, else CONTEXT_TOKENS.
 Only a headless (streaming) seat can take it: a tmux seat has no reply stream, so its calls stay as they are.
 Every turn's timings go to <data dir>/state/voice-calls/agent-turns.jsonl (what fired: silence, the
 acknowledgement after the threshold, or at a tool's start).
@@ -23,6 +25,8 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from services.arturo import thread_context
 
 ACK_AFTER_S = 3.0           # silent this long, then one acknowledgement (a setting per seat)
 LONG_TURN_S = 20.0          # past this, the turn says it is taking a while and speaks the rest out of band
@@ -186,6 +190,67 @@ def voice_context(seat, orch_dir=None, max_chars=VOICE_CONTEXT_CHARS) -> str:
         return "\n".join(reversed(kept))
     except Exception:  # noqa: BLE001 — context is best effort, never the call
         return ""
+
+
+# --- the thread a call opens with: the same contract as Arturo's (GET /api/agents/:id/call-context) ------------------
+#: The opening's size when the seat sets none (agent-calls.json seats.<id>.context_tokens): the native calibration's
+#: greet floor (2026-11-25, GPT-Live: 1500 -> greet 2.44 s, 3000 -> 3.01 s). ARTURO_AGENT_CONTEXT_TOKENS overrides it.
+CONTEXT_TOKENS = 1500
+CONTEXT_ROUTE_TIMEOUT_S = 4.0
+
+
+def context_tokens(seat, orch_dir=None) -> int:
+    for v in (seat_conf(seat, orch_dir).get("context_tokens"), os.environ.get("ARTURO_AGENT_CONTEXT_TOKENS")):
+        try:
+            if v is not None and not isinstance(v, bool):
+                return max(500, min(20000, int(v)))
+        except (TypeError, ValueError):
+            continue
+    return CONTEXT_TOKENS
+
+
+def voice_calls_dir(orch_dir=None) -> Path:
+    env = os.environ.get("ARTURO_VOICE_CALLS_DIR")
+    return Path(env) if env else data_dir(orch_dir) / "state" / "voice-calls"
+
+
+def call_context(seat, exclude=None, orch_dir=None):
+    """(text, source): the thread a call with `seat` opens with, its own chat and its own previous calls, stamped.
+    The route first (one redactor, the API's); then the Python twin; then, when the chat itself cannot be read, the
+    plain recent conversation from the session log; then the twin's calls-only thread. Never raises."""
+    budget = context_tokens(seat, orch_dir)
+    url = (f"{thread_context.api_base()}/api/agents/{urllib.parse.quote(str(seat), safe='')}/call-context"
+           f"?calls={urllib.parse.quote(str(seat), safe='')}&budget={budget}")
+    if exclude:
+        url += f"&exclude={urllib.parse.quote(str(exclude), safe='')}"
+    try:
+        with urllib.request.urlopen(url, timeout=CONTEXT_ROUTE_TIMEOUT_S) as r:
+            text = r.read().decode("utf-8", "replace")
+        if text.strip():
+            return text, "route"
+    except Exception:  # noqa: BLE001 — an API without the route, or down: the twin
+        pass
+    try:
+        items = thread_context.fetch_transcript(seat, 300)
+        chat_ok = True
+    except Exception:  # noqa: BLE001
+        items, chat_ok = None, False
+    kw = dict(chat_agent=seat, call_owner=seat, calls_dir=voice_calls_dir(orch_dir), exclude=exclude,
+              budget_tokens=budget)
+    try:
+        if chat_ok:
+            return thread_context.load(fetch=lambda a, n: items, **kw), "twin"
+    except Exception:  # noqa: BLE001
+        pass
+    plain = voice_context(seat, orch_dir=orch_dir)
+    if plain:
+        return plain, "voice_context"
+    try:
+        def down(a, n):
+            raise OSError("chat unreadable")
+        return thread_context.load(fetch=down, **kw), "twin_partial"
+    except Exception:  # noqa: BLE001
+        return "", "none"
 
 
 DEV_LINE = "I'm open in the terminal right now. Tap Back to chat and I'll take this myself."
@@ -452,7 +517,19 @@ def typed_path(seat, orch_dir=None) -> Path:
     return data_dir(orch_dir) / "state" / "headless" / str(seat) / "typed.jsonl"
 
 
-def typed_note(name, text) -> str:
+STAMP_NOTES_FLAG = "ARTURO_AGENT_CALL_STAMP_NOTES"   # 1: a typed note carries its [UTC, local] stamp (D2; off until measured)
+
+
+def typed_note(name, text, at=None, tz=None, tz_label=None) -> str:
+    note = _typed_note(name, text)
+    if os.environ.get(STAMP_NOTES_FLAG) != "1":
+        return note
+    if tz is None or tz_label is None:
+        tz, tz_label = thread_context.shaw_tz()
+    return f"{thread_context.stamp(time.time() if at is None else at, tz, tz_label)} {note}"
+
+
+def _typed_note(name, text) -> str:
     return (f"The operator just SENT this in your chat during the call (typed, not said aloud): \"{text[:600]}\". It "
             "is on their screen now. React to it out loud right away, naturally, in a few words (for example that it "
             "just came through); answer it only if it asks you something. If it needs work or a written answer, your "
