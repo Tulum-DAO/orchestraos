@@ -175,7 +175,8 @@ def test_the_cli_refuses_a_seat_that_borrows_the_authors_name(store, db, monkeyp
     rid = _task(store)
     rc = _main(db, monkeypatch, {"some-other-seat"}, "postcall-dev", rid, "--summary", "borrowed")
     err = capsys.readouterr().err
-    assert rc == 4 and "interposer" in err and "only the author of" in err and "--delegated-by" not in err.split("REFUSED")[-1]
+    assert rc == 4 and "interposer" in err and "only the author of" in err
+    assert "--delegated-by" not in err, "patch has no --delegated-by: the generic advice must not appear at all"
     assert store.get(rid)["summary"] != "borrowed"
 
 

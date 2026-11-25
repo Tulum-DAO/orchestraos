@@ -109,9 +109,10 @@ def _caller_identities():
     return idents or None
 
 
-def _authorship_guard(from_agent):
+def _authorship_guard(from_agent, advice=True):
     """True = proceed. False = REFUSE (caller is provably authoring a card
-    for a different agent — the interposer anti-pattern)."""
+    for a different agent — the interposer anti-pattern). advice=False prints only
+    the refusal, for a verb whose remedy is not --delegated-by (patch)."""
     idents = _caller_identities()
     if idents is None:
         print("[approval] authorship-guard: no caller signal (non-tmux/cron/"
@@ -120,6 +121,10 @@ def _authorship_guard(from_agent):
     if _canon(from_agent) in idents:
         return True
     caller = sorted(idents)[0]
+    if not advice:
+        print(f"[approval] REFUSED (interposer guard): you are '{caller}' but "
+              f"acting --from '{from_agent}'.", file=sys.stderr)
+        return False
     print(f"[approval] REFUSED (interposer guard): you are '{caller}' but "
           f"authoring --from '{from_agent}'. A decision card is a two-party "
           f"edge — the agent that NEEDS the decision authors it so the operator's "
@@ -788,10 +793,10 @@ def main(argv=None):
                 fields[k] = v
         # The caller must be who --from says (interposer guard, as request/human-task/questionnaire);
         # then the store checks that seat is the author, its current generation, or gm.
-        if not _authorship_guard(args.from_agent):
+        if not _authorship_guard(args.from_agent, advice=False):
             # the guard's generic advice (--delegated-by) does not exist for patch: say what does
-            print(f"REFUSED: only the author of {args.id} (or gm) may patch it; ask that seat, or patch as "
-                  f"yourself only if you are its author", file=sys.stderr)
+            print(f"REFUSED: only the author of {args.id} or gm may patch it; patch with --from set to your "
+                  f"own seat (if you are the author or gm), otherwise ask that seat", file=sys.stderr)
             return 4
         ok = store.update_fields(args.id, caller=args.from_agent, **fields)
         if not ok:
