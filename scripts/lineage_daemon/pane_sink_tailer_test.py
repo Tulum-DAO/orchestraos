@@ -51,3 +51,22 @@ def test_read_all_never_raises_on_a_directory(tmp_path):
     d = tmp_path / "adir"
     d.mkdir()
     assert PaneSinkTailer(str(d)).read_all() == b""   # fail-soft, never raises
+
+
+def test_a_rebound_name_reopens_from_the_end_dropping_the_new_files_backlog(tmp_path):
+    """The sweep rebinds `gm.pipe` (a symlink swap) to a renamed pane's live sink. That
+    file may hold a backlog nobody drained; replaying it would read as a fresh burst. On
+    an inode change the tailer drains-and-drops once, then reads new bytes normally."""
+    p = tmp_path / "gm.pipe"
+    p.write_bytes(b"old")
+    t = PaneSinkTailer(str(p))
+    assert t.read_all() == b"old"
+    live = tmp_path / "gm-g6.pipe"
+    live.write_bytes(b"undrained backlog")
+    tmp = tmp_path / "gm.pipe.tmp"
+    os.symlink(str(live), str(tmp))
+    os.replace(str(tmp), str(p))                 # the sweep's atomic rebind
+    assert t.read_all() == b""                   # reopened from the end
+    with open(live, "ab") as fh:
+        fh.write(b"fresh")
+    assert t.read_all() == b"fresh"

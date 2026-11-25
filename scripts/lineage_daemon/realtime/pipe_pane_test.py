@@ -7,10 +7,26 @@ command-injection gotchas (#1 sink constant, #4 sh -c template).
 #5: fail-isolation — a pipe-pane attach error on ONE seat skips only that seat;
     it must NEVER wedge the sweep / fleet / beat.
 """
+import os
+
 import pytest
 
+from lineage_daemon.realtime import pipe_pane as _pp
 from lineage_daemon.realtime.pipe_pane import (
     AttachSweep, sink_path, attach_command, UnsafeSessionName, SINK_DIR)
+
+
+@pytest.fixture(autouse=True)
+def _tmp_default_sink_dir(tmp_path, monkeypatch):
+    """No test sweep may touch the live sink dir: the sweep persists its pane->sink
+    bindings and rebinds names there. Point the constructor default at a tmp dir."""
+    d = tmp_path / "panes"
+    d.mkdir()
+    init = AttachSweep.__init__
+
+    def _init(self, tmux, *, sink_dir=None, **kw):
+        init(self, tmux, sink_dir=sink_dir or str(d), **kw)
+    monkeypatch.setattr(AttachSweep, "__init__", _init)
 
 
 class FakeTmux:
@@ -149,5 +165,198 @@ def test_renamed_session_is_unbound_and_not_reattached():
     tmux.sessions = [("gm", "$5")]                # renamed; same tmux session-id
     sweep.sweep()
     assert tmux.attach_calls == ["gm-g6"]         # no pipe-pane under the new name
+    # This fake never creates gm-g6.pipe, so there is no file gm.pipe could be rebound to:
+    # unbound. With a live sink it is rebound instead (test_rename_mid_generation_...).
     assert sweep.is_unbound("gm")
     assert not sweep.is_unbound("other")          # a name never seen is not unbound
+
+
+# --- (a) follow the pane, not the name ---------------------------------------
+
+class FileTmux:
+    """A tmux stand-in over REAL tmp files. Each pane is keyed by its session-id; an
+    attach opens an O_APPEND writer on the sink path exactly like `cat >> <sink>` (it
+    follows a symlink, as the shell redirect does). pipe_pane returns False for an
+    already-piped pane (tmux_adapter.Tmux semantics). `writers()` is the injected
+    /proc writer scan: the (dev, ino) of every file a pane's pipe holds open."""
+    def __init__(self, sessions, server="srv-1"):
+        self.sessions = list(sessions)
+        self.fds = {}                       # sid -> O_APPEND fd
+        self.attach_calls = []
+        self.server = server
+
+    def list_sessions(self):
+        return list(self.sessions)
+
+    def server_id(self):
+        return self.server
+
+    def pipe_pane(self, session, sink):
+        sid = dict(self.sessions)[session]
+        if sid in self.fds:
+            return False
+        self.fds[sid] = os.open(sink, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        self.attach_calls.append(session)
+        return True
+
+    def pipe_out(self, sid, data):
+        os.write(self.fds[sid], data)
+
+    def writers(self):
+        return {(st.st_dev, st.st_ino) for st in (os.fstat(fd) for fd in self.fds.values())}
+
+    def close(self):
+        for fd in self.fds.values():
+            os.close(fd)
+
+
+def _same_file(a, b):
+    sa, sb = os.stat(a), os.stat(b)
+    return (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
+
+
+def test_rename_mid_generation_keeps_the_sink_and_root_pipe_resolves_to_it(tmp_path):
+    """gm's ruling: a session renamed mid-generation (`gm-g6` -> `gm`) keeps the SAME
+    sink, and `gm.pipe` resolves to the growing file, so the seat ring for `gm` (which
+    opens by name) drains the pane's live output. Not unbound, no second pipe-pane."""
+    from lineage_daemon.pane_sink_tailer import PaneSinkTailer
+    d = tmp_path / "sinks"; d.mkdir()
+    (d / "gm.pipe").write_bytes(b"")                  # the old blue's dead sink
+    tmux = FileTmux([("gm", "$1"), ("gm-g6", "$5")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()                                     # both piped under their own names
+    ring = PaneSinkTailer(str(d / "gm.pipe"))         # the seat's ring opens by NAME
+    tmux.sessions = [("gm", "$5")]                    # swap: blue gone, green renamed gm
+    sweep.sweep()
+    assert tmux.attach_calls == ["gm", "gm-g6"]       # no pipe-pane under the new name
+    assert not sweep.is_unbound("gm")
+    assert _same_file(d / "gm.pipe", d / "gm-g6.pipe")   # gm.pipe resolves to the live sink
+    tmux.pipe_out("$5", b"green is streaming")
+    assert ring.read_all() == b"green is streaming"
+    tmux.close()
+
+
+def test_binding_survives_a_restart_after_the_rename(tmp_path):
+    """tmux cannot report a pipe's target, so the {session-id: sink} map is persisted: a
+    NEW sweep (telemetryd restart) after the rename still knows where gm's pipe goes."""
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("gm-g6", "$5")])
+    AttachSweep(tmux, sink_dir=str(d), writers=lambda: set()).sweep()
+    tmux.sessions = [("gm", "$5")]
+    fresh = AttachSweep(tmux, sink_dir=str(d), writers=lambda: set())   # restart
+    fresh.sweep()
+    assert not fresh.is_unbound("gm")
+    assert _same_file(d / "gm.pipe", d / "gm-g6.pipe")
+    tmux.close()
+
+
+def test_a_new_tmux_server_discards_the_persisted_map(tmp_path):
+    """Session-ids restart at $0 on a new tmux server: a map from the old server would
+    bind a new session to a stranger's sink. A server change drops it."""
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("gm-g6", "$5")])
+    AttachSweep(tmux, sink_dir=str(d), writers=lambda: set()).sweep()
+    other = FileTmux([("gm", "$5")], server="srv-2")   # same id, different server
+    s2 = AttachSweep(other, sink_dir=str(d), writers=lambda: set())
+    s2.sweep()
+    assert other.attach_calls == ["gm"]               # treated as a fresh pane
+    assert not os.path.islink(d / "gm.pipe")
+    tmux.close(); other.close()
+
+
+def test_unknown_piped_session_is_unbound_without_evidence(tmp_path):
+    """A pane already piped (pipe_pane False) whose session-id is in no map, and whose
+    own sink has no live writer: its pipe goes somewhere unknown -> unbound."""
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("gm", "$5")])
+    tmux.fds["$5"] = os.open(str(d / "elsewhere.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()
+    assert sweep.is_unbound("gm")
+    tmux.close()
+
+
+def test_unknown_piped_session_adopts_its_own_sink_when_a_writer_holds_it(tmp_path):
+    """Spawn-time attach (spawn_pipe_attach) and a pre-fix telemetryd both pipe into
+    `<name>.pipe`; a live writer on that file is the evidence -> bound, not unbound."""
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("planner", "$3")])
+    tmux.fds["$3"] = os.open(str(d / "planner.pipe"), os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()
+    assert not sweep.is_unbound("planner")
+    tmux.close()
+
+
+def test_unknown_renamed_root_adopts_its_orphan_green_sink(tmp_path):
+    """The first run after this fix lands with no map: gm was renamed from gm-g140 by a
+    swap under the old code, so its pipe writes gm-g140.pipe (live writer, no live session
+    of that name) while gm.pipe is silent. Exactly one such orphan green sink -> bind it."""
+    d = tmp_path / "sinks"; d.mkdir()
+    (d / "gm.pipe").write_bytes(b"")
+    tmux = FileTmux([("gm", "$9")])
+    tmux.fds["$9"] = os.open(str(d / "gm-g140.pipe"), os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()
+    assert not sweep.is_unbound("gm")
+    assert _same_file(d / "gm.pipe", d / "gm-g140.pipe")
+    tmux.close()
+
+
+def test_rebind_moves_a_live_blue_sink_aside_instead_of_orphaning_it(tmp_path):
+    """rotate_agent renames the blue `gm` -> an archive name BEFORE renaming the green to
+    `gm`. The blue still pipes into the REAL file gm.pipe; rebinding gm.pipe must not
+    unlink it from under the blue: it is moved aside and the archive name follows it."""
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("gm", "$1"), ("gm-g6", "$5")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()
+    tmux.sessions = [("gm-old", "$1"), ("gm", "$5")]
+    sweep.sweep()
+    assert _same_file(d / "gm.pipe", d / "gm-g6.pipe")
+    tmux.pipe_out("$1", b"blue")
+    assert (d / "gm-old.pipe").read_bytes() == b"blue"
+    tmux.close()
+
+
+def test_gone_session_ids_are_pruned_from_the_persisted_map(tmp_path):
+    import json
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("gm", "$1"), ("dead", "$2")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()
+    tmux.sessions = [("gm", "$1")]
+    sweep.sweep()
+    saved = json.loads((d / _pp.BINDINGS_FILE).read_text())
+    assert set(saved["sinks"]) == {"$1"}
+    tmux.close()
+
+
+def test_proc_writer_scan_reads_fds_that_point_into_the_sink_dir(tmp_path):
+    """The default writer evidence: /proc/<pid>/fd/<n> links into the sink dir (a fake
+    proc tree here). A link elsewhere is ignored; an unreadable proc entry is skipped."""
+    d = tmp_path / "sinks"; d.mkdir()
+    sink = d / "gm.pipe"; sink.write_bytes(b"")
+    other = tmp_path / "elsewhere.log"; other.write_bytes(b"")
+    proc = tmp_path / "proc"
+    (proc / "123" / "fd").mkdir(parents=True)
+    (proc / "456").mkdir()                         # no fd dir: skipped, never raises
+    (proc / "self").mkdir()                        # not a pid
+    os.symlink(str(sink), str(proc / "123" / "fd" / "1"))
+    os.symlink(str(other), str(proc / "123" / "fd" / "2"))
+    st = os.stat(sink)
+    assert _pp._proc_writer_inodes(str(d), proc_root=str(proc)) == {(st.st_dev, st.st_ino)}
+
+
+def test_a_map_with_no_server_id_is_not_trusted_once_the_server_is_known(tmp_path):
+    """A map saved without a server id (a tmux adapter with no server_id, or a stray
+    fixture map) cannot prove its session-ids belong to this server: dropped."""
+    import json
+    d = tmp_path / "sinks"; d.mkdir()
+    (d / _pp.BINDINGS_FILE).write_text(json.dumps({"server": None, "sinks": {"$5": "seat5.pipe"}}))
+    tmux = FileTmux([("gm", "$5")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    sweep.sweep()
+    assert tmux.attach_calls == ["gm"]                # a fresh pane, not seat5's
+    assert not sweep.is_unbound("gm")
+    tmux.close()

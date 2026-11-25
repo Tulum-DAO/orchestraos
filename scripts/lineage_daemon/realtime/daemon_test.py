@@ -8,7 +8,24 @@ max_iters and refuses a sub-floor poll interval; not wired to cron/systemd.
 """
 import os
 
+import pytest
+
 from lineage_daemon.realtime.daemon import RealtimeOverlayDaemon, Seat, MIN_POLL_S
+from lineage_daemon.realtime.pipe_pane import AttachSweep, SINK_DIR
+
+
+@pytest.fixture(autouse=True)
+def _never_the_live_sink_dir(tmp_path, monkeypatch):
+    """The attach sweep persists its pane->sink map and rebinds names in its sink dir. A
+    tick here built it on the LIVE default dir and left a fixture map there. Any sweep
+    built on the live dir is redirected to a tmp one."""
+    d = tmp_path / "panes"
+    d.mkdir()
+    init = AttachSweep.__init__
+
+    def _init(self, tmux, *, sink_dir=SINK_DIR, **kw):
+        init(self, tmux, sink_dir=str(d) if sink_dir == SINK_DIR else sink_dir, **kw)
+    monkeypatch.setattr(AttachSweep, "__init__", _init)
 from lineage_daemon.realtime.lineage_flag import LineageFlagStore
 from lineage_daemon.realtime.ring import RingBuffer
 
@@ -137,3 +154,15 @@ def test_run_is_bounded_by_max_iters(tmp_path):
     reason = d.run([Seat("gm", "r-gm", "claude", 100)],
                    interval=MIN_POLL_S, max_iters=3, sleep=lambda s: None)
     assert reason == "max-iters"
+
+
+def test_no_tick_writes_the_live_sink_dir(tmp_path):
+    """Regression for the residue above: a tick must leave the live sink dir alone."""
+    live_map = os.path.join(SINK_DIR, ".bindings.json")
+    before = os.path.exists(live_map)
+    proc = str(tmp_path / "proc"); os.makedirs(proc)
+    _mkproc(proc, 100)
+    d = RealtimeOverlayDaemon(FakeTmux([("gm", "$1")]), _clean_flags(str(tmp_path)), proc_root=proc)
+    d.tick([Seat("gm", "r-gm", "claude", 100)])
+    assert os.path.exists(live_map) == before
+    assert os.path.exists(tmp_path / "panes" / ".bindings.json")

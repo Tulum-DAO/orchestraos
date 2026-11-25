@@ -567,3 +567,30 @@ def test_unbound_pipe_with_working_hook_reads_unknown_not_stalled(tmp_path):
             live_resolver=lambda s: {"gm": _live(pid=100, hooks=hook)})
     d.tick(now=0.0)
     assert read_status_snapshot(str(tmp_path))["seats"]["gm"]["status"] == "unknown"
+
+
+def test_renamed_green_streams_through_the_root_seat_ring_end_to_end(tmp_path):
+    """The live bug, end to end through the REAL sweep and tailer: the green `gm-g6` is
+    piped into gm-g6.pipe, then renamed `gm`. The `gm` seat's ring (opened by name) must
+    read the green's output as streaming, not sit idle on a gm.pipe that never grows. The
+    first read after the rebind reopens from the end (drops the backlog), then streams."""
+    from .pane_sink_tailer import PaneSinkTailer
+    from .realtime.pipe_pane import AttachSweep
+    from .realtime.pipe_pane_test import FileTmux
+    d = tmp_path / "panes"; d.mkdir()
+    tmux = FileTmux([("gm", "$1"), ("gm-g6", "$5")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    seat = _seat("gm", 100, ring=PaneSinkTailer(str(d / "gm.pipe")))
+    dd = _mk(tmp_path, [seat], FakeSampler({100: IDLE_PROC}), sweep=sweep)
+    dd.tick(now=0.0)                                  # slow: both piped, gm idle
+    tmux.pipe_out("$1", b"blue output")
+    dd.tick(now=1.0)                                  # the ring has read blue's file
+    tmux.sessions = [("gm", "$5")]                    # swap
+    tmux.pipe_out("$5", b"backlog before the rebind")
+    dd.tick(now=SLOW_POLL_S + 1.0)                    # slow: sweep rebinds gm.pipe
+    dd.tick(now=SLOW_POLL_S + 1.5)                    # reopen from the end
+    tmux.pipe_out("$5", b"the green writes new tokens")
+    dd.tick(now=SLOW_POLL_S + 2.0)
+    snap = read_status_snapshot(str(tmp_path))["seats"]["gm"]
+    assert snap["status"] == "streaming"
+    tmux.close()
