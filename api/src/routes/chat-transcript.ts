@@ -29,7 +29,7 @@ import { agentScopeParam, canPrincipalSeeAgent, defaultResolveTags } from '../li
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
 import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents, identityStoreSig } from '../services/identity-store-reader.js';
-import { cachedLog } from '../services/transcript-log-cache.js';
+import { cachedLog, type LogParser } from '../services/transcript-log-cache.js';
 import { firstPage } from '../services/transcript-first-page-cache.js';
 import { callsDir } from '../lib/agentCalls.js';
 import { dataDir } from '../lib/config.js';
@@ -321,6 +321,22 @@ export function looksLikeGrok(lines: string[]): boolean {
 
 /** Codex rollout lines are self-describing, so the SSE tail and the poll path cannot disagree
  *  about which parser to use (they call normalizeTranscript independently). */
+/** Positive evidence of the Claude Code grammar: at least one well-formed user/assistant/attachment/system line with a
+ *  uuid. Used only to decide whether a parse may be RESUMED (transcript-log-cache.ts); detection of the other grammars
+ *  stays as it is. A log that so far holds only lines without a uuid (summary carries leafUuid; file-history-snapshot,
+ *  queue-operation) stays on a full parse per change until its first user line: slower for those reads, never wrong. */
+export function looksLikeClaude(lines: string[]): boolean {
+  for (const l of lines) {
+    if (!l.trim()) continue;
+    try {
+      const d = JSON.parse(l);
+      if (d && (d.type === 'user' || d.type === 'assistant' || d.type === 'attachment' || d.type === 'system')
+        && typeof d.uuid === 'string') return true;
+    } catch { /* torn or foreign line */ }
+  }
+  return false;
+}
+
 export function looksLikeCodex(lines: string[]): boolean {
   for (const l of lines.slice(0, 40)) {
     if (!l.trim()) continue;
@@ -921,7 +937,7 @@ function segmentView(agentId: string, seg: Segment): SegmentView | null {
   const path = seg.file();
   if (!path) return null;
   let log;
-  try { log = cachedLog(path, (lines) => logItems(lines, path.includes('antigravity-cli'))); } catch { return null; }
+  try { log = cachedLog(path, logParser(path.includes('antigravity-cli'))); } catch { return null; }
   const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
   // What a session only saw (the earlier-conversation block, seed rows) is never shown (services/conversation-store.ts).
   const rules = storeRules(seg.session || null);
@@ -1937,57 +1953,102 @@ export function parseGrokUpdates(lines: string[]): any[] {
   return items;
 }
 
+/** What the Claude grammar carries from one line to the next, so a log read in pieces (services/transcript-log-cache.ts:
+ *  the whole file once, then only the appended lines) parses exactly as the whole file would. */
+export interface ClaudeParseState {
+  /** Replies (message.id) whose usage already went on an item. */
+  counted: Set<string>;
+  /** A reply whose lines drew nothing so far: its tokens wait for its own or the next reply's first drawn item. */
+  waiting?: { id: string; usage: TokenUsage };
+  /** Tokens of replies that drew nothing, to go on the next drawn assistant item. */
+  carried?: TokenUsage;
+}
+
+/** Claude Code lines -> items, continuing `state`. Claude Code writes each block of one API reply as its own line,
+ *  every line repeating the reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
+ *  not last: the SSE tailer only appends, and an item already sent never moves its usage. A reply none of whose lines
+ *  drew anything carries its tokens to the next reply's first item. */
+function parseClaudeLines(lines: string[], keepSidechain: boolean, state: ClaudeParseState): any[] {
+  const items: any[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const o = JSON.parse(line);
+      const got = normalizeClaudeEntry(o, keepSidechain);
+      const msg = o?.message;
+      const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
+      const first = got.find((it) => it.role === 'assistant');
+      // A new assistant line from another reply ends the waiting reply: its tokens are carried.
+      if (state.waiting && o?.type === 'assistant' && state.waiting.id !== id) {
+        state.carried = addUsage(state.carried, state.waiting.usage);
+        state.waiting = undefined;
+      }
+      const usage = id && !state.counted.has(id) ? usageFromClaude(msg.usage) : undefined;
+      if (first && (usage || state.carried)) {
+        first.usage = usage ? addUsage(state.carried, usage) : state.carried;
+        state.carried = undefined;
+        if (usage) { state.counted.add(id); state.waiting = undefined; }
+      } else if (usage) state.waiting = { id, usage };
+      items.push(...got);
+    } catch { /* skip bad line */ }
+  }
+  return items;
+}
+
+/** One log's grammar for the parsed-log cache (services/transcript-log-cache.ts): `full` reads whole lines by the
+ *  grammar they show and hands back the state only the Claude grammar can resume from (`append` parses just the new
+ *  lines with it; the other grammars are whole-file parsers, so the cache re-parses them in full on every change);
+ *  `finish` is every whole-array pass, run over all raw items each time. The grammar is detected from the lines
+ *  themselves, NOT from a caller-passed hint: transcript-tail.ts (SSE) and this route (poll) read independently, and
+ *  a hint only one of them passes is how the two lanes drift apart. */
+export function logParser(antigravityHint: boolean, keepSidechain = false): LogParser<ClaudeParseState> {
+  return {
+    // the cache keeps one entry per (key, file): both flags change the items a file yields
+    key: `${antigravityHint ? 'antigravity' : 'auto'}:${keepSidechain ? 'sidechain' : 'main'}`,
+    full(lines) {
+      const isAntigravity = antigravityHint ||
+        lines.some((l) => {
+          try {
+            const parsed = JSON.parse(l);
+            return parsed.type === 'USER_INPUT' || parsed.type === 'PLANNER_RESPONSE' || parsed.source === 'MODEL';
+          } catch { return false; }
+        });
+      if (isAntigravity) return { items: normalizeAntigravity(lines), state: null };
+      if (looksLikeGrok(lines)) return { items: parseGrokUpdates(lines), state: null };
+      if (looksLikeCodex(lines)) return { items: parseCodexRollout(lines), state: null };
+      const state: ClaudeParseState = { counted: new Set<string>() };
+      const items = parseClaudeLines(lines, keepSidechain, state);
+      // A resumable state only on POSITIVE Claude evidence. An empty or torn first read (a session file the tailer saw
+      // the second it was created; a codex session_meta line half-written) shows no grammar at all: handing back a
+      // Claude state then would lock the file to the Claude parser, and every later codex/grok/antigravity line would
+      // be appended into nothing until the API restarted. Without evidence the cache re-detects on every change.
+      return { items, state: looksLikeClaude(lines) ? state : null };
+    },
+    append(lines, state) {
+      return { items: parseClaudeLines(lines, keepSidechain, state), state };
+    },
+    finish(raw, state) {
+      // On COPIES of the raw items: the whole-array passes (tagAudience above all) stamp audience/exchange in place and
+      // never clear them, and `raw` is kept by the cache for the next append. Tagging raw itself left a reply with the
+      // exchange of a queued opener that dedupeQueuedCommands dropped on a later pass (append != whole-file parse).
+      const items = raw.map((it) => ({ ...it }));
+      // Whole-file pass (Claude): a queued message the log later recorded as a real user turn must
+      // show ONCE, and the real turn is the one that wins.
+      return finishLogItems(state ? dedupeQueuedCommands(items) : items);
+    },
+  };
+}
+
 // One log's items: parsed by the grammar its lines show, whole-file passes applied, then tagged
 // (audience/exchange) on the WHOLE log.
-function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
-  const isAntigravity = antigravityHint ||
-    lines.some((l) => {
-      try {
-        const parsed = JSON.parse(l);
-        return parsed.type === 'USER_INPUT' || parsed.type === 'PLANNER_RESPONSE' || parsed.source === 'MODEL';
-      } catch { return false; }
-    });
+export function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
+  const parser = logParser(antigravityHint, keepSidechain);
+  const got = parser.full(lines);
+  return parser.finish(got.items, got.state);
+}
 
-  let items: any[] = [];
-  if (isAntigravity) {
-    items = normalizeAntigravity(lines);
-  } else if (looksLikeGrok(lines)) {
-    items = parseGrokUpdates(lines);
-  } else if (looksLikeCodex(lines)) {
-    // Detected from the lines themselves, NOT from a caller-passed hint: transcript-tail.ts (SSE)
-    // and this route (poll) call normalizeTranscript independently, and a hint only one of them
-    // passes is how the two lanes drift apart.
-    items = parseCodexRollout(lines);
-  } else {
-    // Claude Code writes each block of one API reply as its own line, every line repeating the
-    // reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
-    // not last: the SSE tailer only appends, and an item already sent never moves its usage.
-    const counted = new Set<string>();
-    // A reply none of whose lines drew anything carries its tokens to the next reply's first item.
-    let waiting: { id: string; usage: TokenUsage } | undefined, carried: TokenUsage | undefined;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const o = JSON.parse(line);
-        const got = normalizeClaudeEntry(o, keepSidechain);
-        const msg = o?.message;
-        const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
-        const first = got.find((it) => it.role === 'assistant');
-        // A new assistant line from another reply ends the waiting reply: its tokens are carried.
-        if (waiting && o?.type === 'assistant' && waiting.id !== id) { carried = addUsage(carried, waiting.usage); waiting = undefined; }
-        const usage = id && !counted.has(id) ? usageFromClaude(msg.usage) : undefined;
-        if (first && (usage || carried)) {
-          first.usage = usage ? addUsage(carried, usage) : carried;
-          carried = undefined;
-          if (usage) { counted.add(id); waiting = undefined; }
-        } else if (usage) waiting = { id, usage };
-        items.push(...got);
-      } catch { /* skip bad line */ }
-    }
-    // Whole-file pass: a queued message the log later recorded as a real user turn must
-    // show ONCE, and the real turn is the one that wins.
-    items = dedupeQueuedCommands(items);
-  }
+/** The whole-array passes every grammar's raw items get, in order, then the audience/exchange tags. */
+function finishLogItems(items: any[]): any[] {
   // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
   // Kept as the turn's opener (audience/exchange tagging and the interrupted-turn merge need it), flagged, words only;
   // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
@@ -2131,10 +2192,40 @@ export function normalizeTranscript(
   keepWakeReplies = false,
   keepSidechain = false,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+  return windowFromLog(logItems(lines, antigravityHint, keepSidechain), agentId, sessionId, limit, includeQueued, previous, keepWakeReplies, keepSidechain);
+}
+
+/** normalizeTranscript for a log FILE, through the parsed-log cache (services/transcript-log-cache.ts): the file is
+ *  parsed once, then only its appended lines; the poll route's windows and the SSE tailer share that one parse. The
+ *  previous-generation stitch is the poll route's (chatWindow), not this path's. */
+export function normalizeTranscriptFile(
+  path: string,
+  agentId: string,
+  sessionId: string | null,
+  limit = 150,
+  antigravityHint = false,
+  includeQueued = false,
+  keepWakeReplies = false,
+  keepSidechain = false,
+): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+  const log = cachedLog(path, logParser(antigravityHint, keepSidechain));
+  return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+}
+
+function windowFromLog(
+  logged: readonly any[],
+  agentId: string,
+  sessionId: string | null,
+  limit: number,
+  includeQueued: boolean,
+  previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null,
+  keepWakeReplies: boolean,
+  keepSidechain: boolean,
+): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
   // A subagent's own log (keepSidechain) shares the seat's session id but none of the seat's window rules:
   // the store's seen-only/seed rows and the warmup mark name the seat's entries, so they never apply to it.
   const ruleSession = keepSidechain ? null : sessionId;
-  let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint, keepSidechain), warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
+  let all = applyStoreRules(dropWarmup(logged, warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
@@ -2288,7 +2379,7 @@ export function pageItemsFor(agentId: string, limit = 300): any[] {
     const { path, sid } = resolveTranscriptPath(agentId);
     if (!path) return [];
     const current = path;
-    cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+    cachedLog(current, logParser(current.includes('antigravity-cli')));
     let segs: Segment[];
     try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
     const win = chatWindow(agentId, segs, limit, null);
@@ -2406,7 +2497,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     const read = new Set<string>();
     const missing: Segment[] = [];
     const build = (): Record<string, unknown> | null => {
-      cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+      cachedLog(current, logParser(current.includes('antigravity-cli')));
       let segs: Segment[];
       try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
       segs = segs.map((s) => ({ ...s, file: () => { const f = s.file(); if (f && f !== current) read.add(f); else if (!f && s.refind) missing.push(s); return f; } }));
