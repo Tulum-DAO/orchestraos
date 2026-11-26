@@ -23,6 +23,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
 import {
   readCanonicalPending,
+  readCanonicalPendingCached,
   readCanonicalPendingOrNull,
   canonicalAnswer,
   answerPeer,
@@ -366,17 +367,17 @@ function normalizeAgentApproval(a: any, filename: string): UnifiedApproval {
 // GET /api/approvals/unified — list all approval items
 // ---------------------------------------------------------------------------
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const who = principal(req);
   if (!who) { res.status(401).json({ error: 'unauthenticated' }); return; }
-  res.json(scopeItems(listItems(req), who));
+  res.json(scopeItems(await listItems(req), who));
 });
 
 /** A list, plus the ids of its canonical cards (the only ones an answer route can act on). */
 export interface ApprovalList { items: UnifiedApproval[]; total: number; canonicalIds: Set<string> }
 
 /** Everything the operator sees, filtered by ?type, ?urgency and ?status. */
-function listItems(req: Request): ApprovalList {
+async function listItems(req: Request): Promise<ApprovalList> {
   const typeFilter = (req.query.type as string) || 'all';
   const urgencyFilter = req.query.urgency as string | undefined;
   const statusFilter = req.query.status as string | undefined;
@@ -414,7 +415,7 @@ function listItems(req: Request): ApprovalList {
     if (!statusFilter || statusFilter === 'pending') {
       // W5: gate BEFORE normalizing — a multipart && !walk_complete row never
       // reaches the client raw (see gateMenuRowsForClient above).
-      const canonical = gateMenuRowsForClient(readCanonicalPending(), req);
+      const canonical = gateMenuRowsForClient(await readCanonicalPendingCached(), req);
       // canonical WINS on collision — index its ids AND op_keys.
       const canonicalKeys = new Set<string>();
       for (const r of canonical) {
@@ -496,10 +497,10 @@ export function statsOf(items: UnifiedApproval[]) {
 // GET /api/approvals/unified/stats — counts by type and urgency
 // ---------------------------------------------------------------------------
 
-router.get('/stats', (req: Request, res: Response) => {
+router.get('/stats', async (req: Request, res: Response) => {
   const who = principal(req);
   if (!who) { res.status(401).json({ error: 'unauthenticated' }); return; }
-  if (!isUnscopedAdmin(who)) { res.json(statsOf(scopeItems(listItems(req), who).items)); return; }
+  if (!isUnscopedAdmin(who)) { res.json(statsOf(scopeItems(await listItems(req), who).items)); return; }
 
   const stats = {
     by_type: { learning: 0, agent: 0, deployment: 0 },
@@ -533,7 +534,7 @@ router.get('/stats', (req: Request, res: Response) => {
   }
 
   // Agent approvals: canonical pending UNION filesystem residuals + archive.
-  const canonical = readCanonicalPending();
+  const canonical = await readCanonicalPendingCached();
   const canonicalKeys = new Set<string>();
   for (const r of canonical) {
     canonicalKeys.add(r.id);
