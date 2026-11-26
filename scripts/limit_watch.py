@@ -188,10 +188,9 @@ def shared_holder(paths):
     (state/account_locations.json, the where=="shared" row), else None."""
     acc = _read_json(os.path.join(paths.orch, "state", "account_locations.json"), {}).get("accounts")
     if isinstance(acc, dict):
-        held = sorted((str(r.get("at") or ""), a) for a, r in acc.items()
-                      if isinstance(r, dict) and r.get("where") == "shared")
-        if held:
-            return held[-1][1]
+        for a, r in acc.items():            # the first shared row, exactly as account_switch reads it
+            if isinstance(r, dict) and r.get("where") == "shared":
+                return a
     return None
 
 

@@ -129,6 +129,7 @@ def test_3_never_switches_back_to_the_parked_login_before_its_reset():
     # after the parked login's reset it is a candidate again
     for u in d._usage.values():
         u["as_of"] = RESET + 60
+    d._usage["default"]["windows"]["5h"]["resets_at"] = RESET + 3600   # a reading's reset is after its as_of
     res, _, st = _tick({}, d, st, active="default", now=RESET + 60)
     assert res == "switched" and d.switched == ["default", "strategysimple"]
 
@@ -297,7 +298,7 @@ def test_h2_noop_is_already_on_that_login_not_a_failure():
     d = _poll_fake(96.0, switch_status="noop")
     st = {}
     res = _runs(d, 3, st)
-    assert res[0] == "noop" and d.mails == []
+    assert res[0] == "noop" and [m[1] for m in d.mails] == ["medium"]
     assert st.get("parked") == {}
 
 
@@ -386,3 +387,43 @@ def test_m3_last_fleet_switch_reads_the_audit_log(tmp_path):
                  '{"ts": "2026-11-25T17:59:30+00:00", "seat": "*shared*", "status": "noop"}\n')
     assert LS.last_fleet_switch(str(p)) == NOW - 120
     assert LS.last_fleet_switch(str(tmp_path / "missing")) == 0.0
+
+
+# --- re-review of 9411e11: a passed reset, a noop, a deliberate switch back ----------------------
+
+def test_rr1_a_reading_taken_before_its_reset_is_no_trigger_after_it():
+    d = Fake(usage={"strategysimple": _reading(96.0, age=60, reset=NOW - 30), "default": _reading(20.0)})
+    res, log, _ = _tick({}, d)
+    assert res is None and d.switched == [] and d.mails == []
+    assert "predates its reset" in log[0]["decision"]
+
+
+def test_rr1_a_tag_lives_at_least_an_hour():
+    d = Fake(usage={"strategysimple": _reading(96.0, age=-(RESET - 120 - NOW)), "default": _reading(100.0)})
+    st = {}
+    _runs(d, 1, st, start=RESET - 60)
+    assert min(st["told"].values()) >= RESET - 60 + 3600
+
+
+def test_rr2_noop_mails_gm_once_medium():
+    d = _poll_fake(96.0, switch_status="noop")
+    st = {}
+    _runs(d, 1, st)
+    _runs(d, 1, st, start=NOW + 700)
+    assert [m[1] for m in d.mails] == ["medium"] and "already holds" in d.mails[0][2]
+
+
+def test_rr3_a_switch_back_by_hand_after_the_trigger_is_left_alone():
+    d = _poll_fake(96.0, switch_status="error")
+    st = {}
+    _runs(d, 1, st)                                         # first trigger at NOW (the switch fails)
+    d.last_switch_row = lambda: (NOW + 900, "strategysimple")  # then someone picks strategysimple by hand
+    res = _runs(d, 2, st, start=NOW + 1300)
+    assert res == ["held", "held"] and d.switched == ["default"]
+    assert [m[1] for m in d.mails] == ["high", "medium"]
+
+
+def test_rr3_a_switch_to_the_login_before_it_got_hot_does_not_hold():
+    d = _poll_fake(96.0)
+    d.last_switch_row = lambda: (NOW - 7200, "strategysimple")   # it was picked hours before it got hot
+    assert _tick({}, d)[0] == "switched"

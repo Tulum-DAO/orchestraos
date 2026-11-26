@@ -75,14 +75,19 @@ def _tmux(*args, timeout=10):
 def last_fleet_switch(switch_log):
     """Epoch of the newest completed fleet-wide switch in logs/account-switch.jsonl (the dashboard
     button and the CLI write it too, not only this module), else 0."""
+    return last_fleet_switch_row(switch_log)[0]
+
+
+def last_fleet_switch_row(switch_log):
+    """(epoch, login switched to) of the newest completed fleet-wide switch, else (0.0, None)."""
     try:
         with open(switch_log, "rb") as f:
             f.seek(0, os.SEEK_END)
             f.seek(max(0, f.tell() - 262144))
             raw = f.read().decode("utf-8", "replace")
     except OSError:
-        return 0.0
-    best = 0.0
+        return (0.0, None)
+    best = (0.0, None)
     for line in raw.splitlines():
         try:
             r = json.loads(line)
@@ -90,8 +95,8 @@ def last_fleet_switch(switch_log):
             continue
         if isinstance(r, dict) and r.get("status") == "switched" and r.get("seat") == "*shared*":
             dt = LE._iso_to_dt(r.get("ts"))
-            if dt:
-                best = max(best, dt.timestamp())
+            if dt and dt.timestamp() >= best[0]:
+                best = (dt.timestamp(), r.get("to"))
     return best
 
 
@@ -124,6 +129,9 @@ class LiveDeps:
 
     def last_switch(self):
         return last_fleet_switch(self.paths.switch_log)
+
+    def last_switch_row(self):
+        return last_fleet_switch_row(self.paths.switch_log)
 
     def claude_seats(self):
         """[(root, tmux_session)] for online Claude seats (they all share the fleet config dir).
@@ -241,7 +249,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
             return
         # a usage-reading trigger has no episode to close it: its tags live until the reset in the key
         # (or 5 hours when the reading carried none); an episode's tags live until the episode is pruned
-        told[tag] = ((_poll_reset(key) or int(now + _PARK_FALLBACK["5-hour"]))
+        told[tag] = (max(_poll_reset(key) or int(now + _PARK_FALLBACK["5-hour"]), int(now + 3600))
                      if key and key.startswith("poll|") else None)
         log(dict(row, ts=stamp))
         if mail:
@@ -265,9 +273,15 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
     check = {"ts": stamp, "kind": "switch_check", "active": active, "active_fresh": fresh,
              "active_5h": a5, "active_weekly": aweek, "others": others}
     key = ep = None
-    if fresh and a5 is not None and (a5 >= SWITCH_AT_5H_PCT or (aweek is not None and aweek >= 100)):
+    hot = fresh and a5 is not None and (a5 >= SWITCH_AT_5H_PCT or (aweek is not None and aweek >= 100))
+    if hot:
         window = "5-hour" if a5 >= SWITCH_AT_5H_PCT else "weekly"
         reset = (aw.get("5h" if window == "5-hour" else "weekly") or {}).get("resets_at")
+        if reset and now >= float(reset):
+            # a reading taken before its own reset (usage_poll backing off): that window is already new
+            check["decision"] = f"no switch: {active} {window} reading predates its reset"
+            log(check)
+            return None
         key = f"poll|{active}|{window}|{reset}"
         ep = {"window": window, "reset_at": reset, "spend_capped": False}
         check["decision"] = f"trigger: {active} {window} at {a5 if window == '5-hour' else aweek:.0f}%"
@@ -289,6 +303,19 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
     ev = LE.LimitEvent("claude", ep["window"], ep.get("reset_at"), ep.get("spend_capped", False),
                        account=active)
     line = LE.describe(ev)
+    first = state.setdefault("first_trigger", {})
+    first.setdefault(key, now)
+    for k in [k for k, t in first.items() if now - t > 8 * 86400]:
+        del first[k]
+    if hasattr(deps, "last_switch_row"):
+        ts, to = deps.last_switch_row()
+        if to == active and ts > first[key]:
+            # someone moved the fleet TO this login by hand after it was already hot: their choice stands
+            once(f"override|{key}", {"kind": "switch_held", "key": key, "reason": "switched back by hand"},
+                 ("medium", f"auto-switch holds: {active} chosen by hand",
+                  f"The shared Claude login was switched to {active} by hand while it was out ({line}). "
+                  f"The auto-switch leaves it there until {LE.reset_label(ep.get('reset_at'))}.\n"))
+            return "held"
 
     target, reasons = None, []
     for acct in deps.enrolled():
@@ -336,7 +363,10 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
     res = deps.switch(target)
     if res.get("status") == "noop":
         # the target already holds the shared login: our idea of the active login was wrong
-        once(f"noop|{key}", {"kind": "switch_noop", "key": key, "from": active, "to": target, "result": res})
+        once(f"noop|{key}", {"kind": "switch_noop", "key": key, "from": active, "to": target, "result": res},
+             ("medium", f"auto-switch: {target} already holds the shared login",
+              f"The watcher read the active login as {active} ({line}), but {target} already holds it. "
+              f"Check state/account_locations.json for more than one shared row.\n"))
         return "noop"
     if res.get("status") != "switched":
         once(f"failed|{key}", {"kind": "switch_failed", "key": key, "from": active, "to": target, "result": res},

@@ -251,3 +251,10 @@ def test_m4_a_short_unfinished_line_waits(tree):
         f.write("partial")
     cur = {p: 0}
     assert LW.new_lines(p, cur, start_at_end=False) == [] and cur[p] == 0
+
+
+def test_rr2_shared_holder_takes_the_first_shared_row_like_account_switch(tree):
+    with open(os.path.join(tree.orch, "state", "account_locations.json"), "w") as f:
+        json.dump({"accounts": {"strategysimple": {"where": "shared", "at": "2026-11-25T10:00:00+00:00"},
+                                "default": {"where": "shared", "at": "2026-11-25T22:00:00+00:00"}}}, f)
+    assert LW.shared_holder(tree) == "strategysimple"
