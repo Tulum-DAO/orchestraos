@@ -28,9 +28,10 @@ import {
   answerPeer,
   answerRefusalStatus,
   type CanonicalRow,
+  type AnswerResult,
 } from './_canonical-approvals.js';
 import { principal, installRole, type InstallRole, type Principal } from '../lib/principal.js';
-import { dismissCard, defaultDismissDeps } from '../lib/approval-dismiss.js';
+import { dismissCard, defaultDismissDeps, type DismissFields } from '../lib/approval-dismiss.js';
 import {
   isUnscopedAdmin,
   canPrincipalSeeCard,
@@ -578,6 +579,40 @@ router.get('/stats', (req: Request, res: Response) => {
 // POST /api/approvals/unified/:id/approve — approve any item
 // ---------------------------------------------------------------------------
 
+/**
+ * The body of a refused approve / deny / answer. A task for you (kind 'human_task') takes done / cant / snooze, so an
+ * Approve or Deny from a UI that only knows those two gets a readable reason naming the verbs and the dismiss, never
+ * the gateway's bare "human_task verbs are done|cant|snooze" (operator order 2026-11-25: Deny on a commitment card
+ * showed "400" and nothing else). Every other refusal keeps the gateway's own words and its `why`.
+ */
+export function refusalBody(result: AnswerResult, id: string, verb: string): Record<string, unknown> {
+  const base: Record<string, unknown> = { error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id };
+  if (/human_task verbs are/.test(String(result.error || ''))) {
+    return {
+      ...base,
+      error: `This is a task for you, not an approval: ${verb} does not apply. Answer done, cant or snooze, or dismiss the card.`,
+      kind: 'human_task',
+      verbs: [...TASK_VERBS],
+      dismiss: `/api/approvals/unified/${id}/dismiss`,
+    };
+  }
+  return base;
+}
+
+/**
+ * What the dismiss route tells the gateway. The surface is THIS route's word, `web`, pinned here (R7d: the web route
+ * holds the authenticated session and asserts provenance itself; no client hint is read, not even `chat`, which the
+ * answer path accepts as a hint: a dismiss has no server-side chat path to vouch for it). The reason is the one field
+ * taken from the client: a trimmed string, capped at 500 characters. `by` is never read or sent; the gateway stamps
+ * who from its bearer.
+ */
+export function dismissFieldsOf(body: unknown): DismissFields {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const out: DismissFields = { surface: 'web' };
+  if (typeof b.reason === 'string' && b.reason.trim()) out.reason = b.reason.trim().slice(0, 500);
+  return out;
+}
+
 router.post('/:id/approve', (req: Request, res: Response) => {
   const id = String(req.params.id);
   const reason = req.body?.reason || '';
@@ -633,7 +668,7 @@ router.post('/:id/approve', (req: Request, res: Response) => {
     res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` });
     return;
   }
-  res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
+  res.status(answerRefusalStatus(result)).json(refusalBody(result, id, 'approve'));
 });
 
 // ---------------------------------------------------------------------------
@@ -689,7 +724,7 @@ router.post('/:id/deny', (req: Request, res: Response) => {
     res.status(404).json({ error: `Approval item '${id}' not found in the canonical store` });
     return;
   }
-  res.status(answerRefusalStatus(result)).json({ error: result.error || 'answer refused', ...(result.why ? { why: result.why } : {}), id });
+  res.status(answerRefusalStatus(result)).json(refusalBody(result, id, 'deny'));
 });
 
 // ---------------------------------------------------------------------------
@@ -817,13 +852,17 @@ router.post('/:id/answer', (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/approvals/unified/:id/dismiss — close a pending card without an answer (the card's ✕).
-// The gateway's discard does the work (history + a "don't keep waiting" note to the agent); see
-// lib/approval-dismiss.ts. Scoped like every /:id route by approvalScopeParam above.
+// POST /api/approvals/unified/:id/dismiss — close a pending card of ANY kind without an answer (the card's ✕):
+// approval, task for you (human_task / commitment), menu. Optional body { reason }: the reason and this route's
+// surface (web) go onto the card's history line and into the author's notice; who dismissed is the gateway's word
+// from its bearer (dismissFieldsOf). A menu that is on an agent's screen comes back 423 with a readable error
+// (Escape via /api/agents/:id/agent-key closes the pane's menu and the card together). The gateway's discard does the
+// work (history + a "don't keep waiting" note to the agent); see lib/approval-dismiss.ts. Scoped like every /:id route
+// by approvalScopeParam above.
 // ---------------------------------------------------------------------------
 
 router.post('/:id/dismiss', async (req: Request, res: Response) => {
-  const { status, body } = await dismissCard(String(req.params.id), defaultDismissDeps());
+  const { status, body } = await dismissCard(String(req.params.id), defaultDismissDeps(), dismissFieldsOf(req.body));
   res.status(status).json(body);
 });
 

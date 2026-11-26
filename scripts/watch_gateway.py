@@ -11542,24 +11542,136 @@ async def handle_questionnaire_discard(request):
     return _json({"ok": True, "applied": ok, "id": qid})
 
 
+# Where a dismiss may say it came from, PER EDGE (R7d, the same split as _gateway_answer_tags): a device token
+# is the watch or the phone and may only claim one of those; the fleet bearer is the API (web / chat), the Quest
+# gateway or an agent's CLI and may only claim one of those. Provenance only: a surface NEVER gates authorization.
+DISCARD_SURFACES_DEVICE = ("watch", "phone")
+DISCARD_SURFACES_FLEET = ("web", "chat", "quest", "gateway", "agent_cli")
+DISCARD_SURFACES = DISCARD_SURFACES_DEVICE + DISCARD_SURFACES_FLEET
+DISMISS_ON_THE_PANE = "dismiss it on the pane"
+
+
+def _pane_readable(session):
+    """'gone' | 'unreadable' | 'ok' for the session a menu bridge row names, read from tmux itself: 'gone' when tmux
+    has no such session (a retired seat: nothing can be on its screen), 'unreadable' when the session exists but its
+    visible screen could not be captured (the capture failed or timed out, which returns None, never raises), else
+    'ok'. The menu reader below only runs on 'ok', so a failed capture is never mistaken for an empty screen."""
+    if not session:
+        return "gone"
+    try:
+        if _tmux("has-session", "-t", f"={session}").returncode != 0:
+            return "gone"
+        return "ok" if _capture_pane(session, lines=0) is not None else "unreadable"
+    except Exception as e:  # noqa: BLE001 — tmux itself failing (a timeout) is not an empty screen
+        print(f"[watch_gateway] discard: could not read {session}'s pane: {e!r}", file=sys.stderr)
+        return "unreadable"
+
+
+def _on_screen_menu(row):
+    """'on' | 'off' | 'unreadable' for a menu bridge row: whether its menu is STILL on the agent's screen. Only the
+    bridge's own rows (origin 'menu_bridge') are looked at; a headless seat's card and an agent's written decision are
+    always 'off'. 'on' = the pane's current menu matches the row's question (_ledger_menu_matches, version-tolerant);
+    'off' = the pane shows nothing or another menu, or tmux has no such session any more (dismissing is right, and
+    what reconcile_orphans would do; a retired seat's card stays dismissable); 'unreadable' = the session exists but
+    its screen could not be captured (_pane_readable: a failed or timed-out capture returns None, it never raises), or
+    the menu reader itself failed: NOT evidence the menu is gone, the same stance reconcile_orphans takes, so the
+    caller refuses rather than tells the agent to stop waiting. Reads the pane (ps + tmux capture): call it off the
+    event loop."""
+    if row.get("origin") != "menu_bridge":
+        return "off"
+    session = row.get("session") or row.get("from_agent")
+    readable = _pane_readable(session)
+    if readable == "gone":
+        return "off"
+    if readable == "unreadable":
+        return "unreadable"
+    try:
+        return "on" if _ledger_menu_matches(session, row.get("question")) else "off"
+    except Exception as e:  # noqa: BLE001 — a menu reader that cannot run (its module failed to load) is not an empty screen
+        log.warning(f"discard: the menu reader failed for {row.get('id')} ({session}): {e!r}; answering unreadable")
+        return "unreadable"
+
+
+def discard_fields(data):
+    """The optional body of POST /approvals/{id}/discard. The client's word counts for ONE thing: `reason`
+    (a trimmed string, capped at 500 characters) and the surface HINT it is checked against the edge's set in
+    discard_provenance. `by` is never read: who dismissed is the authenticated principal's word (R7d), the same
+    rule _gateway_answer_tags applies to answered_by. Anything else in the body is ignored."""
+    out = {"surface": None, "reason": None}
+    if not isinstance(data, dict):
+        return out
+    for k, cap in (("surface", 32), ("reason", 500)):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            out[k] = v.strip()[:cap]
+    return out
+
+
+def discard_provenance(request, surface_hint):
+    """(surface, by, device) for a dismiss, derived from the AUTHENTICATED principal, never the body (R7d).
+
+    `by` is 'operator': the bearer (fleet or device) authenticates the operator, exactly as _gateway_answer_tags
+    rules for answered_by; a client that could name `by` could claim the operator dismissed its own card. The
+    surface hint is accepted only from the edge's own set: a device may say watch|phone (else watch), the fleet
+    bearer web|chat|quest|gateway|agent_cli (else gateway), so neither edge can record itself as the other. The
+    device is the principal's "<id>:<label>" (_answer_device), None for the fleet bearer."""
+    device = _answer_device(request)
+    allowed, dflt = (DISCARD_SURFACES_DEVICE, "watch") if device else (DISCARD_SURFACES_FLEET, "gateway")
+    surface = surface_hint if surface_hint in allowed else dflt
+    return surface, "operator", device
+
+
 async def handle_approval_discard(request):
     """R8: guarded pending->discarded for approvals/decisions (the questionnaire
     discard's sibling). Saves to history + fires ONE honest notify to the emitter
-    so a parked agent never waits forever on a dismissed ask."""
+    so a parked agent never waits forever on a dismissed ask. Takes EVERY card kind
+    (approval, human_task, menu; operator order 2026-11-25) and an optional body
+    {surface, reason}. Every dismiss through here leaves the history line (where / who,
+    and why when given) with where and who from the principal (discard_provenance), so
+    a body-less dismiss (iOS today) and a web dismiss record the same act the same way.
+    A menu that is ON an agent's screen (_on_screen_menu) is refused with 423: it is
+    dismissed with Escape on the pane (/agent-key), so the pane and the card agree;
+    marking it discarded here would tell the agent not to wait while its pane still
+    shows the menu. 423, not 409: the web client reads 409 as "already answered".
+    A missing, empty or non-JSON body is a dismiss with no reason."""
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     rid = request.match_info["id"]
+    try:
+        fields = discard_fields(await request.json()) if request.can_read_body else discard_fields(None)
+    except Exception:  # noqa: BLE001 — an empty or non-JSON body is a dismiss with no reason
+        fields = discard_fields(None)
     store = ApprovalStore(); store.migrate()
     row = store.get(rid)
     if not row:
         return _json({"ok": False, "error": "not found"}, status=404)
-    ok = store.discard(rid)
+    if row.get("status") == "pending" and row.get("origin") == "menu_bridge":
+        import asyncio
+        screen = await asyncio.get_event_loop().run_in_executor(None, _on_screen_menu, row)   # ps + tmux: off the loop
+        agent = row.get("from_agent") or "the agent"
+        if screen == "on":
+            return _json({"ok": False, "id": rid, "agent": row.get("from_agent"),
+                          "error": f"This menu is on {agent}'s screen: {DISMISS_ON_THE_PANE} (Escape), which closes this card too.",
+                          "why": "the pane still shows this menu; a dismiss here would tell the agent not to wait while "
+                                 "its screen still waits on it. Escape through /agent-key closes both together."},
+                         status=423)
+        if screen == "unreadable":
+            return _json({"ok": False, "id": rid, "agent": row.get("from_agent"),
+                          "error": f"Could not check {agent}'s screen for this menu: try again in a moment.",
+                          "why": "the pane could not be read, which is not proof the menu is gone; a dismiss would tell "
+                                 "the agent not to wait while its screen may still wait on it."},
+                         status=423)
+    surface, by, device = discard_provenance(request, fields["surface"])
+    import approval_schema as _AS
+    now = _AS._now()                      # one clock: the summary's line and the mail's are the same string
+    line = _AS.dismiss_line(now, surface, by, fields["reason"])
+    ok = store.discard(rid, surface=surface, by=by, reason=fields["reason"], device=device, now=now)
     if ok:
         try:
             import asyncio
             row = store.get(rid)
             await asyncio.get_event_loop().run_in_executor(
-                None, approval_resume.deliver_discarded, row, store)
+                None, approval_resume.deliver_discarded, row, store, line)
         except Exception as e:  # noqa: BLE001 — the discard is durable even if the notify hiccups
             print(f"[watch_gateway] approval discard-notify failed for {rid}: {e}", file=sys.stderr)
     return _json({"ok": True, "applied": ok, "id": rid})
