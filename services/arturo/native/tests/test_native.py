@@ -1525,16 +1525,26 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
         return FakeProvider()
 
     def slow_thread(agent):
-        time.sleep(0.12)                             # runs beside the connect: START waits ~0.07 s after it
+        # runs beside the connect: wait until the call is connected, then 0.05 s more, so START lands after the
+        # connect by that much however slow the runner is
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not any(
+                c.legs.get("provider_connected_s") is not None for c in list(s.calls.values())):
+            time.sleep(0.005)
+        time.sleep(0.05)
         return ""
 
+    from services.arturo.native import call_context
+    monkeypatch.setenv(call_context.FLAG, "1")
+    s = _server(tmp_path, monkeypatch)
+    s.transport_factory = slow_provider
+    s.thread_loader = slow_thread
+
     async def go():
-        s = _server(tmp_path, monkeypatch)
-        s.transport_factory = slow_provider
-        s.thread_loader = slow_thread
         c = await _client(s)
         try:
             ws = await c.ws_connect("/native/ws", headers=HDRS)
+            await asyncio.sleep(0.05)
             await ws.send_str(json.dumps({"type": "start"}))
             for _ in range(100):
                 if FakeProvider.instances and FakeProvider.instances[-1].sent:
@@ -1560,6 +1570,7 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
     order = ["start_frame_s", "provider_connected_s", "start_s", "session_started_s", "first_transcript_s",
              "first_audio_s"]
     assert all(legs[k] is not None for k in order), legs
+    assert legs["start_frame_s"] >= 0.04, legs                     # the zero is the accept, not the start frame
     assert legs["provider_connected_s"] - legs["start_frame_s"] >= 0.04, legs
     for before, after in zip(order[1:], order[2:]):
         assert legs[after] - legs[before] >= 0.04, (before, after, legs)
