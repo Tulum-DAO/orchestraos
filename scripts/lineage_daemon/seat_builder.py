@@ -108,7 +108,7 @@ def build_turn_resolver():
 
 
 def build_seats(agents, live_names, *, pane_pid, source_path, hooks_for, ring_for,
-                resolve_generation):
+                resolve_generation, is_canonical=None):
     """(realtime_seats, mux_seats) for the LIVE subset of the roster. Fail-soft:
     a seat missing its required field (root pid / source path) is skipped, never
     raised. lineage_root falls back to the agent id. generation is RESOLVED (never
@@ -146,9 +146,13 @@ def build_seats(agents, live_names, *, pane_pid, source_path, hooks_for, ring_fo
         except Exception:
             src = None
         if src and gen is not None:             # durable capture needs a valid generation
+            try:
+                canon = is_canonical(lineage_root, rec) if is_canonical else None
+            except Exception:
+                canon = None
             mux_seats.append(MuxSeat(
                 lineage_root=lineage_root, runtime=runtime, source_path=src,
-                sid=rec.get("session_id"), generation=gen, cwd=rec.get("cwd")))
+                sid=rec.get("session_id"), generation=gen, cwd=rec.get("cwd"), canonical=canon))
     return seats, mux_seats
 
 
@@ -174,6 +178,7 @@ class _Resolvers:
     ring_for: Callable             # (session) -> ring|None
     tmux: object                   # AttachSweep tmux adapter (list_sessions/pipe_pane)
     resolve_generation: Callable   # (session, record) -> int>=1 (never None)
+    is_canonical: Callable = None  # (root, record) -> True|False|None: is this the root's canonical generation
 
 
 def _live_resolvers(orchestra_dir):  # pragma: no cover — touches the live estate
@@ -240,6 +245,20 @@ def _live_resolvers(orchestra_dir):  # pragma: no cover — touches the live est
     def resolve_generation(session, record):
         return _resolve_generation(record, conn=_gen_conn)
 
+    def is_canonical(root, record):
+        """True when the record's session is the one the canonical pointer names for its root (a
+        green before promotion is False). None when the store cannot say."""
+        sid = record.get("session_id")
+        if not sid or _gen_conn is None:
+            return None
+        try:
+            row = _gen_conn.execute(
+                "SELECT g.session_id FROM canonical k JOIN generations g ON g.id = k.generation_id "
+                "WHERE k.root=?", (root,)).fetchone()
+        except Exception:
+            return None
+        return None if not row or not row[0] else row[0] == sid
+
     _tmux = Tmux()
 
     def live_resolver(sessions):
@@ -265,7 +284,7 @@ def _live_resolvers(orchestra_dir):  # pragma: no cover — touches the live est
         live_sessions=rfs.get_live_tmux_sessions,
         pane_pid=codex_context._pane_pid, live_resolver=live_resolver,
         source_path=source_path, hooks_for=hooks_for, ring_for=ring_for,
-        tmux=_tmux, resolve_generation=resolve_generation)
+        tmux=_tmux, resolve_generation=resolve_generation, is_canonical=is_canonical)
 
 
 def _mtime_or_none(path):
@@ -293,7 +312,8 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
     live = r.live_sessions()
     seats, mux_seats = build_seats(agents, live, pane_pid=r.pane_pid,
                                    source_path=r.source_path, hooks_for=r.hooks_for,
-                                   ring_for=r.ring_for, resolve_generation=r.resolve_generation)
+                                   ring_for=r.ring_for, resolve_generation=r.resolve_generation,
+                                   is_canonical=r.is_canonical)
 
     # Seat-set refresh (registry mtime driven): a seat spawned after boot appears on the
     # next slow tick. Only the SEAT list is rebuilt here; the durable capture follows
@@ -309,7 +329,8 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
         _s, agents2 = r.load_stores(orchestra_dir)
         fresh, _mux = build_seats(agents2, r.live_sessions(), pane_pid=r.pane_pid,
                                   source_path=r.source_path, hooks_for=r.hooks_for,
-                                  ring_for=r.ring_for, resolve_generation=r.resolve_generation)
+                                  ring_for=r.ring_for, resolve_generation=r.resolve_generation,
+                                   is_canonical=r.is_canonical)
         return fresh
 
     def mux_refresher():
@@ -322,12 +343,17 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
         _seats, fresh = build_seats(agents_now, live_now, pane_pid=lambda aid: pids.get(aid),
                                     source_path=r.source_path, hooks_for=lambda *_a: None,
                                     ring_for=lambda _s: None,
-                                    resolve_generation=r.resolve_generation)
+                                    resolve_generation=r.resolve_generation,
+                                    is_canonical=r.is_canonical)
         # Every live root the resolver looked at, keyed exactly as build_seats keys a MuxSeat:
         # a registered root outside it is retired/gone (dropped); inside it but without a fresh
         # MuxSeat it was unresolvable this pass (kept, fail-closed).
         considered = {(rec or {}).get("lineage_root") or aid
                       for aid, rec in (agents_now or {}).items() if aid in live_now}
+        if not live_now:
+            # an empty listing is a tmux error far more often than a fleet with no seats: drop nothing
+            # (dropping drains every capture, closes its store and throws away the lingering blues)
+            considered = None
         return fresh, considered
 
     wal_dir = str(orchestra_dir / "state" / "wal")

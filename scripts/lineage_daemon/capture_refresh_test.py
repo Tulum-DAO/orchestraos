@@ -323,3 +323,81 @@ def test_the_linger_is_capped_in_time(tmp_path, monkeypatch):
         f.write(_line(SID_A, "still growing"))                          # growth alone can't keep it forever
     assert mux.refresh([new], considered_roots={"seat"})["linger_done"] == ["seat"]
     mux.close()
+
+
+# ---- review of #610 (Claude reviewer): a swap's green never takes its blue's capture early ----------
+
+def test_an_unpromoted_green_does_not_take_the_capture_from_its_working_blue(tmp_path):
+    """Blue (canonical) and its pre-allocated green are both live on one root during a swap. The green's
+    transcript exists before promotion; capture must stay on the blue, whose lines would otherwise be
+    captured only while it lingers (two quiet refreshes, or 15 min at most)."""
+    wal = str(tmp_path / "wal")
+    blue, green = tmp_path / "blue.jsonl", tmp_path / "green.jsonl"
+    blue.write_text(_line(SID_A, "blue working"))
+    green.write_text(_line(SID_B, "green hydrated"))
+    mux = MultiplexedTailer(wal, wal)
+    b = MuxSeat("gm", "claude", str(blue), SID_A, 7, canonical=True)
+    g = MuxSeat("gm", "claude", str(green), SID_B, 8, canonical=False)
+    assert mux.register(b)
+    for order in ([b, g], [g, b]):                       # registry order must not matter
+        out = mux.refresh(order, considered_roots={"gm"})
+        assert out["rebuilt"] == [] and mux._seats["gm"].seat.sid == SID_A, out
+    # promotion moves the pointer: now the green wins
+    out = mux.refresh([MuxSeat("gm", "claude", str(blue), SID_A, 7, canonical=False),
+                       MuxSeat("gm", "claude", str(green), SID_B, 8, canonical=True)], considered_roots={"gm"})
+    assert out["rebuilt"] == ["gm"] and mux._seats["gm"].seat.sid == SID_B
+    mux.close()
+
+
+def test_without_a_canonical_answer_the_seat_already_captured_stays(tmp_path):
+    wal = str(tmp_path / "wal")
+    blue, green = tmp_path / "blue.jsonl", tmp_path / "green.jsonl"
+    blue.write_text(_line(SID_A, "blue"))
+    green.write_text(_line(SID_B, "green"))
+    mux = MultiplexedTailer(wal, wal)
+    assert mux.register(MuxSeat("gm", "claude", str(blue), SID_A, 7))
+    out = mux.refresh([MuxSeat("gm", "claude", str(blue), SID_A, 7), MuxSeat("gm", "claude", str(green), SID_B, 8)])
+    assert out["rebuilt"] == [] and mux._seats["gm"].seat.sid == SID_A
+    mux.close()
+
+
+def _live_daemon(tmp_path, agents, live, canonical=None):
+    from lineage_daemon.seat_builder import build_live_daemon, _Resolvers
+
+    class _T:
+        def list_sessions(self):
+            return []
+
+        def pipe_pane(self, *_a):
+            pass
+    r = _Resolvers(load_stores=lambda orch: ({}, agents), live_sessions=lambda: set(live["now"]),
+                   pane_pid=lambda s: None, live_resolver=lambda sessions: {s: {"pid": 4242, "hooks": None}
+                                                                         for s in sessions},
+                   source_path=lambda s, rec, pid: f"/x/{rec['session_id']}.jsonl",
+                   hooks_for=lambda s, rt: None, ring_for=lambda s: None, tmux=_T(),
+                   resolve_generation=lambda s, rec: rec.get("generation", 1),
+                   is_canonical=canonical)
+    return build_live_daemon(tmp_path, resolvers=r)
+
+
+def test_the_refresher_marks_which_seat_is_canonical(tmp_path):
+    agents = {"gm": {"session_id": SID_A, "runtime": "claude", "generation": 7},
+              "gm-g8": {"session_id": SID_B, "runtime": "claude", "generation": 8, "lineage_root": "gm"}}
+    d = _live_daemon(tmp_path, agents, {"now": {"gm", "gm-g8"}},
+                     canonical=lambda root, rec: rec["session_id"] == SID_A)
+    seats, _ = d._mux_refresher()
+    assert {(m.sid, m.canonical) for m in seats} == {(SID_A, True), (SID_B, False)}
+    d.mux.close()
+
+
+def test_an_empty_tmux_listing_drops_no_capture(tmp_path):
+    """get_live_tmux_sessions answers set() on any tmux error: that must not read as every seat gone."""
+    agents = {"seat": {"session_id": SID_A, "runtime": "claude"}}
+    live = {"now": {"seat"}}
+    d = _live_daemon(tmp_path, agents, live)
+    _, considered = d._mux_refresher()
+    assert considered == {"seat"}
+    live["now"] = set()
+    _, considered = d._mux_refresher()
+    assert considered is None
+    d.mux.close()

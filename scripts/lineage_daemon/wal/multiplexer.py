@@ -125,6 +125,7 @@ class MuxSeat:
     generation: int
     cwd: str = None            # optional: enables the GitEnricher
     panes_dir: str = None      # optional: enables the ProcEnricher
+    canonical: bool = None     # True = the registry's canonical generation for its root; None = unknown
 
 
 class LivenessLock:
@@ -279,6 +280,8 @@ class MultiplexedTailer:
         for seat in seats or ():
             root = getattr(seat, "lineage_root", None)
             if root and seat.generation is not None and seat.source_path:
+                if root in fresh and self._rank(root, fresh[root]) > self._rank(root, seat):
+                    continue
                 fresh[root] = seat
         for root, seat in fresh.items():
             try:
@@ -328,6 +331,15 @@ class MultiplexedTailer:
                 except Exception as e:  # noqa: BLE001
                     _LOG.warning("telemetry mux: drop of seat %s failed (%s)", root, type(e).__name__)
         return out
+
+    def _rank(self, root, seat):
+        """Which of two live seats on one root owns the capture. During a blue-green swap the blue
+        (still the working seat) and its unpromoted green are both live on the root: the canonical
+        generation wins until the promotion moves the pointer; without that answer, the seat already
+        being captured stays. A tie goes to the later seat, as before."""
+        cap = self._seats.get(root)
+        current = cap is not None and (cap.seat.source_path, cap.seat.sid) == (seat.source_path, seat.sid)
+        return (getattr(seat, "canonical", None) is True, current)
 
     def _linger_pass(self, out):
         """Re-drain each lingering OLD capture. It stops after LINGER_QUIET_PASSES refreshes with no
