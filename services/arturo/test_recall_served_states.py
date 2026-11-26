@@ -225,3 +225,124 @@ def test_the_location_pin_never_puts_an_unsourced_fact_above_a_sourced_one(tmp_p
     # cut at k, the unsourced entries go first
     short = rc._query_facts(fr.extract_keywords(q), 3, q)
     assert len(short) == 3 and not any(f["unsourced"] for f in short), short
+
+
+# --- worldview: sourced entries are picked before every cut --------------------------------------------------------
+
+def _wv_db(path, statements=(), beliefs=()):
+    """The fixture schema with only the given statements (sid, source_type, ts, content, metadata dict) and beliefs
+    (bid, value, confidence, derived_from as stored)."""
+    db = _facts_db(path)
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM statements")
+    con.execute("DELETE FROM beliefs")
+    for sid, stype, ts, content, meta in statements:
+        con.execute("INSERT INTO statements VALUES (?,?,?,?,?,?,?,?)",
+                    (sid, stype, "{}", "shaw", ts, "t", content, json.dumps(meta)))
+    for bid, value, conf, derived in beliefs:
+        con.execute("INSERT INTO beliefs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (bid, value, "c", value, conf, "standard", derived, "2026-11-25T10:00:00Z", None, "[]", None))
+    con.commit()
+    con.close()
+    return db
+
+
+def _plain(st):
+    return {"state": st}                                  # a statement the fluid pass does not read
+
+
+def test_worldview_beliefs_are_picked_sourced_first_from_the_whole_window(tmp_path):
+    """k=2 fetches four beliefs; the top two by confidence rest only on an unverified and a superseded statement."""
+    db = _wv_db(tmp_path / "f.db",
+                statements=[("s_u", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified")),
+                            ("s_x", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("superseded")),
+                            ("s_1", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("active")),
+                            ("s_2", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("active"))],
+                beliefs=[("b_u", "zinnia unverified belief", 0.99, '["s_u"]'),
+                         ("b_x", "zinnia superseded belief", 0.95, '["s_x"]'),
+                         ("b_1", "zinnia first belief", 0.9, '["s_1"]'),
+                         ("b_2", "zinnia second belief", 0.8, '["s_2"]')])
+    got = wv.query_worldview(db, ["zinnia"], k=2)
+    assert [e["text"] for e in got] == ["zinnia first belief", "zinnia second belief"]
+
+
+def _eph(st):
+    return {"expiry_class": "ephemeral", "state": st}
+
+
+def test_worldview_fluid_newest_wins_prefers_a_sourced_statement(tmp_path):
+    """A newer unverified 'X is down' does not hide an older sourced 'X is up'."""
+    db = _wv_db(tmp_path / "f.db",
+                statements=[("s_up", "dream-facts", "2026-11-20T00:00:00Z", "zinnia is up", _eph("active")),
+                            ("s_dn", "dream-facts", "2026-11-24T00:00:00Z", "zinnia is down", _eph("unverified"))])
+    got = wv.query_worldview(db, ["zinnia"], k=5)
+    assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia is up", False)]
+    # with no sourced statement for the subject, the newest unsourced one is served, flagged
+    db2 = _wv_db(tmp_path / "g.db",
+                 statements=[("s_a", "dream-facts", "2026-11-20T00:00:00Z", "zinnia is up", _eph("unverified")),
+                             ("s_b", "dream-facts", "2026-11-24T00:00:00Z", "zinnia is down", _eph("unverified"))])
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db2, ["zinnia"], k=5)] == [("zinnia is down", True)]
+
+
+def test_worldview_fluid_slice_takes_sourced_statements_first(tmp_path):
+    """k=1 and no beliefs: three fluid slots; the three newest subjects are unverified, three older ones sourced."""
+    st = [(f"s_u{i}", "dream-facts", f"2026-11-2{i + 4}T00:00:00Z", f"zinnia u{i} is up", _eph("unverified"))
+          for i in range(3)]
+    st += [(f"s_s{i}", "dream-facts", f"2026-11-1{i}T00:00:00Z", f"zinnia s{i} is up", _eph("active"))
+           for i in range(3)]
+    got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=1)
+    assert sorted(e["text"] for e in got) == ["zinnia s0 is up", "zinnia s1 is up", "zinnia s2 is up"]
+
+
+def _wal(st):
+    return {"anchor": {"seq": 7}, "expiry_class": "standard", "confidence": 0.5, "state": st}
+
+
+def test_worldview_reserves_wal_slots_only_for_sourced_rows(tmp_path):
+    """k=1: one belief and two fluid entries fill the three slots; a newer unverified wal row must not take a slot."""
+    db = _wv_db(tmp_path / "f.db",
+                statements=[("s_b", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("active")),
+                            ("s_f1", "dream-facts", "2026-11-21T00:00:00Z", "zinnia f1 is up", _eph("active")),
+                            ("s_f2", "dream-facts", "2026-11-20T00:00:00Z", "zinnia f2 is up", _eph("active")),
+                            ("w_u", "wal", "2026-11-24T00:00:00Z", "zinnia wal unverified", _wal("unverified")),
+                            ("w_s", "wal", "2026-11-23T00:00:00Z", "zinnia wal sourced", _wal("active"))],
+                beliefs=[("b_1", "zinnia belief", 0.9, '["s_b"]')])
+    got = wv.query_worldview(db, ["zinnia"], k=1)
+    assert [e["text"] for e in got] == ["zinnia belief", "zinnia f1 is up", "zinnia wal sourced"]
+
+
+@pytest.mark.parametrize("derived", ['"5"', "5", '{"a": 1}', "not json", '[{"a": 1}]'])
+def test_worldview_a_derived_from_that_is_not_a_list_of_ids_cites_nothing(tmp_path, derived):
+    db = _wv_db(tmp_path / "f.db", beliefs=[("b_1", "zinnia belief", 0.9, derived)])
+    assert [(e["text"], e["cite"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)] == [
+        ("zinnia belief", "", False)]
+
+
+def test_worldview_belief_citation(tmp_path):
+    """The last derived-from statement is cited when it exists and is servable, nothing when it is missing, and the
+    newest servable one when it exists but is unserved."""
+    st = [("s_old", "slack", "2026-11-18T00:00:00Z", "x", _plain("active")),
+          ("s_new", "voice", "2026-11-21T00:00:00Z", "x", _plain("active")),
+          ("s_mid", "email", "2026-11-19T00:00:00Z", "x", _plain("active")),
+          ("s_gone", "dream-facts", "2026-11-22T00:00:00Z", "x", _plain("archived"))]
+    db = _wv_db(tmp_path / "f.db", statements=st,
+                beliefs=[("b_last", "zinnia a", 0.9, '["s_new", "s_old"]'),
+                         ("b_missing", "zinnia b", 0.8, '["s_old", "s_absent"]'),
+                         ("b_unserved", "zinnia c", 0.7, '["s_mid", "s_new", "s_old", "s_gone"]')])
+    got = {e["text"]: e["cite"] for e in wv.query_worldview(db, ["zinnia"], k=5)}
+    assert got == {"zinnia a": "per slack 2026-11-18", "zinnia b": "", "zinnia c": "per voice 2026-11-21"}
+
+
+def test_worldview_an_unsourced_belief_does_not_take_a_fluid_slot(tmp_path):
+    """k=2 with one sourced and one unsourced belief: the fluid slots are counted as if the unsourced belief were not
+    there, so a sourced statement is never left out to make room for it."""
+    st = [("s_b", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("active")),
+          ("s_u", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified"))]
+    st += [(f"s_f{i}", "dream-facts", f"2026-11-1{5 - i}T00:00:00Z", f"zinnia f{i} is up", _eph("active"))
+           for i in range(4)]
+    db = _wv_db(tmp_path / "f.db", statements=st,
+                beliefs=[("b_s", "zinnia sourced belief", 0.9, '["s_b"]'),
+                         ("b_u", "zinnia unsourced belief", 0.99, '["s_u"]')])
+    got = wv.query_worldview(db, ["zinnia"], k=2)
+    assert [e["text"] for e in got] == ["zinnia sourced belief", "zinnia f0 is up", "zinnia f1 is up",
+                                        "zinnia f2 is up"]

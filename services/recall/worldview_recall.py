@@ -23,6 +23,20 @@ def _statement_state(meta):
 def _statement_served(meta):
     return served(_statement_state(meta))
 
+
+def _derived_ids(derived):
+    """The statement ids a belief derives from. Anything that is not a JSON list reads as none, and so does a list
+    whose last entry is not an id (a string or a number); other entries that are not ids are skipped."""
+    def _id(x):
+        return isinstance(x, (str, int, float)) and not isinstance(x, bool)
+    try:
+        sids = json.loads(derived or "[]")
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(sids, list) or not sids or not _id(sids[-1]):
+        return []
+    return [x for x in sids if _id(x)]
+
 L2_FLAG = "ARTURO_WORLDVIEW_L2"   # flag-inert until it is turned on
                                   # on purpose — default off = legacy facts path
                                   # byte-identical, zero reads of beliefs/statements.
@@ -80,9 +94,12 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
     (1) MATERIALIZED beliefs (durable/standard) keyword-matched over subject+current_value,
         ranked by corroboration-count confidence then recency; each cites ONE L1 statement
         (source_type + date via derived_from) — the worldview stays traceable.
-    (2) FLUID synthesis: newest `fluid_limit` ephemeral, active, non-noise statements
-        matching the keywords, deterministically aggregated newest-wins per E1 subject-key
-        (no LLM, directive #3); the stale side of a contradiction never renders as current.
+    (2) FLUID synthesis: newest `fluid_limit` ephemeral, servable, non-noise statements
+        matching the keywords, deterministically aggregated newest-wins per subject-key
+        (no LLM); the stale side of a contradiction never renders as current. The newest
+        SOURCED statement wins its subject; an unsourced one wins only a subject with no sourced one.
+    Sourced entries are picked before every cut (the belief window, the fluid slots, the wal
+    reservation, the final k+2), so an entry with no source quote found never displaces a sourced one.
     """
     if not keywords:
         return []
@@ -97,16 +114,13 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" ORDER BY confidence DESC, last_updated DESC LIMIT ?",
             params + [k * 2]).fetchall()
         out = []
-        for subj, claim, value, conf, tier, derived, updated in beliefs[:k]:
+        for subj, claim, value, conf, tier, derived, updated in beliefs:
             cite = ""
-            try:
-                sids = _json.loads(derived or "[]")
-            except Exception:
-                sids = []
+            sids = _derived_ids(derived)
+            b_unsourced = False
             if sids:
-                # A belief stands only on statements recall may serve: cite the newest servable one, and drop
-                # the belief when every statement under it is unserved. A belief whose statements are not in
-                # this db is served as before.
+                # A belief stands only on statements recall may serve; it is dropped when every statement under it
+                # that this db holds is unserved. A belief whose statements are not in this db is served as before.
                 q = ",".join("?" * len(sids))
                 found = {r[0]: r for r in con.execute(
                     f"SELECT statement_id, source_type, ts, metadata FROM statements WHERE statement_id IN ({q})",
@@ -114,17 +128,26 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 ok = [found[s] for s in sids if s in found and _statement_served(found[s][3])]
                 if found and not ok:
                     continue
-                if ok:
-                    cite = f"per {ok[-1][1]} {str(ok[-1][2])[:10]}"
+                last = found.get(sids[-1])
+                if last is not None and _statement_served(last[3]):
+                    cite_row = last                       # the last statement it derives from, as always
+                elif last is not None:
+                    # the last one is unserved: cite the newest servable one (the later one on a tie)
+                    cite_row = max(enumerate(ok), key=lambda ir: (str(ir[1][2] or ""), ir[0]))[1]
+                else:
+                    cite_row = None                       # the last one is not in this db: no citation, as always
+                if cite_row is not None:
+                    cite = f"per {cite_row[1]} {str(cite_row[2])[:10]}"
                 # a belief is unsourced when every statement it may stand on has no source quote found
                 b_unsourced = bool(ok) and all(unsourced(_statement_state(r[3])) for r in ok)
-            else:
-                b_unsourced = False
             # stmt-cluster beliefs store subject = value[:80] (worldview_migrate
             # _derive_beliefs), so "{subj}: {value}" would print the prefix twice.
             text = value if (value or "").startswith(subj or "") else f"{subj}: {value}"
             out.append({"kind": "belief", "tier": tier, "text": text,
                         "ts": updated, "cite": cite, "conf": conf, "unsourced": b_unsourced})
+        # every fetched belief is a candidate, so one dropped above is backfilled; sourced ones are picked first
+        out = sourced_first(out)[:k]
+        n_sourced = sum(1 for e in out if not e["unsourced"])
         # fluid: recent ephemeral statements, newest-wins per subject-key
         s_like = " OR ".join(["content LIKE ?"] * len(keywords))
         s_params = [f"%{kw}%" for kw in keywords]
@@ -141,11 +164,15 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 continue                                  # §5.2: unanchored wal row is not recallable
             sp = _sp(content)
             key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
-            if key not in newest:
-                newest[key] = {"kind": "fluid", "tier": "ephemeral", "text": content,
-                               "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0,
-                               "unsourced": unsourced(_statement_state(meta))}
-        out.extend(list(newest.values())[: max(0, k - len(out)) + 2])
+            entry = {"kind": "fluid", "tier": "ephemeral", "text": content,
+                     "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0,
+                     "unsourced": unsourced(_statement_state(meta))}
+            # newest SOURCED statement wins its subject; the newest unsourced one only when there is no sourced one
+            if key not in newest or (newest[key]["unsourced"] and not entry["unsourced"]):
+                newest[key] = entry
+        # the fluid slots are counted against sourced beliefs only, and filled with sourced statements first
+        out.extend(sourced_first(list(newest.values()))[: max(0, k - n_sourced) + 2])
+        out = sourced_first(out)
         # WAL->semantic drain §5.2 (step 4): the wal pass. The fluid pass above reads ONLY
         # ephemeral rows; the drain writes `standard` (a commit is not ephemeral), so without
         # this pass 497 drained facts were unrecallable on the first live dry run — written
@@ -163,7 +190,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f"SELECT statement_id, ts, content, metadata FROM statements"
             f" WHERE source_type='wal' AND ({s_like})"
             f" ORDER BY ts DESC LIMIT ?", s_params + [fluid_limit]).fetchall()
-        wal_entries = []
+        wal_entries, wal_unsourced = [], []
         for sid, ts, content, meta in w_rows:
             if not _statement_served(meta):
                 continue
@@ -173,14 +200,21 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 m = _json.loads(meta) if isinstance(meta, str) else (meta or {})
             except (ValueError, TypeError):
                 m = {}
-            wal_entries.append({"kind": "wal", "tier": m.get("expiry_class", "standard"),
-                                "text": content, "ts": ts, "cite": f"per wal {str(ts)[:10]}",
-                                "conf": m.get("confidence", 0.5), "unsourced": unsourced(_statement_state(meta))})
+            e = {"kind": "wal", "tier": m.get("expiry_class", "standard"),
+                 "text": content, "ts": ts, "cite": f"per wal {str(ts)[:10]}",
+                 "conf": m.get("confidence", 0.5), "unsourced": unsourced(_statement_state(meta))}
+            if e["unsourced"]:
+                if len(wal_unsourced) < WAL_RESERVE:
+                    wal_unsourced.append(e)
+                continue
+            wal_entries.append(e)
             if len(wal_entries) >= WAL_RESERVE:
                 break
         if wal_entries:
+            # only sourced wal rows are reserved a slot; `out` is sourced first, so its unsourced tail goes first
             out = out[: max(0, (k + 2) - len(wal_entries))] + wal_entries
-        return sourced_first(out)[: k + 2]          # unsourced entries rank last, so they are trimmed first
+        # unsourced wal rows take the tail; unsourced entries rank last, so they are trimmed first
+        return sourced_first(out + wal_unsourced)[: k + 2]
     finally:
         con.close()
 
