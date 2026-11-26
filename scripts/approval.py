@@ -109,9 +109,10 @@ def _caller_identities():
     return idents or None
 
 
-def _authorship_guard(from_agent):
+def _authorship_guard(from_agent, advice=True):
     """True = proceed. False = REFUSE (caller is provably authoring a card
-    for a different agent — the interposer anti-pattern)."""
+    for a different agent — the interposer anti-pattern). advice=False prints only
+    the refusal, for a verb whose remedy is not --delegated-by (patch)."""
     idents = _caller_identities()
     if idents is None:
         print("[approval] authorship-guard: no caller signal (non-tmux/cron/"
@@ -120,6 +121,10 @@ def _authorship_guard(from_agent):
     if _canon(from_agent) in idents:
         return True
     caller = sorted(idents)[0]
+    if not advice:
+        print(f"[approval] REFUSED (interposer guard): you are '{caller}' but "
+              f"acting --from '{from_agent}'.", file=sys.stderr)
+        return False
     print(f"[approval] REFUSED (interposer guard): you are '{caller}' but "
           f"authoring --from '{from_agent}'. A decision card is a two-party "
           f"edge — the agent that NEEDS the decision authors it so the operator's "
@@ -295,9 +300,9 @@ def _peer_caller(args):
                                       forwarded_for=args.forwarded_for)
 
 
-def _patch_refusal(store, rid, fields):
+def _patch_refusal(store, rid, fields, caller=None):
     """One line saying why `patch` changed nothing (update_fields refuses a missing id, a card that is not
-    pending, a card that is not a human_task, or no patchable field)."""
+    pending, a card that is not a human_task, a caller outside the author/gm circle, or no patchable field)."""
     if not any(k in store._PATCHABLE for k in fields):
         return "nothing to change: pass --summary, --feature, --evidence, --block-task or --blocks-what"
     row = store.get(rid)
@@ -308,6 +313,12 @@ def _patch_refusal(store, rid, fields):
                 f"file a new card if the operator must see something new")
     if row.get("kind") != "human_task":
         return f"card {rid} is a {row.get('kind') or 'approval'} card: patch changes only human_task cards"
+    if caller is not None:
+        import seat_identity
+        ok, why = seat_identity.may_patch(seat_identity.registry_beside(store.db_path), caller,
+                                          row.get("from_agent"))
+        if not ok:
+            return why
     return f"card {rid} could not be changed"
 
 
@@ -780,10 +791,17 @@ def main(argv=None):
             v = getattr(args, k, None)
             if v is not None:
                 fields[k] = v
-        ok = store.update_fields(args.id, **fields)
+        # The caller must be who --from says (interposer guard, as request/human-task/questionnaire);
+        # then the store checks that seat is the author, its current generation, or gm.
+        if not _authorship_guard(args.from_agent, advice=False):
+            # the guard's generic advice (--delegated-by) does not exist for patch: say what does
+            print(f"REFUSED: only the author of {args.id} or gm may patch it; patch with --from set to your "
+                  f"own seat (if you are the author or gm), otherwise ask that seat", file=sys.stderr)
+            return 4
+        ok = store.update_fields(args.id, caller=args.from_agent, **fields)
         if not ok:
             # Say why: a silent exit 4 had a client agent retry the same patch for several turns.
-            print(f"REFUSED: {_patch_refusal(store, args.id, fields)}", file=sys.stderr)
+            print(f"REFUSED: {_patch_refusal(store, args.id, fields, caller=args.from_agent)}", file=sys.stderr)
         print(args.id if ok else "")
         return 0 if ok else 4
     if args.cmd == "retire":
