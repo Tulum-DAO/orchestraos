@@ -41,6 +41,8 @@ This document writes that model down, and the router, message store and gateway 
 - It presses Enter and only reports success when the box has cleared.
 - **No** cooldown, breathe window, presence hold or Stop-hook grace applies. Those exist to protect a person from mail; here the person *is* the sender.
 - If the agent is mid-turn and the client says it accepts a hold, the message is stored as a held row and the router delivers it at the next turn boundary, raw and at high priority.
+- **A person's send is instant.** From a person's own surface (the phone, the watch, the web chat, a paired device) a message is never refused for a cause that clears by itself. Mid-turn it is typed into the running turn after a last look at the pane (the CLI queues it and reads it at its next step): the answer says `outcome: "delivered-steer"`. A cause that passes (a menu or permission on screen, another typer's lock, the CLI starting) holds the message as a row the router types at the next safe moment: `outcome: "held"`. Typed on an idle prompt: `outcome: "delivered-now"`.
+- **"Now" (`interrupt: true`, or `?interrupt=1`).** When the seat is mid-turn and the last look is safe, the gateway sends Escape first (the CLI's own interrupt: the running step ends and the turn stops cleanly), waits up to 3 s for the composer, looks once more, then types + Enter: `outcome: "interrupted"`, and the seat reads the words at once. Never on a menu, a permission prompt or typed text (those hold or refuse first). A turn that does not stop in time is steered as usual and the answer carries `interrupt_failed`. Only a person's surface may ask; mail and automation never interrupt a turn. The default send never sends Escape.
 
 ## What a future agent needs to know
 

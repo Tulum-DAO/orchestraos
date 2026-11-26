@@ -4292,8 +4292,9 @@ def _slash_lead(line: str) -> str:
 #: A slash COMMAND as a CLI reads one: "/" + a command name (built-in, skill or plugin:skill), then a space or the
 #: end of the line. A path with two or more segments ("/home/<you>/x", "/tmp/agent-msg-...") has a second "/" in
 #: its first word, so it is text, never a command (gm msg_1cf0ff32: agent mail is full of lines that start with a
-#: path). A ONE-WORD line such as "/tmp" or "/api is down" does read as a command here, as it would at the prompt:
-#: the cost is a refusal (409) instead of a hold for a person's send that starts that way, never a wrong keystroke.
+#: path). A ONE-WORD line such as "/tmp", "/README.md" or "/api is down" does read as a command here, as it would at
+#: the prompt: the cost is a refusal (409) instead of a hold for a person's send that starts that way, never a wrong
+#: keystroke.
 #: The name ends at whitespace, the end of the line, or punctuation ("/clear." is still /clear to a CLI that trims);
 #: a following "/" makes it a path, never a command.
 _SLASH_TOKEN_RE = re.compile(r"^/[A-Za-z][\w:-]*(?=$|[^\w:/-])")
@@ -4393,7 +4394,7 @@ def _status_runtime(st) -> str:
     return (rt or "").strip().lower()
 
 
-def verified_inject(session, text, force=False, idle_only=False, source="mail"):
+def verified_inject(session, text, force=False, idle_only=False, source="mail", interrupt=False):
     """_verified_inject_locked under the ONE cross-process pane lock (pane_lock.py) for the WHOLE
     call, gates included: the composer read that protects the operator's typed text must not race another
     typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
@@ -4415,8 +4416,10 @@ def verified_inject(session, text, force=False, idle_only=False, source="mail"):
                            "activity": "another sender is typing into this pane"}
         if source == "person":
             # A person's words are typed mid-turn only after the composer is looked at again right
-            # before the keys (_mid_turn_recheck). Mail keeps its call exactly as it was.
-            return _verified_inject_locked(session, text, force, idle_only, strict_mid_turn=True)
+            # before the keys (_mid_turn_recheck). Mail keeps its call exactly as it was. `interrupt` (a
+            # person's "now": Escape first, then the words) exists only on this path.
+            return _verified_inject_locked(session, text, force, idle_only, strict_mid_turn=True,
+                                           interrupt=bool(interrupt))
         return _verified_inject_locked(session, text, force, idle_only)
 
 
@@ -4512,12 +4515,19 @@ def _headless_inject(seat, text, idle_only=False, source="mail"):
                   "msg_state": out.get("state")}
 
 
-def _verified_inject_locked(session, text, force=False, idle_only=False, strict_mid_turn=False):
+def _verified_inject_locked(session, text, force=False, idle_only=False, strict_mid_turn=False, interrupt=False):
     """Inject text into an agent pane with VERIFIED submit.
 
     strict_mid_turn (a person's send, verified_inject source="person"): when the pane is mid-turn,
     _mid_turn_recheck looks at it once more immediately before the keys, under the send lock, and
     refuses as busy (the handler then holds it for the turn boundary) if it stopped being safe.
+
+    interrupt (a person's "now", only with strict_mid_turn): when the pane is mid-turn and that last look is
+    safe, Escape goes first (the CLI's own interrupt: the running step ends and the turn stops cleanly), the
+    composer is waited for (INTERRUPT_WAIT_S), the pane is looked at once more, and only then are the words
+    typed: the seat reads them at once instead of at its next tool boundary. Never on a menu, a permission
+    prompt or typed text (the same holds refuse first). A turn that does not stop in time is steered as
+    today and the answer says so (interrupt_failed). The default send never sends Escape.
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
     composer's async paste ingest -> instruction sits unsubmitted. Sequence:
@@ -4668,6 +4678,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
             # dies before Enter, so nothing is typed.
             print(f"[watch_gateway] inject journal write failed for {session}: {e}", file=sys.stderr)
             return False, {"reason": "journal_unwritable", "state": state, "detail": str(e)}
+        interrupted, interrupt_failed = False, None
         if strict_mid_turn and (mid_turn or turn_already_running):
             # The LAST look, as late as it can be: after the journal row (its mkdir and write took time a person
             # at the pane could have used to type) and immediately before the keys. A refusal clears the row.
@@ -4679,6 +4690,26 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                 if unsafe.get("composer_text"):
                     out["composer_text"] = unsafe["composer_text"]     # FULL: a device echoes it back exactly
                 return False, out
+            if interrupt:
+                # A person's "now": the last look was safe, so Escape ends the running step (the CLI's own
+                # interrupt), the composer comes back, and the words are typed into an idle prompt. Whatever
+                # the wait found, the pane is looked at ONCE MORE before the keys: a menu or a permission can
+                # appear as a step ends, and seconds have passed.
+                stopped = _interrupt_turn(session)
+                unsafe = _mid_turn_recheck(session, force=force)
+                if unsafe:
+                    inject_journal.clear(session)
+                    out = {"reason": "busy", "state": state, "recheck": unsafe["why"], "interrupted": stopped,
+                           "activity": MID_TURN_RECHECK_WORDS.get(unsafe["why"], unsafe["why"])}
+                    if unsafe.get("composer_text"):
+                        out["composer_text"] = unsafe["composer_text"]
+                    return False, out
+                if stopped:
+                    interrupted = True
+                else:
+                    # Escape was sent and the turn kept going (a step that ignores it, or a slow stop): the words
+                    # go in as a steer, as the default send would, and the answer says the interrupt failed.
+                    interrupt_failed = f"the turn did not stop within {INTERRUPT_WAIT_S:g} s after Escape"
         r = _tmux("send-keys", "-t", _st(session), "-l", text)
         if r.returncode != 0:
             inject_journal.clear(session)          # nothing was typed
@@ -4739,9 +4770,13 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
             if turn_started_now or not still_in_composer:
                 inject_journal.clear(session)
                 ok_info = {"state": state, "attempts": attempt}
-                if mid_turn or turn_already_running:
+                if interrupted:
+                    ok_info["interrupted"] = True                      # Escape, then the words: read at once
+                elif mid_turn or turn_already_running:
                     # Typed into a running turn: the CLI holds it in its own queue until the turn ends.
                     ok_info["queued_mid_turn"] = True
+                if interrupt_failed:
+                    ok_info["interrupt_failed"] = interrupt_failed
                 if _chip_pointer:
                     ok_info["chip_dodge_pointer"] = _chip_pointer
                 return True, ok_info
@@ -4787,6 +4822,34 @@ MID_TURN_RECHECK_WORDS = {
 HELD_FOR_BOUNDARY_WORDS = "held for the turn boundary"
 #: Same trust window as agent-status.py HOOK_WAITING_TTL_S (a Notification hook older than this is stale).
 MID_TURN_HOOK_WAITING_TTL_S = 900
+
+
+#: How long a person's interrupt waits for the composer after Escape, and how often it looks.
+INTERRUPT_WAIT_S = float(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "3.0"))
+INTERRUPT_POLL_S = 0.25
+
+
+def _interrupt_turn(session):
+    """Escape into a running turn (what handle_agent_interrupt does for the stop button), then wait up to
+    INTERRUPT_WAIT_S for the turn to leave the visible screen and the composer to accept input. True when it
+    did. Records the interrupt with the detector (mark_turn_interrupted) so a hook left at 'working' does not
+    hold queued mail for its TTL; the screen still wins if the Escape did not stop the turn."""
+    import time as _time
+    r = _tmux("send-keys", "-t", _st(session), "Escape")
+    if r.returncode != 0:
+        return False
+    try:
+        mark = getattr(_agent_status(), "mark_turn_interrupted", None)
+        if callable(mark):
+            mark(session)
+    except Exception:  # noqa: BLE001 — bookkeeping, never the gate
+        pass
+    for _ in range(max(1, int(INTERRUPT_WAIT_S / INTERRUPT_POLL_S))):
+        _time.sleep(INTERRUPT_POLL_S)
+        scr = _strip_ansi(_capture_pane(session, lines=0) or "")
+        if scr and not _pane_shows_active_turn(scr) and _pane_has_composer(scr):
+            return True
+    return False
 
 
 def _mid_turn_recheck(session, force=False):
@@ -7059,12 +7122,13 @@ def _schedule_person_kick(loop):
             return False
 
         def _fire():
-            # Cleared HERE, on the loop, before the executor runs: a hold that lands while the kick runs schedules
-            # the next window's handle, and nothing on another thread can drop that reference afterwards.
-            _person_kick["handle"] = None
+            # Cleared HERE, on the loop, before the executor runs, and only if the slot still holds THIS handle: a
+            # hold that already scheduled the next window's handle keeps it.
+            if _person_kick.get("handle") is mine:
+                _person_kick["handle"] = None
             loop.run_in_executor(None, _run_person_kick)
         _person_kick["loop"] = loop
-        _person_kick["handle"] = loop.call_later(PERSON_HOLD_KICK_DELAY_S, _fire)
+        mine = _person_kick["handle"] = loop.call_later(PERSON_HOLD_KICK_DELAY_S, _fire)
         return True
     except Exception as e:  # noqa: BLE001
         # Whatever sat in the slot is not a usable handle: drop it so the next hold schedules a fresh one.
@@ -7107,7 +7171,7 @@ async def handle_agent_message(request):
     is_slash = bool(_slash_lines(text))
     # Mail keeps the first-line rule it always had (a later line of a long body is pasted, never run); a person's
     # send is checked on every line, because a hold types the row raw later.
-    ends = _ends_session(text) if source == "person" else bool(_SLASH_CMD_RE.match(text or ""))
+    ends = _ends_session(text) if source == "person" else bool(_SLASH_CMD_RE.match(_normalised_lines(text)[0]))
     if ends:
         log.warning(f"AGENT-MESSAGE -> {session}: slash command refused ({(_slash_lines(text) or _normalised_lines(text))[0][:20]!r}) "
                     f"{_caller_desc(request)}")
@@ -7123,20 +7187,30 @@ async def handle_agent_message(request):
     # gm msg_b73cc273: the fleet bearer with no person signal is automation. Its send is still never refused (it
     # is held), but it is typed only into an IDLE pane, never into a running turn.
     idle_only = instant and not _person_surface(request)
+    # A person's "now" (body interrupt:true, or ?interrupt=1): Escape first when the seat is mid-turn and the last
+    # look is safe, then the words. Only a person's own surface may ask for it; mail and automation never
+    # interrupt a turn. The default stays the queued steer (no Escape).
+    interrupt = (instant and not idle_only
+                 and (data.get("interrupt") is True or str(request.query.get("interrupt", "")).strip() == "1"))
 
     import asyncio
     if idle_only:
         ok, info = await asyncio.get_event_loop().run_in_executor(
             None, lambda: verified_inject(session, text, force, idle_only=True, source=source))
     else:
+        # The call keeps its exact shape unless an interrupt was asked for (mail and automation never see the keyword).
+        _kw = {"interrupt": True} if interrupt else {}
         ok, info = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: verified_inject(session, text, force, source=source))
+            None, lambda: verified_inject(session, text, force, source=source, **_kw))
     if not ok and info.get("reason") == "compact_refused":
         # A plain refusal the person reads as is ("Compacting isn't turned on for this agent yet."): nothing was sent.
         return _json({"ok": False, "delivered": False, **info}, status=409)
-    if instant and ok and info.get("queued_mid_turn"):
+    if instant and ok and info.get("interrupted"):
+        log.info(f"AGENT-MESSAGE person -> {session}: typed now (interrupted; state was {info.get('state')})")
+    elif instant and ok and info.get("queued_mid_turn"):
         log.info(f"AGENT-MESSAGE person -> {session}: typed mid-turn (state={info.get('state')}, "
-                 f"queued by the CLI)")
+                 f"queued by the CLI)" + (f"; interrupt failed: {info['interrupt_failed']}"
+                                         if info.get("interrupt_failed") else ""))
     hold_class = _person_hold_class(info) if (instant and not ok and not is_slash) else None
     if hold_class:
         # A person's send is not bounced for a cause that clears on its own (_person_hold_class): the words are
@@ -7159,7 +7233,7 @@ async def handle_agent_message(request):
                  f"(reason={info.get('reason')} state={info.get('state')}: {why})")
         _schedule_person_kick(asyncio.get_event_loop())
         await _record_operator_message(request, session, text)
-        return _json({"ok": True, "delivered": False, "held": True, "state": "held_for_boundary",
+        return _json({"ok": True, "delivered": False, "held": True, "state": "held_for_boundary", "outcome": "held",
                       "message_id": msg_id, "held_reason": info.get("reason"), "hold_class": hold_class,
                       "agent_state": info.get("state"),
                       "activity": (IDLE_ONLY_HOLD_WORDS if idle_only
@@ -7190,7 +7264,7 @@ async def handle_agent_message(request):
                 return _json({"ok": False, "busy": True, "hold_failed": str(e), **info},
                              status=409)
             await _record_operator_message(request, session, text)
-            return _json({"ok": True, "delivered": False, "held": True,
+            return _json({"ok": True, "delivered": False, "held": True, "outcome": "held",
                           "state": "held_for_boundary", "message_id": msg_id},
                          status=200)
         return _json({"ok": False, "busy": True, **info}, status=409)
@@ -7204,13 +7278,17 @@ async def handle_agent_message(request):
                 msg_id = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: _hold_for_boundary(session, text, _name or _cls, origin))
                 await _record_operator_message(request, session, text)
-                return _json({"ok": True, "delivered": False, "held": True, "cleared": True,
+                return _json({"ok": True, "delivered": False, "held": True, "cleared": True, "outcome": "held",
                               "state": "held_for_boundary", "message_id": msg_id}, status=200)
             except Exception as e:  # noqa: BLE001 — the durable write only; text_returned still goes back
                 info = {**info, "hold_failed": str(e)}
         return _json({"ok": False, "delivered": False, **info}, status=502)
     if ok:
         await _record_operator_message(request, session, text)
+        # The honest outcome (what the person's surface shows): typed on an idle prompt, typed into a running turn
+        # (the seat reads it at its next step), or Escape + typed (read at once). Held answers say "held" above.
+        info = {**info, "outcome": ("interrupted" if info.get("interrupted")
+                                    else "delivered-steer" if info.get("queued_mid_turn") else "delivered-now")}
     elif instant and not is_slash and _person_refusal_words(info):
         info = {**info, "detector_activity": info.get("activity") or "", "activity": _person_refusal_words(info)}
     return _json({"ok": ok, "delivered": ok, **info},
