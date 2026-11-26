@@ -1092,3 +1092,10 @@ def test_m7_a_persons_own_switch_resolves_by_the_catalog_never_to_a_model_it_con
     assert AM.live_model("claude-fable-5-1[1m]", seen, None, None) is None        # unknown, not Fable
     boom = lambda: (_ for _ in ()).throw(OSError("catalog"))
     assert AM.live_model("claude-fable-5-1[1m]", seen, None, boom) is None
+
+
+def test_m8_the_catalog_fallback_never_reports_the_other_context_variant():
+    # codex R4 on #672: the live catalog may hold only the 1M Opus; "Opus 5.5" is the 200k one
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5", "t"), None, ["claude-opus-5-5[1m]"]) is None
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5 (1M context)", "t"), None,
+                         ["claude-opus-5-5"]) is None

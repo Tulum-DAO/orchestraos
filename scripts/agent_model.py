@@ -261,9 +261,9 @@ def live_model(stored, seen, last_switch, catalog_ids=None):
             ids = list(catalog_ids() if callable(catalog_ids) else (catalog_ids or ()))
         except Exception:  # noqa: BLE001 — an unreadable catalog resolves nothing
             ids = []
-        wide = "1m" in value.lower()             # "Opus 5.5 (1M context)" is the [1m] id
-        ids = sorted((i for i in ids if isinstance(i, str)), key=lambda i: (i.endswith("[1m]") != wide))
-        return next((i for i in ids if display_matches(value, i)), None)
+        wide = "1m" in value.lower()             # "Opus 5.5 (1M context)" is the [1m] id, "Opus 5.5" not
+        return next((i for i in ids if isinstance(i, str) and i.endswith("[1m]") == wide
+                     and display_matches(value, i)), None)
     return next((c for c in cands if _base(c) == value), value)
 
 
