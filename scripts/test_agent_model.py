@@ -1004,7 +1004,7 @@ def test_r1_every_immediate_switch_records_who_made_it(gw, fable):
 
 
 # --- the model a seat is on NOW (gm 2026-11-26): the live transcript, not the registry's stored model -------
-# The first proactive Fable drop switched gm to Opus 5.5 (transcript: claude-opus-5-5 from 23:10:50Z), but
+# The first proactive Fable drop switched gm to Opus 5.5, but
 # GET /agent-model kept reading registry.json, which still said claude-fable-5-1[1m].
 
 def _transcript(path, *rows):
@@ -1024,10 +1024,10 @@ DROP = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20+00:00", "outc
 
 
 def test_m1_the_newest_evidence_in_the_transcript_is_read(tmp_path):
-    p = _transcript(tmp_path / "t.jsonl", ("claude-fable-5-1", "2026-11-26T22:48:46.872Z"),
-                    ("claude-opus-5-5", "2026-11-26T23:10:50.152Z"), ("<synthetic>", "2026-11-26T23:11:00.000Z"))
-    assert AM.transcript_model(p) == ("model", "claude-opus-5-5", "2026-11-26T23:10:50.152Z")
-    q = _transcript(tmp_path / "q.jsonl", ("claude-fable-5-1", "2026-11-26T22:48:46.872Z"),
+    p = _transcript(tmp_path / "t.jsonl", ("claude-fable-5-1", "2026-11-26T22:00:00.000Z"),
+                    ("claude-opus-5-5", "2026-11-26T23:11:00.000Z"), ("<synthetic>", "2026-11-26T23:11:00.000Z"))
+    assert AM.transcript_model(p) == ("model", "claude-opus-5-5", "2026-11-26T23:11:00.000Z")
+    q = _transcript(tmp_path / "q.jsonl", ("claude-fable-5-1", "2026-11-26T22:00:00.000Z"),
                     ("set:Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z"))
     assert AM.transcript_model(q) == ("set", "Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z")
     assert AM.transcript_model(tmp_path / "missing.jsonl") is None
@@ -1035,13 +1035,13 @@ def test_m1_the_newest_evidence_in_the_transcript_is_read(tmp_path):
 
 
 def test_m2_a_dropped_seat_reads_opus_with_its_exact_id_though_the_registry_says_fable():
-    seen = ("model", "claude-opus-5-5", "2026-11-26T23:10:50.152Z")
+    seen = ("model", "claude-opus-5-5", "2026-11-26T23:11:00.000Z")
     assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) == "claude-opus-5-5[1m]"
     assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-opus-5-5"
 
 
 def test_m3_the_stored_id_is_kept_when_the_transcript_agrees_with_it():
-    seen = ("model", "claude-fable-5-1", "2026-11-26T22:48:46.872Z")
+    seen = ("model", "claude-fable-5-1", "2026-11-26T22:00:00.000Z")
     assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-fable-5-1[1m]"
 
 
@@ -1068,7 +1068,7 @@ def test_m5_no_evidence_is_the_stored_model_never_an_earlier_occupants_switch():
 
 
 def test_m6_the_gateway_seat_lookup_reports_the_live_model_for_a_dropped_seat(monkeypatch, tmp_path):
-    t = _transcript(tmp_path / "t.jsonl", ("claude-opus-5-5", "2026-11-26T23:10:50.152Z"))
+    t = _transcript(tmp_path / "t.jsonl", ("claude-opus-5-5", "2026-11-26T23:11:00.000Z"))
     meta = {"runtime": "claude", "model": "claude-fable-5-1[1m]"}
     monkeypatch.setattr(G, "_load_json", lambda p: {"agents": {"gm": meta}})
     monkeypatch.setattr(G, "_resolve_sess_meta", lambda agents: {"gm": ("gm", meta)})
