@@ -1,0 +1,4 @@
+{"shaw_label": "SPEAKER_00", "shaw_label_evidence": "This is Shaw.",
+ "items": [
+  {"owner": "shaw", "kind": "commitment", "counterpart": "Dana Reyes", "action_type": "email", "operation": "send", "deliverable": "contract", "commitment_text": "Email Dana the contract", "timeframe": "", "quote": "I'll email you the signed contract tonight.", "speaker": "SPEAKER_00", "agent_takeable": false, "recurring": false}
+ ]}

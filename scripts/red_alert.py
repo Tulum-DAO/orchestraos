@@ -38,6 +38,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import limit_event  # noqa: E402  (the one usage-limit parser)
+
 # The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
 # lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
 if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
@@ -158,9 +163,9 @@ CATALOGUE = {
 # or below the LAST composer prompt (❯) — the status region. Prose lines (`●`, indented text) never
 # classify, even when they quote a banner verbatim.
 _SYSTEM_LINE = re.compile(r"^\s*[⎿⚠✗]")
+# Usage limits are NOT a regex here: limit_event.from_text owns every limit banner (Claude,
+# Codex, Grok), so this file and the beat cannot disagree on what a limit looks like.
 _SCREEN_RULES = (
-    (re.compile(r"You'?re out of usage credits|You'?ve hit your usage limit|usage limit reached|"
-                r"insufficient_quota|credits? (?:depleted|exhausted)|Out of credits", re.I), "out_of_usage"),
     (re.compile(r"^\s*[⎿⚠✗]?\s*API Error\b", re.I), "api_error"),
     (re.compile(r"Select login method|Please log in|Login required|Not logged in\.|OAuth error|authentication[_ ]error", re.I), "login_screen"),
 )
@@ -190,9 +195,10 @@ def classify_screen(screen: str) -> tuple[str, str] | None:
         # a ⎿ line that is tool OUTPUT quoting a banner (grep results, file excerpts) is still prose:
         # require the banner to START the notice, not sit inside a quoted path/line
         body = re.sub(r"^\s*[⎿⚠✗]?\s*", "", line)
+        if limit_event.from_text(body) is not None:
+            return "out_of_usage", line.strip()
         for rx, cls in _SCREEN_RULES:
-            m = rx.search(body)
-            if m and (cls != "out_of_usage" or m.start() == 0 or body[:m.start()].strip() == ""):
+            if rx.search(body):
                 return cls, line.strip()
     return None
 
