@@ -7537,10 +7537,13 @@ async def handle_agent_model(request):
         extra = await loop.run_in_executor(None, _read)
         return _json({"ok": True, "session": session, **desc, **extra})
 
-    if not _is_person_surface(request):
+    fable_drop = _fable_drop(request, root, current, model)
+    if isinstance(fable_drop, tuple):
+        return _json(fable_drop[1], status=fable_drop[0])
+    if not fable_drop and not _is_person_surface(request):
         return _json({"ok": False, "error": "a model is switched by a person: send X-Actor "
                       "operator|interactive|app, or use a paired device"}, status=403)
-    refusal = _protected_refusal(request, session)
+    refusal = None if fable_drop else _protected_refusal(request, session)
     if refusal is not None:
         return _json(refusal, status=403)
     if model not in desc["allowed"]:
@@ -7564,6 +7567,30 @@ async def handle_agent_model(request):
         return _json({"ok": False, "error": "another model switch for this agent is still in "
                       "progress; nothing changed, try again", "detail": str(e)}, status=503)
     return _json(body, status=status)
+
+
+FABLE_DROP_ACTOR = ("automation", "limit-watch")
+FABLE_DROP_TARGET = "claude-opus-5-5[1m]"
+
+
+def _fable_drop(request, root, current, model):
+    """The one automation allowed to switch a model (operator, 2026-11-26): limit_watch moving a seat
+    that shows the Fable limit to Opus 5.5 (scripts/model_drop.py). False: not that caller, the
+    person rule applies. True: allowed. (status, body): that caller, refused. Checked here, never
+    trusted from the caller: the target is Opus 5.5, the seat's model is a Fable one, and the
+    watcher's own limited-seat file holds a Fable credits row for this seat."""
+    if _parse_actor(request) != FABLE_DROP_ACTOR:
+        return False
+    if model != FABLE_DROP_TARGET:
+        return 403, {"ok": False, "error": f"limit-watch may only switch a seat to {FABLE_DROP_TARGET}"}
+    if not re.search(r"fable", str(current or ""), re.I):
+        return 409, {"ok": False, "error": "not on a Fable model", "reason": "not_fable", "current": current}
+    rows = (_load_json(ORCH_DIR / "state" / "usage" / "limits.json") or {}).get("seats") or {}
+    row = rows.get(re.sub(r"-g(?:en)?\d+$", "", str(root or ""))) if isinstance(rows, dict) else None
+    if not (isinstance(row, dict) and row.get("window") == "credits"
+            and (not row.get("model") or re.search(r"fable", str(row["model"]), re.I))):
+        return 409, {"ok": False, "error": "no Fable limit on record for this seat", "reason": "no_limit"}
+    return True
 
 
 def _effort_how(session, runtime, desc):

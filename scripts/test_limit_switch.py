@@ -520,7 +520,8 @@ def test_weekly_warning_comes_back_the_next_week():
     assert len([m for m in d.mails if "70%" in m[2]]) == 2
 
 
-# --- the reactive leg: any banner on the active login switches (gm order msg_f495a92c, 2026-11-26) --------
+# --- the reactive leg: a WINDOW banner on the active login switches (gm order msg_f495a92c, 2026-11-26);
+# a model's credits cap never does (operator 2026-11-26, apr_bafb66c3: the seat drops to Opus 5.5, model_drop.py)
 
 FABLE_PANE = "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n"
 
@@ -553,59 +554,74 @@ def _credits_ep(account="default", model="Fable", seats=("gm",), open_=True):
         "spend_capped": False, "open": open_, "seats": list(seats)}}
 
 
-def test_reactive_a_credits_banner_switches_even_with_a_fresh_low_5h_reading():
-    d = FableFake()
+def _win_ep(account="default", window="5-hour", seats=("gm",), open_=True, reset_at=None):
+    return {f"claude|{account}|{window}|{reset_at or '2026-11-26'}": {
+        "runtime": "claude", "window": window, "reset_at": reset_at, "account": account, "model": None,
+        "spend_capped": False, "open": open_, "seats": list(seats)}}
+
+
+WIN_PANE = "  ⎿  You've hit your usage limit · resets 3pm (America/Cancun)\n"
+
+
+class WinFake(FableFake):
+    def pane_text(self, s):
+        return WIN_PANE if s in self._banners else "❯ \n"
+
+
+def test_a_credits_banner_never_switches_the_login():
+    d = FableFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})   # no weekly preference
     res, log, st = _tick(_credits_ep(), d, active="default", state={"last_switch": NOW - 3601})
+    assert res is None and d.switched == [] and d.nudged == []
+    assert [r for r in log if r["kind"] == "switch_check"][0]["decision"].startswith("no switch")
+
+
+def test_a_credits_cap_is_not_a_trigger_window():
+    assert "credits" not in LS.TRIGGER_WINDOWS
+
+
+def test_reactive_a_window_banner_switches_even_with_a_fresh_low_5h_reading():
+    d = WinFake()
+    res, log, st = _tick(_win_ep(window="unknown"), d, active="default", state={"last_switch": NOW - 3601})
     assert res == "switched" and d.switched == ["strategysimple"]
     done = [r for r in log if r["kind"] == "switch_done"][0]
-    assert done["window"] == "credits" and done["model"] == "Fable"
+    assert done["window"] == "unknown"
     mail = [m for m in d.mails if m[0] == "gm"][-1]
-    assert "Fable" in mail[3] and "default" in mail[3] and "strategysimple" in mail[3] and "Undo" in mail[3]
+    assert "default" in mail[3] and "strategysimple" in mail[3] and "Undo" in mail[3]
 
 
 def test_reactive_banner_on_another_login_or_closed_does_not_switch():
-    d = FableFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})   # no weekly preference
-    assert _tick(_credits_ep(account="strategysimple"), d, active="default")[0] != "switched"
-    assert _tick(_credits_ep(open_=False), d, active="default")[0] != "switched"
+    d = WinFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick(_win_ep(account="strategysimple", window="unknown"), d, active="default")[0] != "switched"
+    assert _tick(_win_ep(window="unknown", open_=False), d, active="default")[0] != "switched"
     assert d.switched == []
 
 
-def test_reactive_credits_target_with_its_own_credits_episode_is_refused():
-    d = FableFake()
-    eps = {**_credits_ep(), **_credits_ep(account="strategysimple")}
+def test_reactive_target_with_its_own_window_episode_is_refused():
+    d = WinFake()
+    eps = {**_win_ep(window="unknown"), **_win_ep(account="strategysimple", window="unknown")}
     res, log, _ = _tick(eps, d, active="default")
     assert res == "refused" and d.switched == []
     assert any(m[1] == "high" and "REFUSED" in m[2] for m in d.mails)
 
 
-def test_reactive_credits_target_with_no_usage_reading_is_tried():
-    d = FableFake(usage={"default": _u(1.0, 73.0)})
-    assert _tick(_credits_ep(), d, active="default")[0] == "switched"
-
-
-def test_reactive_credits_target_whose_5h_is_used_up_is_no_headroom():
-    d = FableFake(usage={"default": _u(1.0, 73.0), "strategysimple": _u(100.0, 61.0)})
-    assert _tick(_credits_ep(), d, active="default")[0] == "refused"
-
-
 def test_reactive_safety_conditions_still_hold():
-    d = FableFake()
-    assert _tick(_credits_ep(), d, {"last_switch": NOW - 300}, active="default")[0] == "held"
-    d = FableFake(typing={"gm"})
+    d = WinFake()
+    assert _tick(_win_ep(window="unknown"), d, {"last_switch": NOW - 300}, active="default")[0] == "held"
+    d = WinFake(typing={"gm"})
     d.human_typing = lambda s, attached=None: f"{s}: attached and typing" if s == "gm" else None
-    assert _tick(_credits_ep(), d, active="default")[0] == "held" and d.switched == []
+    assert _tick(_win_ep(window="unknown"), d, active="default")[0] == "held" and d.switched == []
 
 
-def test_nudges_only_unattached_bannered_seats_with_the_model_named():
-    d = FableFake(attached={"pm-nod"})
-    _tick(_credits_ep(seats=("gm", "pm-nod")), d, active="default")
+def test_nudges_only_unattached_bannered_seats():
+    d = WinFake(attached={"pm-nod"})
+    _tick(_win_ep(window="unknown", seats=("gm", "pm-nod")), d, active="default")
     assert [s for s, _ in d.nudged] == ["gm"]
-    assert "Fable" in d.nudged[0][1] and "strategysimple" in d.nudged[0][1]
+    assert "strategysimple" in d.nudged[0][1]
 
 
 def test_after_the_switch_gm_hears_which_seats_resumed():
-    d = FableFake(banners=("gm",), limited={"gm"})
-    res, log, st = _tick(_credits_ep(), d, active="default")
+    d = WinFake(banners=("gm",), limited={"gm"})
+    res, log, st = _tick(_win_ep(window="unknown"), d, active="default")
     assert res == "switched" and st["verify"]["seats"] == ["gm"]
     n = len(d.mails)
     _tick({}, d, st, active="strategysimple", now=NOW + 120)              # gm still limited: nothing yet
@@ -617,8 +633,8 @@ def test_after_the_switch_gm_hears_which_seats_resumed():
 
 
 def test_after_the_switch_no_resume_in_15_minutes_is_a_high_mail():
-    d = FableFake(banners=("gm",), limited={"gm"})
-    _, _, st = _tick(_credits_ep(), d, active="default")
+    d = WinFake(banners=("gm",), limited={"gm"})
+    _, _, st = _tick(_win_ep(window="unknown"), d, active="default")
     n = len(d.mails)
     _tick({}, d, st, active="strategysimple", now=NOW + 16 * 60)
     assert any(m[1] == "high" and "did not resume" in m[2] for m in d.mails[n:])
@@ -636,26 +652,32 @@ def test_live_deps_reads_the_limited_seats_from_the_seat_rows(tmp_path):
 
 # --- codex gating review of #664+#666 (codex exec, 2026-11-26): findings 1, 2, 4 ---------------------------
 
-def test_f1_a_credits_episode_with_no_new_row_for_2h_no_longer_triggers():
-    eps = _credits_ep()
+def test_f1_a_reset_less_episode_with_no_new_row_for_2h_no_longer_triggers():
+    eps = _win_ep(window="unknown")
     next(iter(eps.values()))["last_seen"] = "2026-11-25T15:00:00+00:00"       # NOW is 18:00Z: 3 h quiet
-    d = FableFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})
+    d = WinFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})
     assert _tick(eps, d, active="default")[0] is None and d.switched == []
     next(iter(eps.values()))["last_seen"] = "2026-11-25T17:30:00+00:00"
     assert _tick(eps, d, active="default")[0] == "switched"
 
 
-def test_f1_a_targets_credits_episode_older_than_12h_does_not_disqualify_it():
-    target = _credits_ep(account="strategysimple")
-    next(iter(target.values()))["last_seen"] = "2026-11-25T04:00:00+00:00"    # 14 h old: refilled since, maybe
-    d = FableFake()
-    assert _tick({**_credits_ep(), **target}, d, active="default")[0] == "switched"
+def test_f1_a_targets_reset_less_episode_older_than_12h_does_not_disqualify_it():
+    target = _win_ep(account="strategysimple", window="unknown")
+    next(iter(target.values()))["last_seen"] = "2026-11-25T04:00:00+00:00"    # 14 h old
+    d = WinFake()
+    assert _tick({**_win_ep(window="unknown"), **target}, d, active="default")[0] == "switched"
 
 
-def test_f2_weekly_preference_never_moves_to_a_login_with_a_live_credits_episode():
+def test_f2_weekly_preference_never_moves_to_a_login_with_a_live_window_episode():
     d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
-    eps = _credits_ep(account="strategysimple")                                # strategysimple's Fable is out
+    eps = _win_ep(account="strategysimple", window="unknown")
     assert _tick(eps, d, active="default")[0] is None and d.switched == []
+
+
+def test_f2_weekly_preference_ignores_another_logins_credits_cap():
+    # a Fable credits cap is that model's: its seats drop to Opus 5.5; the login is still a fine target
+    d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick(_credits_ep(account="strategysimple"), d, active="default")[0] == "preferred"
 
 
 def test_f2_our_own_switch_is_not_read_as_a_hand_switch_back():
@@ -691,30 +713,16 @@ def test_r2_a_hand_switch_back_60s_after_ours_is_still_a_hand_switch():
     assert any(r.get("reason") == "switched back by hand" for r in log)
 
 
-def test_r2_a_window_trigger_never_moves_to_a_login_whose_credits_are_out():
+def test_r2_a_window_trigger_may_move_to_a_login_whose_fable_credits_are_out():
     d = FableFake(usage={"default": _u(96.0, 40.0), "strategysimple": _u(5.0, 30.0)})
     res, log, _ = _tick(_credits_ep(account="strategysimple"), d, active="default")
-    assert res == "refused" and d.switched == []
-    assert any("strategysimple" in r.get("reason", "") and "limit" in r.get("reason", "") for r in log
-               if r["kind"] == "switch_refused")
+    assert res == "switched" and d.switched == ["strategysimple"]
 
 
 def test_r2_every_switch_records_where_it_went():
-    d = FableFake()
-    _, _, st = _tick(_credits_ep(), d, active="default")
+    d = WinFake()
+    _, _, st = _tick(_win_ep(window="unknown"), d, active="default")
     assert st["last_to"] == "strategysimple"
     d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
     _, _, st = _tick({}, d, active="default")
     assert st["last_to"] == "strategysimple"
-
-
-def test_r3_a_credits_trigger_may_move_to_a_login_whose_OTHER_model_is_out():
-    d = FableFake()
-    eps = {**_credits_ep(model="Fable"), **_credits_ep(account="strategysimple", model="Opus")}
-    assert _tick(eps, d, active="default")[0] == "switched" and d.switched == ["strategysimple"]
-
-
-def test_r3_a_credits_trigger_still_refuses_a_login_whose_SAME_model_is_out():
-    d = FableFake()
-    eps = {**_credits_ep(model="Fable"), **_credits_ep(account="strategysimple", model="Fable")}
-    assert _tick(eps, d, active="default")[0] == "refused"

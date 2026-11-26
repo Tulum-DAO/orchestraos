@@ -815,3 +815,67 @@ def test_a_single_version_id_matches_its_own_display_and_not_a_point_release():
     assert AM.display_matches("Opus 5.5 (1M context)", "claude-opus-5-5[1m]", None)
     assert not AM.display_matches("Opus 5", "claude-opus-5-5", None)
     assert not AM.display_matches("Sonnet 5", "claude-opus-5", None)
+
+
+# --- the one automation allowed: limit-watch drops a Fable-limited seat to Opus 5.5 (operator 2026-11-26) ----
+
+FABLE, OPUS1M = "claude-fable-5-1[1m]", "claude-opus-5-5[1m]"
+
+
+@pytest.fixture
+def fable(gw, monkeypatch, tmp_path):
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", FABLE))
+    monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [
+        {"id": FABLE, "title": "Fable 5.1 (1M)"}, {"id": OPUS1M, "title": "Opus 5.5 (1M)"},
+        {"id": "claude-sonnet-5-5", "title": "Sonnet 5.5"}])
+    (tmp_path / "state" / "usage").mkdir(parents=True)
+
+    def limited(row):
+        (tmp_path / "state" / "usage" / "limits.json").write_text(json.dumps({"seats": {"dev": row} if row else {}}))
+    limited({"runtime": "claude", "window": "credits", "model": "Fable"})
+    return limited
+
+
+def _drop(model=OPUS1M, actor="automation:limit-watch"):
+    return _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": model}, actor=actor)))
+
+
+def test_limit_watch_drops_a_fable_limited_seat_to_opus_5_5(gw, fable):
+    r = _drop()
+    assert r.status == 200 and _body(r)["switching"] == "switched"
+    assert gw["live"] == [OPUS1M] and gw["stored"] == [("dev", {"model": OPUS1M})]
+
+
+def test_limit_watch_may_switch_to_nothing_but_opus_5_5(gw, fable):
+    r = _drop(model="claude-sonnet-5-5")
+    assert r.status == 403 and gw["live"] == []
+
+
+def test_limit_watch_leaves_a_seat_not_on_fable_alone(gw, fable, monkeypatch):
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", "claude-opus-5[1m]"))
+    r = _drop()
+    assert r.status == 409 and _body(r)["reason"] == "not_fable" and gw["live"] == []
+
+
+def test_limit_watch_needs_a_fable_limit_on_record_for_that_seat(gw, fable):
+    for row in (None, {"window": "5-hour"}, {"window": "credits", "model": "Opus"}):
+        fable(row)
+        r = _drop()
+        assert r.status == 409 and _body(r)["reason"] == "no_limit"
+    assert gw["live"] == []
+
+
+def test_any_other_automation_actor_is_still_refused(gw, fable):
+    for actor in ("automation:bot", "automation", None, "automation:limit-watch-x"):
+        r = _drop(actor=actor)
+        assert r.status == 403
+    assert gw["live"] == []
+
+
+def test_limit_watch_passes_the_protected_sessions_choke_point(gw, fable, monkeypatch):
+    monkeypatch.setattr(G, "_protected_cfg", lambda: {"enabled": True})
+    monkeypatch.setattr(G, "_session_is_protected", lambda s, cfg: True)
+    assert _drop().status == 200
+    r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": OPUS1M}, actor="automation:bot")))
+    assert r.status == 403

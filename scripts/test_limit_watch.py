@@ -262,9 +262,9 @@ def test_rr2_shared_holder_takes_the_first_shared_row_like_account_switch(tree):
 
 # --- 11-26 replay: gm sat on the Fable banner 09:55Z-19:16Z while default's 5-hour read 1% --------------
 
-def test_replay_11_26_the_fable_row_switches_at_its_first_run(tree, monkeypatch):
-    """The sabotage case of gm order msg_f495a92c: before this fix the run logged
-    "no switch: default 5-hour 1% < 95%" and nobody switched for nine hours."""
+def test_replay_11_26_the_fable_row_drops_the_seat_to_opus_and_keeps_the_login(tree, monkeypatch):
+    """The day itself (gm order msg_f495a92c): the run logged "no switch: default 5-hour 1% < 95%" and
+    the Fable seats sat dead for nine hours. The operator's rule (apr_bafb66c3): the seat drops to Opus 5.5."""
     t = 1795658143                                                   # 2026-11-26T09:55:43Z
     monkeypatch.setenv("LIMIT_SWITCH_PREFER_WEEKLY", "0")            # the banner leg alone must switch
     _add(os.path.join(tree.orch, "logs", "account-switch.jsonl"),     # the real day: default since 22:58Z 11-25
@@ -312,12 +312,40 @@ def test_replay_11_26_the_fable_row_switches_at_its_first_run(tree, monkeypatch)
         def mail(self, *a):
             pass
 
-    LW.run_once(tree, now=t + 30, start_at_end=False, switch_deps=D())
+    class Drop:
+        switched, nudged, mails = [], [], []
+
+        def sessions(self):
+            return {"pm-nod": "pm-nod"}
+
+        def switch_model(self, session, model):
+            Drop.switched.append((session, model))
+            return 200, {"ok": True, "switching": "switched"}
+
+        def attached_sessions(self):
+            return set()
+
+        def pane_text(self, s):
+            return "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+
+        def nudge(self, s, text):
+            Drop.nudged.append(s)
+            return 0
+
+        def mail(self, *a):
+            Drop.mails.append(a)
+
+    LW.run_once(tree, now=t + 30, start_at_end=False, switch_deps=D(), drop_deps=Drop())
     log = _log(tree)
     assert any(r["kind"] == "episode_open" and r["window"] == "credits" for r in log)
-    assert D.switched == ["strategysimple"]
-    assert any(r["kind"] == "switch_done" and r["from"] == "default" and r.get("model") == "Fable" for r in log)
-    assert any(r["kind"] == "switch_check" and r["decision"] == "trigger (banner): credits (Fable)" for r in log)
+    assert D.switched == []                                          # the login stays (operator, apr_bafb66c3)
+    assert Drop.switched == [("pm-nod", "claude-opus-5-5[1m]")] and Drop.nudged == ["pm-nod"]
+    assert any(r["kind"] == "model_dropped" and r["seat"] == "pm-nod" for r in log)
+    assert any(m[0] == "gm" and "pm-nod" in m[3] for m in Drop.mails)
+    st = json.load(open(os.path.join(tree.state_dir, "model-drop.json")))
+    LW.run_once(tree, now=t + 150, start_at_end=False, switch_deps=D(), drop_deps=Drop())
+    assert Drop.switched == [("pm-nod", "claude-opus-5-5[1m]")]     # once per episode
+    assert st["drops"]
 
 
 def test_f7_a_second_credits_hit_the_same_day_reopens_the_episode(tree):

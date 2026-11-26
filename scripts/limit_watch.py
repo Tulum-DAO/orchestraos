@@ -285,7 +285,7 @@ def _mail_worthy(ev, episodes):
 
 def switch_decision(paths, ev):
     """What the fleet-wide login switch WOULD do for this Claude episode (dry run, never acts)."""
-    if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend", "credits")):
+    if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend")):   # credits: model_drop
         return None
     profiles = [p.get("id") for p in _read_json(paths.profiles, {}).get("profiles", []) if p.get("enrolled")]
     others = [p for p in profiles if p and p != ev.account]
@@ -305,7 +305,7 @@ def switch_decision(paths, ev):
 
 
 def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None, switch_deps=None,
-             codex_watch=None):
+             codex_watch=None, drop_deps=None):
     now = now or time.time()
     cursors = _read_json(paths.cursors, {})
     episodes = _read_json(paths.episodes, {})
@@ -347,7 +347,7 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
                                 "session": ev.session_id, "line": line})
             if ev.runtime == "codex" and mail_fn:
                 _tell_order_owners(paths, ev, ep, cfg, mail_fn, inbox_fn)
-        rows[ev.seat] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
+        rows[ev.seat] = {"runtime": ev.runtime, "window": ev.window, "model": ev.model, "reset_at": ev.reset_at,
                          "reset_label": LE.reset_label(ev.reset_at), "account": ev.account,
                          "since": ep["first_seen"], "line": line, "session": ev.session_id, "key": key,
                          "last_seen": ev.ts or stamp}
@@ -393,6 +393,17 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
             _append(paths.log, {"ts": stamp, "kind": "switch_error", "error": f"{type(e).__name__}: {e}"[:300]})
         LS.prune_told(st, episodes, now)
         _write_json(st_path, st)
+
+    if drop_deps is not None:            # --model-drop: a seat out of Fable credits moves to Opus 5.5 (model_drop.py)
+        import model_drop as MD
+        md_path = os.path.join(paths.state_dir, "model-drop.json")
+        md = _read_json(md_path, {})
+        try:
+            MD.tick(rows, now, lambda row: _append(paths.log, row), drop_deps, md)
+        except Exception as e:           # noqa: BLE001 — never takes the limit watcher down with it
+            _append(paths.log, {"ts": stamp, "kind": "model_drop_error", "error": f"{type(e).__name__}: {e}"[:300]})
+        MD.prune(md, rows, now)
+        _write_json(md_path, md)
 
     if codex_watch is not None:          # --codex-watch: who gates reviews (codex_watch.py); mails always on
         import codex_watch as CW
@@ -482,6 +493,11 @@ def _prune(episodes, now, keep_days=14):
             del episodes[k]
 
 
+def _drop_deps(paths):
+    import model_drop as MD
+    return MD.LiveDeps(paths, send_mail)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--mail", action="store_true", help="send the mails (default: log only)")
@@ -492,6 +508,9 @@ def main(argv=None):
     ap.add_argument("--codex-watch", action="store_true",
                     help="track whether Codex serves (codex_watch.py): writes state/codex-availability.json "
                          "and mails the review seats + gm on a flip")
+    ap.add_argument("--model-drop", action="store_true",
+                    help="ARM the Fable drop: a seat showing the Fable limit switches to Opus 5.5 through the "
+                         "gateway (model_drop.py; its mails always go to gm)")
     a = ap.parse_args(argv)
     paths = Paths()
     deps = None
@@ -499,7 +518,8 @@ def main(argv=None):
         import limit_switch as LS
         deps = LS.LiveDeps(paths, send_mail)
     res = run_once(paths, mail_fn=send_mail if a.mail else None, start_at_end=not a.backfill,
-                   switch_deps=deps, codex_watch=send_mail if a.codex_watch else None)
+                   switch_deps=deps, codex_watch=send_mail if a.codex_watch else None,
+                   drop_deps=_drop_deps(paths) if a.model_drop else None)
     print(json.dumps(res))
     return 0
 

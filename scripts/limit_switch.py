@@ -6,12 +6,11 @@ other enrolled login, the same move the dashboard's account button makes. Condit
 test (test_limit_switch.py):
   1. trigger, two legs: PROACTIVE, the active login's fresh usage reading is at 95% of its 5-hour
      window (or its weekly window is used up), BEFORE seats hit the banner; REACTIVE, any open limit
-     banner episode on the active login (5-hour, weekly, spend, a model's credits cap such as
-     "You've reached your Fable limit", or a limit with no window named), whatever the usage reading
-     says: a credits cap never shows in the 5-hour/weekly readings (2026-11-26, gm dead nine hours on
-     the Fable banner while default read 1%). AND the other login has headroom in that window class:
-     under 80% on both windows for a window limit; for a credits cap, no open credits episode of its
-     own and no window at 100% (no reading = try it, and the resume check below tells);
+     banner episode on the active login (5-hour, weekly, spend, or a limit with no window named),
+     whatever the usage reading says. AND the other login has headroom: under 80% on both windows.
+     A model's credits cap ("You've reached your Fable limit") is NOT a login limit and never
+     switches the login (operator, 2026-11-26, apr_bafb66c3): the seat that shows it drops to
+     Opus 5.5 instead (model_drop.py), and a credits episode never keeps a login off the target list;
   2. never while a human is attached to a Claude seat mid-typing (tmux client attached AND the
      composer holds text, or cannot be read): the switch waits for the next run;
   3. at most one switch per 10 minutes, and never back: the login switched away from is parked
@@ -41,9 +40,9 @@ from datetime import datetime, timezone
 
 import limit_event as LE
 
-TRIGGER_WINDOWS = ("monthly-spend", "weekly", "credits", "5-hour", "unknown")   # most severe first
+TRIGGER_WINDOWS = ("monthly-spend", "weekly", "5-hour", "unknown")   # most severe first; never "credits"
 VERIFY_S = 15 * 60
-NO_RESET_TRIGGER_S = 2 * 3600     # a reset-less episode (credits) triggers only with a row in the last 2 h
+NO_RESET_TRIGGER_S = 2 * 3600     # a reset-less episode (window unknown) triggers only with a row in the last 2 h
 NO_RESET_BLOCK_S = 12 * 3600      # ... and keeps a login off the target list for 12 h after its last row
 OWN_SWITCH_SLACK_S = 120          # a switch-log row this close to our own switch is ours, not a hand switch            # a switch whose nudged seats have not resumed by then is mailed HIGH
 SWITCH_AT_5H_PCT = 95.0       # the operator's rule: switch at 95% of the 5-hour window, before the banner
@@ -246,7 +245,7 @@ def _headroom(u, now):
 
 def _episode_live(e, now, quiet_s):
     """An open episode still counts: before its reset, or (no reset given) with a row in the last quiet_s.
-    A credits cap has no reset, so without this an episode whose seat moved on would count forever."""
+    A reset-less episode (window unknown) would otherwise count forever after its seat moved on."""
     if not (isinstance(e, dict) and e.get("open")):
         return False
     if e.get("reset_at"):
@@ -255,36 +254,16 @@ def _episode_live(e, now, quiet_s):
     return seen is None or now - seen.timestamp() <= quiet_s
 
 
-def _login_limited(episodes, acct, now, credits_model=None):
-    """An open, live Claude episode on this login (any window), within the 12-hour block for reset-less ones.
-    credits_model: the trigger is that model's credits cap, so ANOTHER model's credits cap on this login does
-    not count (moving Fable seats to a login whose Opus credits are out still frees them)."""
+def _login_limited(episodes, acct, now):
+    """An open, live Claude window episode on this login, within the 12-hour block for reset-less ones.
+    A model's credits cap is not one: it is that model's, on whichever login (model_drop.py handles it)."""
     for k, e in (episodes or {}).items():
-        if str(k).startswith("_") or not isinstance(e, dict):
+        if str(k).startswith("_") or not isinstance(e, dict) or e.get("window") == "credits":
             continue
         if e.get("runtime") != "claude" or e.get("account") != acct or not _episode_live(e, now, NO_RESET_BLOCK_S):
             continue
-        if (credits_model and e.get("window") == "credits" and e.get("model")
-                and e.get("model") != credits_model):
-            continue
         return True
     return False
-
-
-def _credits_headroom(u, now, episodes, acct, model):
-    """(ok, why) for moving off a credits cap: the target's own credits must not be known to be out."""
-    for e in (episodes or {}).values():
-        if (isinstance(e, dict) and e.get("runtime") == "claude" and e.get("account") == acct
-                and e.get("window") == "credits" and (model is None or e.get("model") in (None, model))
-                and _episode_live(e, now, NO_RESET_BLOCK_S)):
-            return False, f"its own {model or 'model'} credits are out too"
-    if u and now - float(u.get("as_of") or 0) <= USAGE_FRESH_S:
-        w = u.get("windows") or {}
-        five, week = (w.get("5h") or {}).get("used_pct"), (w.get("weekly") or {}).get("used_pct")
-        if (five or 0) >= 100 or (week or 0) >= 100:
-            return False, f"5-hour {five or 0:.0f}%, weekly {week or 0:.0f}% (a window is used up)"
-        return True, f"5-hour {five or 0:.0f}%, weekly {week or 0:.0f}%, credits not known to be out"
-    return True, "no usage reading; credits not known to be out (trying it)"
 
 
 def _root(name):
@@ -376,7 +355,7 @@ def _prefer_weekly(active, now, log, deps, state, save, stamp, episodes=None):
     best = None
     for acct in deps.enrolled():
         if acct == active or acct in parked or _login_limited(episodes, acct, now):
-            continue                     # never move to a login with a live limit (a credits cap shows nowhere else)
+            continue                     # never move to a login with a live limit
         fw = _fresh_windows(deps.usage(acct), now)
         if fw is None or fw[0] >= HEADROOM_PCT or fw[1] >= HEADROOM_PCT:
             continue
@@ -448,8 +427,8 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
 
     # PROACTIVE leg (the operator, 2026-11-25): the active login's own usage reading. At 95% of its
     # 5-hour window (or a weekly window used up) switch BEFORE any seat hits the banner.
-    # REACTIVE leg (gm order 2026-11-26): any open banner episode on the active login, whatever the
-    # reading says: a model's credits cap never shows in the 5-hour/weekly readings.
+    # REACTIVE leg (gm order 2026-11-26): any open window-limit banner episode on the active login,
+    # whatever the reading says. Never a credits cap (TRIGGER_WINDOWS): that seat drops to Opus 5.5.
     if hasattr(deps, "refresh_usage"):
         deps.refresh_usage()
     au = deps.usage(active)
@@ -523,15 +502,10 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         if acct in parked:
             reasons.append(f"{acct} parked until {LE.reset_label(parked[acct])} (no switching back)")
             continue
-        if _login_limited(episodes, acct, now,
-                          credits_model=ep.get("model") if ep["window"] == "credits" else None):
-            # its own live limit episode (a credits cap shows in no usage reading): never a target
+        if _login_limited(episodes, acct, now):
             reasons.append(f"{acct}: has a live limit episode of its own")
             continue
-        if ep["window"] == "credits":
-            ok, why = _credits_headroom(deps.usage(acct), now, episodes, acct, ep.get("model"))
-        else:
-            ok, why = _headroom(deps.usage(acct), now)
+        ok, why = _headroom(deps.usage(acct), now)
         reasons.append(f"{acct}: {why}")
         if ok:
             target = acct
