@@ -19,6 +19,12 @@ run takes the readings it can get for free, plus a probe when one is due, and de
   * on a flip: state/codex-availability.json is rewritten (status, window, reset, since, evidence,
     gating_reviewer), every review-consuming seat gets ONE line, and gm one mail per episode edge.
     LANDING_GATE.md's reviewer order is read from that file.
+  * a second login (gm order, 2026-11-26): when the default login (~/.codex) is OUT, the probe tries each
+    parked codex login under state/account-vault/codex-*/ (or CODEX_WATCH_ALT_HOMES, colon-separated)
+    with CODEX_HOME set, and the first one that serves makes the reading OK "via <its email>". The
+    availability file then names it in codex_home, so a review gate runs `codex exec` with that
+    CODEX_HOME and the running codex panes are untouched. While a parked login serves, the default
+    login's own limit readings (rollout, usage) change nothing; only a live probe can flip it.
 """
 from __future__ import annotations
 
@@ -27,6 +33,7 @@ import os
 import re
 import shutil
 import subprocess
+import base64
 import tempfile
 import time
 from dataclasses import dataclass
@@ -55,6 +62,7 @@ class Reading:
     reset_at: int | None
     source: str                  # rollout | usage | probe
     evidence: str
+    codex_home: str | None = None  # the parked login that served this probe; None = the default login
 
 
 # --- 1. readings ---------------------------------------------------------------------------------
@@ -122,17 +130,65 @@ def should_probe(state, now, fresh_usage) -> bool:
     return since >= OK_PROBE_S
 
 
-def run_probe(now=None) -> Reading:
-    codex = os.environ.get("CODEX_WATCH_BIN") or shutil.which("codex") or os.path.expanduser("~/.local/bin/codex")
+def alt_homes(vault=None) -> list:
+    """The parked codex logins to try when the default one is out: CODEX_WATCH_ALT_HOMES, else every
+    state/account-vault/codex-*/ that holds an auth.json."""
+    env = os.environ.get("CODEX_WATCH_ALT_HOMES")
+    if env:
+        return [h for h in env.split(":") if h]
+    vault = vault or os.path.join(os.path.expanduser(os.environ.get("ORCHESTRA_DIR") or "~/.orchestra"),
+                                  "state", "account-vault")
+    try:
+        names = sorted(os.listdir(vault))
+    except OSError:
+        return []
+    return [os.path.join(vault, n) for n in names
+            if n.startswith("codex-") and os.path.isfile(os.path.join(vault, n, "auth.json"))]
+
+
+def login_label(home) -> str:
+    """The login's email from its id_token claims (read, never printed or logged); else the folder name."""
+    try:
+        with open(os.path.join(home, "auth.json")) as f:
+            tok = json.load(f)["tokens"]["id_token"]
+        part = tok.split(".")[1]
+        email = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))).get("email")
+        if isinstance(email, str) and "@" in email and len(email) < 200:
+            return email
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        pass
+    return os.path.basename(os.path.normpath(home))
+
+
+def _probe_once(codex, home, now, runner) -> Reading:
+    env = probe_env()
+    if home:
+        env["CODEX_HOME"] = home
     with tempfile.TemporaryDirectory(prefix="codex-watch-") as cwd:
         try:
-            p = subprocess.run(probe_argv(codex), cwd=cwd, env=probe_env(), stdin=subprocess.DEVNULL,
-                               capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+            p = runner(probe_argv(codex), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
             return classify_probe(p.returncode, p.stdout, p.stderr, now=now)
         except subprocess.TimeoutExpired:
             return Reading("unknown", None, None, "probe", f"timed out after {PROBE_TIMEOUT_S}s")
         except OSError as e:
             return Reading("unknown", None, None, "probe", f"{type(e).__name__}: {e}"[:160])
+
+
+def run_probe(now=None, homes=None, runner=None) -> Reading:
+    """Probe the default login; when it is out, the parked logins in turn. The first that serves wins."""
+    codex = os.environ.get("CODEX_WATCH_BIN") or shutil.which("codex") or os.path.expanduser("~/.local/bin/codex")
+    runner = runner or subprocess.run
+    first = _probe_once(codex, None, now, runner)
+    if first.status != "out":
+        return first
+    for home in (alt_homes() if homes is None else homes):
+        r = _probe_once(codex, home, now, runner)
+        if r.status == "ok":
+            return Reading("ok", None, None, "probe",
+                           f"ok via {login_label(home)}; default login {_window_words(first)}: {first.evidence}"[:240],
+                           codex_home=home)
+    return first
 
 
 # --- 2. decide -----------------------------------------------------------------------------------
@@ -149,6 +205,18 @@ def _window_words(r: Reading) -> str:
     words = {"credits": "out of credits", "5-hour": "5-hour limit", "weekly": "weekly limit",
              "unknown": "usage limit (window not shown)"}.get(r.window or "unknown", r.window)
     return f"{words}, {LE.reset_label(r.reset_at)}" if r.reset_at else words
+
+
+def _write_availability(path, state, r, stamp):
+    _write_json(path, {
+        "status": state["status"], "window": state.get("window"), "reset_at": state.get("reset_at"),
+        "reset_label": LE.reset_label(state["reset_at"]) if state.get("reset_at") else None,
+        "since": state.get("since") or stamp, "evidence": state.get("evidence"), "source": r.source,
+        "gating_reviewer": "claude" if state["status"] == "out" else "codex",
+        "codex_home": state.get("codex_home"),
+        "_doc": "codex_watch (limit_watch --codex-watch): who gates reviews. out -> Claude reviewer, "
+                "naming the window; ok -> codex-gm / codex exec first, with CODEX_HOME=codex_home when "
+                "it is set (a parked login serves while the default one is out)."})
 
 
 def flush_mail(state, mail, save=None):
@@ -174,6 +242,8 @@ def decide(state, readings, now, mail, *, availability_path, log, recipients=Non
     Returns "flipped" | "baseline" | None."""
     stamp = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
     known = [r for r in readings if r is not None and r.status in ("ok", "out")]
+    if state.get("codex_home"):
+        known = [r for r in known if r.source == "probe"]   # rollout/usage readings are the default login's
     if not known:
         return None
     # the probe is a live call made this run: it outranks the rest; otherwise an OUT reading outranks OK
@@ -182,6 +252,10 @@ def decide(state, readings, now, mail, *, availability_path, log, recipients=Non
     cur = state.get("status")
     if r.status == cur:
         state["streak"] = {"status": cur, "count": 0}
+        if cur == "ok" and r.source == "probe" and r.codex_home != state.get("codex_home"):
+            state["codex_home"], state["evidence"] = r.codex_home, f"{r.source}: {r.evidence}"
+            _write_availability(availability_path, state, r, stamp)   # same status, other login: no mail
+            log({"ts": stamp, "kind": "codex_home", "codex_home": r.codex_home, "evidence": r.evidence})
         if cur == "out" and r.window and r.window != state.get("window"):
             state["window"], state["reset_at"] = r.window, r.reset_at  # the window got named better
         return None
@@ -192,15 +266,9 @@ def decide(state, readings, now, mail, *, availability_path, log, recipients=Non
         return None
     state.update(status=r.status, window=r.window if r.status == "out" else None,
                  reset_at=r.reset_at if r.status == "out" else None, since=stamp,
-                 evidence=f"{r.source}: {r.evidence}", streak={"status": r.status, "count": 0})
-    reviewer = "claude" if r.status == "out" else "codex"
-    _write_json(availability_path, {
-        "status": r.status, "window": state["window"], "reset_at": state["reset_at"],
-        "reset_label": LE.reset_label(state["reset_at"]) if state["reset_at"] else None,
-        "since": stamp, "evidence": state["evidence"], "source": r.source,
-        "gating_reviewer": reviewer,
-        "_doc": "codex_watch (limit_watch --codex-watch): who gates reviews. out -> Claude reviewer, "
-                "naming the window; ok -> codex-gm / codex exec first."})
+                 evidence=f"{r.source}: {r.evidence}", streak={"status": r.status, "count": 0},
+                 codex_home=r.codex_home if r.status == "ok" else None)
+    _write_availability(availability_path, state, r, stamp)
     log({"ts": stamp, "kind": "codex_flip", "from": cur, "to": r.status, "window": state["window"],
          "reset_at": state["reset_at"], "evidence": state["evidence"]})
     if cur is None and r.status == "ok":
