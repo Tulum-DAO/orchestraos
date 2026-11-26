@@ -61,7 +61,7 @@ except Exception as _sh_err:  # noqa: BLE001 — a broken gate must never fail a
 
     class _source_health:  # type: ignore[no-redef]
         """The pre-gate behaviour: a source that exists is read; nothing is ever marked stale."""
-        PROFILE_MAX_AGE = TELEGRAM_MAX_AGE = LEARNING_MAX_AGE = None
+        PROFILE_MAX_AGE = TELEGRAM_MAX_AGE = UNIFIED_MAX_AGE = LEARNING_MAX_AGE = None
 
         class _Status:
             def __init__(self, path):
@@ -5550,7 +5550,7 @@ After spawning, the session name is auto-texted to Telegram.""")
     channel_map = {"voice": "jarvis-voice", "telegram": "telegram", "dashboard": "dashboard"}
     my_channel = channel_map.get(calling_channel, "jarvis-voice")
     unified_log_file = ORCHESTRA_DIR / "state" / "unified-conversation.jsonl"
-    if unified_log_file.exists():
+    if _source_health.usable(unified_log_file, _source_health.UNIFIED_MAX_AGE):   # "RECENT" means within the window
         try:
             recent_lines = unified_log_file.read_text().strip().split("\n")[-20:]
             if recent_lines and recent_lines[0]:

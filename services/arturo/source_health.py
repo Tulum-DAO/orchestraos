@@ -29,6 +29,7 @@ FRESH, STALE, MISSING, UNREADABLE = "fresh", "stale", "missing", "unreadable"
 # block labelled "RECENT" that means it is not recent; for a profile or rule store it means the
 # writer has gone quiet and the model should not treat the rows as current.
 TELEGRAM_MAX_AGE = 6 * 3600          # "RECENT TELEGRAM MESSAGES": texts older than a shift are not recent
+UNIFIED_MAX_AGE = 6 * 3600           # "RECENT CROSS-CHANNEL": the shared unified log's writer went quiet 2026-11-22
 LEARNING_MAX_AGE = 7 * 24 * 3600     # "LEARNED RULES": a week without a new rule = stale, still shown dated
 PROFILE_MAX_AGE = 30 * 24 * 3600     # "LEARNED FROM CONVERSATIONS": implicit facts a month old are not memory
 FACTS_MAX_AGE = None                 # facts/facts_db.json is a lookup store: present or not, never "stale"
@@ -93,6 +94,7 @@ def as_of_suffix(status: SourceStatus) -> str:
 SOURCES = (
     ("profile", ("state", "users", "operator", "profile.json"), PROFILE_MAX_AGE, "skipped"),
     ("telegram", ("state", "telegram-outbound.jsonl"), TELEGRAM_MAX_AGE, "skipped"),
+    ("unified", ("state", "unified-conversation.jsonl"), UNIFIED_MAX_AGE, "skipped"),
     ("learning", ("state", "learning.db"), LEARNING_MAX_AGE, "injected with an as-of date"),
     ("facts", ("facts", "facts_db.json"), FACTS_MAX_AGE, "n/a"),
 )
