@@ -645,7 +645,9 @@ class _CountingConnection:
         self._con, self._counter = con, counter
 
     def execute(self, *a):
-        return _CountingCursor(self._con.execute(*a), self._counter)
+        cur = self._con.execute(*a)
+        # the one-row look in sqlite_master for the state indexes is not a window's read
+        return cur if "FROM sqlite_master" in a[0] else _CountingCursor(cur, self._counter)
 
     def __getattr__(self, name):
         return getattr(self._con, name)
@@ -661,19 +663,29 @@ def rows_read(monkeypatch):
     return counter
 
 
-def test_facts_windows_read_a_bounded_number_of_rows_when_most_are_unverified(tmp_path, rows_read):
-    """2000 newer unverified rows over 300 older sourced ones: each window reads at most its size twice."""
+@pytest.mark.parametrize("indexed", [False, True])
+def test_facts_windows_read_a_bounded_number_of_rows_when_most_are_unverified(tmp_path, rows_read, indexed):
+    """2000 newer unverified rows over 300 older sourced ones: each window reads at most its size twice, and at most
+    its size on a db with the bus's state indexes."""
     rows = [(f"u{i:04d}", f"2026-11-24T{i // 120:02d}:{i // 2 % 60:02d}:{i % 2:02d}Z", "standard", "unverified")
             for i in range(2000)]
     rows += [(f"s{i:03d}", f"2026-11-2{i % 3}T00:00:{i % 60:02d}Z", "standard", "active") for i in range(300)]
     db = _window_db(tmp_path / "f.db", rows)
+    times = 1 if indexed else 2
+    if indexed:
+        import bus  # noqa: PLC0415
+        con = sqlite3.connect(db)
+        for ddl in bus._STATE_INDEXES:
+            con.execute(ddl)
+        con.commit()
+        con.close()
     got = fr.query_facts(db, ["marigold"], k=5)
     assert len(got) == 5 and not any(f["unsourced"] for f in got)
-    assert rows_read[0] <= 2 * fr.CANDIDATE_LIMIT + 2 * fr.DURABLE_LIMIT, rows_read[0]
+    assert rows_read[0] <= times * (fr.CANDIDATE_LIMIT + fr.DURABLE_LIMIT), rows_read[0]
     rows_read[0] = 0
     got = fr.recent_facts(24 * 30, k=5, dbpath=db, now=datetime(2026, 11, 25, tzinfo=timezone.utc))
     assert len(got) == 5 and not any(f["unsourced"] for f in got)
-    assert rows_read[0] <= 2 * 100, rows_read[0]
+    assert rows_read[0] <= times * 100, rows_read[0]
 
 
 @pytest.mark.parametrize("n_unverified", [2000, 1000])
