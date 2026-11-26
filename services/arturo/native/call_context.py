@@ -10,6 +10,7 @@ your own messages ... you can't even remember the last call"; one surface, text 
 Neither ever raises into a call: an unreadable source is an empty opening or no notes.
 """
 import logging
+import math
 import os
 import re
 import time
@@ -36,7 +37,8 @@ def enabled():
 # The opening's size on a native call. Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across
 # chat and calls, every one stamped, and that overrides the under-3 s greet bar. Measured on the real gm thread:
 # 1500 tokens -> 15 verbatim turns, 2000 -> 22, 2500 -> 32, 4000 -> 59 (greet: 1500 -> 2.44 s, 3000 -> 3.01 s).
-# When long chat replies leave the default short of MIN_TURNS, the opening is read once more at FLOOR_BUDGET_TOKENS.
+# When long chat replies leave the default short of MIN_TURNS, the opening is read once more at what MIN_TURNS cost
+# at the first read's rate, capped at FLOOR_BUDGET_TOKENS (never the whole floor: ~59 turns on the gm thread).
 DEFAULT_BUDGET_TOKENS = 2500
 MIN_TURNS = 25
 FLOOR_BUDGET_TOKENS = 4000
@@ -74,24 +76,37 @@ def fetch_route(agent, budget, timeout=4.0):
         return resp.read().decode("utf-8")
 
 
+class Opening(str):
+    """The opening text, and how it was read (`info`, for the call report): the budget, the second read's budget
+    (None: no second read), where it came from (route | twin | none), and whether it is still short of MIN_TURNS."""
+
+    def __new__(cls, text, info):
+        self = super().__new__(cls, text)
+        self.info = info
+        return self
+
+
 def opening(agent, load=None, directory=None, route=None):
-    """The opening context text, or "" (flag off, or nothing could be read): the API route first, the twin if the
-    API cannot answer. Short of MIN_TURNS at the default size, it is read once more at FLOOR_BUDGET_TOKENS (an
-    explicit ARTURO_NATIVE_CONTEXT_TOKENS is taken as meant)."""
+    """The opening context (an Opening; "" when the flag is off or nothing could be read): the API route first, the
+    twin if the API cannot answer. Short of MIN_TURNS at the default size, it is read once more, sized to reach
+    MIN_TURNS (an explicit ARTURO_NATIVE_CONTEXT_TOKENS is taken as meant)."""
     if not enabled():
-        return ""
+        return Opening("", {"budget": 0, "reread": None, "source": "off", "short": False})
     budget = budget_tokens()
     t0 = time.monotonic()
-    text = _read(agent, budget, load, directory, route)
-    # the floor re-read only when it can help and cannot cost the thread (Claude review of #638): something older
+    text, source = _read(agent, budget, load, directory, route)
+    turns = describe(text)["turns"]
+    reread = None
+    # the second read only when it can help and cannot cost the thread (Claude review of #638): something older
     # exists to fetch (an EARLIER block), and the first read was quick enough that a second fits inside the server's
     # opening wait (server.OPENING_WAIT_S); a junk setting is not an explicit one
     if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and "EARLIER (summarized):" in text
-            and describe(text)["turns"] < MIN_TURNS and time.monotonic() - t0 <= FLOOR_MAX_ELAPSED_S):
-        more = _read(agent, FLOOR_BUDGET_TOKENS, load, directory, route)
-        if describe(more)["turns"] > describe(text)["turns"]:
-            text = more
-    return text
+            and turns < MIN_TURNS and time.monotonic() - t0 <= FLOOR_MAX_ELAPSED_S):
+        reread = min(FLOOR_BUDGET_TOKENS, math.ceil(budget * MIN_TURNS / max(turns, 1)))
+        more, more_source = _read(agent, reread, load, directory, route)
+        if describe(more)["turns"] > turns:
+            text, source, turns = more, more_source, describe(more)["turns"]
+    return Opening(text, {"budget": budget, "reread": reread, "source": source, "short": turns < MIN_TURNS})
 
 
 def _explicit_budget():
@@ -102,30 +117,41 @@ def _explicit_budget():
 
 
 def _read(agent, budget, load=None, directory=None, route=None):
+    """(text, source): source is "route", "twin", or "none" when neither could be read."""
     try:
         text = (route or fetch_route)(agent, budget)
         if text and text.strip():
-            return text
+            return text, "route"
     except Exception as e:  # noqa: BLE001 — the twin reads the same sources
         log.info(f"native: call-context route for {agent!r} unavailable ({e!r}); using the twin")
     try:
-        return (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
+        text = (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
                                              budget_tokens=budget)
+        return (text, "twin") if text and text.strip() else ("", "none")
     except Exception as e:  # noqa: BLE001 — a call without its thread is still a call
         log.warning(f"native: opening context for {agent!r} failed: {e!r}")
-        return ""
+        return "", "none"
 
 
 # a verbatim line: "[<UTC>Z <local> <label>] chat|call <id> <who>: <words>"; a summary: "- [<stamp>] call <id>, ..."
 _LINE_RE = re.compile(r"^\[(\S+Z) [^\]]*\] (chat|call (\S+)) ")
 _SUMMARY_RE = re.compile(r"^- \[[^\]]*\] call ([^,\s]+),")
+_OMITTED_RE = re.compile(r"^- \((\d+) older item\(s\) omitted\)$")
+_CHAT_ERROR_RE = re.compile(r"^\(\S+ chat could not be read: ")
 
 
 def describe(text):
     """What an opening carried, for the call report (so "he could not recall X" is answerable from the file): the
     verbatim turns, the summarized items, the first/last verbatim stamp (UTC), chat vs call lines, the call ids."""
-    turns, summarized, chat_n, call_n, calls = [], 0, 0, 0, set()
+    turns, summarized, chat_n, call_n, calls, chat_error = [], 0, 0, 0, set(), False
     for line in (text or "").splitlines():
+        m = _OMITTED_RE.match(line)
+        if m:
+            summarized += int(m.group(1))
+            continue
+        if _CHAT_ERROR_RE.match(line):
+            chat_error = True
+            continue
         if line.startswith("- ["):
             summarized += 1
             m = _SUMMARY_RE.match(line)
@@ -142,7 +168,8 @@ def describe(text):
             call_n += 1
             calls.add(m.group(3))
     return {"turns": len(turns), "summarized": summarized, "first": turns[0] if turns else None,
-            "last": turns[-1] if turns else None, "chat_lines": chat_n, "call_lines": call_n, "calls": sorted(calls)}
+            "last": turns[-1] if turns else None, "chat_lines": chat_n, "call_lines": call_n, "calls": sorted(calls),
+            "chat_error": chat_error}
 
 
 class ChatFeed:

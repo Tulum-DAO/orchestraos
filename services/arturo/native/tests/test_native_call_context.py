@@ -265,16 +265,20 @@ def test_the_opening_budget_defaults_to_25_stamped_turns(monkeypatch):
     assert call_context.budget_tokens() == 2500
 
 
+def _NO_TWIN(**k):
+    raise AssertionError("the twin was read: a floor test must never reach the live call journals")
+
+
 def _opening(n_verbatim, n_summ=0):
     from services.arturo import thread_context as tc
     lines = [tc.PAST_OPEN, "THREAD: header"]
     if n_summ:
-        lines += ["EARLIER (summarized):"] + [f"- [2026-11-25T10:0{i}:00Z 05:0{i} ET] call vc_old{i}, 3 phrase(s) not shown; x"
+        lines += ["EARLIER (summarized):"] + [f"- [2026-11-25T10:0{i}:00Z 05:0{i} Local] call vc_old{i}, 3 phrase(s) not shown; x"
                                              for i in range(n_summ)]
     lines.append("RECENT (verbatim):")
     for i in range(n_verbatim):
         where = "chat" if i % 2 else f"call vc_c{i % 3}"
-        lines.append(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} ET] {where} Operator: line {i}")
+        lines.append(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} Local] {where} Operator: line {i}")
     return "\n".join(lines + [tc.PAST_CLOSE])
 
 
@@ -285,7 +289,7 @@ def test_the_opening_is_described_by_turns_span_and_sources():
     assert d["chat_lines"] == 3 and d["call_lines"] == 3
     assert d["calls"] == ["vc_c0", "vc_c1", "vc_c2", "vc_old0", "vc_old1"]
     assert call_context.describe("") == {"turns": 0, "summarized": 0, "first": None, "last": None,
-                                         "chat_lines": 0, "call_lines": 0, "calls": []}
+                                         "chat_lines": 0, "call_lines": 0, "calls": [], "chat_error": False}
 
 
 def test_an_opening_short_of_25_turns_is_asked_again_at_the_floor(monkeypatch):
@@ -295,14 +299,14 @@ def test_an_opening_short_of_25_turns_is_asked_again_at_the_floor(monkeypatch):
     def route(agent, budget):
         asked.append(budget)
         return _opening(12, n_summ=3) if budget < 4000 else _opening(30)
-    out = call_context.opening("gm", route=route)
+    out = call_context.opening("gm", route=route, load=_NO_TWIN)
     assert asked == [2500, 4000] and call_context.describe(out)["turns"] == 30
     asked.clear()
-    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(26))
+    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(26), load=_NO_TWIN)
     assert asked == [2500]                                           # enough: one read, no second trip
     asked.clear()
     monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "1500")       # an explicit setting is taken as meant
-    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(5))
+    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(5), load=_NO_TWIN)
     assert asked == [1500]
 
 
@@ -320,33 +324,115 @@ def test_the_floor_re_read_is_skipped_when_nothing_older_exists_or_the_first_rea
     # read must not push the opening past the server's OPENING_WAIT_S and lose the thread it already has.
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     asked = []
-    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12))      # short, nothing older
+    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12), load=_NO_TWIN)      # short, nothing older
     assert asked == [2500] and call_context.describe(out)["turns"] == 12
     asked.clear()
     clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.5])
     monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
-    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12, n_summ=3))
+    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12, n_summ=3), load=_NO_TWIN)
     assert asked == [2500] and call_context.describe(out)["turns"] == 12
 
 
 def test_a_floor_read_that_is_not_better_keeps_the_first_text(monkeypatch):
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     first = _opening(12, n_summ=3)
-    out = call_context.opening("gm", route=lambda a, b: first if b < 4000 else "")
+    out = call_context.opening("gm", route=lambda a, b: first if b < 4000 else "", load=lambda **k: "")
     assert out == first
 
 
 def test_a_junk_context_setting_keeps_the_floor_on(monkeypatch):
     monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "junk")
     asked = []
-    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12, n_summ=3))
+    call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(12, n_summ=3), load=_NO_TWIN)
     assert asked == [2500, 4000]
 
 
 def test_describe_reads_the_channel_and_call_id_from_the_stamp_not_the_words():
     from services.arturo import thread_context as tc
     text = "\n".join([tc.PAST_OPEN, "RECENT (verbatim):",
-                      "[2026-11-25T17:00:00Z 12:00 ET] call vc_a Operator: he said ] chat  and call vc_fake, ok",
-                      "[2026-11-25T17:01:00Z 12:01 ET] chat Operator: mention ] call vc_other here", tc.PAST_CLOSE])
+                      "[2026-11-25T17:00:00Z 12:00 Local] call vc_a Operator: he said ] chat  and call vc_fake, ok",
+                      "[2026-11-25T17:01:00Z 12:01 Local] chat Operator: mention ] call vc_other here", tc.PAST_CLOSE])
     d = call_context.describe(text)
     assert (d["chat_lines"], d["call_lines"], d["calls"]) == (1, 1, ["vc_a"])
+
+
+def test_the_floor_is_exactly_25_turns(monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    for have, reads in ((24, 2), (25, 1)):
+        asked = []
+        call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(have if b == 2500 else 40, n_summ=2),
+                             load=_NO_TWIN)
+        assert len(asked) == reads, (have, asked)
+
+
+def test_the_second_read_is_sized_to_reach_25_not_the_whole_floor(monkeypatch):
+    # Claude review of #638 (finding 1): at 4000 the real gm thread carries ~59 turns, so one long reply would swing a
+    # call between 25 and 59. The second read asks for what 25 turns cost at the first read's rate, capped at the floor.
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    asked = []
+    out = call_context.opening("gm", route=lambda a, b: asked.append(b) or _opening(20 if b == 2500 else 26, n_summ=2),
+                               load=_NO_TWIN)
+    assert asked == [2500, 3125] and call_context.describe(out)["turns"] == 26
+    assert out.info == {"budget": 2500, "reread": 3125, "source": "route", "short": False}
+
+
+def test_a_second_read_with_no_more_turns_keeps_the_first(monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    first = _opening(12, n_summ=3)
+    for second in (_opening(12, n_summ=3), _opening(8), ""):
+        out = call_context.opening("gm", route=lambda a, b: first if b == 2500 else second, load=lambda **k: "")
+        assert out == first and out.info["reread"] == 4000 and out.info["short"] is True
+
+
+def test_the_opening_says_where_it_came_from(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+
+    def down(agent, budget):
+        raise OSError("api down")
+    out = call_context.opening("gm", route=down, load=lambda **k: _opening(3), directory=tmp_path)
+    assert out.info["source"] == "twin" and out.info["reread"] is None
+    out = call_context.opening("gm", route=down, load=lambda **k: "", directory=tmp_path)
+    assert out == "" and out.info["source"] == "none"
+
+
+def test_summarized_counts_the_omitted_items_and_a_failed_chat_read_is_named():
+    text = _opening(2, n_summ=2).replace("RECENT (verbatim):", "- (4 older item(s) omitted)\nRECENT (verbatim):")
+    assert call_context.describe(text)["summarized"] == 6
+    assert call_context.describe(_opening(2))["chat_error"] is False
+    broken = _opening(2).replace("RECENT (verbatim):", "(gm chat could not be read: URLError)\nRECENT (verbatim):")
+    assert call_context.describe(broken)["chat_error"] is True
+
+
+def test_describe_reads_every_shared_contract_case_as_rendered():
+    # describe() parses text the API route renders: every verbatim line of every shared case is a turn, so a format
+    # change on either side turns this red
+    import pathlib
+    cases = json.loads((pathlib.Path(__file__).resolve().parents[4] / "contract" / "call-context-cases.json")
+                       .read_text())["cases"]
+    for c in cases:
+        body = c["expected"].splitlines()
+        recent = [ln for ln in (body[body.index("RECENT (verbatim):") + 1:-1] if "RECENT (verbatim):" in body else [])
+                  if ln.startswith("[")]
+        earlier = (body[body.index("EARLIER (summarized):") + 1:body.index("RECENT (verbatim):")]
+                   if "EARLIER (summarized):" in body else [])
+        d = call_context.describe(c["expected"])
+        assert d["turns"] == d["chat_lines"] + d["call_lines"] == len(recent), c["name"]
+        assert d["summarized"] >= len(earlier), c["name"]
+        assert d["chat_error"] is ("could not be read" in c["expected"]), c["name"]
+
+
+def test_the_call_report_says_how_the_opening_was_read_and_a_timeout_skip(tmp_path, monkeypatch):
+    import time as _t
+    from services.arturo.native import server as srv
+    opened = call_context.Opening(_opening(4), {"budget": 2500, "reread": None, "source": "route", "short": True})
+    _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: opened)
+    reports = tmp_path / "native" / "calls"
+    th = json.loads(next(reports.glob("*.json")).read_text())["thread"]
+    assert th["budget"] == 2500 and th["source"] == "route" and th["reread"] is None and th["skipped"] is None
+    assert th["turns"] == 4 and th["short"] is True
+    for f in reports.glob("*.json"):
+        f.unlink()
+    monkeypatch.setattr(srv, "OPENING_WAIT_S", 0.1)
+    _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: _t.sleep(0.6) or opened)
+    th = json.loads(next(reports.glob("*.json")).read_text())["thread"]
+    assert th["skipped"] == "timeout" and th["turns"] == 0 and th["source"] is None
