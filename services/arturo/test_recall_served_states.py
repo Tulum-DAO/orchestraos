@@ -215,12 +215,13 @@ def test_recent_work_flags_an_unsourced_fact_and_prints_it_last(P, proxy_store, 
 
 
 def test_the_location_pin_never_puts_an_unsourced_fact_above_a_sourced_one(tmp_path):
-    """Every fixture fact is an open location-slot fact and the unverified one is the newest, so it is pinned."""
+    """Every fixture fact is an open location-slot fact and the unverified one is the newest; sourced ones are
+    pinned ahead of it."""
     db = _facts_db(tmp_path / "f.db")
     rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
     q = "where is shaw with the marigold rollout"
     assert core._LOCATION_Q.search(q)
-    assert any(p["unsourced"] for p in core.open_slot_facts(db, "shaw.location"))
+    assert not any(p["unsourced"] for p in core.open_slot_facts(db, "shaw.location"))
     assert _check(rc._query_facts(fr.extract_keywords(q), 20, q)) == SERVED
     # cut at k, the unsourced entries go first
     short = rc._query_facts(fr.extract_keywords(q), 3, q)
@@ -427,3 +428,118 @@ def test_the_unsourced_line_is_the_bare_text_with_the_flag():
                                   "cite": "per dream-facts 2026-11-25", "conf": 1.0,
                                   "unsourced": True}]).splitlines()[1] == \
         "- [ephemeral · no source quote found] the proxy is up (per dream-facts 2026-11-25)"
+
+
+# --- the SQL windows read past newer unsourced rows, so a sourced row is never cut before the ordering -----------
+
+def test_worldview_belief_window_reads_past_higher_confidence_unsourced_beliefs(tmp_path):
+    """k=2 fetches four beliefs by confidence; four unsourced beliefs rank above the one sourced belief."""
+    st = [(f"s_u{i}", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified")) for i in range(4)]
+    st += [("s_s", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("active"))]
+    bl = [(f"b_u{i}", f"zinnia unsourced belief {i}", 0.99 - i * 0.01, json.dumps([f"s_u{i}"])) for i in range(4)]
+    bl += [("b_s", "zinnia sourced belief", 0.5, '["s_s"]')]
+    got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st, beliefs=bl), ["zinnia"], k=2)
+    assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia sourced belief", False),
+                                                          ("zinnia unsourced belief 0", True)]
+
+
+def _minutes(i):
+    return f"2026-11-24T{i // 60:02d}:{i % 60:02d}:00Z"
+
+
+def test_worldview_fluid_window_reads_past_newer_unverified_statements(tmp_path):
+    """The fluid window holds 100 statements; 100 newer unverified ones would fill it."""
+    st = [(f"s_u{i:03d}", "dream-facts", _minutes(i), f"zinnia u{i} is up", _eph("unverified")) for i in range(100)]
+    st += [("s_s", "dream-facts", "2026-11-20T00:00:00Z", "zinnia sourced is up", _eph("active"))]
+    got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=5)
+    assert [(e["text"], e["unsourced"]) for e in got][:2] == [("zinnia sourced is up", False),
+                                                              ("zinnia u99 is up", True)]
+    assert len(got) == 7
+
+
+def test_worldview_fluid_window_an_older_sourced_statement_still_wins_its_subject(tmp_path):
+    """A sourced 'zinnia is up' older than 100 unverified statements, one of them a newer 'zinnia is down'."""
+    st = [(f"s_u{i:03d}", "dream-facts", _minutes(i), f"zinnia u{i} is up", _eph("unverified")) for i in range(99)]
+    st += [("s_dn", "dream-facts", "2026-11-25T00:00:00Z", "zinnia is down", _eph("unverified")),
+           ("s_up", "dream-facts", "2026-11-20T00:00:00Z", "zinnia is up", _eph("active"))]
+    got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=5)
+    texts = [e["text"] for e in got]
+    assert texts[0] == "zinnia is up" and "zinnia is down" not in texts
+
+
+def test_worldview_wal_window_reads_past_newer_unverified_wal_rows(tmp_path):
+    """The wal window holds 100 rows; 100 newer unverified anchored wal rows would fill it."""
+    st = [(f"w_u{i:03d}", "wal", _minutes(i), f"zinnia wal u{i}", _wal("unverified")) for i in range(100)]
+    st += [("w_s", "wal", "2026-11-20T00:00:00Z", "zinnia wal sourced", _wal("active"))]
+    db = _wv_db(tmp_path / "f.db", statements=st)
+    got = wv.query_worldview(db, ["zinnia"], k=5)
+    assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia wal sourced", False), ("zinnia wal u99", True),
+                                                          ("zinnia wal u98", True)]
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    block = rc.answer("zinnia wal status today", vector=False)["blocks"]["worldview"]
+    assert [(e["text"], e["unsourced"]) for e in block][:1] == [("zinnia wal sourced", False)]
+
+
+def test_the_location_pin_reads_past_newer_unverified_slot_facts(tmp_path):
+    """Two pins: an older sourced open location fact and two newer unverified ones."""
+    db = _facts_db(tmp_path / "f.db")
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM facts")
+    rows = [(fid, ts, text, st, "shaw.location", "fact", "standard") for fid, ts, text, st in (
+        ("loc_src", "2026-11-20T00:00:00Z", "Location: the north office", "active"),
+        ("loc_u1", "2026-11-24T00:00:00Z", "Location: maybe the east office", "unverified"),
+        ("loc_u2", "2026-11-25T00:00:00Z", "Location: maybe the south office", "unverified"))]
+    rows += [(f"d{i}", f"2026-11-2{i % 5}T0{i}:00:00Z", f"Shaw decision number {i} about shaw things", "active",
+              None, "decision", "durable") for i in range(10)]
+    for fid, ts, text, st, slot, kind, tier in rows:
+        con.execute("INSERT INTO facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (fid, ts, kind, text, "shaw", 1.0, "{}", '["ops"]', json.dumps({"source_kind": "dream-facts"}),
+                     st, tier, ts, None, slot, ts, None))
+    con.commit()
+    con.close()
+    assert [(p["fact_id"], p["unsourced"]) for p in core.open_slot_facts(db, "shaw.location")] == [
+        ("loc_src", False), ("loc_u2", True)]
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    q = "where is shaw right now"
+    got = rc._query_facts(fr.extract_keywords(q), 5, q)
+    assert got[0]["fact_id"] == "loc_src" and not any(f["unsourced"] for f in got)
+
+
+# --- the re-sorts after each cut ------------------------------------------------------------------------------------
+
+def test_worldview_wal_reservation_trims_an_unsourced_belief_before_a_sourced_fluid_entry(tmp_path):
+    """k=1: an unsourced belief, three sourced fluid entries and one sourced wal row; the wal row's slot is taken
+    from the unsourced belief, not from a sourced fluid entry."""
+    st = [("s_u", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified"))]
+    st += [(f"s_f{i}", "dream-facts", f"2026-11-2{3 - i}T00:00:00Z", f"zinnia f{i} is up", _eph("active"))
+           for i in range(3)]
+    st += [("w_s", "wal", "2026-11-19T00:00:00Z", "zinnia wal sourced", _wal("active"))]
+    db = _wv_db(tmp_path / "f.db", statements=st, beliefs=[("b_u", "zinnia unsourced belief", 0.9, '["s_u"]')])
+    got = wv.query_worldview(db, ["zinnia"], k=1)
+    assert [e["text"] for e in got] == ["zinnia f0 is up", "zinnia f1 is up", "zinnia wal sourced"]
+
+
+def test_worldview_a_reserved_sourced_wal_row_ranks_above_an_unsourced_belief(tmp_path):
+    st = [("s_u", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified")),
+          ("w_s", "wal", "2026-11-19T00:00:00Z", "zinnia wal sourced", _wal("active"))]
+    db = _wv_db(tmp_path / "f.db", statements=st, beliefs=[("b_u", "zinnia unsourced belief", 0.9, '["s_u"]')])
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)] == [
+        ("zinnia wal sourced", False), ("zinnia unsourced belief", True)]
+
+
+def test_recent_facts_a_keyword_hit_with_no_source_quote_ranks_below_a_sourced_fact(tmp_path):
+    rows = [("unv", "2026-11-25T05:00:00Z", "standard", "unverified"),
+            ("src", "2026-11-24T12:00:00Z", "standard", "active")]
+    got = fr.recent_facts(48, keywords=["unverified"], k=5, dbpath=_window_db(tmp_path / "f.db", rows),
+                          now=datetime(2026, 11, 25, 6, tzinfo=timezone.utc))
+    assert [(f["fact_id"], f["unsourced"]) for f in got] == [("src", False), ("unv", True)]
+
+
+def test_worldview_an_unverified_wal_row_is_still_served_when_both_sourced_reservations_are_full(tmp_path):
+    st = [("w_u", "wal", "2026-11-24T00:00:00Z", "zinnia wal unverified", _wal("unverified")),
+          ("w_s1", "wal", "2026-11-23T00:00:00Z", "zinnia wal s1", _wal("active")),
+          ("w_s2", "wal", "2026-11-22T00:00:00Z", "zinnia wal s2", _wal("active")),
+          ("w_s3", "wal", "2026-11-21T00:00:00Z", "zinnia wal s3", _wal("active"))]
+    got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=5)
+    assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia wal s1", False), ("zinnia wal s2", False),
+                                                          ("zinnia wal unverified", True)]
