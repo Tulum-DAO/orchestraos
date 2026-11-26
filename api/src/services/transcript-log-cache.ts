@@ -240,6 +240,10 @@ function read<S>(path: string, parser: LogParser<S>, want: number): Entry {
   }
   if (hit && hit.state !== null && hit.ino === st.ino && st.size > hit.offset && probeMatches(path, hit)) {
     const added = readRange(path, hit.offset, st.size);
+    // Complete lines only: the append path has no remainder rule, on purpose. A whole-file read parses a complete last
+    // line that has no newline yet (parseRange: a one-line file is not empty); an append waits for the newline, because a
+    // line is appended in pieces by every runtime and a piece that happens to parse (a short value) would be parsed twice.
+    // The cost is one beat's delay on the last line of a growing log, never a missed or doubled item.
     const { lines, end } = completeLines(added);
     drop(slot);
     let entry: Entry;

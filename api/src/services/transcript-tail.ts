@@ -81,8 +81,10 @@ export function alignShift(prev: any[], next: any[]): number | null {
 
 const READ_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG']);
 /** A failure to stat or read the log file (the file is gone, a directory, unreadable), as opposed to a failure to parse it.
- *  Transient errors (EMFILE, EBUSY) are not here on purpose: they propagate out of tick() and the next beat retries with
- *  nothing sent, where a fallback would blank the chat with an empty reset snapshot for a beat. */
+ *  Transient errors (EMFILE, EBUSY) are not here on purpose: out of tick() they propagate to the beat's catch and the next
+ *  beat retries with nothing sent, where a fallback would blank the chat with an empty reset snapshot for a beat. Out of
+ *  subscribe() (its refresh() on connect) they propagate to the SSE route after its 200 head: the socket is destroyed and
+ *  the client's EventSource reconnects after its retry delay. A failed connect, never an empty chat. */
 function isReadError(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   return typeof code === 'string' && READ_ERROR_CODES.has(code);
