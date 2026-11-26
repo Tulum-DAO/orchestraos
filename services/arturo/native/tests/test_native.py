@@ -1469,7 +1469,8 @@ def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_r
     feed([fx.started()], 10.0)
     feed([fx.input_transcript(" what are my agents doing")], 10.8)
     c1 = fx.tool_turn("d1", "r1", [("c1", "list_agents", "{}")])
-    feed(c1[:-1], 11.0)
+    feed(c1[:1], 10.9)                                                   # the live model hands it over
+    feed(c1[1:-1], 11.0)                                                 # the backend asks for the tool
     feed(c1[-1:], 11.4)
     assert sess.report()["tool_timeline"][0]["result_s"] is None      # still held at 1.4
     T[0] = 12.0
@@ -1477,8 +1478,8 @@ def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_r
     feed(fx.tool_turn("d2", "r2", [("c2", "knowledge", json.dumps({"query": "dream fix"}))]), 12.5)
     feed(fx.speech(0.3), 13.0)
     rows = {r["call_id"]: r for r in sess.report()["tool_timeline"]}
-    assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "requested_s": 1.0, "ready_s": 1.4,
-                          "result_s": 2.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
+    assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "delegated_s": 0.9, "requested_s": 1.0,
+                          "ready_s": 1.4, "result_s": 2.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
     assert rows["c2"]["name"] == "knowledge" and rows["c2"]["result_s"] == 2.5
     assert rows["c2"]["first_audio_s"] == 3.0 and rows["c2"]["next"] == "audio"
 

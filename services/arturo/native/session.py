@@ -59,6 +59,8 @@ class Metrics:
     hold_wait_s: dict = field(default_factory=dict)             # call_id -> seconds the settle/hold kept it
     tool_names: dict = field(default_factory=dict)              # call_id -> tool name, in request order
     tool_ready_at: dict = field(default_factory=dict)           # call_id -> t its delegation completed
+    delegated_at: dict = field(default_factory=dict)            # delegation id -> t session.delegation.created
+    tool_delegation: dict = field(default_factory=dict)         # call_id -> its delegation id
     tool_next: dict = field(default_factory=dict)               # call_id -> what came first after its result:
     #                                                             "audio" | "tool:<name>" (latency plan step 1)
     undocumented_types: dict = field(default_factory=dict)
@@ -161,6 +163,7 @@ class NativeSession:
             self.turn_text = ""
         elif t == "session.delegation.created":
             d = frame.get("delegation") or {}
+            self.m.delegated_at.setdefault(d.get("id"), now)
             self._delegation(d.get("id"), d.get("response_id"), d.get("target"))
         elif t == "response.event":
             out += self._on_response_event(frame, now)
@@ -182,6 +185,7 @@ class NativeSession:
             else:
                 self.seen_calls.add(call_id)
                 self.m.tool_requested_at[call_id] = now
+                self.m.tool_delegation[call_id] = did
                 self.m.tool_names[call_id] = name
                 self._after_results(f"tool:{name}")
             deleg["calls"][call_id] = (name, args)
@@ -389,6 +393,7 @@ class NativeSession:
             sent = self.m.tool_result_sent_at.get(cid)
             after = self.m.first_audio_after_result.get(cid)
             rows.append({"call_id": cid, "name": name, "requested_s": rel(self.m.tool_requested_at.get(cid)),
+                         "delegated_s": rel(self.m.delegated_at.get(self.m.tool_delegation.get(cid))),
                          "ready_s": rel(self.m.tool_ready_at.get(cid)), "result_s": rel(sent),
                          "first_audio_s": None if sent is None or after is None else rel(sent + after),
                          "next": self.m.tool_next.get(cid)})
