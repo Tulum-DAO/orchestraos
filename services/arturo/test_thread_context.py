@@ -264,7 +264,7 @@ def test_a_backchannel_between_two_phrases_of_the_other_speaker_folds_out_and_th
 def test_a_short_real_answer_between_the_other_speakers_phrases_is_never_folded():
     # codex review of #662: only wordless sounds fold; "no", "stop", "yes", "ok", "sure" can be the answer
     L = tc.Line
-    for word in ("no", "stop", "yes", "Yes.", "ok", "sure", "of", "no no", "don't"):
+    for word in ("no", "stop", "yes", "Yes.", "ok", "sure", "of", "no no", "don't", "ah", "oh", "Oh.", "Ah!"):
         lines = [L(T0, "Arturo", "Shall I start research-bot?", "call", "vc_a", role="agent"),
                  L(T0 + 1, "Ada", word, "call", "vc_a", role="user"),
                  L(T0 + 2, "Arturo", "Understood.", "call", "vc_a", role="agent")]

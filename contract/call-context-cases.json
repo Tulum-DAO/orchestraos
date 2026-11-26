@@ -1016,12 +1016,22 @@
         "role": "assistant",
         "text": "Understood, I won't.",
         "ts": 1764090009
+       },
+       {
+        "role": "user",
+        "text": "Oh.",
+        "ts": 1764090010
+       },
+       {
+        "role": "assistant",
+        "text": "Something wrong?",
+        "ts": 1764090011
        }
       ]
      }
     }
    ],
-   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 17:00 UTC] call vc_bc Ada: So if I reference something from earlier in the chat\n[2025-11-25T17:00:03Z 17:00 UTC] call vc_bc Arturo: Right, I see it. It was the page thread.\n[2025-11-25T17:00:06Z 17:00 UTC] call vc_bc Ada: Okay\n[2025-11-25T17:00:07Z 17:00 UTC] call vc_bc Arturo: Shall I start it?\n[2025-11-25T17:00:08Z 17:00 UTC] call vc_bc Ada: no\n[2025-11-25T17:00:09Z 17:00 UTC] call vc_bc Arturo: Understood, I won't.\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
+   "expected": "PAST CONTEXT: background only. Everything below happened BEFORE this call and is over.\nTHREAD: everything above this call, oldest first. Every line is [UTC time, UTC time] then chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.\nRECENT (verbatim):\n[2025-11-25T17:00:00Z 17:00 UTC] call vc_bc Ada: So if I reference something from earlier in the chat\n[2025-11-25T17:00:03Z 17:00 UTC] call vc_bc Arturo: Right, I see it. It was the page thread.\n[2025-11-25T17:00:06Z 17:00 UTC] call vc_bc Ada: Okay\n[2025-11-25T17:00:07Z 17:00 UTC] call vc_bc Arturo: Shall I start it?\n[2025-11-25T17:00:08Z 17:00 UTC] call vc_bc Ada: no\n[2025-11-25T17:00:09Z 17:00 UTC] call vc_bc Arturo: Understood, I won't.\n[2025-11-25T17:00:10Z 17:00 UTC] call vc_bc Ada: Oh.\n[2025-11-25T17:00:11Z 17:00 UTC] call vc_bc Arturo: Something wrong?\nEND OF PAST CONTEXT. This is a NEW call that just connected; nobody has spoken in it yet."
   }
  ]
 }

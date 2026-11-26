@@ -23,8 +23,9 @@ export const MAX_BUDGET_TOKENS = 20000;
 const LINE_MAX_CHARS = 1200;
 const MERGE_GAP_S = 120;  // one speaker's phrases further apart than this in a call are separate turns
 const BACKCHANNEL_WORDS = 2;  // a call phrase this short, wedged between two of the other speaker's, is not a turn
-// ... and only when every word is a wordless sound (codex review of #662): "no", "stop", "yes", "ok" can be the answer
-const SOUND_RE = /^(?:m+(?:-?h+m*)?|h+m+|u+h+(?:-?h+u+h+)?|u+m+|a+h+|o+h+|e+r+m*|mhm+)?$/;
+// ... and only when every word is a wordless sound (codex review of #662): "no", "stop", "yes", "ok", "ah", "oh"
+// can be the answer
+const SOUND_RE = /^(?:m+(?:-?h+m*)?|h+m+|u+h+(?:-?h+u+h+)?|u+m+|e+r+m*|mhm+)?$/;
 
 function soundsOnly(text: string): boolean {
   const words = text.split(/\s+/).filter(Boolean);
