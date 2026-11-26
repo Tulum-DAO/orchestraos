@@ -18,7 +18,10 @@ _CLOCK = re.compile(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\bat\s+(\d{
 _NUMBERS = {w: str(n) for n, w in enumerate(
     "one two three four five six seven eight nine ten eleven twelve".split(), 1)}
 _SPELLED = re.compile(r"\b(" + "|".join(_NUMBERS) + r")(?=\s*(?:am|pm|o'?clock)\b)")
-_AT_SPELLED = re.compile(r"\b(at\s+)(" + "|".join(_NUMBERS) + r")\b")
+# "at nine" is a clock only when it reads as one: at the end, or before a clock or part-of-day word.
+_AT_SPELLED = re.compile(r"\b(at\s+)(" + "|".join(_NUMBERS) + r")\b(?=\s*(?:$|[,.;]|o'?clock\b|am\b|pm\b|"
+                         r"in the\b|at night\b|tonight\b|tomorrow\b|today\b|this\b|morning\b|afternoon\b|"
+                         r"evening\b|night\b|sharp\b))")
 _OCLOCK = re.compile(r"\b(\d{1,2})\s*o'?clock\b")
 # A zone named in the phrase wins over Shaw's zone ("two PM EST"): (region, standard, daylight, name).
 # A standard/daylight abbreviation that disagrees with the season is ambiguous, never guessed.
@@ -211,9 +214,12 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
             return Due(None, f"unknown ({phrase})")
     if len(_DAYWORD.findall(p)) > 1:     # "in the morning or in the evening"
         return Due(None, f"unknown ({phrase})")
-    if (clocks and not clocks[0].group(3) and int(clocks[0].group(1) or clocks[0].group(4)) == 12
-            and re.search(r"\b(?:night|evening|tonight)\b", p)):
-        return Due(None, f"ambiguous: {phrase} (midnight: the end of which day?)")   # never noon
+    if clocks and not clocks[0].group(3):
+        bare = int(clocks[0].group(1) or clocks[0].group(4))
+        night = re.search(r"\b(?:night|tonight)\b", p)
+        # 12 with any part-of-day word, or 1-5 "at night", could be either side of midnight: never guessed.
+        if (bare == 12 and (night or re.search(r"\b(?:evening|morning)\b", p))) or (night and 1 <= bare <= 5):
+            return Due(None, f"ambiguous: {phrase} (around midnight: which day?)")
     hours = _hours_ahead(p)
     if hours is not None:      # "in the next couple of hours": from the call, exact
         m = _HOURS.search(p)

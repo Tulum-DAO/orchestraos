@@ -15,6 +15,7 @@ def _paths(tmp_path, url=URL):
     url_file.parent.mkdir()
     if url is not None:
         url_file.write_text(url + "\n")
+        os.chmod(url_file, 0o600)
     return str(url_file), str(tmp_path / "cal" / "shaw.ics")
 
 
@@ -129,3 +130,12 @@ def test_a_folded_line_is_one_content_line(tmp_path):
     folded = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDESCRIPTION:see\r\n END:VEVENT\r\n"
               "END:VEVENT\r\nEND:VCALENDAR\r\n")
     assert calendar_fetch.refresh(url_file, out, opener=_opener(folded, []), now=1e9) == "fetched"
+
+
+
+def test_a_url_file_readable_by_others_is_refused(tmp_path):
+    url_file, out = _paths(tmp_path)
+    os.chmod(url_file, 0o644)
+    status = calendar_fetch.refresh(url_file, out, opener=_opener(ICS, []), now=1e9)
+    assert status.startswith("error") and "0600" in status and URL not in status
+    assert not os.path.exists(out)

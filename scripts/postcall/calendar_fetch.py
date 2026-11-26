@@ -54,6 +54,8 @@ def _complete(body):
 def refresh(url_path=None, out_path=None, *, opener=None, now=None, max_age_s=MAX_AGE_S, timeout=20):
     url_path, out_path = url_path or url_file(), out_path or calendar_file()
     try:
+        if os.stat(url_path).st_mode & 0o077:
+            return "error: the calendar URL file must be mode 0600"
         with open(url_path) as f:
             url = f.read().strip()
     except FileNotFoundError:

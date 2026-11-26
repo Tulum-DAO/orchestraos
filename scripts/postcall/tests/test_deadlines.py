@@ -232,8 +232,9 @@ def test_twelve_at_night_is_ambiguous_never_noon(phrase):
     assert d.due_ts is None and d.due_source.startswith("ambiguous"), d
 
 
-def test_twelve_in_the_morning_is_midnight_starting_the_day():
-    assert due("tomorrow at 12 in the morning").due_ts == "2026-11-25T00:00:00-05:00"
+def test_twelve_in_the_morning_is_ambiguous_too():
+    d = due("tomorrow at 12 in the morning")
+    assert d.due_ts is None and d.due_source.startswith("ambiguous")
 
 
 @pytest.mark.parametrize("phrase,hours", [("in 0000002 hours", 2), ("in 02 hours", 2)])
@@ -263,3 +264,27 @@ def test_alternatives_and_impossible_clocks_stay_unknown(phrase):
 ])
 def test_a_bare_clock_follows_the_part_of_day_word(phrase, expected):
     assert due(phrase).due_ts == expected
+
+
+
+# --- review round 8: small hours at night are never the afternoon; "at one" is a time only as a time
+
+@pytest.mark.parametrize("phrase", ["at 2 at night", "at one o'clock at night", "tonight at one",
+                                    "tomorrow night at two", "at 3 at night", "tomorrow at 4 at night",
+                                    "at 12 in the evening"])
+def test_small_hours_with_a_night_word_are_ambiguous(phrase):
+    d = due(phrase, anchor="2026-11-24T18:00:00Z")
+    assert d.due_ts is None and d.due_source.startswith("ambiguous"), d
+
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("at one point next week", None),             # an idiom, not a time: the number is unread -> unknown
+    ("at one of our meetings tomorrow", None),
+])
+def test_a_spelled_number_after_at_is_a_clock_only_when_it_reads_as_one(phrase, expected):
+    assert due(phrase).due_ts == expected
+
+
+
+def test_five_in_the_evening_is_seventeen_hundred():
+    assert due("tomorrow at 5 in the evening").due_ts == "2026-11-25T17:00:00-05:00"

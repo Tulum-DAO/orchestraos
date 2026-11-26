@@ -133,3 +133,11 @@ def test_two_labels_matching_configured_names_are_not_proof(monkeypatch):
     call = dataclasses.replace(base, transcript=base.transcript + "\n**Pat** _[00:20]_\nSure.\n")
     with pytest.raises(extract.AttributionError):
         extract.ground(call, _named_raw())
+
+
+
+def test_a_name_label_proves_only_itself_not_another_claimed_label(monkeypatch):
+    """POSTCALL_SHAW_NAMES names one label; the extractor claims the OTHER label: still needs proof."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(_named(), _named_raw(label="Dana Reyes"))
