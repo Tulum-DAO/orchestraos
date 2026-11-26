@@ -5,6 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer, type IncomingMessage } from 'http';
 import { join } from 'path';
+import { operatorZone } from './lib/operatorZone.js';
 import { WebSocketServer } from 'ws';
 
 import agentsRouter from './routes/agents.js';
@@ -191,6 +192,9 @@ app.get('/api/status/stream', (_req, res) => {
 app.get('/api/me', (req, res) => {
   const p = principal(req);
   if (!p) { res.status(401).json({ error: 'unauthenticated' }); return; }
+  // The operator's current zone (lib/operatorZone.ts), read per request: a client labels the times it shows with it
+  // (a quoted reply's "16:57 Tulum"). ADDITIVE; absent when the install keeps no location file.
+  const zone = operatorZone(process.env.ORCHESTRA_DIR || loadConfig().dataDir);
   res.json({
     username: p.username,
     role: p.role,
@@ -198,6 +202,7 @@ app.get('/api/me', (req, res) => {
     allowed_agents: p.allowedAgents,
     client_scope: p.clientScope,
     trusted: p.trusted,
+    ...(zone ? { zone } : {}),
   });
 });
 
