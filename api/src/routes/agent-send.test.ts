@@ -456,7 +456,34 @@ test('interrupt: the ?interrupt=1 query flag is the same ask', async () => {
   const d = deps({ gatewayInject: async (_s, _t, _f, interrupt) => { seen.push(interrupt); return { httpStatus: 200, ok: true, delivered: true }; } });
   await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: '1' } }), fakeRes().res);
   await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: 'yes' } }), fakeRes().res);
-  assert.deepEqual(seen, [true, false]);
+  await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: ' 1 ' } }), fakeRes().res);      // trimmed, as the gateway does
+  await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: ['1', '1'] as any } }), fakeRes().res);  // repeated flag
+  assert.deepEqual(seen, [true, false, true, true]);
+});
+
+test('outcome: only the four known words pass the gateway parser; anything else is dropped, not forwarded', async () => {
+  const { asOutcome, SEND_OUTCOMES } = await import('./agent-send.js');
+  assert.deepEqual([...SEND_OUTCOMES], ['delivered-now', 'delivered-steer', 'interrupted', 'held']);
+  for (const w of SEND_OUTCOMES) assert.equal(asOutcome(w), w);
+  for (const bad of ['Delivered-Now', 'typed', '', undefined, null, 3, {}]) assert.equal(asOutcome(bad), undefined, String(bad));
+});
+
+test('escape_sent: a held or 409 answer after an interrupt says the agent\'s step was stopped', async () => {
+  let r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h2', outcome: 'held', escape_sent: true }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.state, 'held');
+  assert.equal(r.calls.json.escape_sent, true);
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working', composer_text: 'restored draft', escape_sent: true }) }),
+    req({ body: { text: 'hi', interrupt: true } }), r.res);
+  assert.equal(r.calls.status, 409);
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(r.calls.json.composer_text, 'restored draft');
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h3', outcome: 'held' }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'] } }), r.res);
+  assert.equal('escape_sent' in r.calls.json, false);
 });
 
 test('outcome: a delivered answer carries the gateway\'s outcome and the interrupt facts', async () => {

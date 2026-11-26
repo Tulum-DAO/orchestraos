@@ -4409,7 +4409,13 @@ def verified_inject(session, text, force=False, idle_only=False, source="mail", 
         # anywhere: not to the pane, not to the supervisor.
         return False, {"reason": "compact_refused", "detail": COMPACT_OFF}
     if hl_seat:
-        return _headless_inject(hl_seat, text, idle_only=idle_only, source=source)
+        ok, info = _headless_inject(hl_seat, text, idle_only=idle_only, source=source)
+        if ok and interrupt and source == "person":
+            # No pane, no Escape: the supervisor queues the words to the CLI's stdin. Said plainly, never a
+            # silent "delivered-now" (the seat's own interrupt control request is the stop button's job).
+            info = {**info, "interrupt_failed": "headless seat: no pane to interrupt; the words went to its "
+                                                "supervisor's queue"}
+        return ok, info
     with _pane_guard(session) as _pane_held:
         if not _pane_held:
             return False, {"reason": "busy", "state": "busy",
@@ -4527,7 +4533,10 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
     composer is waited for (INTERRUPT_WAIT_S), the pane is looked at once more, and only then are the words
     typed: the seat reads them at once instead of at its next tool boundary. Never on a menu, a permission
     prompt or typed text (the same holds refuse first). A turn that does not stop in time is steered as
-    today and the answer says so (interrupt_failed). The default send never sends Escape.
+    today and the answer says so (interrupt_failed). The default send never sends Escape. Escape goes ONLY when
+    the screen, read right then, draws the CLI's spinner above the input box (_screen_turn_above_composer): a
+    stale detector or quoted "esc to interrupt" never earns one (the words then go onto the idle prompt, outcome
+    delivered-now). Under force with text in the composer there is no Escape either (it would discard the draft).
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
     composer's async paste ingest -> instruction sits unsubmitted. Sequence:
@@ -4678,7 +4687,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
             # dies before Enter, so nothing is typed.
             print(f"[watch_gateway] inject journal write failed for {session}: {e}", file=sys.stderr)
             return False, {"reason": "journal_unwritable", "state": state, "detail": str(e)}
-        interrupted, interrupt_failed = False, None
+        interrupted, interrupt_failed, typed_on_idle = False, None, False
         if strict_mid_turn and (mid_turn or turn_already_running):
             # The LAST look, as late as it can be: after the journal row (its mkdir and write took time a person
             # at the pane could have used to type) and immediately before the keys. A refusal clears the row.
@@ -4690,26 +4699,48 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                 if unsafe.get("composer_text"):
                     out["composer_text"] = unsafe["composer_text"]     # FULL: a device echoes it back exactly
                 return False, out
-            if interrupt:
-                # A person's "now": the last look was safe, so Escape ends the running step (the CLI's own
-                # interrupt), the composer comes back, and the words are typed into an idle prompt. Whatever
-                # the wait found, the pane is looked at ONCE MORE before the keys: a menu or a permission can
-                # appear as a step ends, and seconds have passed.
-                stopped = _interrupt_turn(session)
+            if interrupt and not _screen_turn_above_composer(session):
+                # No spinner above the input box NOW: the detector is stale, or the screen only quotes
+                # "esc to interrupt". Nothing to interrupt; the words go onto the idle prompt as a plain send,
+                # no Escape (an Escape into an idle prompt is what the stop button refuses too).
+                typed_on_idle = True
+                interrupt_failed = "no running turn on screen; typed without Escape"
+            elif interrupt and force and (_mid_turn_recheck(session, force=False) or {}).get("composer_text"):
+                # force skips the typed-text look (it appends to a draft on purpose), but Escape would DISCARD that
+                # draft: with text in the composer the words go in as the forced steer they would be without
+                # interrupt, and the answer says why there was no Escape.
+                interrupt_failed = "typed text in the composer; force appends to it, Escape would discard it"
+            elif interrupt:
+                # A person's "now": the last look was safe and a turn is drawn above the composer, so Escape ends
+                # the running step (the CLI's own interrupt), the composer comes back, and the words are typed
+                # into an idle prompt. Whatever the wait found, the pane is looked at ONCE MORE before the keys:
+                # a menu or a permission can appear as a step ends, and seconds have passed.
+                sent, stopped = _interrupt_turn(session)
                 unsafe = _mid_turn_recheck(session, force=force)
                 if unsafe:
+                    # Nothing typed. escape_sent tells the person (and the API) that their agent's step WAS
+                    # interrupted even though the words were not delivered: a held answer carries it, a 409 too.
                     inject_journal.clear(session)
-                    out = {"reason": "busy", "state": state, "recheck": unsafe["why"], "interrupted": stopped,
+                    out = {"reason": "busy", "state": state, "recheck": unsafe["why"], "escape_sent": sent,
+                           "turn_stopped": stopped,
                            "activity": MID_TURN_RECHECK_WORDS.get(unsafe["why"], unsafe["why"])}
                     if unsafe.get("composer_text"):
                         out["composer_text"] = unsafe["composer_text"]
+                        if stopped:
+                            # Text that was not there before the Escape: the CLI restoring its queued input, or
+                            # someone typing. Neither may be typed over; the person sends or clears it first.
+                            out["activity"] = ("Escape stopped the turn and text appeared in the composer "
+                                               "(queued input the CLI restored, or someone typing): send or "
+                                               "clear it first")
                     return False, out
                 if stopped:
                     interrupted = True
-                else:
+                elif sent:
                     # Escape was sent and the turn kept going (a step that ignores it, or a slow stop): the words
                     # go in as a steer, as the default send would, and the answer says the interrupt failed.
                     interrupt_failed = f"the turn did not stop within {INTERRUPT_WAIT_S:g} s after Escape"
+                else:
+                    interrupt_failed = "the Escape keystroke did not reach the pane"
         r = _tmux("send-keys", "-t", _st(session), "-l", text)
         if r.returncode != 0:
             inject_journal.clear(session)          # nothing was typed
@@ -4772,7 +4803,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                 ok_info = {"state": state, "attempts": attempt}
                 if interrupted:
                     ok_info["interrupted"] = True                      # Escape, then the words: read at once
-                elif mid_turn or turn_already_running:
+                elif (mid_turn or turn_already_running) and not typed_on_idle:
                     # Typed into a running turn: the CLI holds it in its own queue until the turn ends.
                     ok_info["queued_mid_turn"] = True
                 if interrupt_failed:
@@ -4824,32 +4855,60 @@ HELD_FOR_BOUNDARY_WORDS = "held for the turn boundary"
 MID_TURN_HOOK_WAITING_TTL_S = 900
 
 
-#: How long a person's interrupt waits for the composer after Escape, and how often it looks.
-INTERRUPT_WAIT_S = float(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "3.0"))
+#: How long a person's interrupt waits for the composer after Escape, and how often it looks. Clamped to
+#: [0.25, 3] s: the wait runs under the pane lock AND the per-session send lock, and with the submit witness
+#: (2.5 s + 2.0 s Enter checks, a 0.5 s C-u) the worst case must stay within PANE_LOCK_WAIT_S (8 s), or a
+#: concurrent sender (the router, a second person) times out as busy. A bad value falls back to the default
+#: instead of stopping the gateway from booting.
+INTERRUPT_WAIT_MAX_S = 3.0
+
+
+def _interrupt_wait_s(raw, default=3.0):
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if v != v:          # NaN
+        return default
+    return min(INTERRUPT_WAIT_MAX_S, max(0.25, v))
+
+
+INTERRUPT_WAIT_S = _interrupt_wait_s(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "3.0"))
 INTERRUPT_POLL_S = 0.25
 
 
 def _interrupt_turn(session):
     """Escape into a running turn (what handle_agent_interrupt does for the stop button), then wait up to
-    INTERRUPT_WAIT_S for the turn to leave the visible screen and the composer to accept input. True when it
-    did. Records the interrupt with the detector (mark_turn_interrupted) so a hook left at 'working' does not
-    hold queued mail for its TTL; the screen still wins if the Escape did not stop the turn."""
+    INTERRUPT_WAIT_S for the spinner to leave the rows above the input box and the composer to accept input.
+    Returns (sent, stopped): sent = the Escape keystroke reached the pane; stopped = the turn was seen to stop.
+    The interrupt is recorded with the detector (mark_turn_interrupted) ONLY once the stop is seen, so a hook
+    left at 'working' does not hold queued mail for its TTL, and a turn that ignored the Escape is never
+    marked idle while it still runs (the stop button's handler cannot know; this one can)."""
     import time as _time
     r = _tmux("send-keys", "-t", _st(session), "Escape")
     if r.returncode != 0:
-        return False
-    try:
-        mark = getattr(_agent_status(), "mark_turn_interrupted", None)
-        if callable(mark):
-            mark(session)
-    except Exception:  # noqa: BLE001 — bookkeeping, never the gate
-        pass
+        return False, False
     for _ in range(max(1, int(INTERRUPT_WAIT_S / INTERRUPT_POLL_S))):
         _time.sleep(INTERRUPT_POLL_S)
         scr = _strip_ansi(_capture_pane(session, lines=0) or "")
-        if scr and not _pane_shows_active_turn(scr) and _pane_has_composer(scr):
-            return True
-    return False
+        if scr and not _turn_above_composer(scr) and _pane_has_composer(scr):
+            try:
+                mark = getattr(_agent_status(), "mark_turn_interrupted", None)
+                if callable(mark):
+                    mark(session)
+            except Exception:  # noqa: BLE001 — bookkeeping, never the gate
+                pass
+            return True, True
+    return True, False
+
+
+def _screen_turn_above_composer(session):
+    """The interrupt's own gate: Escape goes only when the CLI's spinner is drawn right above the input box on
+    the screen as it is NOW. The detector's word can be stale (a hook left at working while the prompt is idle)
+    and the whole-screen heuristic (_pane_shows_active_turn) reads quoted "esc to interrupt" as a turn; Escape
+    into an idle prompt is exactly what handle_agent_interrupt refuses. An unreadable screen is not a turn."""
+    scr = _strip_ansi(_capture_pane(session, lines=0) or "")
+    return bool(scr) and _turn_above_composer(scr)
 
 
 def _mid_turn_recheck(session, force=False):
@@ -7190,8 +7249,12 @@ async def handle_agent_message(request):
     # A person's "now" (body interrupt:true, or ?interrupt=1): Escape first when the seat is mid-turn and the last
     # look is safe, then the words. Only a person's own surface may ask for it; mail and automation never
     # interrupt a turn. The default stays the queued steer (no Escape).
-    interrupt = (instant and not idle_only
-                 and (data.get("interrupt") is True or str(request.query.get("interrupt", "")).strip() == "1"))
+    _q = getattr(request, "query", None) or {}
+    interrupt_asked = data.get("interrupt") is True or str(_q.get("interrupt", "")).strip() == "1"
+    interrupt = instant and not idle_only and interrupt_asked
+    if interrupt_asked and not interrupt:
+        # Interrupting a turn is a stronger act than steering it: who asked and was refused is on record.
+        log.info(f"AGENT-MESSAGE -> {session}: interrupt refused (not a person's instant send) {_caller_desc(request)}")
 
     import asyncio
     if idle_only:
@@ -7206,7 +7269,8 @@ async def handle_agent_message(request):
         # A plain refusal the person reads as is ("Compacting isn't turned on for this agent yet."): nothing was sent.
         return _json({"ok": False, "delivered": False, **info}, status=409)
     if instant and ok and info.get("interrupted"):
-        log.info(f"AGENT-MESSAGE person -> {session}: typed now (interrupted; state was {info.get('state')})")
+        log.info(f"AGENT-MESSAGE person -> {session}: typed now (interrupted; state was {info.get('state')}) "
+                 f"{_caller_desc(request)}")
     elif instant and ok and info.get("queued_mid_turn"):
         log.info(f"AGENT-MESSAGE person -> {session}: typed mid-turn (state={info.get('state')}, "
                  f"queued by the CLI)" + (f"; interrupt failed: {info['interrupt_failed']}"
@@ -7236,6 +7300,9 @@ async def handle_agent_message(request):
         return _json({"ok": True, "delivered": False, "held": True, "state": "held_for_boundary", "outcome": "held",
                       "message_id": msg_id, "held_reason": info.get("reason"), "hold_class": hold_class,
                       "agent_state": info.get("state"),
+                      # An interrupt whose second look refused: the agent's step WAS stopped, the words are held.
+                      **({"escape_sent": True, "turn_stopped": bool(info.get("turn_stopped"))}
+                         if info.get("escape_sent") else {}),
                       "activity": (IDLE_ONLY_HOLD_WORDS if idle_only
                                    else f"{info.get('activity') or hold_class}; {HELD_FOR_BOUNDARY_WORDS}")},
                      status=PERSON_HOLD_STATUS)
@@ -7397,7 +7464,15 @@ async def handle_agent_interrupt(request):
                          status=503)
         return _json({"ok": bool(out.get("ok")), "interrupted": bool(out.get("ok")), "headless": True,
                       "hook_cleared": False}, status=200 if out.get("ok") else 502)
-    r = _tmux("send-keys", "-t", _st(session), "Escape")
+    # Under the per-session send lock (off the loop): an interrupt send (_interrupt_turn) holds it while it
+    # presses Escape and waits, so a stop-button tap at the same moment cannot add a SECOND Escape (two on an
+    # idle prompt open the CLI's previous-message picker).
+    import asyncio as _asyncio
+
+    def _esc():
+        with _session_send_lock(session):
+            return _tmux("send-keys", "-t", _st(session), "Escape")
+    r = await _asyncio.get_event_loop().run_in_executor(None, _esc)
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
     # and the detector reports "Active turn" for up to HOOK_WORKING_TTL_S

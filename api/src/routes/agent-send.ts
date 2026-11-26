@@ -176,13 +176,22 @@ export interface GatewayInjectResult {
   attempts?: number;
   /** The gateway's plain words for a refusal (shown to the person as written), e.g. a /compact refused. */
   detail?: string;
-  /** The honest outcome of an accepted send: 'delivered-now' | 'delivered-steer' | 'interrupted' | 'held'. */
-  outcome?: string;
+  /** The honest outcome of an accepted send. */
+  outcome?: SendOutcome;
   /** Escape was sent and the words typed on the idle prompt that followed. */
   interrupted?: boolean;
-  /** interrupt was asked for and the turn did not stop in time: the words went in as a steer. */
+  /** interrupt was asked for and there was no Escape, or the turn did not stop in time: the words went in as a
+   *  steer (or onto an idle prompt), and this says why. */
   interrupt_failed?: string;
+  /** On a held or refused answer: Escape WAS sent (the agent's step stopped) but the words were not typed. */
+  escape_sent?: boolean;
 }
+
+/** What happened to an accepted send, as the gateway said it. */
+export type SendOutcome = 'delivered-now' | 'delivered-steer' | 'interrupted' | 'held';
+export const SEND_OUTCOMES: readonly SendOutcome[] = ['delivered-now', 'delivered-steer', 'interrupted', 'held'];
+export const asOutcome = (v: unknown): SendOutcome | undefined =>
+  (SEND_OUTCOMES as readonly string[]).includes(String(v)) ? (v as SendOutcome) : undefined;
 
 export interface MsgStoreSendResult {
   sent: boolean;
@@ -262,9 +271,10 @@ export async function postAgentMessage(session: string, text: string,
       error: body.error,
       attempts: body.attempts,
       detail: typeof body.detail === 'string' ? body.detail : undefined,
-      outcome: typeof body.outcome === 'string' ? body.outcome : undefined,
+      outcome: asOutcome(body.outcome),
       interrupted: body.interrupted === true ? true : undefined,
       interrupt_failed: typeof body.interrupt_failed === 'string' ? body.interrupt_failed : undefined,
+      escape_sent: body.escape_sent === true ? true : undefined,
     };
   } catch (err: any) {
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -415,7 +425,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // Only an explicit boolean true counts.
   // interrupt: the person's "now" (body interrupt:true or ?interrupt=1). Only an explicit boolean true or the
   // literal "1" counts; the gateway decides whether this caller may interrupt at all.
-  const interrupt = body.interrupt === true || String((req.query as any)?.interrupt ?? '') === '1';
+  const qi = (req.query as any)?.interrupt;
+  const interrupt = body.interrupt === true || String((Array.isArray(qi) ? qi[0] : qi) ?? '').trim() === '1';
   const gw = await deps.gatewayInject(session, deliveredText, body.force === true, interrupt);
 
   const shape = (state: SendState, extra: Record<string, unknown> = {}) =>
@@ -433,6 +444,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     ...(gw.outcome ? { outcome: gw.outcome } : {}),
     ...(gw.interrupted ? { interrupted: true } : {}),
     ...(gw.interrupt_failed ? { interrupt_failed: gw.interrupt_failed } : {}),
+    ...(gw.escape_sent ? { escape_sent: true } : {}),
   };
 
   // Delivered — the parser-confirmed submit landed. agent_state says whether the agent was
@@ -458,7 +470,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // inject — but a pane that genuinely cannot take a keystroke right now.
   if (gw.ok && gw.held) {
     res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working',
-                                         outcome: 'held', ...pointer }));
+                                         outcome: 'held', ...(gw.escape_sent ? { escape_sent: true } : {}), ...pointer }));
     return;
   }
 
@@ -472,6 +484,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
       activity: gw.activity,
       composer_text: gw.composer_text,
       stranded: gw.stranded,
+      // An interrupt whose look after Escape found text: the agent's step WAS stopped, nothing was typed.
+      ...(gw.escape_sent ? { escape_sent: true } : {}),
     };
     res.status(409).json({
       ...legacy,
