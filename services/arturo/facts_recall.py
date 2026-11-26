@@ -50,6 +50,7 @@ UNSERVED_STATES = ("superseded", "archived")
 UNSOURCED_STATE = "unverified"
 UNSOURCED_FLAG = "no source quote found"
 SERVED_SQL = "COALESCE(state,'active') NOT IN (" + ",".join(f"'{s}'" for s in UNSERVED_STATES) + ")"
+UNSOURCED_SQL = f"COALESCE(state,'') = '{UNSOURCED_STATE}'"
 
 
 def served(state):
@@ -90,6 +91,30 @@ def sourced_window(cursor, limit, is_unsourced=None):
             if len(src) >= limit:
                 break
     return src + uns[: limit - len(src)]
+
+
+def _facts_window(con, select, where, params, limit, sequential=True):
+    """sourced_window over `select ... WHERE where ORDER BY ts DESC` (rows with a state column), with SQLite doing
+    the scanning. The newest `limit` rows come first; when none is unsourced, or they are every row there is, they are
+    the window, so a window with no unsourced row reads exactly what `ORDER BY ts DESC LIMIT n` reads. Otherwise a
+    second query reads the newest `limit` sourced rows, and the unsourced rows among the first fill what is left.
+    When at least half the first rows are sourced, the sourced ones are dense near the top and the ts index reaches
+    them in a few reads; when fewer are, one sequential pass, which reads each table page once, is cheaper than the
+    table lookup per index entry an index scan makes over a long stretch of unsourced rows. `sequential=False` keeps the
+    ts index for a `where` that bounds ts itself, since SQLite would read that range through the index anyway."""
+    if limit <= 0:
+        return []
+    head = con.execute(f"{select} WHERE {where} ORDER BY ts DESC LIMIT ?", [*params, limit]).fetchall()
+    uns = [r for r in head if unsourced(r["state"])]
+    if not uns:
+        return head
+    if len(head) < limit:
+        return [r for r in head if not unsourced(r["state"])] + uns
+    order = "ts" if not sequential or len(head) - len(uns) >= limit // 2 else "+ts"
+    src = con.execute(f"{select} WHERE NOT {UNSOURCED_SQL} AND {where} ORDER BY {order} DESC LIMIT ?",
+                      [*params, limit]).fetchall()
+    return src + uns[: limit - len(src)]
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -214,11 +239,10 @@ def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
     try:
         con = _connect_ro(dbpath)
         try:
-            rows = sourced_window(con.execute(
-                "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
-                "WHERE ts >= ? AND " + SERVED_SQL
-                + ((" AND " + noise_clause) if noise_clause else "") + " ORDER BY ts DESC",
-                [cutoff] + [p + "%" for p in _NOISE_PREFIXES]), max(k * 8, 100))
+            rows = _facts_window(
+                con, "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts",
+                "ts >= ? AND " + SERVED_SQL + ((" AND " + noise_clause) if noise_clause else ""),
+                [cutoff] + [p + "%" for p in _NOISE_PREFIXES], max(k * 8, 100), sequential=False)
         finally:
             con.close()
     except sqlite3.Error as e:
@@ -326,16 +350,12 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
         noise_clause = " AND ".join(["lower(ltrim(text)) NOT LIKE ?"] * len(_NOISE_PREFIXES))
         noise_params = [p + "%" for p in _NOISE_PREFIXES]
         not_noise = (" AND " + noise_clause) if noise_clause else ""
-        rows = sourced_window(con.execute(
-            "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
-            f"WHERE ({like}) AND {not_sup}{not_noise} ORDER BY ts DESC",
-            params + noise_params), candidate_limit)
+        select = "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts"
+        rows = _facts_window(con, select, f"({like}) AND {not_sup}{not_noise}", params + noise_params,
+                             candidate_limit)
         tier_ph = ",".join("?" * len(_NODECAY_TIERS))
-        rows2 = sourced_window(con.execute(
-            "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
-            f"WHERE ({like}) AND {not_sup}{not_noise} AND expiry_class IN ({tier_ph}) "
-            "ORDER BY ts DESC",
-            params + noise_params + list(_NODECAY_TIERS)), DURABLE_LIMIT)
+        rows2 = _facts_window(con, select, f"({like}) AND {not_sup}{not_noise} AND expiry_class IN ({tier_ph})",
+                              params + noise_params + list(_NODECAY_TIERS), DURABLE_LIMIT)
     finally:
         con.close()
 
