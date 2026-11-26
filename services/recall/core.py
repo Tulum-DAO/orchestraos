@@ -31,8 +31,10 @@ from pathlib import Path
 
 log = logging.getLogger("recall-core")
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
 _ROOT = str(Path(__file__).resolve().parents[2])
+# Where the semantic_memory package is imported from: $RECALL_SCRIPTS_DIR, else this checkout's scripts/.
+# Without it the RECALL block reports embedder:failed and the FACTS and WORLDVIEW blocks still serve.
+SCRIPTS_DIR = Path(os.environ.get("RECALL_SCRIPTS_DIR") or Path(_ROOT) / "scripts")
 for _p in (_ROOT, os.path.join(_ROOT, "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -198,7 +200,7 @@ class Recall:
 
     # ------------------------------------------------------------ embedder (once, off the path)
     def _default_loader(self):
-        scripts = str(ORCHESTRA_DIR / "scripts")
+        scripts = str(SCRIPTS_DIR)
         if scripts not in sys.path:
             sys.path.insert(0, scripts)
         from semantic_memory import embed as sme  # noqa: PLC0415
@@ -277,7 +279,7 @@ class Recall:
         def _write():
             try:
                 sr._import_sm.__globals__  # keep the sys.path seam identical to the vector path
-                scripts = str(ORCHESTRA_DIR / "scripts")
+                scripts = str(SCRIPTS_DIR)
                 if scripts not in sys.path:
                     sys.path.insert(0, scripts)
                 import semantic_memory.db as smdb  # noqa: PLC0415  (db_connect only, no numpy)
@@ -423,7 +425,7 @@ class Recall:
     # ------------------------------------------------------------ per-call load log (review R1)
     def _ensure_calls_table(self):
         """Service-owned, additive table in semantic-memory.db; the library's tables are untouched."""
-        scripts = str(ORCHESTRA_DIR / "scripts")
+        scripts = str(SCRIPTS_DIR)
         if scripts not in sys.path:
             sys.path.insert(0, scripts)
         import semantic_memory.db as smdb  # noqa: PLC0415

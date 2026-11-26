@@ -16,17 +16,22 @@ import fcntl
 import json
 import os
 import sqlite3
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from facts_schema import STATES, classify_expiry_class, is_noise_text, validate_fact
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:                      # its sibling modules import flat, also when loaded by file path
+    sys.path.append(_HERE)
+from facts_schema import STATES, classify_expiry_class, is_noise_text, validate_fact  # noqa: E402
 
-_LIVE_REDACTOR = os.path.expanduser("~/scripts/agent-orchestra/scripts/brain/redact_secrets.py")
+# The redactor sits next to this file. REDACT_SECRETS_PATH overrides it.
+_LIVE_REDACTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "redact_secrets.py")
 
 
 def _scrubber():
-    """The LIVE tree's scrub_fact_text (the same wide filter the 10-09 purge used), loaded by file
+    """The redactor's scrub_fact_text (the same wide filter the 10-09 purge used), loaded by file
     path like ingest_run's worldview hook: cron code is brain-e1, the redactor lives on the live tree. Raises if it
     cannot load, so ingest refuses rather than storing secrets unredacted. REDACT_SECRETS_PATH overrides (tests)."""
     import importlib.util  # noqa: PLC0415
@@ -38,7 +43,14 @@ def _scrubber():
     spec.loader.exec_module(mod)
     return mod.scrub_fact_text
 
-ORCH = os.path.expanduser("~/scripts/agent-orchestra")
+# The data dir is orchestra_cli's data_dir() ($ORCHESTRA_DIR first), like every other script here.
+# orchestra_cli lives in this file's checkout; appended, never prepended, so nothing is shadowed.
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:
+    sys.path.append(_ROOT)
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+ORCH = str(_data_dir())
 DEFAULT_DB = os.path.join(ORCH, "state", "brain", "facts.db")
 
 _SCHEMA = """
