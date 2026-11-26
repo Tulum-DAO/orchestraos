@@ -7,8 +7,9 @@ ranked below sourced facts and never as anyone's words.
 Off unless QUOTE_GATE_LABEL=1.
 
 What verifies today, read-only at ingest time:
-- dream CLI rows: the dream row (found in its day file by text) says actor "shaw" and carries a citation
-  {transcript, uuid, part}; that transcript record exists, and its text block contains the fact's text.
+- dream CLI rows: the dream row (the day file line its source_id names) has the fact's text, says actor "shaw"
+  and carries a citation {transcript, uuid, part}; that transcript record exists, and its text block contains
+  the fact's text.
 - voice rows: the conversation row the fact cites says the operator spoke, and its text is the fact's text.
 Every other attributed fact (summaries, inferences, goals) has no quote to check, so it is labelled.
 
@@ -97,22 +98,25 @@ class _Sources:
         self.projects_dir = projects_dir
         self._jsonl = {}
 
-    def rows(self, path: str) -> list:
+    def rows(self, path: str, by_line: bool = False) -> list:
+        """The parsed rows of a jsonl file (None for a line that does not parse), or None if it cannot be read.
+        by_line splits the way the dream adapter numbers lines (str.splitlines), so row n-1 is line n."""
         if not isinstance(path, str) or not path:
             return None
-        if path not in self._jsonl:
+        key = (path, by_line)
+        if key not in self._jsonl:
             out = []
             try:
                 with open(path, errors="replace") as fh:
-                    for line in fh:
+                    for line in (fh.read().splitlines() if by_line else fh):
                         try:
                             out.append(json.loads(line))
                         except ValueError:
                             out.append(None)
             except (OSError, ValueError):             # ValueError: a NUL byte in the path
                 out = None
-            self._jsonl[path] = out
-        return self._jsonl[path]
+            self._jsonl[key] = out
+        return self._jsonl[key]
 
     def transcript_block(self, citation: dict):
         """The text of block `part` of the record `uuid` in `transcript`, or None."""
@@ -134,13 +138,18 @@ class _Sources:
 
 def _check_dream(fact: dict, src: _Sources):
     p = fact.get("provenance") or {}
-    rows = src.rows(p.get("path"))
+    rows = src.rows(p.get("path"), by_line=True)
     if rows is None:
         return False, "dream day file not readable"
-    want = _norm(fact.get("text"))
-    row = next((r for r in rows if isinstance(r, dict) and _norm(r.get("text")) == want), None)
-    if row is None:
+    # source_id is "<day file name>:<1-based line>", as the dream adapter writes it
+    name, _, line = str(p.get("source_id") or "").rpartition(":")
+    n = int(line) if re.fullmatch(r"[1-9][0-9]*", line) else 0
+    row = rows[n - 1] if name == os.path.basename(p["path"]) and 0 < n <= len(rows) else None
+    if not isinstance(row, dict):
         return False, "dream row not found"
+    want = _norm(fact.get("text"))
+    if _norm(row.get("text")) != want:
+        return False, "dream row text differs from the fact"
     if _lower(row.get("actor")) != OPERATOR:
         return False, f"dream row author is {row.get('actor')!r}"
     cite = row.get("citation")

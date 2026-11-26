@@ -292,3 +292,28 @@ def test_a_voice_fact_must_be_the_cited_turn_word_for_word(world, tmp_path, monk
     assert states["paraphrase"] == "unverified"
     assert prov["paraphrase"]["quote_gate"]["reason"] == "conversation row text differs from the fact"
     assert states["voice_shaw"] == "active"
+
+
+def test_a_dream_fact_is_checked_against_the_row_its_source_id_names(world, tmp_path, monkeypatch):
+    """An agent row with the same text earlier in the day file does not hide the operator's row the fact cites."""
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    _append(tmp_path / "projects" / "proj" / "sess.jsonl", [
+        {"type": "user", "uuid": "u-dup", "message": {"content": "pin the release notes to the top"}}])
+    day = tmp_path / "2026-11-25.jsonl"
+    text = "pin the release notes to the top"
+    first = _append(day, [_cli_row(text, {"transcript": "proj/sess.jsonl", "uuid": "u-dup", "part": 0}, actor="agent"),
+                          _cli_row(text, {"transcript": "proj/sess.jsonl", "uuid": "u-dup", "part": 0})])
+    world["agent_line"] = _dream_at(day, first, text, actor="shaw")
+    world["operator_line"] = _dream_at(day, first + 1, text, actor="shaw")
+    world["wrong_line"] = _dream_at(day, 1, "a fact that is not on its cited line")
+    world["other_file"] = make_fact(ts=TS, kind="fact", text="keep the dark theme on every page", actor="shaw",
+                                    provenance={"source_kind": "dream-facts", "source_id": "2026-11-24.jsonl:1",
+                                                "path": str(day)})
+    _, states, prov = _ingest(tmp_path, world)
+    reasons = {k: prov[k]["quote_gate"]["reason"] for k in ("agent_line", "operator_line", "wrong_line", "other_file")}
+    assert reasons == {"agent_line": "dream row author is 'agent'",
+                       "operator_line": "quote found in the operator's cited transcript turn",
+                       "wrong_line": "dream row text differs from the fact",
+                       "other_file": "dream row not found"}
+    assert states["operator_line"] == "active"
+    assert {k: states[k] for k in EXPECT} == EXPECT
