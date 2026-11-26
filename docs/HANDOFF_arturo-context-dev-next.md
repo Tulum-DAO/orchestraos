@@ -93,3 +93,4 @@
   - New native, 1387 tokens, 39 tools: one real call, 3.27 s (native-ef7dc1274bf1). No real call since the 23:01Z 2500 respawn.
   - End of user speech -> first audio: p50 0.31-0.94 s, p90 1.0-1.6 s. Outliers of 9-17 s are tool turns.
   - Tool result -> audio: 2-4 s typical, tail 18-42 s (old tree). These turns are the latency problem more than the greet.
+- 00:45Z: #645 re-review MERGE-OK at 652c59b, CI 19/19 green by name; HOLD lifted on card apr_f7e96424. Merge after #638. Follow-up PR after it merges (non-blocking): pin whether the 120 s gap counts from the previous phrase or the turn's first (a third phrase at ~200 s), and a non-ASCII tail-cut case, so a UTF-16 slice in the TS tail path turns red.
