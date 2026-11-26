@@ -349,3 +349,60 @@ def test_the_voice_speaker_check_ignores_case(world, tmp_path, monkeypatch):
     _, states, prov = _ingest(tmp_path, world)
     assert states["capital_role"] == states["upper_from"] == "active"
     assert {k: states[k] for k in EXPECT} == EXPECT
+
+
+def test_a_citation_cannot_reach_a_transcript_outside_the_projects_dir(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    text = "deploy the docs site tonight"
+    outside = tmp_path / "outside" / "sess.jsonl"
+    outside.parent.mkdir()
+    outside.write_text(json.dumps({"type": "user", "uuid": "u-out", "message": {"content": text}}) + "\n")
+    day = tmp_path / "2026-11-25.jsonl"
+    first = _append(day, [_cli_row(text, {"transcript": "../outside/sess.jsonl", "uuid": "u-out", "part": 0}),
+                          _cli_row(text, {"transcript": str(outside), "uuid": "u-out", "part": 0})])
+    world["dotdot"] = _dream_at(day, first, text)
+    world["absolute"] = _dream_at(day, first + 1, text)
+    _, states, prov = _ingest(tmp_path, world)
+    for k in ("dotdot", "absolute"):
+        assert states[k] == "unverified"
+        assert prov[k]["quote_gate"]["reason"] == "cited transcript turn not found"
+
+
+def test_the_quote_must_be_in_the_cited_block_not_another(world, tmp_path, monkeypatch):
+    """u-multi has the text in block 1; a citation of block 0 does not verify it."""
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    day = tmp_path / "2026-11-25.jsonl"
+    text = "ship the beta on friday"
+    line = _append(day, [_cli_row(text, {"transcript": "proj/sess.jsonl", "uuid": "u-multi", "part": 0})])
+    world["wrong_block"] = _dream_at(day, line, text)
+    _, states, prov = _ingest(tmp_path, world)
+    assert states["wrong_block"] == "unverified"
+    assert prov["wrong_block"]["quote_gate"]["reason"] == "fact text not found in the cited turn"
+    assert states["multi_block"] == "active"
+
+
+def test_a_voice_fact_is_checked_against_the_row_its_source_id_names(world, tmp_path, monkeypatch):
+    """The operator's words cited to the system's row, or to no row, do not verify by matching some other row."""
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    conv = tmp_path / "conversation.jsonl"
+    world["system_row"] = _voice_at(conv, "voice:2026-11-25T11:01:00Z", "turn the volume down please")
+    world["no_row"] = _voice_at(conv, "voice:2026-11-25T12:00:00Z", "turn the volume down please")
+    _, states, prov = _ingest(tmp_path, world)
+    assert {k: prov[k]["quote_gate"]["reason"] for k in ("system_row", "no_row")} == {
+        "system_row": "conversation row speaker is 'system'", "no_row": "conversation row not found"}
+    assert states["system_row"] == states["no_row"] == "unverified"
+
+
+@pytest.mark.parametrize("value", [None, "0", "false", "", "true", "yes", " 1", "01"])
+def test_only_the_value_1_turns_the_gate_on(value, world, tmp_path, monkeypatch):
+    if value is not None:
+        monkeypatch.setenv("QUOTE_GATE_LABEL", value)
+    assert quote_gate.enabled() is False
+    _, states, prov = _ingest(tmp_path, world)
+    assert set(states.values()) == {"active"}
+    assert not any("quote_gate" in p for p in prov.values())
+
+
+def test_the_value_1_turns_the_gate_on(monkeypatch):
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    assert quote_gate.enabled() is True
