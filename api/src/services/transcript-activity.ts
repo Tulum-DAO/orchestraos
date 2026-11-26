@@ -27,10 +27,14 @@ import { statSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { resolveTranscriptPath } from '../routes/chat-transcript.js';
+import { dataDir } from '../lib/config.js';
 
 const HOME = process.env.HOME || homedir();
-const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, '.orchestra');
-const SESSIONS_PATH = join(ORCHESTRA_DIR, 'state', 'agent-sessions.json');
+const CLAUDE_PROJECTS = join(HOME, '.claude', 'projects');
+/** The resolver reads this same data dir, so the sid and its path come from one registry. */
+function sessionsPath(): string {
+  return join(dataDir(), 'state', 'agent-sessions.json');
+}
 
 /**
  * How recently the transcript must have been touched to count as working.
@@ -54,7 +58,7 @@ function sessions(): Record<string, any> {
   const now = Date.now();
   if (now - sessionsReadAt < SESSIONS_TTL_MS) return sessionsCache;
   try {
-    sessionsCache = JSON.parse(readFileSync(SESSIONS_PATH, 'utf8')) || {};
+    sessionsCache = JSON.parse(readFileSync(sessionsPath(), 'utf8')) || {};
   } catch {
     sessionsCache = {};          // absent/unreadable → no corroboration, detector stands
   }
@@ -62,9 +66,28 @@ function sessions(): Record<string, any> {
   return sessionsCache;
 }
 
-/** Resolved paths, kept as long as the session map: one resolve per seat per TTL, not per request. */
-let resolvedCache = new Map<string, string | null>();
-let resolvedAt = 0;
+interface SessionEntry { conversation_path?: unknown; session_id?: unknown; cwd?: unknown }
+
+/** A session id goes into a file path: plain id characters only, never a separator. */
+const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;
+
+/**
+ * Resolved paths by `<agent>:<sid>`. A found path is kept until the seat's sid changes (a new key);
+ * a miss is retried after MISS_TTL_MS. The full resolver costs up to ~0.3 s per seat (sqlite, /proc,
+ * directory scans), so it must never run for every seat on every poll of the list.
+ */
+const MISS_TTL_MS = 60_000;
+const MAX_RESOLVED = 2000;
+const resolvedCache = new Map<string, { path: string | null; at: number }>();
+
+function remember(key: string, path: string | null): void {
+  if (resolvedCache.size >= MAX_RESOLVED) resolvedCache.delete(resolvedCache.keys().next().value as string);
+  resolvedCache.set(key, { path, at: Date.now() });
+}
+
+function fileExists(p: string): boolean {
+  try { return statSync(p).isFile(); } catch { return false; }
+}
 
 /**
  * The seat's transcript file. An explicit conversation_path wins; otherwise the chat route's own
@@ -73,25 +96,32 @@ let resolvedAt = 0;
  * recorded session_id: a newest-file guess in a shared project dir could be another seat's, and
  * unknown must never read as working.
  */
-function transcriptPath(agentId: string, entry: any): string | null {
+function transcriptPath(agentId: string, entry: SessionEntry): string | null {
   const cp = entry.conversation_path;
   if (cp && typeof cp === 'string') return cp;
   const sid = typeof entry.session_id === 'string' ? entry.session_id : '';
-  if (!sid) return null;
-  const now = Date.now();
-  if (now - resolvedAt >= SESSIONS_TTL_MS) { resolvedCache = new Map(); resolvedAt = now; }
+  if (!sid || !SESSION_ID.test(sid)) return null;
   const key = `${agentId}:${sid}`;
-  if (!resolvedCache.has(key)) {
-    let path: string | null = null;
+  const hit = resolvedCache.get(key);
+  if (hit && (hit.path !== null || Date.now() - hit.at < MISS_TTL_MS)) return hit.path;
+  // 1. The direct file: a Claude seat's transcript is <projects>/<slug(cwd)>/<sid>.jsonl. One stat.
+  let path: string | null = null;
+  if (typeof entry.cwd === 'string' && entry.cwd) {
+    const direct = join(CLAUDE_PROJECTS, entry.cwd.replace(/[/.]/g, '-'), `${sid}.jsonl`);
+    if (fileExists(direct)) path = direct;
+  }
+  // 2. Otherwise the chat route's full resolver (other runtimes, moved cwds), accepted only when the
+  // session it found IS the seat's recorded one.
+  if (path === null) {
     try {
       const r = resolveTranscriptPath(agentId);
       path = r.path && r.sid === sid ? r.path : null;
     } catch {
       path = null;               // a resolver failure is unknown, never working
     }
-    resolvedCache.set(key, path);
   }
-  return resolvedCache.get(key) ?? null;
+  remember(key, path);
+  return path;
 }
 
 /**
@@ -99,7 +129,7 @@ function transcriptPath(agentId: string, entry: any): string | null {
  * no usable transcript path (never indexed, or the file is gone).
  */
 export function transcriptAgeMs(agentId: string): number | null {
-  const entry = sessions()[agentId];
+  const entry = sessions()[agentId] as SessionEntry | undefined;
   if (!entry) return null;
   const cp = transcriptPath(agentId, entry);
   if (!cp) return null;

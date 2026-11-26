@@ -30,9 +30,24 @@ const projDir = join(dir, 'home', '.claude', 'projects', seatCwd.replace(/[/.]/g
 mkdirSync(projDir, { recursive: true });
 writeFileSync(join(projDir, `${SID}.jsonl`), '{}\n');
 process.env.HOME = join(dir, 'home');
+// The resolver probes panes: point tmux at an empty socket dir so no test ever reaches the real server.
+process.env.TMUX_TMPDIR = join(dir, 'no-tmux');
+mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });
+delete process.env.TMUX;
+
+// A seat whose recorded session has no file, in a project dir whose only (fresh) transcript is ANOTHER
+// session's: the newest-file guess must not be taken as this seat's activity.
+const OTHER_CWD = '/work/seat-b';
+const otherDir = join(dir, 'home', '.claude', 'projects', OTHER_CWD.replace(/[/.]/g, '-'));
+mkdirSync(otherDir, { recursive: true });
+writeFileSync(join(otherDir, '0c0ffee0-0000-4000-8000-0000000000aa.jsonl'), '{}\n');
+// The file a traversing sid ('../../fresh' from the seat's project dir) would land on, fresh on purpose.
+writeFileSync(join(dir, 'home', '.claude', 'fresh.jsonl'), '{}\n');
 
 writeFileSync(join(dir, 'state', 'agent-sessions.json'), JSON.stringify({
   bysid: { session_id: SID, cwd: seatCwd, tmux_session: 'bysid-no-such-pane', runtime: 'claude' },
+  othersid: { session_id: '0c0ffee0-0000-4000-8000-000000000002', cwd: OTHER_CWD, tmux_session: 'othersid', runtime: 'claude' },
+  badsid: { session_id: '../../fresh', cwd: seatCwd, tmux_session: 'badsid', runtime: 'claude' },
   busy: { conversation_path: fresh, tmux_session: 'busy' },
   quiet: { conversation_path: stale, tmux_session: 'quiet' },
   gone: { conversation_path: join(dir, 'does-not-exist.jsonl'), tmux_session: 'gone' },
@@ -47,6 +62,15 @@ test('a seat with no conversation_path is found from its session id (the real pr
   assert.equal(isTranscriptActive('bysid'), true);
   const age = transcriptAgeMs('bysid');
   assert.ok(age !== null && age < 60_000, `expected a fresh age, got ${age}`);
+});
+
+test("another session's fresh transcript in the seat's project dir is NOT the seat working", () => {
+  assert.equal(isTranscriptActive('othersid'), false);
+  assert.equal(transcriptAgeMs('othersid'), null);
+});
+
+test('a session id that is not a plain id never becomes a path', () => {
+  assert.equal(transcriptAgeMs('badsid'), null);
 });
 
 test('a transcript being appended to right now reads as working', () => {
