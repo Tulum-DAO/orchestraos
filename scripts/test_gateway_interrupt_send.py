@@ -1,6 +1,6 @@
-"""A person's "now": interrupt=1 on POST /agent-message, and the honest outcome of every accepted send (operator
-order via gm msg_4952c4ff: "messages which are important for context and steering are getting queued and not being
-ingested until the turn is done").
+"""A person's "now": interrupt=1 on POST /agent-message, and the honest outcome of every accepted send (the operator's
+order: "messages which are important for context and steering are getting queued and not being ingested until the
+turn is done").
 
 Today a person's send into a working seat is typed and the CLI queues it until the turn ends (outcome
 "delivered-steer"); the dashboard showed that as QUEUED, which read as "not delivered". With interrupt:true (or
