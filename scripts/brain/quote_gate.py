@@ -133,7 +133,8 @@ class _Sources:
                     b.get("text", "") for b in (c if isinstance(c, list) else [])
                     if isinstance(b, dict) and b.get("type") == "text"]
                 part = citation.get("part")
-                return o, (blocks[part] if isinstance(part, int) and 0 <= part < len(blocks) else None)
+                ok = isinstance(part, int) and not isinstance(part, bool) and 0 <= part < len(blocks)
+                return o, (blocks[part] if ok else None)
         return None, None
 
 

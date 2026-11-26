@@ -406,3 +406,14 @@ def test_only_the_value_1_turns_the_gate_on(value, world, tmp_path, monkeypatch)
 def test_the_value_1_turns_the_gate_on(monkeypatch):
     monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
     assert quote_gate.enabled() is True
+
+
+def test_a_boolean_part_is_not_a_block_index(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    day = tmp_path / "2026-11-25.jsonl"
+    text = "ship the beta on friday"
+    line = _append(day, [_cli_row(text, {"transcript": "proj/sess.jsonl", "uuid": "u-multi", "part": True})])
+    world["bool_part"] = _dream_at(day, line, text)
+    _, states, prov = _ingest(tmp_path, world)
+    assert states["bool_part"] == "unverified"
+    assert prov["bool_part"]["quote_gate"]["reason"] == "cited transcript turn not found"
