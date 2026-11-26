@@ -276,7 +276,7 @@ Precedence, first hit wins; `due_source` names the rule.
   1. counterpart (a participant for theirs, the named person for Shaw's) → `client.json` `pm_agent`;
   2. else project → `protocol.py determine_pm()`;
   3. it must be live in `registry.json`, where the PM seats in `gm.md:283-293` are absent today;
-  4. else gm.
+  4. else gm. The option reads `Assign to gm to route: <work> (you send it)` and the dispatch asks gm to pick the seat; sending stays Shaw's (dry run 11-26, gm msg_feff515d). Step 2 (project → `determine_pm()`) is not built yet: the extractor's `project` field came back empty on all three real calls.
 - **Results:** replies to `postcall-dev` (the sweeper takes only messages whose subject carries a `[postcall dispatch:<cmt>]` / `duenote` tag) are matched to their item by the dispatch id in the subject. When every dispatched item on a card has a result, or 48 h pass (report partial), effect `results:<card_id>` sends **one** message to gm: `Post-call results ready: <title>: <k>/<m> done, <unreviewed u>, <links>`. gm relays one line to Shaw; postcall never texts him.
 
 ## 7. Fixtures, tests, shadow and rollout

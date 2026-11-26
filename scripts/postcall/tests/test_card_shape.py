@@ -127,3 +127,40 @@ def test_frozen_entry_carries_the_item_for_later_sends():
                                       "due_ts": "2026-11-27T17:00:00-05:00", "due_source": "by Friday",
                                       "quote": "quote for a1", "citation": "pocket:r1@02:10",
                                       "call_title": "Synthetic Vendor Sync"}
+
+
+def test_a_backlog_card_never_shows_a_decide_by_in_the_past():
+    """gm msg_feff515d (3): a replayed or backlog call gets now + the normal window."""
+    page, = card.build(title="Synthetic Vendor Sync", items=[_item("a1", due=Due(None, "none stated"))], tz=TZ,
+                       tz_label=LABEL, call_start=CALL_START, call_end=CALL_END, participants=["Dana Reyes"],
+                       now="2026-11-26T02:00:00Z")
+    assert page.decide_by == "2026-11-27T02:00:00+00:00"
+    assert page.summary.startswith("Decide by: Thu 26 Nov 21:00 Local · ")
+
+
+def test_a_due_already_past_also_gives_now_plus_a_day():
+    page, = card.build(title="Synthetic Vendor Sync", items=[_item("a1")], tz=TZ, tz_label=LABEL,
+                       call_start=CALL_START, call_end=CALL_END, participants=["Dana Reyes"],
+                       now="2026-11-28T00:00:00Z")
+    assert page.decide_by == "2026-11-29T00:00:00+00:00"
+
+
+def test_gm_routed_agent_work_is_offered_and_says_sending_stays_human():
+    it = _item("a1", seat="gm", agent_work="draft the pricing deck email", route=True)
+    page, = _build([it])
+    labels = [o["label"] for o in page.questions[1]["menu"]["options"]]
+    assert labels[0].startswith("Assign to gm to route: draft the pricing deck email (you send it)")
+    assert page.frozen[0]["options"][0] == {"action": "assign", "seat": "gm", "agent_work":
+                                            "draft the pricing deck email", "route": True}
+    assert page.frozen[0]["options"][1] == {"action": "take"}
+
+
+def test_the_pipeline_files_a_backlog_call_with_a_future_decide_by(tmp_path, monkeypatch):
+    from postcall import effects, ledger, pipeline
+    from . import _calls
+    monkeypatch.setattr(pipeline, "_now", lambda: "2026-12-01T12:00:00+00:00")
+    world = effects.Recorder()
+    call, ex = _calls.call([_calls.item("I'll send you the pricing deck by Friday.")], when="2026-11-24T19:00:00Z")
+    assert pipeline.process(call, ledger=ledger.Ledger(str(tmp_path / "l.db")), extractor=ex,
+                            effects=world).status == "carded"
+    assert world.sent[0].payload["decide_by"] == "2026-12-02T12:00:00+00:00"

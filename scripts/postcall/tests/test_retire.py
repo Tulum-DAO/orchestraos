@@ -33,6 +33,12 @@ def _filed(tmp_path):
     return led, world, card
 
 
+@pytest.fixture(autouse=True)
+def _before_the_call(monkeypatch):
+    """These tests reason from the card's own Decide-by; the clock is pinned before the synthetic call."""
+    monkeypatch.setattr(pipeline, "_now", lambda: "2026-11-24T00:00:00+00:00")
+
+
 def test_card_payload_carries_decide_by(tmp_path):
     _, _, card = _filed(tmp_path)
     # Earliest due: Dana's "tomorrow morning" = Wed 25 Nov 09:00 Local; decide two hours before.

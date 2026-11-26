@@ -18,7 +18,7 @@ import os
 import sqlite3
 import time
 
-from . import effects, ledger, pipeline, sources
+from . import calendar_fetch, effects, ledger, pipeline, sources
 
 SETTLE_S = 120  # a file touched more recently than this may still be being written (§1)
 
@@ -176,6 +176,14 @@ def run_once(*, now=None, extractor=None, adapter=None, mode=None, root=None):
             out["retired"] = pipeline.retire_stale(led, adapter, dt.datetime.fromtimestamp(now, dt.timezone.utc))
         except Exception as e:
             out["errors"].append({"call": None, "error": f"retire: {e!r}"})
+
+        # Shaw's calendar, before any call needs it (design §3). A failure never stops the sweep.
+        try:
+            out["calendar"] = calendar_fetch.refresh(now=now)
+        except Exception as e:
+            out["calendar"] = f"error: {type(e).__name__}"
+        if out["calendar"].startswith("error"):
+            out["errors"].append({"call": None, "error": f"calendar: {out['calendar']}"})
 
         start_ts = ensure_start_ts(path, now)
         found = scan(root, start_ts, now)

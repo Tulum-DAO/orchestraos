@@ -86,3 +86,45 @@ def test_local_zone_is_not_new_york_in_summer():
     # June: New York is UTC-4 (EDT), the local zone stays UTC-5. A hardcoded ET would be an hour off.
     d = due("tomorrow", anchor="2027-06-15T15:00:00Z")
     assert d.due_ts == "2027-06-16T17:00:00-05:00"
+
+
+# --- dry-run gaps (gm msg_feff515d): spelled-out clocks, a named zone, relative hours -------------
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("two PM EST", "2026-11-24T14:00:00-05:00"),              # ET = UTC-5 on this date
+    ("at four pm", "2026-11-24T16:00:00-05:00"),
+    ("by 5 p.m.", "2026-11-24T17:00:00-05:00"),
+    ("tomorrow at eleven am", "2026-11-25T11:00:00-05:00"),
+    ("three o'clock tomorrow", "2026-11-25T15:00:00-05:00"),
+])
+def test_spelled_out_and_bare_clock_times_resolve(phrase, expected):
+    d = due(phrase, anchor="2026-11-24T18:00:00Z")            # 13:00 local: these times are still ahead
+    assert d.due_ts == expected
+
+
+def test_a_clock_time_already_past_on_the_call_day_is_the_next_day():
+    d = due("at 9am", anchor="2026-11-24T18:00:00Z")
+    assert d.due_ts == "2026-11-25T09:00:00-05:00"
+
+
+def test_a_named_zone_is_honoured_over_shaws_zone():
+    d = due("2pm Pacific", anchor="2026-11-24T18:00:00Z")
+    assert d.due_ts == "2026-11-24T17:00:00-05:00"            # 14:00 PT = 17:00 in the test zone (UTC-5)
+    assert "Pacific" in d.due_source
+
+
+@pytest.mark.parametrize("phrase,hours", [
+    ("in the next couple of hours", 2), ("in a couple hours", 2), ("in an hour", 1),
+    ("within 3 hours", 3), ("in the next few hours", 3),
+])
+def test_relative_hours_count_from_the_call(phrase, hours):
+    d = due(phrase)
+    import datetime as dt
+    expected = (dt.datetime(2026, 11, 24, 19, tzinfo=dt.timezone.utc) + dt.timedelta(hours=hours))
+    assert deadlines._parse_utc(d.due_ts) == expected
+    assert d.due_source == phrase
+
+
+def test_conditions_without_a_time_stay_unknown():
+    for phrase in ("once I'm at my desk", "in the meantime", "whenever you're back at your desk"):
+        assert due(phrase).due_ts is None

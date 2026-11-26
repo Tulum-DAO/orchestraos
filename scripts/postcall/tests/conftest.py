@@ -36,6 +36,7 @@ def _fence_env(tmp):
         "POSTCALL_MODE": "test",
         "MSG_STORE_NO_KICK": "1",                                            # no router pass from a child
         "POSTCALL_CALENDAR_FILE": os.path.join(tmp, "no-calendar", "shaw.ics"),  # never the live feed
+        "POSTCALL_CALENDAR_URL_FILE": os.path.join(tmp, "no-secrets", "cal.url"),  # nor the secret URL
         "POSTCALL_STATE_DIR": os.path.join(tmp, "postcall-state"),
         "SHAW_LOCATION_FILE": os.path.join(FIXTURES, "shaw-location.json"),
         "POSTCALL_CLIENTS_DIR": os.path.join(tmp, "no-clients"),                 # never the live client files
@@ -59,7 +60,7 @@ def _no_outside_effects(monkeypatch, request, tmp_path):
     for key in [k for k in os.environ if k.startswith("TELEGRAM_")]:
         monkeypatch.delenv(key)
     for key in ("APPROVAL_DB_PATH", "NTFY_TOKEN_FILE", "MSG_DB_PATH", "POSTCALL_STATE_DIR", "POSTCALL_CLIENTS_DIR",
-                "POSTCALL_REGISTRY_FILE"):
+                "POSTCALL_REGISTRY_FILE", "POSTCALL_CALENDAR_URL_FILE"):
         assert not _under_live(os.environ[key]), f"postcall fence: {key} points at a live path"
     assert not os.path.exists(os.environ["NTFY_TOKEN_FILE"]), "postcall fence: ntfy token must be absent"
     real_run, real_popen = subprocess.run, subprocess.Popen
