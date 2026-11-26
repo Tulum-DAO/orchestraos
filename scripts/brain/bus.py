@@ -80,6 +80,27 @@ CREATE TABLE IF NOT EXISTS ingest_meta (
 );
 """
 
+# Recall's sourced windows (services/arturo/facts_recall.py) read the newest facts that have a source quote:
+# `WHERE UNSOURCED_SQL = 0 ... ORDER BY ts DESC LIMIT n`. With only idx_facts_ts that read walks past every unsourced
+# (unverified) row, nearly the whole table when nearly every row is one. These two indexes on the same expression let
+# it search straight to the sourced rows, newest first, and stop at its limit; the second does it for the tier-aware
+# (durable) pass. SQLite uses an index on an expression only for a query that writes that same expression, so this is
+# facts_recall.UNSOURCED_SQL exactly (recall may not import this module; a test holds the two equal). It is 1 for a
+# state that reads 'unverified' lowercased with its surrounding whitespace removed (str.strip's characters, below),
+# else 0. Recall opens facts.db read-only and never makes them: a db made before them gets them the next time the bus
+# opens it (every write does, through _migrate).
+_STRIP_SQL = "char(" + ",".join(map(str, (9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760, *range(8192, 8203),
+                                          8232, 8233, 8239, 8287, 12288))) + ")"
+_STATE_SQL = f"(CASE WHEN typeof(state) = 'blob' THEN state ELSE lower(trim(COALESCE(state, ''), {_STRIP_SQL})) END)"
+UNSOURCED_SQL = ("(CASE WHEN state = 'unverified' THEN 1"
+                 " WHEN state IN ('active','resolved','expired','superseded','archived') THEN 0"
+                 f" ELSE {_STATE_SQL} = 'unverified' END)")
+_STATE_INDEXES = (
+    f"CREATE INDEX IF NOT EXISTS idx_facts_unsourced_ts ON facts({UNSOURCED_SQL}, ts)",
+    f"CREATE INDEX IF NOT EXISTS idx_facts_unsourced_expiry_ts ON facts({UNSOURCED_SQL}, expiry_class, ts)",
+)
+_SCHEMA += "".join(f"{ddl};\n" for ddl in _STATE_INDEXES)
+
 
 class BusLockTimeout(RuntimeError):
     """The bus write lock could not be acquired in time."""
@@ -127,14 +148,18 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _migrate(con: sqlite3.Connection) -> None:
-    """Additive column migrations for a pre-existing facts table. Idempotent —
-    ALTER only when the column is absent (sqlite has no ADD COLUMN IF NOT EXISTS)."""
+    """Additive column and index migrations for a pre-existing facts table. Idempotent —
+    ALTER only when the column is absent (sqlite has no ADD COLUMN IF NOT EXISTS). An existing
+    db gets the state indexes here, on the bus's next write; no row or column changes."""
     cols = {r[1] for r in con.execute("PRAGMA table_info(facts)")}
     if cols and "superseded_by" not in cols:
         con.execute("ALTER TABLE facts ADD COLUMN superseded_by TEXT")
     # ensure the tier index exists on pre-existing dbs (perf, budget wall)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_facts_expiry_ts ON facts(expiry_class, ts)")
+    # and the state indexes recall's sourced windows search (perf, budget wall)
+    for ddl in _STATE_INDEXES:
+        con.execute(ddl)
 
 
 def init_db(db_path: str = DEFAULT_DB) -> None:

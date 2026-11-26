@@ -76,6 +76,12 @@ SERVED_SQL = (f"(CASE WHEN state IN {_in(_SERVED_STATES)} THEN 1 WHEN state IN {
 UNSOURCED_SQL = (f"(CASE WHEN state = '{UNSOURCED_STATE}' THEN 1"
                  f" WHEN state IN {_in(_SERVED_STATES[:-1] + UNSERVED_STATES)} THEN 0"
                  f" ELSE {STATE_SQL} = '{UNSOURCED_STATE}' END)")
+# The bus indexes UNSOURCED_SQL with ts and with (expiry_class, ts) (scripts/brain/bus.py writes the same expression;
+# a test holds the two equal). SQLite uses an index on an expression only for a query that writes that expression,
+# so a sourced window filters on `UNSOURCED_SQL = 0` (UNSOURCED_SQL is always 0 or 1) and reads its rows newest first
+# from the index, stopping at its limit, whatever the share of unsourced rows. A db made before the indexes gets them
+# the next time the bus opens it (every bus write does); until then a window reads as it did before.
+UNSOURCED_INDEXES = ("idx_facts_unsourced_ts", "idx_facts_unsourced_expiry_ts")
 
 
 def state_key(state):
@@ -123,15 +129,23 @@ def sourced_window(cursor, limit, is_unsourced=None):
     return src + uns[: limit - len(src)]
 
 
-def _facts_window(con, select, where, params, limit, sequential=True):
+def _unsourced_indexed(con):
+    """True when the db has the bus's indexes on UNSOURCED_SQL (made with this expression)."""
+    n = con.execute("SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='facts' AND name IN "
+                    f"{_in(UNSOURCED_INDEXES)} AND instr(sql, ?) > 0", [UNSOURCED_SQL]).fetchone()[0]
+    return n == len(UNSOURCED_INDEXES)
+
+
+def _facts_window(con, select, where, params, limit, sequential=True, indexed=False):
     """sourced_window over `select ... WHERE where ORDER BY ts DESC` (rows with a state column), with SQLite doing
     the scanning. The newest `limit` rows come first; when none is unsourced, or they are every row there is, they are
     the window, so a window with no unsourced row reads exactly what `ORDER BY ts DESC LIMIT n` reads. Otherwise a
     second query reads the newest `limit` sourced rows, and the unsourced rows among the first fill what is left.
-    When at least half the first rows are sourced, the sourced ones are dense near the top and the ts index reaches
-    them in a few reads; when fewer are, one sequential pass, which reads each table page once, is cheaper than the
-    table lookup per index entry an index scan makes over a long stretch of unsourced rows. `sequential=False` keeps the
-    ts index for a `where` that bounds ts itself, since SQLite would read that range through the index anyway."""
+    On a db with the state indexes (`indexed`) that query searches them in ts order and stops at its limit. Without
+    them: when at least half the first rows are sourced, the sourced ones are dense near the top and the ts index
+    reaches them in a few reads; when fewer are, one sequential pass, which reads each table page once, is cheaper than
+    the table lookup per index entry an index scan makes over a long stretch of unsourced rows. `sequential=False` keeps
+    ts order for a `where` that bounds ts itself, since SQLite would read that range through an index anyway."""
     if limit <= 0:
         return []
     head = con.execute(f"{select} WHERE {where} ORDER BY ts DESC LIMIT ?", [*params, limit]).fetchall()
@@ -140,8 +154,8 @@ def _facts_window(con, select, where, params, limit, sequential=True):
         return head
     if len(head) < limit:
         return [r for r in head if not unsourced(r["state"])] + uns
-    order = "ts" if not sequential or len(head) - len(uns) >= limit // 2 else "+ts"
-    src = con.execute(f"{select} WHERE NOT {UNSOURCED_SQL} AND {where} ORDER BY {order} DESC LIMIT ?",
+    order = "ts" if indexed or not sequential or len(head) - len(uns) >= limit // 2 else "+ts"
+    src = con.execute(f"{select} WHERE {UNSOURCED_SQL} = 0 AND {where} ORDER BY {order} DESC LIMIT ?",
                       [*params, limit]).fetchall()
     return src + uns[: limit - len(src)]
 
@@ -381,11 +395,12 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
         noise_params = [p + "%" for p in _NOISE_PREFIXES]
         not_noise = (" AND " + noise_clause) if noise_clause else ""
         select = "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts"
+        indexed = _unsourced_indexed(con)
         rows = _facts_window(con, select, f"({like}) AND {not_sup}{not_noise}", params + noise_params,
-                             candidate_limit)
+                             candidate_limit, indexed=indexed)
         tier_ph = ",".join("?" * len(_NODECAY_TIERS))
         rows2 = _facts_window(con, select, f"({like}) AND {not_sup}{not_noise} AND expiry_class IN ({tier_ph})",
-                              params + noise_params + list(_NODECAY_TIERS), DURABLE_LIMIT)
+                              params + noise_params + list(_NODECAY_TIERS), DURABLE_LIMIT, indexed=indexed)
     finally:
         con.close()
 
