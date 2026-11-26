@@ -143,3 +143,18 @@ def test_attribution_rule():
     assert quote_gate.attributed({"actor": "shaw", "text": "x"})
     assert quote_gate.attributed({"actor": "pocket", "text": "Shaw decided to ship on friday"})
     assert not quote_gate.attributed({"actor": "pocket", "text": "the team shipped on friday"})
+
+
+def test_a_labelled_fact_is_served_flagged_not_hidden(world, tmp_path, monkeypatch):
+    """The gate and recall together: a fact the gate could not verify is still recalled, flagged as having no
+    source quote, and ranked after a verified one; nothing about it is dropped."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from services.arturo import facts_recall as fr  # noqa: PLC0415
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    _ingest(tmp_path, world)
+    got = fr.query_facts(str(tmp_path / "facts.db"), ["theme", "replies"], k=10)
+    by_text = {f["text"]: f for f in got}
+    assert by_text["Shaw prefers short replies on calls."]["unsourced"] is True
+    assert by_text["keep the dark theme on every page"]["unsourced"] is False
+    assert [f["unsourced"] for f in got] == sorted(f["unsourced"] for f in got)
+    assert "no source quote found" in fr._render(got)

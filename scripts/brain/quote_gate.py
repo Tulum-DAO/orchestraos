@@ -2,7 +2,8 @@
 stored as 'unverified' unless its own source shows the operator said exactly that.
 
 LABEL ONLY. The gate never refuses, drops or deletes a fact; it only changes the state a NEW row is written with,
-and records why in provenance.quote_gate. Recall never serves 'unverified' (facts_schema.UNSERVED_STATES).
+and records why in provenance.quote_gate. Recall serves an 'unverified' fact flagged "no source quote found",
+ranked below sourced facts and never as anyone's words.
 Off unless QUOTE_GATE_LABEL=1.
 
 What verifies today, read-only at ingest time:
