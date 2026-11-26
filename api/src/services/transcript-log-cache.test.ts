@@ -158,6 +158,59 @@ test('two grammars on one file keep separate entries: a sidechain-keeping read n
   assert.equal(cachedLog(path, logParser(false, false)).items.length, 0);
 });
 
+// A codex rollout line (chat-transcript.codex.test.ts rec): the grammar `full` detects from the lines, never a hint.
+const codexRec = (ordinal: number, type: string, payload: any) =>
+  JSON.stringify({ timestamp: T(++seq), ordinal, type, payload });
+const codexUser = (ordinal: number, text: string) => codexRec(ordinal, 'response_item',
+  { type: 'message', id: `m${ordinal}`, role: 'user', content: [{ type: 'input_text', text }] });
+const codexMeta = (ordinal: number) => codexRec(ordinal, 'session_meta', { id: 'c-1', cwd: '/w', originator: 'codex' });
+
+test('an empty first read does not lock the file to the Claude grammar: a codex log read at 0 bytes parses as codex once it has lines', () => {
+  // Review of #660 (blocking): `full([])` fell through to the Claude parser and handed back a Claude state, so every
+  // later growth took the append path and codex lines parsed to nothing until the API restarted.
+  const { path, parser } = fresh();
+  writeFileSync(path, '');
+  assert.equal(cachedLog(path, parser).items.length, 0);
+  appendFileSync(path, [codexMeta(1), codexUser(2, 'spawn my gm agent')].join('\n') + '\n');
+  const grown = cachedLog(path, parser);
+  assert.deepEqual(grown.items, oracle(path));
+  assert.equal(grown.items.length, 1, 'the codex user line is an item');
+  assert.equal(grown.items[0].text, 'spawn my gm agent');
+});
+
+test('a half-written first line does not lock the grammar either: the torn session_meta, then the rest, equals a whole-file parse', () => {
+  const { path, parser } = fresh();
+  const meta = codexMeta(1);
+  writeFileSync(path, meta.slice(0, Math.floor(meta.length / 2)));
+  assert.equal(cachedLog(path, parser).items.length, 0);
+  appendFileSync(path, meta.slice(Math.floor(meta.length / 2)) + '\n' + codexUser(2, 'hello from codex') + '\n');
+  const grown = cachedLog(path, parser);
+  assert.deepEqual(grown.items, oracle(path));
+  assert.equal(grown.items.length, 1);
+});
+
+test('a complete last line with no newline is parsed for a whole-file grammar, as the old split-on-newline read did', () => {
+  // Review of #660: completeLines() held the remainder back for every grammar; a one-line codex file gave zero items.
+  const { path, parser } = fresh();
+  writeFileSync(path, codexUser(1, 'the only line'));            // no trailing newline
+  assert.equal(cachedLog(path, parser).items.length, 1);
+  assert.deepEqual(cachedLog(path, parser).items, oracle(path));
+});
+
+test('an append equals a whole-file parse when it drops a queued opener: no stale exchange on the items before it', () => {
+  // Review of #660: `finish` re-ran tagAudience IN PLACE on the raw items; when dedupeQueuedCommands later dropped the
+  // queued opener (its real user turn landed after the boundary), the reply kept exchange = the dropped uuid.
+  const { path, parser } = fresh();
+  const queued = (text: string) => JSON.stringify({ type: 'attachment', uuid: `q-${++seq}`, timestamp: T(seq),
+    attachment: { type: 'queued_command', prompt: text, origin: { kind: 'human' }, commandMode: 'prompt' } });
+  writeFileSync(path, [queued('please summarize the log'), assistant('msg_1', 'working on it', { input_tokens: 3, output_tokens: 1 })].join('\n') + '\n');
+  const first = cachedLog(path, parser);
+  assert.deepEqual(first.items, oracle(path));
+  appendFileSync(path, user('please summarize the log') + '\n');
+  const grown = cachedLog(path, parser);
+  assert.deepEqual(grown.items, oracle(path));
+});
+
 test('a 5 MB log: an append costs a small fraction of the full parse', () => {
   const { path, parser } = fresh();
   const chunk: string[] = [];
@@ -171,6 +224,7 @@ test('a 5 MB log: an append costs a small fraction of the full parse', () => {
     }
   }
   writeFileSync(path, chunk.join('\n') + '\n');
+  logItems(chunk.slice(0, 400), false);                        // warm the parser: the measured full parse is not a cold JIT
   const t0 = performance.now();
   const first = cachedLog(path, parser);
   const fullMs = performance.now() - t0;

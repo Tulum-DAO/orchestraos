@@ -321,6 +321,20 @@ export function looksLikeGrok(lines: string[]): boolean {
 
 /** Codex rollout lines are self-describing, so the SSE tail and the poll path cannot disagree
  *  about which parser to use (they call normalizeTranscript independently). */
+/** Positive evidence of the Claude Code grammar: at least one well-formed line of a type its parser reads. Used only
+ *  to decide whether a parse may be RESUMED (transcript-log-cache.ts); detection of the other grammars stays as it is. */
+export function looksLikeClaude(lines: string[]): boolean {
+  for (const l of lines) {
+    if (!l.trim()) continue;
+    try {
+      const d = JSON.parse(l);
+      if (d && (d.type === 'user' || d.type === 'assistant' || d.type === 'attachment' || d.type === 'summary'
+        || d.type === 'system') && typeof d.uuid === 'string') return true;
+    } catch { /* torn or foreign line */ }
+  }
+  return false;
+}
+
 export function looksLikeCodex(lines: string[]): boolean {
   for (const l of lines.slice(0, 40)) {
     if (!l.trim()) continue;
@@ -2001,15 +2015,24 @@ export function logParser(antigravityHint: boolean, keepSidechain = false): LogP
       if (looksLikeGrok(lines)) return { items: parseGrokUpdates(lines), state: null };
       if (looksLikeCodex(lines)) return { items: parseCodexRollout(lines), state: null };
       const state: ClaudeParseState = { counted: new Set<string>() };
-      return { items: parseClaudeLines(lines, keepSidechain, state), state };
+      const items = parseClaudeLines(lines, keepSidechain, state);
+      // A resumable state only on POSITIVE Claude evidence. An empty or torn first read (a session file the tailer saw
+      // the second it was created; a codex session_meta line half-written) shows no grammar at all: handing back a
+      // Claude state then would lock the file to the Claude parser, and every later codex/grok/antigravity line would
+      // be appended into nothing until the API restarted. Without evidence the cache re-detects on every change.
+      return { items, state: looksLikeClaude(lines) ? state : null };
     },
     append(lines, state) {
       return { items: parseClaudeLines(lines, keepSidechain, state), state };
     },
     finish(raw, state) {
+      // On COPIES of the raw items: the whole-array passes (tagAudience above all) stamp audience/exchange in place and
+      // never clear them, and `raw` is kept by the cache for the next append. Tagging raw itself left a reply with the
+      // exchange of a queued opener that dedupeQueuedCommands dropped on a later pass (append != whole-file parse).
+      const items = raw.map((it) => ({ ...it }));
       // Whole-file pass (Claude): a queued message the log later recorded as a real user turn must
       // show ONCE, and the real turn is the one that wins.
-      return finishLogItems(state ? dedupeQueuedCommands(raw) : raw);
+      return finishLogItems(state ? dedupeQueuedCommands(items) : items);
     },
   };
 }

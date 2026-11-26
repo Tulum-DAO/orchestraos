@@ -91,3 +91,49 @@ test('another agent has its own rows: its first build reads, and never this agen
   mergeQueuedItems(items(), AGENT);
   assert.equal(queuedMergeReads(), r0 + 1, 'this agent\'s rows are still kept');
 });
+
+test('a batched row that is delivered, then acknowledged with nothing else changing, is a new state: its card appears', () => {
+  // Review of #660: the signature counted rows and open rows; delivered -> acknowledged changed neither, so a row that
+  // reached B2 only at its ack stayed out of the batch card until another row arrived for the agent.
+  clearQueuedMergeCache();
+  ins.run({ id: 'msg_b3', type: 'task', from: 'pm-z', to: AGENT, body: 'batched message three, delivered by the router and acked later', status: 'delivered', metadata: JSON.stringify({ batch_id: 'batch-C' }), created: T(8), acked: null, delivered: T(9) });
+  const before = mergeQueuedItems(items(), AGENT);
+  assert.equal(before.some((x: any) => x.kind === 'queued_batch' && x.entries?.some((e: any) => e.body.startsWith('batched message three'))), false, 'not acked yet: not in B2');
+  const sig0 = queuedStateSig(AGENT);
+  const r0 = queuedMergeReads();
+  db.prepare(`UPDATE messages SET status = 'acknowledged', acknowledged_at = ? WHERE id = 'msg_b3'`).run(T(10));
+  assert.notEqual(queuedStateSig(AGENT), sig0, 'the ack is a new state');
+  const after = mergeQueuedItems(items(), AGENT);
+  assert.equal(queuedMergeReads(), r0 + 1);
+  assert.ok(after.some((x: any) => x.kind === 'queued_batch' && x.entries?.some((e: any) => e.body.startsWith('batched message three'))), 'the card is there');
+});
+
+test('the kept rows are handed out as copies: a tag stamped on one build never reaches the next', () => {
+  // Review of #660: tagSynthetics stamps audience/exchange in place and only when audience is undefined; a memoised
+  // object stamped by the first window kept that window's exchange for every later build.
+  clearQueuedMergeCache();
+  const one = mergeQueuedItems(items(), AGENT);
+  const card = one.find((x: any) => x.kind === 'queued_batch');
+  const bubble = one.find((x: any) => x.uuid === 'queued:msg_pending1');
+  assert.ok(card && bubble);
+  card.audience = 'agent'; card.exchange = 'window-one'; bubble.audience = 'user'; bubble.exchange = 'window-one';
+  const two = mergeQueuedItems(items(), AGENT);
+  const card2 = two.find((x: any) => x.kind === 'queued_batch');
+  const bubble2 = two.find((x: any) => x.uuid === 'queued:msg_pending1');
+  assert.equal(card2.audience, undefined); assert.equal(card2.exchange, undefined);
+  assert.equal(bubble2.audience, undefined); assert.equal(bubble2.exchange, undefined);
+});
+
+test('the memo is bounded: rows are kept for the most recent agents only', async () => {
+  clearQueuedMergeCache();
+  const { QUEUED_MEMO_MAX_AGENTS, queuedMemoSize } = await import('./queued-merge.js');
+  for (let i = 0; i < QUEUED_MEMO_MAX_AGENTS + 5; i++) {
+    const a = `zz-many-${i}`;
+    ins.run({ id: `msg_many_${i}`, type: 'task', from: 'pm-x', to: a, body: 'a row so the agent has a state', status: 'pending', metadata: null, created: T(11), acked: null, delivered: null });
+    mergeQueuedItems(items(), a);
+  }
+  assert.ok(queuedMemoSize() <= QUEUED_MEMO_MAX_AGENTS, `${queuedMemoSize()} kept`);
+  const r0 = queuedMergeReads();
+  mergeQueuedItems(items(), `zz-many-${QUEUED_MEMO_MAX_AGENTS + 4}`);
+  assert.equal(queuedMergeReads(), r0, 'the newest agent is still kept');
+});

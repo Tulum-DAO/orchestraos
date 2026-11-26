@@ -277,14 +277,16 @@ export function queuedStateSig(agentId: string): string {
     let st = sigStatements.get(db);
     if (!st) {
       st = {
-        all: db.prepare(`SELECT count(*) AS n, max(rowid) AS r FROM messages WHERE to_agent = ?`),
+        // count(acknowledged_at) / max(acknowledged_at): B2 admits a batched row at its ACK, and delivered -> acknowledged
+        // changes neither the row count nor the open set (review of #660).
+        all: db.prepare(`SELECT count(*) AS n, max(rowid) AS r, count(acknowledged_at) AS a, max(acknowledged_at) AS t FROM messages WHERE to_agent = ?`),
         open: db.prepare(`SELECT count(*) AS n, max(rowid) AS r FROM messages WHERE to_agent = ? AND status IN ('pending', 'processing')`),
       };
       sigStatements.set(db, st);
     }
-    const all = st.all.get(agentId) as { n: number; r: number | null };
+    const all = st.all.get(agentId) as { n: number; r: number | null; a: number; t: string | null };
     const open = st.open.get(agentId) as { n: number; r: number | null };
-    return `${all.n}:${all.r ?? ''}:${open.n}:${open.r ?? ''}`;
+    return `${all.n}:${all.r ?? ''}:${all.a}:${all.t ?? ''}:${open.n}:${open.r ?? ''}`;
   } catch {
     return '';
   }
@@ -297,17 +299,25 @@ const sigStatements = new WeakMap<DB, { all: ReturnType<DB['prepare']>; open: Re
  *  store's state for the agent does, and the signature says when: the first-page cache already trusts it for the whole
  *  page. B3 is not kept: it depends on the window's own items and its query is bounded (LIVE_LIMIT). */
 interface QueuedRows { sig: string; pending: any[]; batches: any[]; claimed: Set<string> }
+/** Agents whose rows are kept (least recently built first): B2's rows are an agent's whole batch history, so the memo is
+ *  bounded by agents, not left to grow with every seat ever viewed. */
+export const QUEUED_MEMO_MAX_AGENTS = 64;
 const queuedRows = new Map<string, QueuedRows>();
 let reads = 0;
 
 /** How many times the B1/B2 rows were read from the store (tests: a second build under the same state reads nothing). */
 export function queuedMergeReads(): number { return reads; }
+export function queuedMemoSize(): number { return queuedRows.size; }
 export function clearQueuedMergeCache(): void { queuedRows.clear(); }
 
 function rowsFor(db: DB, agentId: string): QueuedRows {
   const sig = queuedStateSig(agentId);
   const kept = sig ? queuedRows.get(agentId) : undefined;
-  if (kept && kept.sig === sig) return kept;
+  if (kept && kept.sig === sig) {
+    queuedRows.delete(agentId);
+    queuedRows.set(agentId, kept);          // most recently built last
+    return kept;
+  }
   // One read snapshot for both lanes: a batch stamp or an ack landing between the two queries
   // must not drop a row out of both B2 and B3 for a poll (B3 reads `claimed` from this snapshot).
   let pending: any[] = [], batches: any[] = [];
@@ -318,7 +328,11 @@ function rowsFor(db: DB, agentId: string): QueuedRows {
   })();
   reads += 1;
   const fresh = { sig, pending, batches, claimed };
-  if (sig) queuedRows.set(agentId, fresh);
+  if (sig) {
+    queuedRows.delete(agentId);
+    queuedRows.set(agentId, fresh);
+    while (queuedRows.size > QUEUED_MEMO_MAX_AGENTS) queuedRows.delete(queuedRows.keys().next().value as string);
+  }
   return fresh;
 }
 
@@ -333,8 +347,10 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
   let pending: any[] = [], batches: any[] = [], live: any[] = [];
   try {
     const rows = rowsFor(db, agentId);
-    pending = rows.pending;
-    batches = boundQueuedBatches(rows.batches, floor);
+    // Copies: the kept rows are tagged in place later (lib/audience.ts tagSynthetics stamps audience/exchange only when
+    // audience is undefined), so a shared object would carry the FIRST window's tags into every later build.
+    pending = rows.pending.map((r) => ({ ...r }));
+    batches = boundQueuedBatches(rows.batches.map((b) => ({ ...b, entries: Array.isArray(b.entries) ? b.entries.map((e: any) => ({ ...e })) : b.entries })), floor);
     // B3 needs the transcript's own evidence of injection, so it can never show a row early.
     live = b3LiveCards(db, agentId, items, floor, rows.claimed);
   } catch {

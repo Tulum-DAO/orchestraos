@@ -101,7 +101,10 @@ function readRange(path: string, from: number, to: number): Buffer {
   }
 }
 
-/** The bytes just under the parsed end are still what was parsed: this is the same file, grown. */
+/** The bytes just under the parsed end are still what was parsed: this is the same file, grown. Logs are taken as
+ *  APPEND-ONLY: an in-place edit of an earlier line that keeps the file's length and the last APPEND_PROBE_BYTES under
+ *  the parsed end (a scrub tool rewriting one value) is not seen until the next full parse (restart, eviction, a
+ *  rewrite under the end, or another inode). Every runtime this reads writes its session log by appending. */
 function probeMatches(path: string, hit: Entry): boolean {
   if (!hit.probe.length) return hit.offset === 0;
   try {
@@ -163,7 +166,12 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
   drop(slot);
   const buf = readFileSync(path);
   const { lines, end } = completeLines(buf);
-  const got = parser.full(lines);
+  let got = parser.full(lines);
+  // A grammar that cannot resume (state null) is re-parsed in full on every change anyway, so its parse may take the
+  // torn remainder too: a complete last line with no newline yet was parsed by the old split-on-newline read, and a
+  // one-line codex/grok file must not read as empty. A torn line fails JSON.parse harmlessly, as before. A resumable
+  // grammar keeps the remainder for the append that lands its newline (parsing it now would parse it twice).
+  if (got.state === null && end < buf.length) got = parser.full(buf.toString('utf-8').split('\n'));
   const items = parser.finish(got.items, got.state);
   parses += 1;
   fullParses += 1;

@@ -76,6 +76,13 @@ export function alignShift(prev: any[], next: any[]): number | null {
   return null;
 }
 
+const READ_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ENOTDIR', 'EMFILE', 'EBUSY', 'ELOOP', 'ENAMETOOLONG']);
+/** A failure to stat or read the log file (the file is gone, a directory, unreadable), as opposed to a failure to parse it. */
+function isReadError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && READ_ERROR_CODES.has(code);
+}
+
 export class TranscriptTailer {
   private agentId: string;
   private resolve: Resolver;
@@ -163,7 +170,10 @@ export class TranscriptTailer {
     let env: ReturnType<typeof normalizeTranscriptFile>;
     try {
       env = normalizeTranscriptFile(path, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, true, this.keepSidechain);
-    } catch {
+    } catch (err) {
+      // Only the file being unreadable is an empty log (what readFileSync's catch gave before); a parser or store-rule
+      // error is a bug and still propagates out of tick(), as it did.
+      if (!isReadError(err)) throw err;
       env = normalizeTranscript([], this.agentId, sid, TAIL_ITEM_CAP, false, false, null, true, this.keepSidechain);
     }
     let turns: InterruptedTurn[] = [];
