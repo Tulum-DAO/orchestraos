@@ -543,3 +543,48 @@ def test_worldview_an_unverified_wal_row_is_still_served_when_both_sourced_reser
     got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=5)
     assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia wal s1", False), ("zinnia wal s2", False),
                                                           ("zinnia wal unverified", True)]
+
+
+# --- rows that are never served hold no place in a window --------------------------------------------------------
+
+def _answer_block(db, tmp_path, q="zinnia status today"):
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    return [(e["text"], e["unsourced"]) for e in rc.answer(q, vector=False)["blocks"]["worldview"]]
+
+
+def test_worldview_fluid_window_skips_superseded_statements(tmp_path):
+    """The fluid window holds 100 statements; 100 superseded ones are never served, so they take none of its places."""
+    st = [(f"s_x{i:03d}", "dream-facts", _minutes(i), f"zinnia old{i} is up", _eph("superseded")) for i in range(100)]
+    st += [("s_u", "dream-facts", "2026-11-25T00:00:00Z", "zinnia new is up", _eph("unverified"))]
+    db = _wv_db(tmp_path / "f.db", statements=st)
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)] == [
+        ("zinnia new is up", True)]
+    assert _answer_block(db, tmp_path) == [("zinnia new is up", True)]
+
+
+@pytest.mark.parametrize("old", ["superseded", "unanchored"])
+def test_worldview_wal_window_skips_rows_it_never_serves(tmp_path, old):
+    """The wal window holds 100 rows; 100 superseded anchored rows, or 100 active rows with no anchor, are never
+    served, so they take none of its places."""
+    meta = _wal("superseded") if old == "superseded" else {"expiry_class": "standard", "state": "active"}
+    st = [(f"w_x{i:03d}", "wal", _minutes(i), f"zinnia wal old{i}", meta) for i in range(100)]
+    st += [("w_u", "wal", "2026-11-25T00:00:00Z", "zinnia wal new", _wal("unverified"))]
+    db = _wv_db(tmp_path / "f.db", statements=st)
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)] == [("zinnia wal new", True)]
+    assert _answer_block(db, tmp_path) == [("zinnia wal new", True)]
+
+
+def test_worldview_belief_window_skips_dropped_beliefs(tmp_path):
+    """k=2 fetches four beliefs; four that rest only on superseded statements are dropped, so they take none of its
+    places and the unverified belief is served, flagged."""
+    st = [("s_u", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified"))]
+    st += [(f"s_x{i}", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("superseded")) for i in range(4)]
+    bl = [("b_u", "zinnia unverified belief", 0.99, '["s_u"]')]
+    bl += [(f"b_x{i}", f"zinnia gone belief {i}", 0.9 - i * 0.01, json.dumps([f"s_x{i}"])) for i in range(4)]
+    db = _wv_db(tmp_path / "f.db", statements=st, beliefs=bl)
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=2)] == [
+        ("zinnia unverified belief", True)]
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    block = rc.answer("zinnia status today", k=2, vector=False)["blocks"]["worldview"]
+    assert [(e["text"], e["unsourced"]) for e in block] == [("zinnia unverified belief", True)]
+

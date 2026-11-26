@@ -72,13 +72,17 @@ def sourced_window(cursor, limit, is_unsourced=None):
     cursor order, then the first unsourced ones fill what is left. For rows with a `state` column this equals
     `ORDER BY (COALESCE(state,'')='unverified'), ts DESC LIMIT n`, but read in index order: the scan stops as soon as
     `limit` sourced rows are in, so with no unsourced row it reads exactly what `ORDER BY ts DESC LIMIT n` reads.
-    `is_unsourced(row)` decides for rows without a `state` column; by default it is unsourced(row["state"])."""
+    `is_unsourced(row)` decides for rows without a `state` column; by default it is unsourced(row["state"]). It
+    returns None for a row that is never served: that row is skipped and takes no place in the window."""
     src, uns = [], []
     if limit <= 0:
         return []
     is_unsourced = is_unsourced or (lambda r: unsourced(r["state"]))
     for r in cursor:
-        if is_unsourced(r):
+        u = is_unsourced(r)
+        if u is None:
+            continue
+        if u:
             if len(uns) < limit:
                 uns.append(r)
         else:

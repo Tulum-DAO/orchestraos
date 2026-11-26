@@ -24,6 +24,14 @@ def _statement_served(meta):
     return served(_statement_state(meta))
 
 
+def _window_class(state, is_wal, meta):
+    """A statement's place in a window: None when it is never served (copied from a superseded or archived fact, or
+    a wal row with no anchor), else whether it is unsourced."""
+    if not served(state) or (is_wal and not _wal_anchored(meta)):
+        return None
+    return unsourced(state)
+
+
 def _derived_ids(derived):
     """The statement ids a belief derives from. Anything that is not a JSON list reads as none, and so does a list
     whose last entry is not an id (a string or a number); other entries that are not ids are skipped."""
@@ -149,10 +157,9 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" ORDER BY confidence DESC, last_updated DESC",
             params)
         # the window holds k*2 beliefs, sourced ones first, read in confidence order until k*2 are in: an unsourced
-        # belief never pushes a sourced one out of it. A dropped belief (None) holds its place, as under a plain LIMIT.
-        window = sourced_window((_belief_entry(con, r) for r in beliefs), k * 2,
-                                lambda e: e is not None and e["unsourced"])
-        out = [e for e in window if e is not None]
+        # belief never pushes a sourced one out of it. A dropped belief (None) is skipped and takes no place in it.
+        out = sourced_window((_belief_entry(con, r) for r in beliefs), k * 2,
+                             lambda e: None if e is None else e["unsourced"])
         # every fetched belief is a candidate, so one dropped is backfilled; sourced ones are picked first
         out = sourced_first(out)[:k]
         n_sourced = sum(1 for e in out if not e["unsourced"])
@@ -164,15 +171,13 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" WHERE ({s_like}) AND metadata LIKE '%ephemeral%'"
             f" AND metadata NOT LIKE '%\"noise\": true%'"
             f" ORDER BY ts DESC", s_params)
-        # the newest `fluid_limit` statements, sourced ones first: newer unverified ones never push a sourced one out.
-        # Each row is read with its state, parsed once.
-        rows = sourced_window(((r, _statement_state(r[4])) for r in rows), fluid_limit, lambda rs: unsourced(rs[1]))
+        # the newest `fluid_limit` servable statements, sourced ones first: newer unverified ones never push a
+        # sourced one out. Each row is read with its state, parsed once. A row copied from a superseded or archived
+        # fact, or an unanchored wal row, is never served, so it is skipped and takes no place in the window.
+        rows = sourced_window(((r, _statement_state(r[4])) for r in rows), fluid_limit,
+                              lambda rs: _window_class(rs[1], rs[0][1] == "wal", rs[0][4]))
         newest = {}
         for (sid, stype, ts, content, meta), state in rows:   # sourced, then unsourced, each ts DESC: first seen wins
-            if not served(state):
-                continue                                  # copied from a superseded or archived fact
-            if stype == "wal" and not _wal_anchored(meta):
-                continue                                  # an unanchored wal row is not recallable
             sp = _sp(content)
             key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
             entry = {"kind": "fluid", "tier": "ephemeral", "text": content,
@@ -203,7 +208,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" ORDER BY ts DESC", s_params)
         # the same window rule: sourced wal rows first, so newer unverified ones never take a sourced row's reservation
         w_rows = sourced_window(((r, _statement_state(r[3])) for r in w_rows), fluid_limit,
-                                lambda rs: unsourced(rs[1]))
+                                lambda rs: _window_class(rs[1], True, rs[0][3]))
         wal_entries, wal_unsourced = [], []
         for (sid, ts, content, meta), state in w_rows:
             is_unsourced = unsourced(state)
@@ -211,10 +216,6 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 break
             if len(wal_unsourced if is_unsourced else wal_entries) >= WAL_RESERVE:
                 continue                                  # its reservation is full
-            if not served(state):
-                continue
-            if not _wal_anchored(meta):
-                continue                                  # unanchored is not recallable
             try:
                 m = _json.loads(meta) if isinstance(meta, str) else (meta or {})
             except (ValueError, TypeError):
