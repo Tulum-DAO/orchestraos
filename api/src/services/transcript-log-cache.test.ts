@@ -136,6 +136,28 @@ test('a half-written last line is not parsed, and is read whole once its newline
   assert.equal(done.items[1].text, 'partial line');
 });
 
+test('two grammars on one file keep separate entries: a sidechain-keeping read never serves a plain one', () => {
+  // CI on the first head of this PR: the subagent tailer (keepSidechain) parsed <sid>/subagents/agent-<id>.jsonl, then a
+  // plain tailer on the same path got ITS three sidechain rows back from the cache instead of an empty log.
+  const { path } = fresh();
+  const side = (text: string) => JSON.stringify({ type: 'user', uuid: `s-${++seq}`, timestamp: T(seq), isSidechain: true,
+    message: { role: 'user', content: text } });
+  writeFileSync(path, [side('survey the code'), side('found 3 hooks')].join('\n') + '\n');
+  const keeping = cachedLog(path, logParser(false, true));
+  assert.equal(keeping.items.length, 2);
+  const plain = cachedLog(path, logParser(false, false));
+  assert.equal(plain.items.length, 0, 'a plain read of a sidechain-only log is empty whatever another reader cached');
+  assert.notEqual(plain, keeping);
+  // each entry hits on its own, and each follows an append with its own grammar
+  const reads = logCacheParses();
+  assert.equal(cachedLog(path, logParser(false, true)), keeping);
+  assert.equal(cachedLog(path, logParser(false, false)), plain);
+  assert.equal(logCacheParses(), reads);
+  appendFileSync(path, side('done') + '\n');
+  assert.equal(cachedLog(path, logParser(false, true)).items.length, 3);
+  assert.equal(cachedLog(path, logParser(false, false)).items.length, 0);
+});
+
 test('a 5 MB log: an append costs a small fraction of the full parse', () => {
   const { path, parser } = fresh();
   const chunk: string[] = [];

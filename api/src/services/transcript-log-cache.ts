@@ -29,6 +29,9 @@ export const APPEND_PROBE_BYTES = 64;
  *  continues from (null when the grammar cannot resume: the cache then re-parses in full on every
  *  change); `finish` runs the whole-array passes over the raw items, every time. */
 export interface LogParser<S = unknown> {
+  /** What of this grammar changes the items it yields (its flags): two parsers with different keys keep separate
+   *  entries for one file. Without it, a subagent log read once WITH its sidechain rows served them to a plain reader. */
+  readonly key: string;
   full(lines: string[]): { items: any[]; state: S | null };
   append(lines: string[], state: S): { items: any[]; state: S };
   finish(raw: any[], state: S | null): any[];
@@ -50,7 +53,7 @@ interface Entry extends CachedLog {
   state: unknown | null;
 }
 
-const entries = new Map<string, Entry>();   // insertion order = least recently used first
+const entries = new Map<string, Entry>();   // by `${parser.key}\n${path}`; insertion order = least recently used first
 let bytes = 0;
 let parses = 0;        // every read that produced items (full or append)
 let fullParses = 0;
@@ -65,19 +68,19 @@ export function logCacheAppends(): number { return appends; }
 
 export function clearLogCache(): void { entries.clear(); bytes = 0; }
 
-function drop(path: string): void {
-  const e = entries.get(path);
+function drop(slot: string): void {
+  const e = entries.get(slot);
   if (!e) return;
-  entries.delete(path);
+  entries.delete(slot);
   bytes -= e.size;
 }
 
-function keep(path: string, entry: Entry): void {
-  entries.set(path, entry);
+function keep(slot: string, entry: Entry): void {
+  entries.set(slot, entry);
   bytes += entry.size;
-  for (const [p] of entries) {
+  for (const [k] of entries) {
     if (bytes <= LOG_CACHE_MAX_BYTES && entries.size <= LOG_CACHE_MAX_FILES) break;
-    if (p !== path) drop(p);
+    if (k !== slot) drop(k);
   }
 }
 
@@ -126,16 +129,17 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
   // Stat BEFORE reading: if the file grows in between, the entry records the older size and the
   // next request reads again. The other order could keep a short read under the longer size.
   const st = statSync(path);
-  const hit = entries.get(path);
+  const slot = `${parser.key}\n${path}`;
+  const hit = entries.get(slot);
   if (hit && hit.ino === st.ino && hit.size === st.size && hit.mtimeMs === st.mtimeMs) {   // ino: an atomic replace keeps size and mtime
-    entries.delete(path);
-    entries.set(path, hit);
+    entries.delete(slot);
+    entries.set(slot, hit);
     return hit;
   }
   if (hit && hit.state !== null && hit.ino === st.ino && st.size > hit.offset && probeMatches(path, hit)) {
     const added = readRange(path, hit.offset, st.size);
     const { lines, end } = completeLines(added);
-    drop(path);
+    drop(slot);
     let entry: Entry;
     if (!end) {
       // Grew by part of a line only: nothing new to parse yet. Remember the size so the next request
@@ -153,10 +157,10 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
         offset: hit.offset + end, probe: probeOf(hit.probe, added.subarray(0, end)),
       };
     }
-    if (st.size <= LOG_CACHE_MAX_BYTES) keep(path, entry);
+    if (st.size <= LOG_CACHE_MAX_BYTES) keep(slot, entry);
     return entry;
   }
-  drop(path);
+  drop(slot);
   const buf = readFileSync(path);
   const { lines, end } = completeLines(buf);
   const got = parser.full(lines);
@@ -169,6 +173,6 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
     offset: end, probe: probeOf(Buffer.alloc(0), buf.subarray(0, end)),
   };
   if (st.size > LOG_CACHE_MAX_BYTES) return entry;
-  keep(path, entry);
+  keep(slot, entry);
   return entry;
 }

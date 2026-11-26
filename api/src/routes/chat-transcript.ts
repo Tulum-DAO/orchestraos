@@ -1987,6 +1987,8 @@ function parseClaudeLines(lines: string[], keepSidechain: boolean, state: Claude
  *  a hint only one of them passes is how the two lanes drift apart. */
 export function logParser(antigravityHint: boolean, keepSidechain = false): LogParser<ClaudeParseState> {
   return {
+    // the cache keeps one entry per (key, file): both flags change the items a file yields
+    key: `${antigravityHint ? 'antigravity' : 'auto'}:${keepSidechain ? 'sidechain' : 'main'}`,
     full(lines) {
       const isAntigravity = antigravityHint ||
         lines.some((l) => {
