@@ -53,10 +53,9 @@ export interface UsageOverview {
 const NAMES: Record<string, string> = { claude: 'Claude', codex: 'ChatGPT (Codex)', gemini: 'Gemini', grok: 'Grok' };
 const WINDOW_LABEL: Record<string, string> = {
   '5h': '5-hour session', weekly: 'Weekly', 'weekly-opus': 'Weekly · Opus', 'weekly-sonnet': 'Weekly · Sonnet',
-  'weekly-fable': 'Weekly · Fable',
 };
 /** Shortest window first, then weekly, then the model-specific weeks. */
-const WINDOW_ORDER = ['5h', 'weekly', 'weekly-fable', 'weekly-opus', 'weekly-sonnet'];
+const WINDOW_ORDER = ['5h', 'weekly', 'weekly-opus', 'weekly-sonnet'];
 const PROVIDER_ORDER = ['claude', 'codex', 'gemini', 'grok'];
 const isEpoch = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const isPct = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;

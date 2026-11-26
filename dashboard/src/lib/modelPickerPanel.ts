@@ -80,9 +80,7 @@ export interface UsageSummary {
   accounts?: string[];
 }
 
-const WINDOWS: Record<string, string> = {
-  '5h': '5 h', weekly: 'weekly', 'weekly-fable': 'weekly Fable', 'weekly-opus': 'weekly Opus', 'weekly-sonnet': 'weekly Sonnet',
-};
+const WINDOWS: Record<string, string> = { '5h': '5 h', weekly: 'weekly', 'weekly-opus': 'weekly Opus', 'weekly-sonnet': 'weekly Sonnet' };
 const isPct = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
 /** The default login's name (~/.claude, ~/.codex): the agents' login when no row says otherwise. */
 export const AGENTS_ACCOUNT = 'default';
