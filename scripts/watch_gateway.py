@@ -4924,7 +4924,7 @@ SUBMIT_WITNESS_S = ENTER_CHECK_WAIT_S[0] + ENTER_CHECK_WAIT_S[1] + CLEAR_WAIT_S
 #: minus everything else a send sleeps under the lock (above, plus the ingest wait) and the overhead. Over that, a
 #: concurrent sender (the router, a second person) times out as busy. With the defaults (8 s lock, 1 s ingest) the
 #: cap is 0.75 s. The wait has a 0.25 s floor so an interrupt can still be asked for: with PANE_LOCK_WAIT_S below
-#: about 7.0 s that floor is over the budget, and a concurrent sender may see busy during an interrupt. The
+#: 7.5 s that floor is over the budget, and a concurrent sender may see busy during an interrupt. The
 #: Escape-to-composer latency has NOT been measured; a value too short shows up as interrupt_failed, never as a
 #: wrong keystroke. A bad value falls back to the default instead of stopping the boot.
 INTERRUPT_WAIT_MAX_S = max(0.25, PANE_LOCK_WAIT_S - (RATING_DISMISS_WAIT_S + INJECT_INGEST_WAIT_S + SUBMIT_WITNESS_S)
@@ -7549,9 +7549,11 @@ async def handle_agent_interrupt(request):
     def _esc():
         with _session_send_lock(session):
             # The wait for the lock can be seconds (an interrupt send holds it): the "mid-turn" read above is
-            # stale by now. Look again under the lock, the way the send path does: Escape goes when the screen
-            # shows a turn anywhere (the anchored spinner, or the whole-screen read: a layout the anchored read
-            # misses must still be stoppable); only a screen with NOTHING that reads as a turn gets no Escape.
+            # stale by now. Look again under the lock, the way the send path does. Escape goes onto the anchored
+            # spinner (whatever the input box holds: the CLI's own stop, as before this PR), or when only the
+            # whole-screen read sees a turn and the input box is EMPTY (a layout the anchored read misses must
+            # still be stoppable). Three refusals, no Escape: an unreadable screen; a screen where nothing reads
+            # as a turn; a whole-screen-only read with text in the box (Escape on a draft is not measured).
             raw = _capture_pane(session, lines=0, ansi=True)
             scr = _strip_ansi(raw or "")
             if not scr:
@@ -7559,7 +7561,7 @@ async def handle_agent_interrupt(request):
             if not _turn_above_composer(scr):
                 if not _pane_shows_active_turn(scr):
                     return None                               # nothing reads as a turn: no Escape onto an idle prompt
-                if _typed_on_prompt_line(raw) or "":
+                if _typed_on_prompt_line(raw):
                     return None                               # only the whole screen reads a turn AND a draft sits in
                                                               # the box: Escape on a draft was not measured; keep it
             return _tmux("send-keys", "-t", _st(session), "Escape")

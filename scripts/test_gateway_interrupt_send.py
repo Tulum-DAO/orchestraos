@@ -452,7 +452,8 @@ QUOTED_DRAFT_PANE = "the log line said: esc to interrupt\nmore output\n❯ my ow
     (QUOTED_DRAFT_PANE, False),  # only the whole screen reads a turn AND a draft sits in the box: Escape on a draft was not measured
     (QUOTED_PANE, True),         # something reads as a turn, the anchored read sees no spinner: the stop button still works
     (TODO_PANE, True),           # the anchored spinner
-    (DRAFT_PANE, True),          # the anchored spinner with a draft: the CLI's own stop (Escape ends the step, the draft stays)
+    (DRAFT_PANE, True),          # the anchored spinner with a draft: the CLI's own stop, as before this PR; what Escape does to
+                                 # the draft is NOT measured (the send path refuses to Escape over one for that reason)
 ], ids=["idle", "todo-idle", "unreadable", "whole-screen-turn-with-draft", "whole-screen-turn", "anchored-spinner", "anchored-spinner-with-draft"])
 def test_the_stop_button_looks_again_under_the_lock_with_the_send_paths_three_way_read(box, monkeypatch, screen, escapes):
     # the detector still says working (the read before the lock wait); under the lock the screen decides
@@ -482,10 +483,13 @@ def test_a_cleared_unverified_submit_after_an_escape_keeps_the_escape_facts(box,
     assert body["escape_sent"] is True and body["turn_stopped"] is True
     lines = [r.getMessage() for r in caplog.records if "submit unverified after an Escape" in r.getMessage()]
     assert len(lines) == 1 and "cleared=True" in lines[0] and ("ua=" in lines[0] or "OrchestraUltra" in lines[0]), lines
+    caplog.clear()
     monkeypatch.setattr(G, "verified_inject", _refuse({"reason": "unverified_submit", "state": "working", "cleared": True,
                                                        "text_returned": "hi"}))
-    status, body = _post(box, {**PHONE, "interrupt": True})
+    with caplog.at_level(logging.INFO, logger=G.log.name):
+        status, body = _post(box, {**PHONE, "interrupt": True})
     assert status == 200 and "escape_sent" not in body
+    assert not [r for r in caplog.records if "submit unverified after an Escape" in r.getMessage()], "logged with no Escape"
 
 
 def test_a_refusal_carries_no_outcome(box, monkeypatch):
