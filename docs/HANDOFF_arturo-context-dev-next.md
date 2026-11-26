@@ -1,5 +1,5 @@
-# Handoff: arturo-context-dev (gen row 2013) -> next
-- **Timestamp:** 2026-11-26T07:10Z (02:10 Tulum)
+# Handoff: arturo-context-dev (gen row 2041) -> next
+- **Timestamp:** 2026-11-26T07:15Z (02:15 Tulum)
 - **Working Directory:** /home/shaw/wt/arturo-context-dev/program (branch fix/arturo-call-context; baton only)
 - **Last Commit SHA:** see `git log -1` on fix/arturo-call-context (this file). The previous baton text is in git history (a3c2f10).
 
@@ -30,11 +30,11 @@
 - Probe runner: /home/shaw/wt/arturo-context-dev/probe2.py (run from a worktree root). Knobs: PROBE_CALLS, PROBE_TOOLS, PROBE_SPENDING=1 (the live 39 tools, declare-only); a live run needs `live` + PROBE_LIVE_OK=1.
 
 ## 2. Open loops (in order)
-- [ ] Fold #662's 2 blockers, push, mail builder, then CI, then its card (draft to gm first; gm approved the earlier card style).
+- [x] #662 BLOCK(3) folded at e8f92ff (test-only + :884 wrap; 6 sabotages red); delta asked of builder msg_0b228745. NEXT: on MERGE-OK, wait for CI green by name on e8f92ff, then the card (draft to gm first).
 - [ ] On each approval: squash-merge with `--match-head-commit`, note the card with the sha, ack it, and tell gm the sha.
 - [ ] After #644 (and #662 if approved) merge: one respawn from a fresh worktree of new main on gm's GO. Report pid, healthz, the first real call's START (turns=, start=, connect_s=) and the report's legs.
 - [ ] From the first real call after the respawn: split the 3.27 s after-START leg into provider (session_started -> first_transcript) vs return path. Then propose to gm. 2(b) (8 spending tools, +0.3-0.6 s) waits on those numbers; 2(a) warm-up connect was DROPPED; 3(a)/3(b) wait for tool_timeline from real calls.
-- [ ] gm msg_4d4c80f1: 3 probes with a recorded ROOM-NOISE uplink (20-30 s of quiet room, no speech) instead of digital silence, before the next real call. If open -> words moves toward 3 s, the provider's noise wait is the leg (fix: speak on session.started). If it stays under 2 s, the leg is the return path or the post-START appends. Report with the #662 result, one mail. LIVE GO (gm msg_72f2b0ba): 3 test-tagged sessions, ONE set, cap 3 (more needs a new GO), PROBE_LIVE_OK=1, about $0.03, side port, nothing to Shaw's phone or chat. UPLINK: from ~/pocket-recordings/<date>-<slug>/ (not the Mac): cut 20-30 s of NON-speech (the lead-in before anyone talks, or a pause), confirm with that recording's transcript that the window has no words, then convert with ffmpeg to 16 kHz mono s16le. Add a PROBE_UPLINK=<file> knob to probe2.py that streams that file in 100 ms frames instead of zeros. Label the probe with the source file. ORDER: #662's two test fixes first, then this set; ONE mail to gm with both.
+- [x] Room-noise set DONE (3 live sessions, cap used; $0.125, ~4x the estimate). Uplink: pocket 2026-11-23-guest-bed-and-towels-setup 27:15-27:40, file scratch roomnoise.s16le (re-cut with ffmpeg -ss 1635 -t 25 -ac 1 -ar 16000 -f s16le). Greet 2.67 cold / 2.18, 2.38 warm vs zeros 1.54 / 1.68, 1.88. session.started->first transcript 0.73-1.06 s. Reported to gm msg_eb90874f; asked GO for 3 zero-uplink controls with legs (~$0.03). Wait for that GO; never more sessions without it.
 - [ ] Follow-ups (non-blocking review notes): #645's gap-from-previous-phrase + non-ASCII tail case; #661's per-line ts / doctor-row test / dated comment; calls=unowned alias + state/operator.json first; "the operator" wording; SECRET_RE flags.
 - [ ] A leftover waiter (pid 3406272, `while pgrep ... services/arturo`) from gen 1997's session loops on other seats' pytest; it isn't mine to kill.
 
@@ -46,10 +46,10 @@
 5. CI waits: filter runs by the push time (a guessed filter once cost 3 h).
 
 ## 4. Declared First Effect
-`cd /home/shaw/wt/arturo-context-dev/instr && git log --oneline -1 && timeout 60 gh api repos/Tulum-DAO/orchestraos/issues/662/comments --jq '.[-1].body' | head -40`
+`python3 /home/shaw/.orchestra/msg_store.py inbox --agent arturo-context-dev --limit 10` (builder's #662 delta verdict on e8f92ff; gm's GO on the control probes)
 
 ## 5. Next 3 Actions
-1. Fold #662's two blockers red-first (distinct times for requested/ready/result; ready_s None; drop the msg id), push, mail orchestraos-builder the head.
+1. Read builder's #662 delta verdict at e8f92ff; on MERGE-OK + CI green by name, draft the card to gm.
 2. Watch for Shaw's answers on apr_93693b11 / apr_704ba3ae / apr_5d280244; merge each on approve (#635 needs main merged in + CI first).
 3. After #644 merges: draft the respawn GO request to gm (fresh worktree of main, quiet check, rollback = the same command from native-live).
 
