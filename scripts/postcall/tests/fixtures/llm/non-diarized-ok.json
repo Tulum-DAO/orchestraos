@@ -1,0 +1,5 @@
+{"shaw_label": null, "shaw_label_evidence": null,
+ "items": [
+  {"owner": "shaw", "kind": "commitment", "counterpart": "Morgan Lee", "action_type": "email", "operation": "send", "deliverable": "revised order form", "commitment_text": "Email Morgan the revised order form", "timeframe": "by Thursday", "quote": "I'll email you the revised order form by Thursday.", "speaker": null, "agent_takeable": false, "recurring": false},
+  {"owner": "participant", "kind": "commitment", "counterpart": "Morgan Lee", "action_type": "document_send", "operation": "send", "deliverable": "sample kit", "commitment_text": "Morgan ships the sample kit to the office", "timeframe": "on Monday", "quote": "I will ship the sample kit to your office on Monday.", "speaker": null, "agent_takeable": false, "recurring": false}
+ ]}

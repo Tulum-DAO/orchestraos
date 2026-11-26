@@ -19,6 +19,9 @@ def fenced(tmp_path, monkeypatch):
     monkeypatch.setenv("NTFY_TOKEN_FILE", NO_NTFY)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("APPROVAL_DDL_ARMED", raising=False)
+    # patch now runs the interposer guard: no inherited pane identity (test_approval.py's _no_inherited_tmux_identity)
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
     assert not os.path.exists(NO_NTFY)
 
 

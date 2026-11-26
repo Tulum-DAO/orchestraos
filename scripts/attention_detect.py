@@ -82,6 +82,8 @@ def from_headless_result(agent, ev, cfg=None):
     if not isinstance(ev, dict) or ev.get("type") != "result" or ev.get("is_error") is not True:
         return None
     text = str(ev.get("result") or "")
+    if red_alert.limit_event.from_text(text) is not None:
+        return _failed(agent, _CLASS_TO_REASON["out_of_usage"], f"headless:{agent}", cfg)
     for rx, cls in red_alert._SCREEN_RULES:
         reason = _CLASS_TO_REASON.get(cls)
         if reason and rx.search(text):
