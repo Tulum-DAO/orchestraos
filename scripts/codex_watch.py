@@ -116,6 +116,9 @@ def should_probe(state, now, fresh_usage) -> bool:
     since = now - float(state.get("last_probe") or 0)
     if state.get("status") != "ok":
         return True
+    s = state.get("streak") or {}
+    if s.get("count") and s.get("status") != state.get("status"):
+        return True        # a flip is pending: confirm it now, or a low usage reading cancels it every run
     return since >= OK_PROBE_S
 
 
@@ -148,7 +151,25 @@ def _window_words(r: Reading) -> str:
     return f"{words}, {LE.reset_label(r.reset_at)}" if r.reset_at else words
 
 
-def decide(state, readings, now, mail, *, availability_path, log, recipients=None):
+def flush_mail(state, mail, save=None):
+    """Send the queued flip mails; one that fails stays queued for the next run, sent ones never repeat."""
+    queue = state.get("pending_mail") or []
+    while queue:
+        to, prio, subj, body = queue[0]
+        try:
+            mail(to, prio, subj, body)
+        except Exception:  # noqa: BLE001 — a timed-out send is retried next run, after the flip is saved
+            break
+        queue.pop(0)
+        if save:
+            save(state)
+    if queue:
+        state["pending_mail"] = queue
+    else:
+        state.pop("pending_mail", None)
+
+
+def decide(state, readings, now, mail, *, availability_path, log, recipients=None, save=None):
     """Fold this run's readings into `state` (persisted by the caller); flip + mail on a debounced change.
     Returns "flipped" | "baseline" | None."""
     stamp = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
@@ -192,11 +213,14 @@ def decide(state, readings, now, mail, *, availability_path, log, recipients=Non
         line = (f"Codex is BACK: gating reviews go to codex-gm / codex exec first again; "
                 f"Claude reviewer only when codex is out ({availability_path}).")
         gm_subj = "codex back: reviews to codex first"
-    for seat in (recipients if recipients is not None else DEFAULT_RECIPIENTS):
-        mail(seat, "high" if r.status == "out" else "medium", gm_subj, line + "\n")
-    mail("gm", "high" if r.status == "out" else "medium", gm_subj,
-         f"{line}\nEvidence: {state['evidence']}. Seats told: "
-         f"{', '.join(recipients if recipients is not None else DEFAULT_RECIPIENTS)}.\n")
+    prio = "high" if r.status == "out" else "medium"
+    seats = recipients if recipients is not None else DEFAULT_RECIPIENTS
+    # the flip is saved BEFORE any mail: a send that fails cannot make the next run flip (and mail) again
+    state["pending_mail"] = [[seat, prio, gm_subj, line + "\n"] for seat in seats] + [
+        ["gm", prio, gm_subj, f"{line}\nEvidence: {state['evidence']}. Seats told: {', '.join(seats)}.\n"]]
+    if save:
+        save(state)
+    flush_mail(state, mail, save)
     return "flipped"
 
 
@@ -215,6 +239,8 @@ def tick(paths, events, now, mail, log, probe=run_probe):
             usage = json.load(f)
     except (OSError, ValueError):
         usage = None
+    save = lambda st: _write_json(st_path, st)
+    flush_mail(state, mail, save)                        # anything a failed send left queued last run
     readings = [from_events(events, now)]
     u = classify_usage(usage, now)
     if u is not None and float((usage or {}).get("as_of") or 0) > float(state.get("usage_as_of") or 0):
@@ -233,6 +259,6 @@ def tick(paths, events, now, mail, log, probe=run_probe):
     except (OSError, ValueError):
         pass
     res = decide(state, readings, now, mail, log=log, recipients=cfg.get("codex_watch_recipients"),
-                 availability_path=os.path.join(paths.orch, "state", "codex-availability.json"))
+                 availability_path=os.path.join(paths.orch, "state", "codex-availability.json"), save=save)
     _write_json(st_path, state)
     return res

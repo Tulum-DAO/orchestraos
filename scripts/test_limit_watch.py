@@ -318,3 +318,29 @@ def test_replay_11_26_the_fable_row_switches_at_its_first_run(tree, monkeypatch)
     assert D.switched == ["strategysimple"]
     assert any(r["kind"] == "switch_done" and r["from"] == "default" and r.get("model") == "Fable" for r in log)
     assert any(r["kind"] == "switch_check" and r["decision"] == "trigger (banner): credits (Fable)" for r in log)
+
+
+def test_f7_a_second_credits_hit_the_same_day_reopens_the_episode(tree):
+    row = lambda ts: {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+                      "error": "rate_limit", "quotaLimits": None, "timestamp": ts, "sessionId": SID_C,
+                      "message": {"content": [{"type": "text", "text": "You've reached your Fable limit."}]}}
+    # all after the fixture's 17:46:32Z switch, so every row is on the same login
+    _add(tree.transcript, row("2026-11-25T17:47:00Z"))
+    _run(tree, now=NOW - 3000)
+    _add(tree.transcript, _ok_row("2026-11-25T17:52:00Z"))
+    _run(tree, now=NOW - 2400, backfill=False)
+    eps = json.load(open(tree.episodes))
+    assert not [e for k, e in eps.items() if not k.startswith("_") and e.get("open")]
+    _add(tree.transcript, row("2026-11-25T17:58:00Z"))
+    _run(tree, now=NOW, backfill=False)
+    eps = json.load(open(tree.episodes))
+    ep = [e for k, e in eps.items() if not k.startswith("_") and e.get("window") == "credits"][0]
+    assert ep["open"] is True and ep["last_seen"] == "2026-11-25T17:58:00Z"
+
+
+def test_f1_a_reset_less_seat_row_expires_after_12h_without_a_new_row(tree):
+    _add(tree.transcript, {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+                           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-25T17:00:00Z",
+                           "sessionId": SID_C, "message": {"content": [{"type": "text", "text": "x"}]}})
+    assert _run(tree, now=NOW)["limited_seats"] == ["pm-nod"]
+    assert _run(tree, now=NOW + 13 * 3600, backfill=False)["limited_seats"] == []

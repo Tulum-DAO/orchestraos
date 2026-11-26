@@ -632,3 +632,45 @@ def test_live_deps_reads_the_limited_seats_from_the_seat_rows(tmp_path):
     assert d.limited_seats() is None                                  # unreadable: the check waits
     (tmp_path / "limits.json").write_text(json.dumps({"seats": {"gm": {}, "pm-nod": {}}}))
     assert d.limited_seats() == {"gm", "pm-nod"}
+
+
+# --- codex gating review of #664+#666 (codex exec, 2026-11-26): findings 1, 2, 4 ---------------------------
+
+def test_f1_a_credits_episode_with_no_new_row_for_2h_no_longer_triggers():
+    eps = _credits_ep()
+    next(iter(eps.values()))["last_seen"] = "2026-11-25T15:00:00+00:00"       # NOW is 18:00Z: 3 h quiet
+    d = FableFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick(eps, d, active="default")[0] is None and d.switched == []
+    next(iter(eps.values()))["last_seen"] = "2026-11-25T17:30:00+00:00"
+    assert _tick(eps, d, active="default")[0] == "switched"
+
+
+def test_f1_a_targets_credits_episode_older_than_12h_does_not_disqualify_it():
+    target = _credits_ep(account="strategysimple")
+    next(iter(target.values()))["last_seen"] = "2026-11-25T04:00:00+00:00"    # 14 h old: refilled since, maybe
+    d = FableFake()
+    assert _tick({**_credits_ep(), **target}, d, active="default")[0] == "switched"
+
+
+def test_f2_weekly_preference_never_moves_to_a_login_with_a_live_credits_episode():
+    d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    eps = _credits_ep(account="strategysimple")                                # strategysimple's Fable is out
+    assert _tick(eps, d, active="default")[0] is None and d.switched == []
+
+
+def test_f2_our_own_switch_is_not_read_as_a_hand_switch_back():
+    d = Fake(usage={"strategysimple": _reading(97.0), "default": _reading(20.0)})
+    st = {"first_trigger": {f"poll|strategysimple|5-hour|{RESET}": NOW - 600}, "last_switch": NOW - 120}
+    d.last_switch_row = lambda: (NOW - 120, "strategysimple")                  # the log row of OUR switch
+    d.last_switch = lambda: NOW - 900
+    res, log, _ = _tick({}, d, st)
+    assert not any(r.get("reason") == "switched back by hand" for r in log)
+
+
+def test_f4_a_weekly_reading_taken_before_its_reset_does_not_warn_after_it():
+    d = Fake(usage={"default": _u(38.0, 86.0)})
+    d._usage["default"]["windows"]["weekly"]["resets_at"] = NOW - 60           # the week already turned over
+    st = {"last_switch": NOW - 60}
+    for i in range(3):
+        _tick({}, d, st, active="default", now=NOW + 120 * i)
+    assert not [m for m in d.mails if "weekly" in m[2].lower() and "%" in m[2]]

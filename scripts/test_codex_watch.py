@@ -234,11 +234,13 @@ def test_tick_counts_one_usage_reading_once(tmp_path):
     no_probe = lambda now: (_ for _ in ()).throw(AssertionError("not due"))
     _usage(paths, NOW - 10, five=100.0)
     CW.tick(paths, [], NOW + 60, box.mail, lambda r: None, probe=no_probe)
-    CW.tick(paths, [], NOW + 180, box.mail, lambda r: None, probe=no_probe)  # same file: not re-counted
+    # a flip is pending now, so the probe runs every run (finding 3); a probe that cannot tell counts nothing
+    unknown = lambda now: CW.Reading("unknown", None, None, "probe", "rc=124: timed out")
+    CW.tick(paths, [], NOW + 180, box.mail, lambda r: None, probe=unknown)   # same file: not re-counted
     st = json.load(open(st_path))
     assert st["status"] == "ok" and st["streak"] == {"status": "out", "count": 1, "last": "5-hour used_pct 100.0"}
     _usage(paths, NOW + 200, five=100.0)
-    CW.tick(paths, [], NOW + 300, box.mail, lambda r: None, probe=no_probe)  # a new reading: second in a row
+    CW.tick(paths, [], NOW + 300, box.mail, lambda r: None, probe=unknown)   # a new reading: second in a row
     a = json.load(open(tmp_path / "state" / "codex-availability.json"))
     assert a["status"] == "out" and a["window"] == "5-hour" and a["gating_reviewer"] == "claude"
 
@@ -276,3 +278,39 @@ def test_tick_rollout_event_drives_out_with_no_probe_budget_spent_while_ok(tmp_p
         "out", "credits", None, "probe", "x"))
     a = json.load(open(tmp_path / "state" / "codex-availability.json"))
     assert a["status"] == "out" and a["window"] == "credits"
+
+
+# --- codex gating review of #664+#666: findings 3, 5 ------------------------------------------------------
+
+def test_f3_a_pending_flip_probes_every_run_so_low_usage_cannot_cancel_a_credits_out(tmp_path):
+    paths, box = _Paths(tmp_path), Box()
+    os.makedirs(paths.state_dir, exist_ok=True)
+    st_path = os.path.join(paths.state_dir, "codex_watch.json")
+    json.dump({"status": "ok", "last_probe": NOW - CW.OK_PROBE_S}, open(st_path, "w"))
+    out = lambda now: CW.Reading("out", "credits", None, "probe", "Your workspace is out of credits")
+    for i in range(3):
+        _usage(paths, NOW + 120 * i - 5)                                     # a fresh, low usage reading each run
+        CW.tick(paths, [], NOW + 120 * i, box.mail, lambda r: None, probe=out)
+    assert json.load(open(tmp_path / "state" / "codex-availability.json"))["status"] == "out"
+
+
+def test_f5_a_mail_failure_mid_flip_never_repeats_the_flip_or_the_delivered_mails(tmp_path):
+    paths = _Paths(tmp_path)
+    sent, fail = [], {"on": "avatar-dev"}
+
+    def mail(to, prio, subj, body):
+        if to == fail["on"]:
+            raise TimeoutError("msg_store send timed out")
+        sent.append(to)
+
+    out = lambda now: CW.Reading("out", "credits", None, "probe", "x")
+    for i in range(2):
+        try:
+            CW.tick(paths, [], NOW + 120 * i, mail, lambda r: None, probe=out)
+        except TimeoutError:
+            pass
+    st = json.load(open(os.path.join(paths.state_dir, "codex_watch.json")))
+    assert st["status"] == "out"                                              # the flip itself persisted
+    fail["on"] = None
+    CW.tick(paths, [], NOW + 240, mail, lambda r: None, probe=out)
+    assert sorted(sent) == sorted(CW.DEFAULT_RECIPIENTS + ["gm"])             # each exactly once

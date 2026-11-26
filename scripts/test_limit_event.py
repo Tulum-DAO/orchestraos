@@ -282,3 +282,11 @@ def test_the_real_fable_transcript_row_is_a_credits_event():
 def test_describe_names_the_model():
     ev = LE.LimitEvent("claude", "credits", None, account="default", model="Fable")
     assert "Fable" in LE.describe(ev) and "credits" in LE.describe(ev)
+
+
+@pytest.mark.parametrize("text", [
+    "You've reached your patience limit.",                                 # prose: not a model
+    "> You've reached your Fable limit. This is an example.",              # a markdown quote of the banner
+])
+def test_f6_model_limit_needs_a_model_name_and_no_quote(text):
+    assert LE.from_text(text, now=NOW_PM) is None

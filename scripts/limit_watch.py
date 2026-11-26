@@ -49,6 +49,7 @@ if _REPO not in sys.path:
 import limit_event as LE  # noqa: E402
 
 FRESH_SECONDS = 15 * 60       # only files written in the last 15 min are opened
+NO_RESET_ROW_TTL = 12 * 3600  # a limit with no reset time (a credits cap) leaves the seat rows after 12 h quiet
 MAX_READ = 4 * 1024 * 1024    # per file per run; a cursor never re-reads old bytes
 _UUID_TAIL = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
 _GEN_SUFFIX = re.compile(r"-g\d+$")
@@ -317,6 +318,10 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
         key = episode_key(ev)
         ep = episodes.get(key)
         line = LE.describe(ev)
+        if ep is not None and not ep.get("open"):
+            # the same window hit again after a recovery (a credits key is per day): the episode is live again
+            ep["open"] = True
+            _append(paths.log, {"ts": stamp, "kind": "episode_reopen", "key": key, "line": line})
         if ep is None:
             ep = episodes[key] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                                   "account": ev.account, "first_seen": ev.ts or stamp, "seats": [],
@@ -335,6 +340,7 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
                 mail_fn("gm", "high", f"usage limit: {line}",
                         f"{line}\nFirst seen {ev.ts or stamp} on {ev.seat}.\n"
                         + (f"Switch decision (dry run, not armed): {dec['reason']}\n" if dec else ""))
+        ep["last_seen"] = ev.ts or stamp
         if ev.seat not in ep["seats"]:
             ep["seats"].append(ev.seat)
             _append(paths.log, {"ts": stamp, "kind": "seat_limited", "key": key, "seat": ev.seat,
@@ -343,16 +349,20 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
                 _tell_order_owners(paths, ev, ep, cfg, mail_fn, inbox_fn)
         rows[ev.seat] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                          "reset_label": LE.reset_label(ev.reset_at), "account": ev.account,
-                         "since": ep["first_seen"], "line": line, "session": ev.session_id, "key": key}
+                         "since": ep["first_seen"], "line": line, "session": ev.session_id, "key": key,
+                         "last_seen": ev.ts or stamp}
 
     # recovery: by effect (a healthy record / a normal reply on the same session) or the reset passed
     for seat, r in list(rows.items()):
         healed = (r.get("runtime"), r.get("session")) in recovered
         expired = r.get("reset_at") and now >= int(r["reset_at"]) + 120
-        if healed or expired:
+        seen = LE._iso_to_dt(r.get("last_seen") or r.get("since"))
+        quiet = not r.get("reset_at") and seen is not None and now - seen.timestamp() > NO_RESET_ROW_TTL
+        if healed or expired or quiet:
             del rows[seat]
             _append(paths.log, {"ts": stamp, "kind": "seat_recovered", "seat": seat, "key": r.get("key"),
-                                "how": "healthy record" if healed else "reset time passed"})
+                                "how": "healthy record" if healed else
+                                       "reset time passed" if expired else "no new limit row for 12 h"})
     for key, ep in episodes.items():
         if key.startswith("_") or not ep.get("open"):
             continue

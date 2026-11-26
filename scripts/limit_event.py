@@ -78,8 +78,9 @@ _AUTO_RESETS = re.compile(_PREFIX + r"Usage limit reached\s*·\s*limit resets\s+
 _CONTINUING = re.compile(_PREFIX + r"Continuing automatically at\s+" + _WHEN, re.I)
 _CLAUDE_PIPE = re.compile(_PREFIX + r"Claude AI usage limit reached\b(?:\|(?P<epoch>\d+))?", re.I)
 # a per-model credits cap on the login (2026-11-26: Fable): invisible to the 5-hour/weekly readings
-_MODEL_LIMIT = re.compile(_PREFIX + r"You'?ve reached your (?!usage\b|session\b|weekly\b)"
-                          r"(?P<model>[A-Za-z][\w.-]*(?: [\d.]+)?) limit\b", re.I)
+# a model FAMILY name only (prose like "your patience limit" is not one), and never after a quote mark
+_MODEL_LIMIT = re.compile(r"^[\s⎿●■⚠✗•›❯]*(?:\d+\.\s+)?You'?ve reached your "
+                          r"(?P<model>(?:Claude )?(?:Fable|Opus|Sonnet|Haiku|Mythos)(?: [\d.]+)?) limit\b", re.I)
 _CODEX_CREDITS = re.compile(_PREFIX + r"Your workspace is out of credits\b", re.I)
 _CODEX_LIMIT = re.compile(_PREFIX + r"Usage limit reached\.\s*You'?ve reached your usage limit", re.I)
 _GROK_WEEKLY = re.compile(_PREFIX + r"You hit your weekly limit\b", re.I)

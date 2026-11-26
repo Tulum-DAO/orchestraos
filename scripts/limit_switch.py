@@ -42,7 +42,10 @@ from datetime import datetime, timezone
 import limit_event as LE
 
 TRIGGER_WINDOWS = ("monthly-spend", "weekly", "credits", "5-hour", "unknown")   # most severe first
-VERIFY_S = 15 * 60            # a switch whose nudged seats have not resumed by then is mailed HIGH
+VERIFY_S = 15 * 60
+NO_RESET_TRIGGER_S = 2 * 3600     # a reset-less episode (credits) triggers only with a row in the last 2 h
+NO_RESET_BLOCK_S = 12 * 3600      # ... and keeps a login off the target list for 12 h after its last row
+OWN_SWITCH_SLACK_S = 120          # a switch-log row this close to our own switch is ours, not a hand switch            # a switch whose nudged seats have not resumed by then is mailed HIGH
 SWITCH_AT_5H_PCT = 95.0       # the operator's rule: switch at 95% of the 5-hour window, before the banner
 HEADROOM_PCT = 80.0
 MIN_GAP_S = 600
@@ -241,11 +244,30 @@ def _headroom(u, now):
     return ok, f"5-hour {five:.0f}%, weekly {week:.0f}%"
 
 
+def _episode_live(e, now, quiet_s):
+    """An open episode still counts: before its reset, or (no reset given) with a row in the last quiet_s.
+    A credits cap has no reset, so without this an episode whose seat moved on would count forever."""
+    if not (isinstance(e, dict) and e.get("open")):
+        return False
+    if e.get("reset_at"):
+        return now < int(e["reset_at"])
+    seen = LE._iso_to_dt(e.get("last_seen") or e.get("first_seen"))
+    return seen is None or now - seen.timestamp() <= quiet_s
+
+
+def _login_limited(episodes, acct, now):
+    """An open, live Claude episode on this login (any window), within the 12-hour block for reset-less ones."""
+    return any(isinstance(e, dict) and e.get("runtime") == "claude" and e.get("account") == acct
+               and _episode_live(e, now, NO_RESET_BLOCK_S) for k, e in (episodes or {}).items()
+               if not str(k).startswith("_"))
+
+
 def _credits_headroom(u, now, episodes, acct, model):
     """(ok, why) for moving off a credits cap: the target's own credits must not be known to be out."""
     for e in (episodes or {}).values():
-        if (isinstance(e, dict) and e.get("open") and e.get("runtime") == "claude" and e.get("account") == acct
-                and e.get("window") == "credits" and (model is None or e.get("model") in (None, model))):
+        if (isinstance(e, dict) and e.get("runtime") == "claude" and e.get("account") == acct
+                and e.get("window") == "credits" and (model is None or e.get("model") in (None, model))
+                and _episode_live(e, now, NO_RESET_BLOCK_S)):
             return False, f"its own {model or 'model'} credits are out too"
     if u and now - float(u.get("as_of") or 0) <= USAGE_FRESH_S:
         w = u.get("windows") or {}
@@ -318,6 +340,8 @@ def _weekly_warnings(deps, now, told, log, stamp):
         if fw is None:
             continue
         _, week, reset = fw
+        if reset and now >= float(reset):
+            continue                     # a reading from before its week turned over says nothing about this week
         for pct in WEEKLY_WARN_PCT:
             tag = f"weekly|{acct}|{pct:.0f}|{reset}"
             if week < pct or tag in told:
@@ -332,7 +356,7 @@ def _weekly_warnings(deps, now, told, log, stamp):
                       + ("85% warning." if pct < 85 else "the window runs out at 100%.") + "\n")
 
 
-def _prefer_weekly(active, now, log, deps, state, save, stamp):
+def _prefer_weekly(active, now, log, deps, state, save, stamp, episodes=None):
     """Rule 7. Returns "preferred" | "held" | "failed" | "noop" | None (nothing to do)."""
     if os.environ.get("LIMIT_SWITCH_PREFER_WEEKLY", "1") == "0":
         return None
@@ -342,8 +366,8 @@ def _prefer_weekly(active, now, log, deps, state, save, stamp):
     parked = state.get("parked") or {}
     best = None
     for acct in deps.enrolled():
-        if acct == active or acct in parked:
-            continue
+        if acct == active or acct in parked or _login_limited(episodes, acct, now):
+            continue                     # never move to a login with a live limit (a credits cap shows nowhere else)
         fw = _fresh_windows(deps.usage(acct), now)
         if fw is None or fw[0] >= HEADROOM_PCT or fw[1] >= HEADROOM_PCT:
             continue
@@ -450,7 +474,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         live = [(k, e) for k, e in episodes.items()
                 if not k.startswith("_") and e.get("open") and e.get("runtime") == "claude"
                 and e.get("account") == active and e.get("window") in TRIGGER_WINDOWS
-                and not (e.get("reset_at") and now >= int(e["reset_at"]))]
+                and _episode_live(e, now, NO_RESET_TRIGGER_S)]
         if live:
             live.sort(key=lambda ke: TRIGGER_WINDOWS.index(ke[1]["window"]))
             key, ep = live[0]
@@ -460,7 +484,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         check["decision"] = (f"no switch: {active} 5-hour {a5:.0f}% < {SWITCH_AT_5H_PCT:.0f}%"
                              if fresh and a5 is not None else "no switch: no fresh reading, no banner episode")
         log(check)
-        return _prefer_weekly(active, now, log, deps, state, save, stamp)
+        return _prefer_weekly(active, now, log, deps, state, save, stamp, episodes)
     log(check)
     ev = LE.LimitEvent("claude", ep["window"], ep.get("reset_at"), ep.get("spend_capped", False),
                        account=active, model=ep.get("model"))
@@ -471,7 +495,8 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         del first[k]
     if hasattr(deps, "last_switch_row"):
         ts, to = deps.last_switch_row()
-        if to == active and ts > first[key]:
+        ours = abs(ts - float(state.get("last_switch") or 0)) <= OWN_SWITCH_SLACK_S
+        if to == active and ts > first[key] and not ours:
             # someone moved the fleet TO this login by hand after it was already hot: their choice stands
             once(f"override|{key}", {"kind": "switch_held", "key": key, "reason": "switched back by hand"},
                  ("medium", f"auto-switch holds: {active} chosen by hand",
