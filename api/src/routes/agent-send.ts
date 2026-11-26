@@ -468,9 +468,11 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // checks the transcript and says "delivered" or "couldn't confirm"; it never says "not sent".
   if ((gw.httpStatus === 502 && gw.reason === 'unverified_submit') || gw.timedOut) {
     const reason = gw.timedOut ? 'gateway_timeout' : 'unverified_submit';
+    // An Escape that went before the unconfirmed Enter is still a fact the person should see.
+    const esc = gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {};
     res.status(502).json(capable
-      ? { state: 'unknown', reason, ...pointer }
-      : { ok: false, delivery: 'unknown', reason, ...pointer });
+      ? { state: 'unknown', reason, ...pointer, ...esc }
+      : { ok: false, delivery: 'unknown', reason, ...pointer, ...esc });
     return;
   }
 

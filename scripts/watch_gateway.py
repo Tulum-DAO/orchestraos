@@ -4112,9 +4112,10 @@ _SPINNER_GLYPHS = "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●
 #: The detector's spinner shape (agent-status.py _SPINNER_LINE_RE): a glyph, then a capitalised
 #: gerund ending in an ellipsis ("✻ Sautéing…", "* Fermenting…", Codex "• Working").
 _SPINNER_GERUND_RE = re.compile(r"^[" + re.escape(_SPINNER_GLYPHS) + r"]\s*[A-Z][a-zà-ÿ]+ing\S*(…|\.\.\.|\s*\()")
-#: The same glyph, any label, an ellipsis, then the CLI's elapsed-time suffix: "✻ alpha… (51s · ↓ 2.0k tokens)".
-#: Output bullets ("● Cogitated for 2s · done") have no ellipsis before a "(<time>" group, so they do not match.
-_SPINNER_TIMED_RE = re.compile(r"^[" + re.escape(_SPINNER_GLYPHS) + r"]\s*\S.*?(…|\.\.\.)\s*\((\d+h\s*)?(\d+m\s*)?\d+s\b")
+#: The same glyph, any label, an ellipsis, then the CLI's elapsed-time suffix: "✻ alpha… (51s · ↓ 2.0k tokens)",
+#: "(1m 4s)", "(1h 14m 31s · …". The time group must be followed by " ·" or ")": a reply bullet such as
+#: "● Retrying... (30s backoff)" is not a spinner.
+_SPINNER_TIMED_RE = re.compile(r"^[" + re.escape(_SPINNER_GLYPHS) + r"]\s*\S.*?(…|\.\.\.)\s*\((\d+h\s*)?(\d+m\s*)?\d+s\s*(·|\))")
 
 
 def _bottom_composer_rows(pane_text: str) -> str:
@@ -4650,7 +4651,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
     if any("How's the CLI experience so far" in ln or "[0] Skip" in ln for ln in pre.splitlines()):
         with _session_send_lock(session):
             _tmux("send-keys", "-t", _st(session), "0")
-            _time.sleep(0.5)
+            _time.sleep(RATING_DISMISS_WAIT_S)
             pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
             pre = _strip_ansi(pre_raw)
 
@@ -4724,14 +4725,16 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                 return False, out
             if interrupt:
                 # ONE fresh look decides everything about the Escape (a capture is evidence: nothing it shows is
-                # thrown away): a menu or permission -> refuse before any Escape; text in the composer (only
-                # reachable under force, which skipped that check above) -> no Escape, it would DISCARD the draft;
-                # no spinner drawn above the input box -> no Escape, the words go in as a plain send; the CLI's
-                # spinner above the input box -> Escape.
+                # thrown away): a menu or permission -> refuse before any Escape; text in the composer -> refused
+                # without force (it appeared since the recheck above), and under force no Escape (it would DISCARD
+                # the draft force appends to); no spinner drawn above the input box -> no Escape, the words go in
+                # as a plain send; the CLI's spinner above the input box -> Escape.
                 raw_look = _capture_pane(session, lines=0, ansi=True)
                 strict = _mid_turn_recheck(session, force=False, raw=raw_look if raw_look is not None else "")
                 plain_look = _strip_ansi(raw_look or "")
-                if strict and strict["why"] != "composer_text":
+                if strict and (strict["why"] != "composer_text" or not force):
+                    # A menu, a permission, a chip, or (without force) text that appeared since the recheck above:
+                    # the operator's own text is sacred, so nothing is typed, and no Escape.
                     inject_journal.clear(session)
                     out = {"reason": "busy", "state": state, "recheck": strict["why"],
                            "activity": MID_TURN_RECHECK_WORDS.get(strict["why"], strict["why"])}
@@ -4739,6 +4742,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                         out["composer_text"] = strict["composer_text"]
                     return False, out
                 if strict:
+                    # force only: the draft is appended to, as force means, but no Escape (it would discard it).
                     interrupt_failed = "typed text in the composer; force appends to it, Escape would discard it"
                 elif not _turn_above_composer(plain_look):
                     if _pane_shows_active_turn(plain_look):
@@ -4754,9 +4758,10 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                     # A person's "now": a turn is drawn above the composer, so Escape ends the running step (the
                     # CLI's own interrupt), the composer comes back, and the words are typed into an idle prompt.
                     # Whatever the wait found, the pane is looked at ONCE MORE before the keys, with the typed-text
-                    # check ON even under force: text that was not there before the Escape (measured 2026-11-25
-                    # on Claude Code 2.1.284: Escape does NOT restore queued input, it SUBMITS it as the next turn;
-                    # someone typing is the other source) is never what force meant to append to.
+                    # check ON even under force: text that was not there before the Escape is never what force
+                    # meant to append to. (Measured 2026-11-25 on Claude Code 2.1.284 only, 2 of 2 runs: Escape
+                    # does NOT restore queued input to the composer, it SUBMITS it as the next turn. Codex and
+                    # Gemini were not measured; the look after Escape refuses any text whichever way a CLI behaves.)
                     sent, stopped = _interrupt_turn(session)
                     esc_sent, esc_stopped = sent, stopped
                     unsafe = _mid_turn_recheck(session, force=False)
@@ -4809,7 +4814,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                 if st_retry.get("state") not in allowed and not own_text_waiting:
                     break
             _tmux("send-keys", "-t", _st(session), "Enter")
-            _time.sleep(2.5 if attempt == 1 else 2.0)
+            _time.sleep(ENTER_CHECK_WAIT_S[0] if attempt == 1 else ENTER_CHECK_WAIT_S[1])
             pane = _strip_ansi(_capture_pane(session, lines=0) or "")   # visible only
             # Submitted messages ALSO render as "❯ text" or "> text" in scrollback — only the
             # BOTTOM-MOST prompt line is the live composer. Submit is verified when that
@@ -4872,7 +4877,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
         viewer = _client_attached(session)
         if not viewer and inject_journal.is_ours(_composer_now(), text):   # EXACT: nothing of anyone else's
             _tmux("send-keys", "-t", _st(session), "C-u")
-            _time.sleep(0.5)
+            _time.sleep(CLEAR_WAIT_S)
             cleared = not _composer_now().strip()
         if cleared:
             inject_journal.clear(session)
@@ -4902,17 +4907,27 @@ HELD_FOR_BOUNDARY_WORDS = "held for the turn boundary"
 MID_TURN_HOOK_WAITING_TTL_S = 900
 
 
+#: Every sleep a send spends under the pane lock, by name, so the interrupt's budget below is computed from the
+#: same numbers the code sleeps (a literal changed in one place cannot drift from the sum).
+RATING_DISMISS_WAIT_S = 0.5                 # after "0" to a rating prompt, before the pre-inject capture
+ENTER_CHECK_WAIT_S = (2.5, 2.0)             # after Enter, first and later attempts (the submit witness)
+CLEAR_WAIT_S = 0.5                          # after C-u, before the composer is read back
+LOCK_OVERHEAD_S = 0.5                       # the dozen captures, two detector reads and the journal I/O
+SUBMIT_WITNESS_S = ENTER_CHECK_WAIT_S[0] + ENTER_CHECK_WAIT_S[1] + CLEAR_WAIT_S
+
 #: How long a person's interrupt waits for the composer after Escape, and how often it looks. The wait runs
 #: under the pane lock AND the per-session send lock, so its cap is DERIVED from the lock budget: PANE_LOCK_WAIT_S
-#: minus everything else a send spends under the lock (the ingest wait, the submit witness's 2.5 s + 2.0 s Enter
-#: checks and 0.5 s C-u, and half a second for the captures). Over that, a concurrent sender (the router, a second
-#: person) times out as busy. With the defaults (8 s lock, 1 s ingest) the cap is 1.5 s; a Claude pane redraws its
-#: composer well under a second after Escape. A bad value falls back to the default instead of stopping the boot.
-SUBMIT_WITNESS_S = 2.5 + 2.0 + 0.5
-INTERRUPT_WAIT_MAX_S = max(0.25, PANE_LOCK_WAIT_S - (INJECT_INGEST_WAIT_S + SUBMIT_WITNESS_S) - 0.5)
+#: minus everything else a send sleeps under the lock (above, plus the ingest wait) and the overhead. Over that, a
+#: concurrent sender (the router, a second person) times out as busy. With the defaults (8 s lock, 1 s ingest) the
+#: cap is 1.0 s. The wait has a 0.25 s floor so an interrupt can still be asked for: with PANE_LOCK_WAIT_S below
+#: about 7.25 s that floor is over the budget, and a concurrent sender may see busy during an interrupt. The
+#: Escape-to-composer latency has NOT been measured; a value too short shows up as interrupt_failed, never as a
+#: wrong keystroke. A bad value falls back to the default instead of stopping the boot.
+INTERRUPT_WAIT_MAX_S = max(0.25, PANE_LOCK_WAIT_S - (RATING_DISMISS_WAIT_S + INJECT_INGEST_WAIT_S + SUBMIT_WITNESS_S)
+                           - LOCK_OVERHEAD_S)
 
 
-def _interrupt_wait_s(raw, default=1.5):
+def _interrupt_wait_s(raw, default=1.0):
     try:
         v = float(raw)
     except (TypeError, ValueError):
@@ -4922,7 +4937,7 @@ def _interrupt_wait_s(raw, default=1.5):
     return min(INTERRUPT_WAIT_MAX_S, max(0.25, v))
 
 
-INTERRUPT_WAIT_S = _interrupt_wait_s(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "1.5"))
+INTERRUPT_WAIT_S = _interrupt_wait_s(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "1.0"))
 INTERRUPT_POLL_S = 0.25
 
 
@@ -7406,10 +7421,15 @@ async def handle_agent_message(request):
                     None, lambda: _hold_for_boundary(session, text, _name or _cls, origin))
                 await _record_operator_message(request, session, text)
                 return _json({"ok": True, "delivered": False, "held": True, "cleared": True, "outcome": "held",
-                              "state": "held_for_boundary", "message_id": msg_id}, status=200)
+                              "state": "held_for_boundary", "message_id": msg_id,
+                              **({"escape_sent": True, "turn_stopped": bool(info.get("turn_stopped"))}
+                                 if info.get("escape_sent") else {})}, status=200)
             except Exception as e:  # noqa: BLE001 — the durable write only; text_returned still goes back
                 info = {**info, "hold_failed": str(e)}
         return _json({"ok": False, "delivered": False, **info}, status=502)
+    if not ok and info.get("reason") == "unverified_submit" and info.get("escape_sent"):
+        log.info(f"AGENT-MESSAGE person -> {session}: submit unverified after an Escape "
+                 f"(turn_stopped={bool(info.get('turn_stopped'))}) {_caller_desc(request)}")
     if ok:
         await _record_operator_message(request, session, text)
         # The honest outcome (what the person's surface shows): typed on an idle prompt, typed into a running turn
@@ -7532,14 +7552,17 @@ async def handle_agent_interrupt(request):
     def _esc():
         with _session_send_lock(session):
             # The wait for the lock can be seconds (an interrupt send holds it): the "mid-turn" read above is
-            # stale by now. Look again under the lock; Escape goes only onto a spinner the screen shows NOW.
-            if not _screen_turn_above_composer(session):
+            # stale by now. Look again under the lock, the way the send path does: Escape goes when the screen
+            # shows a turn anywhere (the anchored spinner, or the whole-screen read: a layout the anchored read
+            # misses must still be stoppable); only a screen with NOTHING that reads as a turn gets no Escape.
+            scr = _strip_ansi(_capture_pane(session, lines=0) or "")
+            if scr and not _turn_above_composer(scr) and not _pane_shows_active_turn(scr):
                 return None
             return _tmux("send-keys", "-t", _st(session), "Escape")
     r = await _asyncio.get_event_loop().run_in_executor(None, _esc)
     if r is None:
         return _json({"ok": False, "error": "not mid-turn",
-                      "detail": "the turn ended before the stop button reached the pane"}, status=409)
+                      "detail": "no running turn on the screen when the stop button reached the pane"}, status=409)
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
     # and the detector reports "Active turn" for up to HOOK_WORKING_TTL_S

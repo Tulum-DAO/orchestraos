@@ -492,6 +492,15 @@ test('escape_sent + turn_stopped ride every answer shape the gateway can give af
     req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
   assert.equal(r.calls.json.escape_sent, true);
   assert.equal(r.calls.json.turn_stopped, false);
+  // the 502 "unknown" answer (Enter unconfirmed after an Escape) keeps the facts too, for both client shapes
+  for (const caps of [['send-states'], undefined]) {
+    r = fakeRes();
+    await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'unverified_submit', escape_sent: true, turn_stopped: true }) }),
+      req({ body: { text: 'hi', ...(caps ? { client_caps: caps } : {}), interrupt: true } }), r.res);
+    assert.equal(r.calls.status, 502);
+    assert.equal(r.calls.json.escape_sent, true);
+    assert.equal(r.calls.json.turn_stopped, true);
+  }
   // without an Escape neither key appears on the durable-first answer
   r = fakeRes();
   await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working' }) }),
