@@ -195,7 +195,7 @@ app.get('/api/me', (req, res) => {
   // The operator's current zone (lib/operatorZone.ts), read per request, for the install admin only: their client
   // labels the times it shows with it. ADDITIVE; absent for a client-scoped caller or a member, and when the install
   // keeps no location file.
-  const zone = operatorZoneFor(installRole(req), p.clientScope, dataDir());
+  const zone = operatorZoneFor(req, dataDir());
   res.json({
     username: p.username,
     role: p.role,
