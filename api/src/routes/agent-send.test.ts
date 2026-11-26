@@ -517,7 +517,32 @@ test('reply_to: without the dep nothing is kept and the send is unchanged', asyn
   assert.equal(calls.json.sent_text, PREFIXED);
 });
 
-// ── interrupt send + honest outcome (gm msg_4952c4ff) ──────────────────────
+test('reply_to and interrupt on one send: the reply is kept and the answer carries the outcome and the Escape facts', async () => {
+  // The two halves meet on every answer shape (#652 + #656 resolved together): a held answer after an Escape keeps the
+  // reply under the gateway's message id AND says held / escape_sent; a delivered answer keeps it AND says its outcome.
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  let r = fakeRes();
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h9', outcome: 'held', escape_sent: true, turn_stopped: false }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY, client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.state, 'held');
+  assert.equal(r.calls.json.outcome, 'held');
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].message_id, 'msg_h9');
+  assert.deepEqual(kept[0].reply_to, REPLY);
+  r = fakeRes();
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 200, ok: true, delivered: true, outcome: 'interrupted', interrupted: true, state: 'working' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY, client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.state, 'delivered');
+  assert.equal(r.calls.json.outcome, 'interrupted');
+  assert.equal(r.calls.json.interrupted, true);
+  assert.equal(kept.length, 2);
+  assert.equal('message_id' in kept[1], false);
+  assert.deepEqual(kept[1].reply_to, REPLY);
+});
+
+// ── interrupt send + honest outcome ─────────────────────────────────────────
 
 test('interrupt: body interrupt:true reaches the gateway; absent, false or a truthy non-boolean does not', async () => {
   const seen: any[] = [];
