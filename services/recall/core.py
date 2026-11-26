@@ -100,7 +100,7 @@ CALLS_SCHEMA = """CREATE TABLE IF NOT EXISTS recall_calls (
   budget_facts INTEGER, budget_worldview INTEGER, budget_recall INTEGER, source TEXT, question_len INTEGER,
   vector INTEGER NOT NULL DEFAULT 1)"""
 CALLS_MIGRATIONS = ("ALTER TABLE recall_calls ADD COLUMN vector INTEGER NOT NULL DEFAULT 1",)
-DEFAULT_SWEEP_UTC_HOUR = 9           # 04:00 Tulum (UTC-5, no DST): the dream/ingest window (ingest cron 04:15 ET)
+DEFAULT_SWEEP_UTC_HOUR = 9           # 09:00 UTC: the nightly dream/ingest window
 SWEEP_NICE = 10
 SWEEP_CHILD_ARGV = [sys.executable, str(Path(__file__).resolve().parent / "sweep_child.py")]   # patchable in tests
 SWEEP_CHILD_TIMEOUT_S = 3600
