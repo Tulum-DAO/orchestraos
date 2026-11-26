@@ -224,8 +224,9 @@ class OpenAITransport:
 # it lands while the call is up, comes in as a note (late=), and gm's own "the answer comes to your chat" is dropped.
 DETACH_TOOLS = frozenset({"gm_command"})
 DETACH_AFTER_S = 1.5
-DETACHED = {"ok": True, "result": "Sent to gm. Tell the operator that in a few words and keep talking; gm's answer "
-                                  "comes into this call when it lands, or to the chat after it."}
+DETACHED = {"ok": True, "result": "Sent to gm; gm has not answered yet. Tell the operator that once, in a few words "
+                                  "(gm's answer comes into this call when it lands, or to the chat after it), then "
+                                  "keep answering him yourself. Never fill the air with 'still on it'."}
 _GM_ANSWER = "gm says:"
 
 
@@ -246,6 +247,8 @@ class ToolRunner:
         self.tools.new_turn(conversation_id)
 
     def execute(self, binding, tool_call_id, name, arguments_json):
+        if tool_call_id in self._detached:          # handed over stays handed over (codex review of #673): the
+            return dict(DETACHED)                    # session re-polls a held delegation; never a second answer
         fut = self._futs.get(tool_call_id)
         if fut is None:
             fut = self._futs[tool_call_id] = self.pool.submit(self.tools.execute, binding, tool_call_id, name,
