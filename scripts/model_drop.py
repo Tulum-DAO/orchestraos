@@ -11,10 +11,11 @@ Conditions, each one a test (test_model_drop.py):
   2. the switch goes through the gateway's PUT /agent-model, the one path that holds the session's
      switch lock, defers a busy seat to its turn end and puts the host default model back; the
      gateway itself checks the seat is on a Fable model now, so a seat already moved is left alone;
-  3. once per seat per episode; a failed switch is retried after 10 minutes, at most 3 times, then
+  3. once per seat per episode per session (a new generation is a new drop); a failed switch is retried after 10 minutes, at most 3 times, then
      gm hears it HIGH once;
   4. a seat with no tmux client attached whose screen still shows the banner is nudged once to
-     continue; an attached seat is not typed into (the person there sees the banner);
+     continue; an attached seat is not typed into (the person there sees the banner), and the client
+     list is read fresh right before typing: unreadable means no nudge;
   5. every drop is logged and gm hears one line per run naming the seats.
 No automatic return: the gateway stores Opus 5.5 as the seat's model, so it stays there until a person
 switches it back. A seat PINNED to Fable (state/model_pins.json) comes back on Fable at its next
@@ -115,7 +116,7 @@ def tick(rows, now, log, deps, state):
         seen = LE._iso_to_dt(r.get("last_seen") or r.get("since"))
         if seen is None or now - seen.timestamp() > FRESH_S:
             continue
-        k = f"{seat}|{r.get('key')}"
+        k = f"{seat}|{r.get('key')}|{r.get('session')}"      # a new generation (new session) is a new drop
         d = drops.get(k) or {}
         if d.get("done") or int(d.get("tries") or 0) >= MAX_TRIES:
             continue
@@ -128,7 +129,6 @@ def tick(rows, now, log, deps, state):
     if sessions is None:
         log({"ts": stamp, "kind": "model_drop_held", "reason": "seat registry unreadable"})
         return []
-    attached = deps.attached_sessions()
     done = []
     for seat, r, k in todo:
         d = drops.setdefault(k, {"tries": 0})
@@ -145,12 +145,12 @@ def tick(rows, now, log, deps, state):
         if status in (200, 202) and body.get("ok"):
             d["done"] = True
             nudged = None
-            if status == 200 and not (attached and session in attached):
-                tail = deps.pane_text(session)
-                if LE.from_text(tail) is not None:
+            if status == 200:
+                attached = deps.attached_sessions()           # fresh, right before typing; unreadable = hold
+                if attached is not None and session not in attached and LE.from_text(deps.pane_text(session)):
                     nudged = deps.nudge(session, NUDGE)
             log(dict(row, kind="model_dropped", nudged=nudged,
-                     returns="stays on Opus 5.5 until switched back; a seat pinned to Fable returns at its next rotation"))
+                     returns="stays on Opus; return to Fable is manual or v2 on credits reset (a seat pinned to Fable returns at its next rotation)"))
             done.append(f"{seat}{' (at its turn end)' if status == 202 else ''}")
         elif body.get("reason") == "not_fable":
             # the gateway says this seat is not on a Fable model now (moved by hand, or rotated): nothing to do
@@ -166,14 +166,14 @@ def tick(rows, now, log, deps, state):
     if done:
         deps.mail("gm", "medium", f"Fable limit: {len(done)} seat(s) moved to Opus 5.5",
                   f"Fable credits are out on these seats, so they now run {TARGET}: {', '.join(done)}. "
-                  f"The shared login was not switched. They stay on Opus 5.5 until switched back (a seat pinned "
-                  f"to Fable returns to it at its next rotation).\n")
+                  f"The shared login was not switched. They stay on Opus; return to Fable is manual or v2 on credits "
+                  f"reset (a seat pinned to Fable returns to it at its next rotation).\n")
     return done
 
 
 def prune(state, rows, now, keep_s=86400):
     """Forget drops whose seat is no longer limited, a day after their last try."""
-    live = {f"{s}|{r.get('key')}" for s, r in rows.items()}
+    live = {f"{s}|{r.get('key')}|{r.get('session')}" for s, r in rows.items()}
     for k in [k for k, d in state.get("drops", {}).items()
               if k not in live and now - float(d.get("last") or 0) > keep_s]:
         del state["drops"][k]

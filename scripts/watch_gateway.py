@@ -7557,7 +7557,8 @@ async def handle_agent_model(request):
     from scripts import agent_model_pending as AMP
     try:
         status, body = await loop.run_in_executor(
-            None, lambda: _put_model(session, model, catalog, by, effort))
+            None, lambda: _put_model(session, model, catalog, by, effort,
+                                     revalidate=_fable_drop_refusal if fable_drop else None))
     except AMP.StateUnreadable as e:
         log.error(f"agent-model: {e}")
         return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
@@ -7583,6 +7584,13 @@ def _fable_drop(request, root, current, model):
         return False
     if model != FABLE_DROP_TARGET:
         return 403, {"ok": False, "error": f"limit-watch may only switch a seat to {FABLE_DROP_TARGET}"}
+    return _fable_drop_refusal(root, current) or True
+
+
+def _fable_drop_refusal(root, current, waiting=None):
+    """None when the Fable drop may go ahead on this seat state, else (409, body). Run before the
+    switch lock (a cheap early answer) and AGAIN under it on the fresh read (_put_model's
+    `revalidate`): a person may have switched the seat off Fable while this request waited."""
     if not re.search(r"fable", str(current or ""), re.I):
         return 409, {"ok": False, "error": "not on a Fable model", "reason": "not_fable", "current": current}
     rows = (_load_json(ORCH_DIR / "state" / "usage" / "limits.json") or {}).get("seats") or {}
@@ -7590,7 +7598,11 @@ def _fable_drop(request, root, current, model):
     if not (isinstance(row, dict) and row.get("window") == "credits"
             and (not row.get("model") or re.search(r"fable", str(row["model"]), re.I))):
         return 409, {"ok": False, "error": "no Fable limit on record for this seat", "reason": "no_limit"}
-    return True
+    if waiting and waiting.get("model") not in (None, FABLE_DROP_TARGET):
+        # a person's pick is waiting for the turn to end: theirs stands, never replaced by automation
+        return 409, {"ok": False, "error": "a person's model pick is waiting for this seat",
+                     "reason": "person_pick_waiting"}
+    return None
 
 
 def _effort_how(session, runtime, desc):
@@ -7671,11 +7683,12 @@ def _model_switch_lock(session, timeout):
     return AMP.session_lock(AMP.state_path(ORCH_DIR), session, timeout=timeout)
 
 
-def _put_model(session, model, catalog, by, effort=None):
+def _put_model(session, model, catalog, by, effort=None, revalidate=None):
     """PUT /agent-model's decision, under the session's switch lock, on a fresh read of the seat
     (an apply that finished while this waited has changed its model). (status, body). `effort`: a
     level already checked against the runtime (_effort_refusal); a level the agent already has is
-    no change."""
+    no change. `revalidate(root, current, waiting)`: a caller's own condition, re-checked here on the
+    fresh read; a (status, body) it returns is the answer and nothing is switched."""
     from scripts import agent_effort as AE
     from scripts import agent_model as AM
     from scripts import agent_model_pending as AMP
@@ -7691,6 +7704,10 @@ def _put_model(session, model, catalog, by, effort=None):
         if model not in desc["allowed"]:
             return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
         waiting = AMP.get(pend_file, session)
+        if revalidate is not None:
+            refused = revalidate(root, current, waiting)
+            if refused is not None:
+                return refused
         if waiting:
             # A pick never drops the other half of one still waiting: a pick of ANOTHER model keeps
             # the waiting effort, and an effort pick sent with the model it is on keeps the waiting

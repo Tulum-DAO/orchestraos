@@ -879,3 +879,18 @@ def test_limit_watch_passes_the_protected_sessions_choke_point(gw, fable, monkey
     assert _drop().status == 200
     r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": OPUS1M}, actor="automation:bot")))
     assert r.status == 403
+
+
+def test_r1_the_fable_conditions_are_rechecked_under_the_switch_lock(gw, fable, monkeypatch):
+    # a person switched the seat off Fable while this request waited for the lock: the fresh read refuses it
+    reads = iter([("dev", {}, "claude", FABLE), ("dev", {}, "claude", "claude-sonnet-5-5")])
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: next(reads))
+    r = _drop()
+    assert r.status == 409 and _body(r)["reason"] == "not_fable" and gw["live"] == []
+
+
+def test_r1_a_persons_waiting_pick_is_never_replaced_by_the_drop(gw, fable, monkeypatch):
+    from scripts import agent_model_pending as AMP
+    monkeypatch.setattr(AMP, "get", lambda f, s: {"model": "claude-sonnet-5-5", "by": "app:ios"})
+    r = _drop()
+    assert r.status == 409 and _body(r)["reason"] == "person_pick_waiting" and gw["live"] == []

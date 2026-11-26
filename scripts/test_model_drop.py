@@ -141,3 +141,31 @@ def test_live_deps_never_reach_a_gateway_under_pytest(tmp_path):
         registry_db = str(tmp_path / "none.db")
     status, body = MD.LiveDeps(P(), None).switch_model("gm", MD.TARGET)
     assert status == 599
+
+
+# --- codex gating review of the rework (536a294) ------------------------------------------------------------
+
+def test_r1_a_new_generation_hitting_fable_again_the_same_day_is_dropped_again():
+    d = Fake()
+    st = {}
+    _tick({"gm": dict(_row(), session="sid-a")}, d, st)
+    _tick({}, d, st, now=NOW + 120)                                         # recovered on Opus
+    _tick({"gm": dict(_row(), session="sid-b")}, d, st, now=NOW + 3600)     # pinned seat rotated back to Fable
+    assert len(d.switched) == 2
+
+
+def test_r1_unreadable_tmux_clients_mean_no_nudge():
+    d = Fake()
+    d.attached_sessions = lambda: None
+    _tick({"gm": _row()}, d)
+    assert d.switched and d.nudged == []
+
+
+def test_r1_the_client_list_is_read_after_the_switch_not_before():
+    d = Fake()
+    calls = []
+    real_switch = d.switch_model
+    d.switch_model = lambda s, m: (calls.append("switch"), real_switch(s, m))[1]
+    d.attached_sessions = lambda: (calls.append("clients"), {"gm"})[1]     # a person attached meanwhile
+    _tick({"gm": _row()}, d)
+    assert calls == ["switch", "clients"] and d.nudged == []
