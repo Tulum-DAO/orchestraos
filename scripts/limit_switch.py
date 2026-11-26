@@ -255,11 +255,20 @@ def _episode_live(e, now, quiet_s):
     return seen is None or now - seen.timestamp() <= quiet_s
 
 
-def _login_limited(episodes, acct, now):
-    """An open, live Claude episode on this login (any window), within the 12-hour block for reset-less ones."""
-    return any(isinstance(e, dict) and e.get("runtime") == "claude" and e.get("account") == acct
-               and _episode_live(e, now, NO_RESET_BLOCK_S) for k, e in (episodes or {}).items()
-               if not str(k).startswith("_"))
+def _login_limited(episodes, acct, now, credits_model=None):
+    """An open, live Claude episode on this login (any window), within the 12-hour block for reset-less ones.
+    credits_model: the trigger is that model's credits cap, so ANOTHER model's credits cap on this login does
+    not count (moving Fable seats to a login whose Opus credits are out still frees them)."""
+    for k, e in (episodes or {}).items():
+        if str(k).startswith("_") or not isinstance(e, dict):
+            continue
+        if e.get("runtime") != "claude" or e.get("account") != acct or not _episode_live(e, now, NO_RESET_BLOCK_S):
+            continue
+        if (credits_model and e.get("window") == "credits" and e.get("model")
+                and e.get("model") != credits_model):
+            continue
+        return True
+    return False
 
 
 def _credits_headroom(u, now, episodes, acct, model):
@@ -514,7 +523,8 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         if acct in parked:
             reasons.append(f"{acct} parked until {LE.reset_label(parked[acct])} (no switching back)")
             continue
-        if _login_limited(episodes, acct, now):
+        if _login_limited(episodes, acct, now,
+                          credits_model=ep.get("model") if ep["window"] == "credits" else None):
             # its own live limit episode (a credits cap shows in no usage reading): never a target
             reasons.append(f"{acct}: has a live limit episode of its own")
             continue

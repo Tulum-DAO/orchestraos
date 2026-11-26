@@ -706,3 +706,15 @@ def test_r2_every_switch_records_where_it_went():
     d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
     _, _, st = _tick({}, d, active="default")
     assert st["last_to"] == "strategysimple"
+
+
+def test_r3_a_credits_trigger_may_move_to_a_login_whose_OTHER_model_is_out():
+    d = FableFake()
+    eps = {**_credits_ep(model="Fable"), **_credits_ep(account="strategysimple", model="Opus")}
+    assert _tick(eps, d, active="default")[0] == "switched" and d.switched == ["strategysimple"]
+
+
+def test_r3_a_credits_trigger_still_refuses_a_login_whose_SAME_model_is_out():
+    d = FableFake()
+    eps = {**_credits_ep(model="Fable"), **_credits_ep(account="strategysimple", model="Fable")}
+    assert _tick(eps, d, active="default")[0] == "refused"
