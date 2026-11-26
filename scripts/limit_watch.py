@@ -18,6 +18,8 @@ With --mail it also sends:
     also forwarded to the fallback seat with the limited seat's baton path.
 5-hour hits are logged and shown on the seat row only (gm ruling).
 
+--codex-watch tracks whether Codex serves (codex_watch.py) and flips the reviewer rule both ways.
+
 --auto-switch arms the fleet-wide Claude login switch (limit_switch.py: trigger, human-typing
 hold, 10-minute gap, no switching back, one-line undo mail, nudge of banner-stuck seats, refusal
 mail when the other login has no headroom). Without it the log carries `switch_decision` lines
@@ -47,6 +49,7 @@ if _REPO not in sys.path:
 import limit_event as LE  # noqa: E402
 
 FRESH_SECONDS = 15 * 60       # only files written in the last 15 min are opened
+NO_RESET_ROW_TTL = 12 * 3600  # a limit with no reset time (a credits cap) leaves the seat rows after 12 h quiet
 MAX_READ = 4 * 1024 * 1024    # per file per run; a cursor never re-reads old bytes
 _UUID_TAIL = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
 _GEN_SUFFIX = re.compile(r"-g\d+$")
@@ -269,6 +272,8 @@ def episode_key(ev):
 def _mail_worthy(ev, episodes):
     if ev.window in ("weekly", "monthly-spend"):
         return True
+    if ev.runtime == "claude" and ev.window == "credits":     # a model's credits cap: no reset comes
+        return True
     if ev.runtime == "claude" and ev.spend_capped:
         month = (ev.ts or "")[:7]
         flag = f"spendcap|{ev.account}|{month}"
@@ -280,7 +285,7 @@ def _mail_worthy(ev, episodes):
 
 def switch_decision(paths, ev):
     """What the fleet-wide login switch WOULD do for this Claude episode (dry run, never acts)."""
-    if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend")):
+    if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend")):   # credits: model_drop
         return None
     profiles = [p.get("id") for p in _read_json(paths.profiles, {}).get("profiles", []) if p.get("enrolled")]
     others = [p for p in profiles if p and p != ev.account]
@@ -299,7 +304,8 @@ def switch_decision(paths, ev):
     return {"would_switch": bool(best), "from": ev.account, "to": best, "reason": why}
 
 
-def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None, switch_deps=None):
+def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None, switch_deps=None,
+             codex_watch=None, drop_deps=None):
     now = now or time.time()
     cursors = _read_json(paths.cursors, {})
     episodes = _read_json(paths.episodes, {})
@@ -312,15 +318,20 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
         key = episode_key(ev)
         ep = episodes.get(key)
         line = LE.describe(ev)
+        if ep is not None and not ep.get("open"):
+            # the same window hit again after a recovery (a credits key is per day): the episode is live again
+            ep["open"] = True
+            _append(paths.log, {"ts": stamp, "kind": "episode_reopen", "key": key, "line": line})
         if ep is None:
             ep = episodes[key] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                                   "account": ev.account, "first_seen": ev.ts or stamp, "seats": [],
-                                  "spend_capped": ev.spend_capped,
+                                  "spend_capped": ev.spend_capped, "model": ev.model,
                                   "owners_told": [], "open": True}
             _append(paths.log, {"ts": stamp, "kind": "episode_open", "key": key, "line": line,
                                 "runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                                 "reset_local": _local(ev.reset_at), "account": ev.account,
-                                "spend_capped": ev.spend_capped, "source": ev.source, "text": ev.text[:300]})
+                                "spend_capped": ev.spend_capped, "model": ev.model, "source": ev.source,
+                                "text": ev.text[:300]})
             dec = switch_decision(paths, ev)
             if dec is not None:
                 _append(paths.log, dict(dec, ts=stamp, kind="switch_decision", key=key,
@@ -329,24 +340,29 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
                 mail_fn("gm", "high", f"usage limit: {line}",
                         f"{line}\nFirst seen {ev.ts or stamp} on {ev.seat}.\n"
                         + (f"Switch decision (dry run, not armed): {dec['reason']}\n" if dec else ""))
+        ep["last_seen"] = ev.ts or stamp
         if ev.seat not in ep["seats"]:
             ep["seats"].append(ev.seat)
             _append(paths.log, {"ts": stamp, "kind": "seat_limited", "key": key, "seat": ev.seat,
                                 "session": ev.session_id, "line": line})
             if ev.runtime == "codex" and mail_fn:
                 _tell_order_owners(paths, ev, ep, cfg, mail_fn, inbox_fn)
-        rows[ev.seat] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
+        rows[ev.seat] = {"runtime": ev.runtime, "window": ev.window, "model": ev.model, "reset_at": ev.reset_at,
                          "reset_label": LE.reset_label(ev.reset_at), "account": ev.account,
-                         "since": ep["first_seen"], "line": line, "session": ev.session_id, "key": key}
+                         "since": ep["first_seen"], "line": line, "session": ev.session_id, "key": key,
+                         "last_seen": ev.ts or stamp}
 
     # recovery: by effect (a healthy record / a normal reply on the same session) or the reset passed
     for seat, r in list(rows.items()):
         healed = (r.get("runtime"), r.get("session")) in recovered
         expired = r.get("reset_at") and now >= int(r["reset_at"]) + 120
-        if healed or expired:
+        seen = LE._iso_to_dt(r.get("last_seen") or r.get("since"))
+        quiet = not r.get("reset_at") and seen is not None and now - seen.timestamp() > NO_RESET_ROW_TTL
+        if healed or expired or quiet:
             del rows[seat]
             _append(paths.log, {"ts": stamp, "kind": "seat_recovered", "seat": seat, "key": r.get("key"),
-                                "how": "healthy record" if healed else "reset time passed"})
+                                "how": "healthy record" if healed else
+                                       "reset time passed" if expired else "no new limit row for 12 h"})
     for key, ep in episodes.items():
         if key.startswith("_") or not ep.get("open"):
             continue
@@ -377,6 +393,24 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
             _append(paths.log, {"ts": stamp, "kind": "switch_error", "error": f"{type(e).__name__}: {e}"[:300]})
         LS.prune_told(st, episodes, now)
         _write_json(st_path, st)
+
+    if drop_deps is not None:            # --model-drop: a seat out of Fable credits moves to Opus 5.5 (model_drop.py)
+        import model_drop as MD
+        md_path = os.path.join(paths.state_dir, "model-drop.json")
+        md = _read_json(md_path, {})
+        try:
+            MD.tick(rows, now, lambda row: _append(paths.log, row), drop_deps, md)
+        except Exception as e:           # noqa: BLE001 — never takes the limit watcher down with it
+            _append(paths.log, {"ts": stamp, "kind": "model_drop_error", "error": f"{type(e).__name__}: {e}"[:300]})
+        MD.prune(md, rows, now)
+        _write_json(md_path, md)
+
+    if codex_watch is not None:          # --codex-watch: who gates reviews (codex_watch.py); mails always on
+        import codex_watch as CW
+        try:
+            CW.tick(paths, events, now, codex_watch, lambda row: _append(paths.log, row))
+        except Exception as e:           # noqa: BLE001 — never takes the limit watcher down with it
+            _append(paths.log, {"ts": stamp, "kind": "codex_watch_error", "error": f"{type(e).__name__}: {e}"[:300]})
     return {"events": len(events), "limited_seats": sorted(rows)}
 
 
@@ -459,6 +493,11 @@ def _prune(episodes, now, keep_days=14):
             del episodes[k]
 
 
+def _drop_deps(paths):
+    import model_drop as MD
+    return MD.LiveDeps(paths, send_mail)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--mail", action="store_true", help="send the mails (default: log only)")
@@ -466,6 +505,12 @@ def main(argv=None):
                     help="read fresh files from their start instead of their end on first sight")
     ap.add_argument("--auto-switch", action="store_true",
                     help="ARM the fleet-wide Claude login switch (limit_switch.py; its mails always go to gm)")
+    ap.add_argument("--codex-watch", action="store_true",
+                    help="track whether Codex serves (codex_watch.py): writes state/codex-availability.json "
+                         "and mails the review seats + gm on a flip")
+    ap.add_argument("--model-drop", action="store_true",
+                    help="ARM the Fable drop: a seat showing the Fable limit switches to Opus 5.5 through the "
+                         "gateway (model_drop.py; its mails always go to gm)")
     a = ap.parse_args(argv)
     paths = Paths()
     deps = None
@@ -473,7 +518,8 @@ def main(argv=None):
         import limit_switch as LS
         deps = LS.LiveDeps(paths, send_mail)
     res = run_once(paths, mail_fn=send_mail if a.mail else None, start_at_end=not a.backfill,
-                   switch_deps=deps)
+                   switch_deps=deps, codex_watch=send_mail if a.codex_watch else None,
+                   drop_deps=_drop_deps(paths) if a.model_drop else None)
     print(json.dumps(res))
     return 0
 

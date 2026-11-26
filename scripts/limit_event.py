@@ -59,6 +59,7 @@ class LimitEvent:
     session_id: str | None = None
     ts: str | None = None         # when the signal was written (ISO), when known
     seat: str | None = None       # filled by the caller that knows the seat
+    model: str | None = None      # a per-model credits cap ("You've reached your Fable limit")
 
 
 # --- banner text -----------------------------------------------------------------------------
@@ -76,6 +77,10 @@ _AUTO = re.compile(_PREFIX + r"Usage limit reached\s*·\s*continuing automatical
 _AUTO_RESETS = re.compile(_PREFIX + r"Usage limit reached\s*·\s*limit resets\s+" + _WHEN, re.I)
 _CONTINUING = re.compile(_PREFIX + r"Continuing automatically at\s+" + _WHEN, re.I)
 _CLAUDE_PIPE = re.compile(_PREFIX + r"Claude AI usage limit reached\b(?:\|(?P<epoch>\d+))?", re.I)
+# a per-model credits cap on the login (2026-11-26: Fable): invisible to the 5-hour/weekly readings
+# a model FAMILY name only (prose like "your patience limit" is not one), and never after a quote mark
+_MODEL_LIMIT = re.compile(r"^[\s⎿●■⚠✗•›❯]*(?:\d+\.\s+)?You'?ve reached your "
+                          r"(?P<model>(?:Claude )?(?:Fable|Opus|Sonnet|Haiku|Mythos)(?: [\d.]+)?) limit\b", re.I)
 _CODEX_CREDITS = re.compile(_PREFIX + r"Your workspace is out of credits\b", re.I)
 _CODEX_LIMIT = re.compile(_PREFIX + r"Usage limit reached\.\s*You'?ve reached your usage limit", re.I)
 _GROK_WEEKLY = re.compile(_PREFIX + r"You hit your weekly limit\b", re.I)
@@ -146,6 +151,9 @@ def _line_event(line: str, now: datetime, host_tz) -> LimitEvent | None:
     m = _AUTO.match(line) or _AUTO_RESETS.match(line) or _CONTINUING.match(line)
     if m:
         return LimitEvent("claude", "unknown", _reset_epoch(m, _local_tz(host_tz), now), text=line.strip())
+    m = _MODEL_LIMIT.match(line)
+    if m:
+        return LimitEvent("claude", "credits", None, text=line.strip(), model=m.group("model"))
     if _CODEX_CREDITS.match(line):
         return LimitEvent("codex", "credits", None, text=line.strip())
     if _CODEX_LIMIT.match(line):
@@ -209,7 +217,12 @@ def from_claude_row(row: dict) -> LimitEvent | None:
     now = _iso_to_dt(row.get("timestamp")) or datetime.now(timezone.utc)
     q = row.get("quotaLimits")
     ev = None
-    if isinstance(q, dict) and q.get("rateLimitType"):
+    if row.get("apiError") == "model_requires_usage_credits":
+        # the model's credits cap: no quotaLimits, no reset; the banner text names the model
+        named = from_text(text, now=now)
+        ev = LimitEvent("claude", "credits", None, text=text,
+                        model=named.model if named is not None else None)
+    elif isinstance(q, dict) and q.get("rateLimitType"):
         rlt = str(q.get("rateLimitType"))
         window = _CLAUDE_WINDOW.get(rlt) or ("weekly" if rlt.startswith("seven_day") else "unknown")
         reset = q.get("resetsAt")
@@ -297,7 +310,8 @@ def reset_label(epoch: int | None, tz: str | None = None, label: str | None = No
 
 def describe(ev: LimitEvent) -> str:
     """One line: runtime, window, reset in the operator's zone, account."""
-    parts = [f"{ev.runtime}: {_LABEL.get(ev.window, ev.window)}"]
+    parts = [f"{ev.runtime}: {_LABEL.get(ev.window, ev.window)}"
+             + (f" ({ev.model})" if getattr(ev, "model", None) else "")]
     if ev.spend_capped and ev.window != "monthly-spend":
         parts.append("org monthly spend cap also reached, so no overage")
     parts.append(reset_label(ev.reset_at))
