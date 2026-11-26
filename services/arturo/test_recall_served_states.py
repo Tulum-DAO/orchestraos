@@ -28,6 +28,10 @@ SERVED = {"active", "resolved", "expired", "unverified"}
 FLAG = "no source quote found"
 
 
+# Budgets far past the default wall: these tests are about what is served and in what order, not about
+# how fast a loaded machine answers. Under the default wall a busy CI box can empty a block.
+WIDE_BUDGETS = {"facts": 30000, "worldview": 30000, "recall": 30000}
+
 def _facts_db(path, now="2026-11-25T10:00:00Z"):
     con = sqlite3.connect(path)
     con.executescript("""
@@ -135,7 +139,8 @@ def test_end_to_end_through_the_recall_core(tmp_path, hidden):
     """An unverified fact and its backfilled statement come back through core.answer, flagged in both blocks and
     never as anyone's words; a superseded or archived one comes back through neither block."""
     db = _facts_db(tmp_path / "f.db")
-    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False,
+                     budgets=WIDE_BUDGETS)
     out = rc.answer("marigold rollout note status", vector=False)
     facts, world = out["blocks"]["facts"], out["blocks"]["worldview"]
     assert {_state_of(f["text"]) for f in facts} >= {"unverified"}
@@ -218,7 +223,8 @@ def test_the_location_pin_never_puts_an_unsourced_fact_above_a_sourced_one(tmp_p
     """Every fixture fact is an open location-slot fact and the unverified one is the newest; sourced ones are
     pinned ahead of it."""
     db = _facts_db(tmp_path / "f.db")
-    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False,
+                     budgets=WIDE_BUDGETS)
     q = "where is shaw with the marigold rollout"
     assert core._LOCATION_Q.search(q)
     assert not any(p["unsourced"] for p in core.open_slot_facts(db, "shaw.location"))
@@ -494,7 +500,8 @@ def test_worldview_wal_window_reads_past_newer_unverified_wal_rows(tmp_path):
     got = wv.query_worldview(db, ["zinnia"], k=5)
     assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia wal sourced", False), ("zinnia wal u99", True),
                                                           ("zinnia wal u98", True)]
-    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False,
+                     budgets=WIDE_BUDGETS)
     block = rc.answer("zinnia wal status today", vector=False)["blocks"]["worldview"]
     assert [(e["text"], e["unsourced"]) for e in block][:1] == [("zinnia wal sourced", False)]
 
@@ -518,7 +525,8 @@ def test_the_location_pin_reads_past_newer_unverified_slot_facts(tmp_path):
     con.close()
     assert [(p["fact_id"], p["unsourced"]) for p in core.open_slot_facts(db, "shaw.location")] == [
         ("loc_src", False), ("loc_u2", True)]
-    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False,
+                     budgets=WIDE_BUDGETS)
     q = "where is shaw right now"
     got = rc._query_facts(fr.extract_keywords(q), 5, q)
     assert got[0]["fact_id"] == "loc_src" and not any(f["unsourced"] for f in got)
@@ -567,7 +575,8 @@ def test_worldview_an_unverified_wal_row_is_still_served_when_both_sourced_reser
 # --- rows that are never served hold no place in a window --------------------------------------------------------
 
 def _answer_block(db, tmp_path, q="zinnia status today"):
-    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False,
+                     budgets=WIDE_BUDGETS)
     return [(e["text"], e["unsourced"]) for e in rc.answer(q, vector=False)["blocks"]["worldview"]]
 
 
@@ -603,7 +612,8 @@ def test_worldview_belief_window_skips_dropped_beliefs(tmp_path):
     db = _wv_db(tmp_path / "f.db", statements=st, beliefs=bl)
     assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=2)] == [
         ("zinnia unverified belief", True)]
-    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False,
+                     budgets=WIDE_BUDGETS)
     block = rc.answer("zinnia status today", k=2, vector=False)["blocks"]["worldview"]
     assert [(e["text"], e["unsourced"]) for e in block] == [("zinnia unverified belief", True)]
 
