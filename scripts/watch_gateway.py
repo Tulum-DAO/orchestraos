@@ -7812,7 +7812,8 @@ def _put_model(session, model, catalog, by, effort=None, revalidate=None):
             log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by {model} ({by})")
         status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by,
                                          effort=effort)
-        if status == 200 and body.get("ok") and model != current:
+        if model != current and ((status == 200 and body.get("ok")) or body.get("model_switched")):
+            # the model switched (a 409 with model_switched = it did, only a following effort waits): record who
             try:
                 AMP.note_switched(pend_file, session, model, by)
             except Exception as e:  # noqa: BLE001 — the switch happened; only its record of who made it is missing

@@ -358,3 +358,12 @@ def test_a_headless_effort_waits_for_the_next_start_on_a_call_and_is_kept(headle
                                                      "why": "on a call"}})
     status, b = _put({"model": OPUS, "effort": "low"})
     assert status == 200 and b["effort_switching"] == "next_start" and AE.get(headless["efforts"], "dev") == "low"
+
+
+def test_a_model_that_switched_before_its_effort_failed_is_recorded_with_who_switched_it(seat, monkeypatch):
+    # codex on #668: the Fable watcher returns a seat only while its own drop is the LAST switch; a model that did
+    # switch must be on record even when the effort after it did not apply (or waits for the turn end)
+    monkeypatch.setattr(AE, "switch_effort_live", lambda **kw: (502, {"ok": False, "error": "unconfirmed"}))
+    _put({"model": SONNET, "effort": "low"})
+    last = _get()["last_switch"]
+    assert last["model"] == SONNET and last["by"] == "ios" and last["outcome"] == "switched"

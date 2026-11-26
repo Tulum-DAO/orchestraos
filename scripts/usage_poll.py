@@ -211,7 +211,11 @@ def parse_claude(body: dict, now: float) -> dict:
     # {"kind": "weekly_scoped", "percent", "resets_at", "scope": {"model": {"display_name": "Fable"}}}
     # (measured 2026-11-26). Labelled weekly-<model>; a window named above is never overwritten.
     limits = body.get("limits")
-    for w in limits if isinstance(limits, list) else ():
+    shares = {}                              # weekly_scoped_shares: {limit_index -> allowance % of the weekly}
+    for sh in body.get("weekly_scoped_shares") if isinstance(body.get("weekly_scoped_shares"), list) else ():
+        if isinstance(sh, dict) and isinstance(sh.get("limit_index"), int) and not isinstance(sh["limit_index"], bool):
+            shares[sh["limit_index"]] = UM._pct(sh.get("allowance_percent_of_weekly"))
+    for i, w in enumerate(limits if isinstance(limits, list) else ()):
         if not (isinstance(w, dict) and w.get("kind") == "weekly_scoped"):
             continue
         model = ((w.get("scope") or {}).get("model") or {}) if isinstance(w.get("scope"), dict) else {}
@@ -221,6 +225,10 @@ def parse_claude(body: dict, now: float) -> dict:
         if not slug or used is None or f"weekly-{slug}" in out:
             continue
         out[f"weekly-{slug}"] = {"used_pct": used, "resets_at": UM._iso_to_epoch(w.get("resets_at"))}
+        if shares.get(i) is not None:
+            out[f"weekly-{slug}"]["allowance_pct_of_weekly"] = shares[i]
+        if w.get("severity") in ("normal", "warning", "critical", "exceeded", "rejected"):
+            out[f"weekly-{slug}"]["severity"] = w["severity"]
     return out
 
 
