@@ -31,9 +31,8 @@ _LIVE_REDACTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "redac
 
 
 def _scrubber():
-    """The redactor's scrub_fact_text (the same wide filter the 10-09 purge used), loaded by file
-    path like ingest_run's worldview hook: cron code is brain-e1, the redactor lives on the live tree. Raises if it
-    cannot load, so ingest refuses rather than storing secrets unredacted. REDACT_SECRETS_PATH overrides (tests)."""
+    """The redactor's scrub_fact_text, loaded by file path from REDACT_SECRETS_PATH, else from the redactor
+    next to this file. Raises if it cannot load, so ingest refuses rather than storing secrets unredacted."""
     import importlib.util  # noqa: PLC0415
     path = os.environ.get("REDACT_SECRETS_PATH") or _LIVE_REDACTOR
     spec = importlib.util.spec_from_file_location("redact_secrets_live", path)
