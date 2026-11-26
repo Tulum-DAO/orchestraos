@@ -75,11 +75,20 @@ def test_agent_takeable_item_with_a_live_seat_offers_assign_first(tmp_path, clie
     assert labels[0] == "Assign to pm-example: draft the pricing deck (suggested)"
 
 
-@pytest.mark.parametrize("why", ["seat_not_live", "no_client", "not_takeable"])
-def test_no_assign_option_without_a_live_resolved_seat(tmp_path, clients, registry, why):
+@pytest.mark.parametrize("why", ["seat_not_live", "no_client"])
+def test_without_a_live_resolved_seat_the_draft_goes_to_gm_to_route(tmp_path, clients, registry, why):
+    """gm msg_feff515d: the agent-draft split is offered anyway; gm routes it, sending stays Shaw's."""
     clients("example-widgets", "pm-example", {"primary": {"name": "Dana Reyes" if why != "no_client" else "X Y"}})
     registry(**{"pm-example": "retired" if why == "seat_not_live" else "online"})
-    _, card = _card(tmp_path, agent_takeable=why != "not_takeable")
+    _, card = _card(tmp_path)
+    assert card.payload["frozen"][0]["options"][0] == {"action": "assign", "seat": "gm", "route": True,
+                                                       "agent_work": "draft the pricing deck"}
+
+
+def test_no_assign_option_when_the_work_is_not_agent_takeable(tmp_path, clients, registry):
+    clients("example-widgets", "pm-example", {"primary": {"name": "Dana Reyes"}})
+    registry(**{"pm-example": "online"})
+    _, card = _card(tmp_path, agent_takeable=False)
     assert [o["action"] for o in card.payload["frozen"][0]["options"]] == ["take", "drop"]
 
 

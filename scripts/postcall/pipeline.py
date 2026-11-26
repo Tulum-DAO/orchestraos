@@ -78,7 +78,7 @@ def process(call, *, ledger, extractor, effects):
         ledger.set_call_status(call.call_id, "no_card_dupes", content_hash=call.content_hash)
         ledger.run_pending(effects)
         return Result("no_card_dupes", items=items, dupes=dupes)
-    pages = card.build(title=call.title, items=card_items, **_card_context(call, all_items, roster))
+    pages = card.build(title=call.title, items=card_items, now=_now(), **_card_context(call, all_items, roster))
     extra = "".join([f"\nAlready tracked, due date moved: {dupes['due_moved']}" if dupes["due_moved"] else "",
                      f"\nAlready done/dropped: {dupes['already_closed']}" if dupes["already_closed"] else ""])
     planned = []
@@ -234,6 +234,10 @@ def _source_key(call, quote, fields=None):
     return "src_" + hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
 
 
+def _now():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
 def _calendar_path():
     return os.environ.get("POSTCALL_CALENDAR_FILE") or os.path.expanduser("~/.orchestra/state/calendar/shaw.ics")
 
@@ -267,10 +271,13 @@ def _card_items(call, items, location, *, roster, events):
         # Assign is offered only for agent work with a live, resolved seat (design §6 seat resolution).
         work = (f.get("agent_work") or "").strip() if f.get("agent_takeable") is True else ""
         seat = seats.resolve(counterpart) if work else None
+        # No client-contact seat: still offer the draft, to gm to route; sending stays Shaw's (gm msg_feff515d).
+        route = bool(work) and seat is None
+        seat = seat or ("gm" if work else None)
         out.append(card.CardItem(
             key=_source_key(call, it.quote, f), owner=it.owner, text=f.get("commitment_text") or it.quote,
             counterpart=counterpart, due=due, quote=it.quote, citation=it.citation,
-            trust=it.trust, seat=seat, agent_work=work if seat else None,
+            trust=it.trust, seat=seat, agent_work=work if seat else None, route=route,
             chase_date=deadlines.chase_date(due.due_ts, call.created_at, tz) if it.owner == "participant" else None))
     return out
 

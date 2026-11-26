@@ -80,3 +80,64 @@ def test_pipeline_marks_unproven_label_as_failed_retry_with_no_card(call, tmp_pa
     result = pipeline.process(call, ledger=led, extractor=extractor, effects=fx)
     assert result.status == "failed_retry"
     assert fx.sent == []
+
+
+# --- a transcript whose speaker label IS Shaw's name needs no quoted proof (Glenn-call preview, 11-26)
+
+def _named(label="Pat Example"):
+    import dataclasses
+    from postcall import sources
+    t = ("# Sync\n\n## Transcript\n\n"
+         f"**{label}** _[00:01]_\nThanks for joining.\n\n"
+         "**Dana Reyes** _[00:05]_\nHappy to be here.\n\n"
+         f"**{label}** _[00:09]_\nI'll send you the pricing deck by Friday.\n")
+    return sources.Call(call_id="pocket:n1", source="pocket", title="Synthetic", created_at="2026-11-24T19:00:00Z",
+                        duration_s=600.0, category="call-external", diarized=True, ingested=True, transcript=t,
+                        content_hash="h")
+
+
+def _named_raw(label="Pat Example", evidence=""):
+    return extract.Extraction(ok=True, raw={"shaw_label": label, "shaw_label_evidence": evidence, "items": [
+        {"owner": "shaw", "kind": "commitment", "quote": "I'll send you the pricing deck by Friday.",
+         "commitment_text": "Send Dana the pricing deck", "counterpart": "Dana Reyes"}]})
+
+
+def test_a_label_that_is_shaws_configured_name_is_its_own_proof(monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example")
+    items = extract.ground(_named(), _named_raw())
+    assert [i.owner for i in items] == ["shaw"]
+
+
+def test_a_name_label_that_is_not_shaws_still_needs_proof(monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Someone Else")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(_named(), _named_raw())
+
+
+def test_without_configured_names_nothing_changes(monkeypatch):
+    monkeypatch.delenv("POSTCALL_SHAW_NAMES", raising=False)
+    with pytest.raises(extract.AttributionError):
+        extract.ground(_named(), _named_raw())
+
+
+def test_the_name_must_be_a_label_in_the_transcript(monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(_named(label="SPEAKER_00"), _named_raw(label="Pat Example"))
+
+
+def test_two_labels_matching_configured_names_are_not_proof(monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example,Pat")
+    import dataclasses
+    base = _named()
+    call = dataclasses.replace(base, transcript=base.transcript + "\n**Pat** _[00:20]_\nSure.\n")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(call, _named_raw())
+
+
+
+def test_a_name_label_proves_only_itself_not_another_claimed_label(monkeypatch):
+    """POSTCALL_SHAW_NAMES names one label; the extractor claims the OTHER label: still needs proof."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(_named(), _named_raw(label="Dana Reyes"))

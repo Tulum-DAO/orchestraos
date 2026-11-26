@@ -359,6 +359,8 @@ def _server(tmp_path, monkeypatch, enabled=True, verified=True, usage=None, exec
                          transport_factory=FakeProvider, usage_store=usage or FakeUsage(),
                          verify=lambda headers: verified)
     s.thread_loader = lambda agent: ""                  # never the live API or the live call journals
+    s.calls_loader = lambda: ""
+    s.page_thread_loader = lambda tid, principal: ""
     s.chat_feed_factory = lambda agent: None
     return s
 
@@ -1524,7 +1526,7 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
         time.sleep(0.05)
         return FakeProvider()
 
-    def slow_thread(agent):
+    def slow_thread(*agent):
         # runs beside the connect: wait until the call is connected, then 0.05 s more, so START lands after the
         # connect by that much however slow the runner is
         deadline = time.monotonic() + 5.0
@@ -1538,7 +1540,7 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
     monkeypatch.setenv(call_context.FLAG, "1")
     s = _server(tmp_path, monkeypatch)
     s.transport_factory = slow_provider
-    s.thread_loader = slow_thread
+    s.thread_loader = s.calls_loader = slow_thread      # a start frame with no agent reads Arturo's calls
 
     async def go():
         c = await _client(s)

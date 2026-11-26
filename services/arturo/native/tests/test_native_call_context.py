@@ -44,6 +44,7 @@ def _go(tmp_path, monkeypatch, start, after_start, loader=None, flag=None):
         s = _server(tmp_path, monkeypatch)
         s.thread_loader = loader or (lambda agent: asked.append(agent) or f"THREAD for {agent}: last call said hi")
         s.chat_feed_factory = lambda agent: feeds.append(_Feed(agent)) or feeds[-1]
+        s.calls_loader = lambda: "ARTURO CALLS"
         c = await _client(s)
         try:
             ws, p = await _start(c, start)
@@ -62,7 +63,7 @@ async def _started(ws, p):
 
 
 def test_the_thread_opens_the_call_in_both_prompts(tmp_path, monkeypatch):
-    p, _, asked = _go(tmp_path, monkeypatch, {"type": "start"}, _started)
+    p, _, asked = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started)
     start = p.sent[0]
     assert start["type"] == "session.start"
     assert asked == ["gm"]                                          # the client page's chat is gm's (10-20 ruling)
@@ -77,7 +78,7 @@ def test_the_page_names_whose_chat_it_is(tmp_path, monkeypatch):
     _, feeds, asked = _go(tmp_path, monkeypatch, {"type": "start", "agent": "pm-demo"}, _started)
     assert asked == ["pm-demo"] and feeds[0].agent == "pm-demo"
     _, _, asked = _go(tmp_path, monkeypatch, {"type": "start", "agent": "../etc"}, _started)
-    assert asked == ["gm"]                                          # a malformed id is ignored
+    assert asked == []              # a malformed id is ignored: no chat at all, Arturo's own calls (gm msg_e7402cbb)
 
 
 def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_path, monkeypatch):
@@ -85,7 +86,7 @@ def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_p
         await asyncio.sleep(0.4)                                    # not started yet: nothing appended
         assert not [f for f in p.sent if f["type"].endswith(".append") and "dream fix" in f.get("content", "")]
         await _started(ws, p)
-    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, before_and_after)
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, before_and_after)
     notes = [f for f in p.sent if f["type"] == "session.thinking.append" and "dream fix" in f["content"]]   # the default kind
     assert len(notes) == 1 and notes[0]["content"].startswith("[2026-11-25T17:40:00Z 12:40 Local] chat gm")
     rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
@@ -95,7 +96,7 @@ def test_chat_during_the_call_reaches_the_session_stamped_after_it_started(tmp_p
 def test_a_slow_or_broken_thread_never_holds_the_call(tmp_path, monkeypatch):
     def boom(agent):
         raise OSError("api down")
-    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=boom)
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=boom)
     assert p.sent[0]["type"] == "session.start"
     assert "THREAD" not in p.sent[0]["session"]["instructions"]
 
@@ -255,7 +256,7 @@ def test_the_chat_feed_defaults_to_thinking_the_kind_measured_voiced(monkeypatch
 
 
 def test_the_opening_budget_defaults_to_25_stamped_turns(monkeypatch):
-    # Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across chat and calls, stamped; this
+    # The operator, 2026-11-25: a call opens with the last 20-25 turns across chat and calls, stamped; this
     # overrides the under-3 s greet bar. Measured on the real gm thread: 2000 -> 22 verbatim turns, 2500 -> 32.
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     assert call_context.budget_tokens() == call_context.DEFAULT_BUDGET_TOKENS == 2500
@@ -264,6 +265,16 @@ def test_the_opening_budget_defaults_to_25_stamped_turns(monkeypatch):
     assert call_context.budget_tokens() == 6000
     monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "junk")
     assert call_context.budget_tokens() == 2500
+
+
+def _clock(ticks):
+    """A fake monotonic for call_context only: the given ticks, then the last one forever (never StopIteration)."""
+    last = [0.0]
+
+    def now():
+        last[0] = next(ticks, last[0])
+        return last[0]
+    return now
 
 
 class _TwinRead(BaseException):
@@ -317,12 +328,109 @@ def test_an_opening_short_of_25_turns_is_asked_again_at_the_floor(monkeypatch):
 
 
 def test_the_call_report_says_what_the_opening_carried(tmp_path, monkeypatch):
-    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: _opening(7, n_summ=1))
+    p, _, _ = _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=lambda agent: _opening(7, n_summ=1))
     rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
     th = rep["thread"]
     assert th["turns"] == 7 and th["summarized"] == 1 and th["chat_lines"] == 3 and th["call_lines"] == 4
     assert th["first"] == "2026-11-25T17:00:00Z" and th["last"] == "2026-11-25T17:06:00Z"
     assert "vc_old0" in th["calls"] and th["opening_tokens"] > 0
+
+
+# --- a call from the standalone Arturo page opens with that page's own thread (gm msg_e7402cbb) ----------------------
+
+def _go_page(tmp_path, monkeypatch, start):
+    seen = {}
+
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        s.thread_loader = lambda agent: seen.setdefault("agent", []).append(agent) or "AGENT CHAT"
+        s.page_thread_loader = lambda tid, principal: seen.setdefault("thread", []).append(tid) or _opening(3)
+        s.calls_loader = lambda: seen.setdefault("calls", []).append(1) or "ARTURO CALLS"
+        s.chat_feed_factory = lambda agent: seen.setdefault("agent_feed", []).append(agent) or _Feed(agent)
+        s.page_feed_factory = lambda tid, principal=None: seen.setdefault("thread_feed", []).append(tid) or _Feed(tid)
+        c = await _client(s)
+        try:
+            ws, p = await _start(c, start)
+            await _started(ws, p)
+            await ws.send_str(json.dumps({"type": "disconnect"}))
+            await ws.close()
+        finally:
+            await c.close()
+        return p
+    p = _run(go())
+    rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
+    return p, seen, rep
+
+
+def test_a_standalone_page_call_opens_with_its_own_thread_and_the_feed_follows_it(tmp_path, monkeypatch):
+    p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start", "thread": "web_abc123"})
+    assert seen.get("thread") == ["web_abc123"] and seen.get("thread_feed") == ["web_abc123"]
+    assert "agent" not in seen and "agent_feed" not in seen and "calls" not in seen      # never gm's chat
+    assert rep["thread"]["thread_id"] == "web_abc123" and rep["thread"]["chat"] is None
+    assert rep["thread"]["turns"] == 3
+
+
+def test_a_call_naming_an_agent_opens_with_that_agents_chat(tmp_path, monkeypatch):
+    p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start", "agent": "dev-x"})
+    assert seen.get("agent") == ["dev-x"] and seen.get("agent_feed") == ["dev-x"] and "thread" not in seen
+    assert rep["thread"]["chat"] == "dev-x" and rep["thread"]["thread_id"] is None
+
+
+def test_a_call_naming_neither_opens_with_arturos_own_calls_and_no_chat_feed(tmp_path, monkeypatch):
+    p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start"})
+    assert seen.get("calls") == [1] and "agent" not in seen and "thread" not in seen
+    assert "agent_feed" not in seen and "thread_feed" not in seen
+    assert rep["thread"]["chat"] is None and rep["thread"]["thread_id"] is None
+
+
+def test_a_bad_thread_id_is_refused_and_logged_never_read(tmp_path, monkeypatch, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        p, seen, rep = _go_page(tmp_path, monkeypatch, {"type": "start", "thread": "../../etc/passwd"})
+    assert "thread" not in seen and seen.get("calls") == [1]
+    assert any("thread id refused" in r.getMessage() for r in caplog.records)
+
+
+def test_the_page_thread_feed_sends_new_typed_lines_only(tmp_path):
+    from services.arturo import thread_store
+    db = tmp_path / "threads.db"
+    st = thread_store.ThreadStore(db)
+    st.append_message("web_abc123", "user", "before the call", ts=1764090000)
+    feed = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, tz="UTC", tz_label="UTC", operator="Ada")
+    assert feed.poll() == []
+    st.append_message("web_abc123", "user", "typed during the call", ts=1764090010)
+    st.append_message("web_abc123", "user", "said on the call", mode="voice", ts=1764090011)
+    st.append_message("web_abc123", "assistant", "Arturo typed reply", ts=1764090012)
+    notes = feed.poll()
+    assert len(notes) == 1 and notes[0].startswith("[2025-11-25T17:00:10Z 17:00 UTC] chat Ada (typed, during this call)")
+    assert feed.poll() == []                                         # the cursor moved
+
+
+def test_the_page_thread_feed_is_by_role_and_by_access(tmp_path):
+    # Claude review of #644: an operator named "Arturo" must not turn Arturo's typed reply into the operator's words;
+    # and a caller that may not read the thread gets nothing.
+    from services.arturo import thread_store
+    db = tmp_path / "threads.db"
+    st = thread_store.ThreadStore(db)
+    st.record_turn("web_abc123", "first", "reply", principal="owner:ada", ts=1764090000)
+    feed = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, tz="UTC", tz_label="UTC", operator="Arturo")
+    st.append_message("web_abc123", "assistant", "Arturo typed reply", ts=1764090010)
+    st.append_message("web_abc123", "user", "the operator typed", ts=1764090011)
+    notes = feed.poll()
+    assert len(notes) == 1 and "the operator typed" in notes[0]
+    bob = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, principal="owner:bob", tz="UTC",
+                                  tz_label="UTC", operator="Ada")
+    st.append_message("web_abc123", "user", "secret", ts=1764090020)
+    assert bob.poll() == []
+
+
+def test_a_page_thread_the_caller_may_not_read_opens_with_nothing(tmp_path, monkeypatch):
+    from services.arturo import thread_store
+    db = tmp_path / "threads.db"
+    thread_store.ThreadStore(db).record_turn("web_abc123", "the owner's private question", "answer", principal="owner:ada")
+    monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
+    assert "private question" in call_context.opening_thread("web_abc123", principal="fleet")
+    assert call_context.opening_thread("web_abc123", principal="owner:bob") == ""
 
 
 def test_the_floor_re_read_is_skipped_when_nothing_older_exists_or_the_first_read_was_slow(monkeypatch):
@@ -334,7 +442,7 @@ def test_the_floor_re_read_is_skipped_when_nothing_older_exists_or_the_first_rea
     assert asked == [2500] and call_context.describe(out)["turns"] == 12
     asked.clear()
     clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.5])
-    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(call_context, "_now", _clock(clock))
     out = call_context.opening("gm", route=lambda a, b, **k: asked.append(b) or _opening(12, n_summ=3), load=_NO_TWIN)
     assert asked == [2500] and call_context.describe(out)["turns"] == 12
 
@@ -439,7 +547,7 @@ def test_the_call_report_says_how_the_opening_was_read_and_a_timeout_skip(tmp_pa
     import time as _t
     from services.arturo.native import server as srv
     opened = call_context.Opening(_opening(4), {"budget": 2500, "reread": None, "source": "route", "short": True})
-    _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: opened)
+    _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=lambda agent: opened)
     reports = tmp_path / "native" / "calls"
     th = json.loads(next(reports.glob("*.json")).read_text())["thread"]
     assert th["budget"] == 2500 and th["source"] == "route" and th["reread"] is None and th["skipped"] is None
@@ -447,9 +555,22 @@ def test_the_call_report_says_how_the_opening_was_read_and_a_timeout_skip(tmp_pa
     for f in reports.glob("*.json"):
         f.unlink()
     monkeypatch.setattr(srv, "OPENING_WAIT_S", 0.1)
-    _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: _t.sleep(0.6) or opened)
+    _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started,
+        loader=lambda agent: _t.sleep(0.6) or opened)
     th = json.loads(next(reports.glob("*.json")).read_text())["thread"]
     assert th["skipped"] == "timeout" and th["turns"] == 0 and th["source"] is None
+
+
+def test_the_page_thread_and_calls_openings_say_their_source(tmp_path, monkeypatch):
+    from services.arturo import thread_store
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    assert call_context.opening_calls(load=lambda **k: _opening(3)).info["source"] == "calls"
+    assert call_context.opening_calls(load=lambda **k: "").info["source"] == "none"
+    db = tmp_path / "threads.db"
+    thread_store.ThreadStore(db).record_turn("web_abc123", "q", "a", principal="owner:ada")
+    monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
+    assert call_context.opening_thread("web_abc123", load=lambda *a, **k: _opening(3)).info["source"] == "thread"
+    assert call_context.opening_thread("web_abc123", principal="owner:bob").info["source"] == "refused"
 
 
 def test_the_second_read_is_route_only_and_bounded_by_the_deadline(monkeypatch):
@@ -459,7 +580,7 @@ def test_the_second_read_is_route_only_and_bounded_by_the_deadline(monkeypatch):
     assert call_context.READ_DEADLINE_S < srv.OPENING_WAIT_S
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     clock = iter([0.0, 1.5])
-    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(call_context, "_now", _clock(clock))
     seen, first = [], _opening(12, n_summ=3)
 
     def route(agent, budget, timeout=None):
@@ -487,7 +608,7 @@ def test_an_empty_opening_reaches_the_report_with_how_it_was_read_and_a_loader_e
     # Claude re-review of #638 (B): "nothing could be read" must not look like the flag being off
     none = call_context.Opening("", {"budget": 2500, "reread": None, "reread_result": None, "source": "none",
                                      "short": True})
-    _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=lambda agent: none)
+    _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=lambda agent: none)
     reports = tmp_path / "native" / "calls"
     th = json.loads(next(reports.glob("*.json")).read_text())["thread"]
     assert th["source"] == "none" and th["budget"] == 2500 and th["short"] is True and th["skipped"] is None
@@ -496,6 +617,60 @@ def test_an_empty_opening_reaches_the_report_with_how_it_was_read_and_a_loader_e
 
     def boom(agent):
         raise RuntimeError("loader broke")
-    _go(tmp_path, monkeypatch, {"type": "start"}, _started, loader=boom)
+    _go(tmp_path, monkeypatch, {"type": "start", "agent": "gm"}, _started, loader=boom)
     th = json.loads(next(reports.glob("*.json")).read_text())["thread"]
     assert th["skipped"] == "error" and th["source"] is None
+
+
+def test_a_page_thread_short_of_25_is_read_again_locally_and_cut_to_25(tmp_path, monkeypatch):
+    from services.arturo import thread_store
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    db = tmp_path / "threads.db"
+    thread_store.ThreadStore(db).record_turn("web_abc123", "q", "a", principal="owner:ada")
+    monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
+    asked = []
+
+    def load(tid, budget_tokens, **k):
+        asked.append(budget_tokens)
+        return _opening(12, n_summ=3) if budget_tokens == 2500 else _opening(30)
+    out = call_context.opening_thread("web_abc123", load=load)
+    assert asked == [2500, 4000] and call_context.describe(out)["turns"] == 25
+    assert out.info["source"] == "thread" and out.info["reread_result"] == "kept"
+
+
+def test_the_cut_keeps_the_newest_turns_under_an_earlier_heading():
+    # builder's notes on #638 at 01c8481: a reversed cut (the oldest 25) passed every test, and a second read with no
+    # EARLIER block put the omitted line under THREAD, a shape the renderer never makes
+    out = call_context._newest(_opening(30), 25)
+    assert "line 29" in out and "line 5" in out and "line 4" not in out and "line 0" not in out
+    lines = out.splitlines()
+    at = lines.index("EARLIER (summarized):")
+    assert lines[at + 1] == "- (5 older item(s) omitted)" and lines[at + 2] == "RECENT (verbatim):"
+    assert call_context.describe(out)["summarized"] == 5
+    with_earlier = call_context._newest(_opening(30, n_summ=2), 25).splitlines()
+    assert with_earlier.count("EARLIER (summarized):") == 1
+    assert with_earlier[with_earlier.index("RECENT (verbatim):") - 1] == "- (5 older item(s) omitted)"
+
+
+def test_a_cut_without_a_recent_heading_keeps_the_text():
+    odd = "\n".join(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} Local] chat Operator: line {i}" for i in range(30))
+    assert call_context._newest(odd, 25) == odd
+
+
+def test_a_second_read_skipped_as_too_slow_says_so(monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.1])
+    monkeypatch.setattr(call_context, "_now", _clock(clock))
+    out = call_context.opening("gm", route=lambda a, b, **k: _opening(12, n_summ=3), load=_NO_TWIN)
+    assert out.info["reread"] is None and out.info["reread_result"] == "too_slow"
+
+
+def test_a_page_thread_that_could_not_be_read_is_named_and_an_uncut_keep_says_so(monkeypatch):
+    broken = _opening(2).replace("RECENT (verbatim):", "(thread web_abc123 could not be read: OperationalError)\n"
+                                 "RECENT (verbatim):")
+    assert call_context.describe(broken)["chat_error"] is True
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    no_recent = "\n".join(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} Local] chat Operator: line {i}" for i in range(30))
+    out = call_context.opening("gm", route=lambda a, b, **k: _opening(12, n_summ=3) if b == 2500 else no_recent,
+                               load=_NO_TWIN)
+    assert out == no_recent and out.info["reread_result"] == "kept_uncut"

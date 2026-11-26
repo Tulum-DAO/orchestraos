@@ -128,6 +128,7 @@ Two sources are combined, and each participant gets a trust level.
      - **inferred:** every Pocket item.
        - Diarized transcripts carry only `SPEAKER_00`/`SPEAKER_01` labels (checked on disk 2026-11-25), and nothing on the box maps a label to Shaw.
        - When a transcript is diarized, the LLM proposes Shaw's label with quoted evidence, and code requires that label to agree across the call's items; if it doesn't, the call goes `failed_retry` and then to manual review.
+       - **Named labels (gm msg_ac5f49bf, 11-26):** some recorder transcripts label speakers by name. A label equal to a name in `POSTCALL_SHAW_NAMES` (set in the sweep's environment, never in code) proves itself, but only if it is the ONLY label naming Shaw and it is the label claimed. Otherwise quoted evidence is still required. Calendar verification stays the stronger path.
        - **Quote-in-segment rule:** the grounded quote's span must lie entirely inside **one** speaker turn (the text between two `**SPEAKER_xx**` / segment boundaries), and that turn's speaker determines the attribution. An item's `owner` must match it: Shaw's label for `shaw`, any other label for `participant`. A quote that spans turns, or an owner mismatch, drops the item. The same rule applies to segments files, using the `speaker` field.
        - When a transcript isn't diarized, the item is marked `speaker unknown`.
      - **Inferred and unknown items are never covered by Q1 accept-all (§4).** Each needs its own explicit answer, so no task or dispatch comes from an unconfirmed attribution.
@@ -276,7 +277,7 @@ Precedence, first hit wins; `due_source` names the rule.
   1. counterpart (a participant for theirs, the named person for Shaw's) → `client.json` `pm_agent`;
   2. else project → `protocol.py determine_pm()`;
   3. it must be live in `registry.json`, where the PM seats in `gm.md:283-293` are absent today;
-  4. else gm.
+  4. else gm. The option reads `Assign to gm to route: <work> (you send it)` and the dispatch asks gm to pick the seat; sending stays Shaw's (dry run 11-26, gm msg_feff515d). Step 2 (project → `determine_pm()`) is not built yet: the extractor's `project` field came back empty on all three real calls.
 - **Results:** replies to `postcall-dev` (the sweeper takes only messages whose subject carries a `[postcall dispatch:<cmt>]` / `duenote` tag) are matched to their item by the dispatch id in the subject. When every dispatched item on a card has a result, or 48 h pass (report partial), effect `results:<card_id>` sends **one** message to gm: `Post-call results ready: <title>: <k>/<m> done, <unreviewed u>, <links>`. gm relays one line to Shaw; postcall never texts him.
 
 ## 7. Fixtures, tests, shadow and rollout
@@ -350,6 +351,7 @@ Precedence, first hit wins; `due_source` names the rule.
   6. *(reschedule patching only)* orchestraos-builder's guarded `update_fields` has landed; gm queued it as LOW. Until then `POSTCALL_RESCHEDULE_PATCH` stays off and that one path is reported, not applied (§5).
   7. Service identity: `--from` moves from `postcall-dev` to a runtime=service identity (spawn_adopt), which changes `<AUTHOR>` in recovery.
   8. *(phase-2 review round 3)* Every ledger starts empty at this schema. The occurrence key gained the owner, and commitments gained `quote` and calls `card_hash`; a ledger written before that would re-card every item of a re-ingested call with no ⚠. No shadow or live ledger exists yet, so this holds by construction. If one is ever created before this lands, it is deleted, not migrated.
+- **Sweep environment (PR #655).** The cron line sets `POSTCALL_SHAW_NAMES` (Shaw's name as recorders label him) and, once Shaw supplies it, the 0600 calendar URL file. Neither value is ever written in the repo. Without `POSTCALL_SHAW_NAMES` the named-label proof is off, and quoted evidence is required as before.
 - **Known spec gap (review round 3).** If a re-transcription changes an old quote's words so it can't be relocated, and the model makes no `same_as_occ` claim, §5 step 4 treats the item as new, with no ⚠. Accepted for now: a re-ingest needs a changed transcript and the extractor is shown the old occurrences. Revisit if the shadow ledger shows a duplicate.
   **No generated post-call card reaches Shaw before step 5.** The only Shaw-facing card before then is the deliberate step-4 validation card that gm files.
 
