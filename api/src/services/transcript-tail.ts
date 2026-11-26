@@ -89,7 +89,8 @@ export class TranscriptTailer {
   private agentId: string;
   private resolve: Resolver;
   private limit: number;
-  private subs = new Set<Subscriber>();
+  /** Each subscriber with ITS OWN window (items per snapshot, and the most it is ever sent at once). */
+  private subs = new Map<Subscriber, number>();
 
   private sid: string | null = null;
   private path: string | null = null;
@@ -235,8 +236,13 @@ export class TranscriptTailer {
     return `${this.sidTag()}:${this.items.length}`;
   }
 
-  private snapshot(reset = false): TailEvent {
-    const windowed = this.items.slice(-this.limit);
+  /** The newest `limit` items as a snapshot. Built once per (limit, reset) within one broadcast: `memo` is the broadcast's
+   *  own map, so two subscribers with the same window share one render pass and never one from an earlier read. */
+  private snapshot(limit: number, reset = false, memo?: Map<string, TailEvent>): TailEvent {
+    const key = `${limit}:${reset ? 1 : 0}`;
+    const kept = memo?.get(key);
+    if (kept) return kept;
+    const windowed = this.items.slice(-limit);
     const ev: TailEvent = {
       type: 'snapshot',
       id: this.eventId(),
@@ -247,6 +253,7 @@ export class TranscriptTailer {
       render_items: buildRenderItems(windowed),
     };
     if (reset) ev.reset = true;
+    memo?.set(key, ev);
     return ev;
   }
 
@@ -262,11 +269,14 @@ export class TranscriptTailer {
   }
 
   /**
-   * Subscribe. With a valid `lastEventId` (`<sid>:<offset>`) the subscriber
-   * resumes: it immediately receives a delta of anything it missed (nothing if
-   * caught up). Otherwise it receives a full snapshot.
+   * Subscribe with a window of `limit` items (the tailer's default when not given). With a valid `lastEventId`
+   * (`<sid>:<offset>`) the subscriber resumes: it immediately receives a delta of anything it missed (nothing if
+   * caught up). Otherwise it receives a snapshot of its window. A subscriber is never sent more items at once than
+   * its window: a resume that missed more than `limit` items (an API restart under a busy seat drew a 1500-row
+   * delta) gets its snapshot instead, which holds the newest `limit` and says nothing older is missing.
    */
-  subscribe(cb: Subscriber, lastEventId?: string): () => void {
+  subscribe(cb: Subscriber, lastEventId?: string, limit?: number): () => void {
+    const window = Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : this.limit;
     this.refresh();
     let resumed = false;
     if (lastEventId) {
@@ -274,12 +284,15 @@ export class TranscriptTailer {
       const sid = i >= 0 ? lastEventId.slice(0, i) : '';
       const offset = i >= 0 ? Number(lastEventId.slice(i + 1)) : NaN;
       if (sid && sid === this.sidTag() && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
-        resumed = true;
-        if (offset < this.items.length) cb(this.delta(offset));
+        const missed = this.items.length - offset;
+        if (missed <= window) {
+          resumed = true;
+          if (missed > 0) cb(this.delta(offset));
+        }
       }
     }
-    if (!resumed) cb(this.snapshot());
-    this.subs.add(cb);
+    if (!resumed) cb(this.snapshot(window));
+    this.subs.set(cb, window);
     return () => { this.subs.delete(cb); };
   }
 
@@ -305,14 +318,18 @@ export class TranscriptTailer {
       return 'gone';
     }
     if (rotated || restated) {
-      // reset only for a new session or a shrunk log; a late usage update is a plain snapshot.
-      const ev = this.snapshot(rotated);
-      for (const cb of this.subs) cb(ev);
+      // reset only for a new session or a shrunk log; a late usage update is a plain snapshot. Each subscriber's own
+      // window; one render pass per distinct window.
+      const memo = new Map<string, TailEvent>();
+      for (const [cb, window] of this.subs) cb(this.snapshot(window, rotated, memo));
       return;
     }
     if (grewFrom !== null) {
+      // A growth that fits a subscriber's window is its delta; one that does not (a burst after a stall, a resumed
+      // seat) is its snapshot: the newest `window` items, never more than the window at once.
       const ev = this.delta(grewFrom);
-      for (const cb of this.subs) cb(ev);
+      const memo = new Map<string, TailEvent>();
+      for (const [cb, window] of this.subs) cb(ev.items.length <= window ? ev : this.snapshot(window, false, memo));
     }
   }
 }
