@@ -87,13 +87,13 @@ def test_merged_thread_is_time_ordered_with_a_stamp_on_every_line(tmp_path):
     chat = tc.chat_lines([chat_item("user", "typed before", T0), chat_item("assistant", "typed after", T0 + 20)],
                          agent_label="gm", operator_label="Shaw")
     text = tc.render(chat + tc.call_lines(tmp_path, owner=None, operator_label="Shaw"), budget_tokens=2000, tz="America/Cancun",
-                     tz_label="Tulum")
+                     tz_label="Local")
     order = [text.index(s) for s in ("typed before", "call line", "call reply", "typed after")]
     assert order == sorted(order)
     body = [ln for ln in text.splitlines() if ln.startswith("[")]
     assert len(body) == 4
-    # ISO UTC and Shaw-local on every line: 17:00Z is 12:00 Tulum
-    assert body[0].startswith("[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw:")
+    # ISO UTC and Shaw-local on every line: 17:00Z is 12:00 Local
+    assert body[0].startswith("[2025-11-25T17:00:00Z 12:00 Local] chat Shaw:")
     assert "call vc_a Arturo:" in text
 
 
