@@ -239,6 +239,27 @@ def test_a_turn_is_an_exchange_consecutive_phrases_of_one_speaker_in_one_call_me
                     "[2025-11-25T17:00:06Z 17:00 UTC] chat Ada: typed again"]
 
 
+def test_a_backchannel_between_two_phrases_of_the_other_speaker_folds_out_and_they_merge():
+    # proving call 2026-11-26: the opening's 41 "turns" were mostly "Mm-h" / "of" / "m.": a phrase of two words or fewer
+    # wedged between two phrases of the other speaker in one call is a backchannel, not a turn
+    L = tc.Line
+    a = lambda t, text, call="vc_a": L(T0 + t, "Arturo", text, "call", call, role="agent")     # noqa: E731
+    u = lambda t, text, call="vc_a": L(T0 + t, "Ada", text, "call", call, role="user")         # noqa: E731
+    out = tc.merge_phrases([u(0, "So if I reference something"), a(1, "Mm-h"), u(2, "from earlier in the chat"),
+                            a(3, "You didn't."), a(4, "Sorry."),                  # a real short reply, not wedged
+                            u(5, "Okay so tell me more"), a(6, "Right then, so"),  # wedged, but 3 words: a turn
+                            u(7, "go on please now"),
+                            a(8, "Yes"), u(9, "ok", "vc_b"),                      # neighbours in another call: kept
+                            u(10, "first", "vc_c"), a(11, "Mm", "vc_c"),
+                            u(11 + tc.MERGE_GAP_S + 1, "much later", "vc_c")])    # neighbours too far apart: kept
+    assert [(l.who, l.text, l.phrases) for l in out] == [
+        ("Ada", "So if I reference something from earlier in the chat", 2),
+        ("Arturo", "You didn't. Sorry.", 2), ("Ada", "Okay so tell me more", 1), ("Arturo", "Right then, so", 1),
+        ("Ada", "go on please now", 1), ("Arturo", "Yes", 1), ("Ada", "ok", 1),
+        ("Ada", "first", 1), ("Arturo", "Mm", 1), ("Ada", "much later", 1)]
+    assert out[0].at == T0                                                  # stamped at its first phrase
+
+
 def _call(tmp_path, turns, call_id="vc_a", started=T0):
     (tmp_path / f"{call_id}.json").write_text(json.dumps({"call_id": call_id, "started_at": started, "turns": turns}))
 

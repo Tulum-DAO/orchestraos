@@ -35,6 +35,7 @@ DEFAULT_BUDGET_TOKENS = 6000      # opening context; GPT-Live's start frame has 
 APPEND_MAX_TOKENS = 500           # native protocol.APPEND_MAX_TOKENS
 LINE_MAX_CHARS = 1200             # one very long chat reply must not eat the whole budget
 MERGE_GAP_S = 120                 # one speaker's phrases further apart than this in a call are separate turns
+BACKCHANNEL_WORDS = 2             # a call phrase this short, wedged between two of the other speaker's, is not a turn
 SUMMARY_SHARE = 0.2               # of the budget, for the EARLIER block
 # The opening is fenced as history that is over (live probes 2026-11-25: unfenced, the thread ended on verbatim call
 # dialogue and Arturo never greeted, native-90a7e00cd3d1; thread off, he greeted at 1.5 s, native-8f4a14b348a8).
@@ -268,10 +269,24 @@ def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> lis
     return out
 
 
+def _same_speaker(a, b) -> bool:
+    return a.channel == "call" and b.channel == "call" and a.call_id == b.call_id and a.role == b.role and a.who == b.who
+
+
+def _backchannel(prev, ln, nxt) -> bool:
+    """"Mm-h", "of", "m.": a call phrase of BACKCHANNEL_WORDS words or fewer between two phrases of the OTHER speaker
+    in the same call, those two within MERGE_GAP_S of each other."""
+    return (prev is not None and nxt is not None and ln.channel == "call" and len(ln.text.split()) <= BACKCHANNEL_WORDS
+            and _same_speaker(prev, nxt) and prev.call_id == ln.call_id and not _same_speaker(prev, ln)
+            and nxt.at - prev.at <= MERGE_GAP_S)
+
+
 def merge_phrases(lines: list) -> list:
     """A turn is an exchange: consecutive phrases by the same speaker (same role and name) in the same call become one
-    turn, stamped at its first phrase, while each phrase follows the one before within MERGE_GAP_S. Chat lines never
-    merge. `lines` in time order."""
+    turn, stamped at its first phrase, while each phrase follows the one before within MERGE_GAP_S. A backchannel
+    (_backchannel) is left out first, so the phrases around it join. Chat lines never merge. `lines` in time order."""
+    lines = [ln for i, ln in enumerate(lines)
+             if not _backchannel(lines[i - 1] if i else None, ln, lines[i + 1] if i + 1 < len(lines) else None)]
     out, last_at = [], None
     for ln in lines:
         prev = out[-1] if out else None
