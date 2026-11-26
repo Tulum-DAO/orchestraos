@@ -841,7 +841,10 @@ def finalize_from_client(client_call_id="", conv_id=""):
         if not any(t.get("role") == "tool" for t in server_turns):
             # a native call writes no server journal: its tool runs are in the native tool ledger (2026-11-26: "0 tool
             # runs" on a call with three questions to gm)
-            server_turns = list(server_turns) + _fm.native_tool_turns(conv, NATIVE_TOOL_LEDGER)
+            # a re-notify merges again (gm_injected still False): never fold the same native run twice (codex review)
+            _have = {t.get("call_id") for t in client.get("turns", []) if t.get("role") == "tool"}
+            server_turns = list(server_turns) + [t for t in _fm.native_tool_turns(conv, NATIVE_TOOL_LEDGER)
+                                                 if t["call_id"] not in _have]
         # merge: client spine + server tools + surface events, ts-ordered
         merged = _fm.merge_timeline(client.get("turns", []), server_turns, surface_events)
         summary = _endcall.sanitize_summary(_fm.summarize(merged))

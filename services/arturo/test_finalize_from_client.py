@@ -215,7 +215,9 @@ def test_a_native_call_counts_the_tool_runs_in_its_ledger(monkeypatch, tmp_path)
         "started_at": now - 60, "ended_at": now,
         "turns": [{"role": "user", "text": "ask the gm", "ts": now - 50},
                   {"role": "arturo", "text": "Sent.", "ts": now - 40}]}))
-    assert m.finalize_from_client(client_call_id="vc_client_nq1", conv_id="native-q1") is True
-    client = json.loads((scratch / "vc_client_nq1.json").read_text())
-    assert [t["tool"] for t in client["turns"] if t.get("role") == "tool"] == ["gm_command"] * 3
-    assert client["summary"].startswith("Voice call: 2 turns, 3 tool runs.")
+    # twice: with the gm inject off (or failing) gm_injected stays False, so a re-notify merges again (codex review)
+    for _ in range(2):
+        assert m.finalize_from_client(client_call_id="vc_client_nq1", conv_id="native-q1") is True
+        client = json.loads((scratch / "vc_client_nq1.json").read_text())
+        assert [t["tool"] for t in client["turns"] if t.get("role") == "tool"] == ["gm_command"] * 3
+        assert client["summary"].startswith("Voice call: 2 turns, 3 tool runs.")
