@@ -1,7 +1,7 @@
-"""E1 — lane context read API: the PM contract (spec §E2).
+"""Lane context read API: the contract a project manager reads.
 
 get_context(lane, kinds, since, limit) -> {
-    "api_version": 1,                 # consumers capability-gate on this (D5 analog)
+    "api_version": 1,                 # consumers capability-gate on this
     "freshness": {content_hash, last_source_event_ts, ingest_lag_s,
                   ok, error, sources},   # LOAD-BEARING, on EVERY read (binding)
     "facts": [ranked typed facts],
@@ -9,8 +9,8 @@ get_context(lane, kinds, since, limit) -> {
 
 Freshness semantics: ingest_lag_s = seconds since the OLDEST source's last
 ingest run (worst-case staleness). A missing/empty db reads explicitly
-not-ok — never a silent empty (W1 analog). Content currency of the SOURCES
-is freshness.py's job (E3); this header proves bus currency.
+not-ok — never a silent empty. Content currency of the SOURCES
+is freshness.py's job; this header proves bus currency.
 
 Ranking (fixed v1 weights): recency x confidence x lane-affinity
 (direct 1.0 > alias 0.8 > co-mention 0.6). Active decisions/commitments are

@@ -1,6 +1,6 @@
-"""E1 — the brain fact bus: facts.db writer/reader.
+"""The brain fact bus: facts.db writer/reader.
 
-PURE-ADDITIVE + INERT: nothing consumes this until the post-arm wiring DEC.
+PURE-ADDITIVE + INERT: nothing consumes this until it is wired in.
 Guardrails (binding):
   - EVERY write runs under an exclusive flock on the bus's OWN lockfile
     (facts.lock next to the db — registry_lock.py pattern, its own file).
@@ -168,7 +168,7 @@ def ingest(db_path: str, facts: list, *, source_kind: str,
             _migrate(con)
             now = _now_iso()
             for f in facts:
-                if is_noise_text(f["text"]):     # write-side noise filter (R2-4)
+                if is_noise_text(f["text"]):     # write-side noise filter
                     continue                     # never persist prompt-echoes
                 cur = con.execute(
                     "INSERT OR IGNORE INTO facts (fact_id, ts, kind, text, "
@@ -197,7 +197,7 @@ def backfill_expiry_class(db_path: str = DEFAULT_DB,
     """Recompute expiry_class for every row via the deterministic heuristic and
     write back the ones that change. Idempotent; returns rows updated.
 
-    SINGLE-WRITER (build-gate #5): runs under the bus write lock, so it serializes
+    SINGLE-WRITER: runs under the bus write lock, so it serializes
     against the daily ingest cron — never a concurrent writer on facts.db.
     """
     updated = 0
@@ -257,7 +257,7 @@ def update_state(db_path: str, fact_id: str, state: str,
 
 def mark_superseded(db_path: str, old_fact_id: str, new_fact_id: str,
                     lock_timeout_s: float = 30.0) -> None:
-    """E1 demote-not-delete: flip old fact to state='superseded' and record the
+    """Demote, never delete: flip old fact to state='superseded' and record the
     fact that replaced it. The row is retained (auditable), just down-ranked."""
     with bus_lock(db_path, timeout_s=lock_timeout_s):
         con = _connect(db_path)

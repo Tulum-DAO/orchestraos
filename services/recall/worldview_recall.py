@@ -59,10 +59,10 @@ def _sp(text):
 
 
 def _wal_anchored(meta_json):
-    """WAL->semantic drain §5.2 reader refusal (step 4). A `source_type='wal'` statement is
+    """The WAL->semantic drain's reader refusal. A `source_type='wal'` statement is
     recallable ONLY if its metadata.anchor carries a seq — the anchor is corroboration, never
-    the claim (§5.4), and a wal row that cannot be corroborated must not be surfaced as if it
-    were grounded. Writer refusal (§5.1, wal_emit.assert_anchored) is the first wall; this is
+    the claim, and a wal row that cannot be corroborated must not be surfaced as if it
+    were grounded. Writer refusal (wal_emit.assert_anchored) is the first wall; this is
     the second, so a row that slipped past the first (an older db, a hand insert, a future
     writer) still cannot be recalled. Decidable on malformed input: anything that is not a JSON
     object with anchor.seq is NOT anchored."""
@@ -90,7 +90,7 @@ def l2_enabled():
 
 
 def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
-    """P1.d L2 read path (runs INSIDE the same budget wall/single-flight as query_facts).
+    """The L2 read path (runs INSIDE the same budget wall/single-flight as query_facts).
     (1) MATERIALIZED beliefs (durable/standard) keyword-matched over subject+current_value,
         ranked by corroboration-count confidence then recency; each cites ONE L1 statement
         (source_type + date via derived_from) — the worldview stays traceable.
@@ -161,7 +161,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             if not _statement_served(meta):
                 continue                                  # copied from a superseded or archived fact
             if stype == "wal" and not _wal_anchored(meta):
-                continue                                  # §5.2: unanchored wal row is not recallable
+                continue                                  # an unanchored wal row is not recallable
             sp = _sp(content)
             key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
             entry = {"kind": "fluid", "tier": "ephemeral", "text": content,
@@ -173,11 +173,11 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         # the fluid slots are counted against sourced beliefs only, and filled with sourced statements first
         out.extend(sourced_first(list(newest.values()))[: max(0, k - n_sourced) + 2])
         out = sourced_first(out)
-        # WAL->semantic drain §5.2 (step 4): the wal pass. The fluid pass above reads ONLY
+        # The WAL->semantic drain's wal pass. The fluid pass above reads ONLY
         # ephemeral rows; the drain writes `standard` (a commit is not ephemeral), so without
         # this pass 497 drained facts were unrecallable on the first live dry run — written
         # but invisible, a green pass with nothing behind it. Anchored rows only (the reader's
-        # half of §5); keyword-matched; newest first; bounded by the same LIMIT and the same
+        # half of the anchor rule); keyword-matched; newest first; bounded by the same LIMIT and the same
         # k+2 contract as everything else in this function.
         # RESERVED SLOTS, not leftovers. My first version ran this pass only
         # `if len(out) < k + 2` — and on the LIVE facts.db 120 matching beliefs filled every
@@ -195,7 +195,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             if not _statement_served(meta):
                 continue
             if not _wal_anchored(meta):
-                continue                                  # §5.2: unanchored is not recallable
+                continue                                  # unanchored is not recallable
             try:
                 m = _json.loads(meta) if isinstance(meta, str) else (meta or {})
             except (ValueError, TypeError):
@@ -219,7 +219,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         con.close()
 
 
-# WAL->semantic drain §5.2: how many matching ANCHORED wal facts query_worldview guarantees a
+# WAL->semantic drain: how many matching ANCHORED wal facts query_worldview guarantees a
 # place for inside its k+2 result — measured need on the first live dry run, where 120 matching
 # beliefs starved every wal row. 2 mirrors the existing '+2' the fluid pass gets.
 WAL_RESERVE = 2

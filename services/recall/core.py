@@ -106,7 +106,7 @@ DEFAULT_SWEEP_UTC_HOUR = 9           # 09:00 UTC: the nightly dream/ingest windo
 SWEEP_NICE = 10
 SWEEP_CHILD_ARGV = [sys.executable, str(Path(__file__).resolve().parent / "sweep_child.py")]   # patchable in tests
 SWEEP_CHILD_TIMEOUT_S = 3600
-DEFAULT_SWEEP_LOAD_MAX = float(os.cpu_count() or 4)   # core count (8 here), same rule as the brain-voice watchdog; a fixed 4 deferred every tick at load 5-8
+DEFAULT_SWEEP_LOAD_MAX = float(os.cpu_count() or 4)   # core count, same rule as the brain-voice watchdog; a fixed 4 deferred every tick at load 5-8
 
 
 def _load_1m():
@@ -114,7 +114,7 @@ def _load_1m():
         return float(os.getloadavg()[0])
     except Exception:  # noqa: BLE001
         return 0.0
-STATS_THRESHOLD_PCT = 5.0            # review R1: budget-exceeded above 5 percent of real calls => build 1b
+STATS_THRESHOLD_PCT = 5.0            # a block over budget on more than 5 percent of real calls is over the threshold
 DEFAULT_EXCLUDE_PREFIXES = ("burst", "test", "gemini-test", "codex-test", "devex-review", "seed:")
 
 
@@ -184,7 +184,7 @@ class Recall:
         self.last_warm_ms = 0.0
         self._log_threads = []
         self._calls_table_ready = False
-        # nightly index sweep (step 5 / condition 5): inside this process, niced, dream window
+        # nightly index sweep: inside this process, niced, dream window
         self.sweep_enabled = (os.environ.get("RECALL_SWEEP", "1") != "0") if sweep_enabled is None else bool(sweep_enabled)
         self.sweep_utc_hour = int(os.environ.get("RECALL_SWEEP_UTC_HOUR", DEFAULT_SWEEP_UTC_HOUR)) if sweep_utc_hour is None else int(sweep_utc_hour)
         self._sweep_resolve = sweep_resolve
@@ -249,7 +249,7 @@ class Recall:
     def _query_facts(self, keywords, k, text=""):
         facts = [f for f in fr.query_facts(self.facts_db, keywords, k=k) if not _is_noise(f.get("text"))]
         if text and _LOCATION_Q.search(text):
-            # memory slice 1 step 2: a location question gets the CURRENT shaw.location slot fact first. Keyword
+            # a location question gets the CURRENT shaw.location slot fact first. Keyword
             # scoring alone ranks old durable "Shaw decision" rows above it ("shaw" matches nearly every fact).
             pinned = open_slot_facts(self.facts_db, "shaw.location")
             ids = {p["fact_id"] for p in pinned}
@@ -351,7 +351,7 @@ class Recall:
             total_budget = max(self.budgets[b] for b, _ in plan) / 1000.0
             t_start = time.perf_counter()
             deadline = t_start + total_budget
-            # ---- pool slot: the wait counts against the caller's budget (condition 1)
+            # ---- pool slot: the wait counts against the caller's budget
             with self._lock:
                 self._queued += 1
             got = self._slots.acquire(timeout=total_budget)
@@ -427,7 +427,7 @@ class Recall:
         self._log_call(out, text, vector)
         return out
 
-    # ------------------------------------------------------------ per-call load log (review R1)
+    # ------------------------------------------------------------ per-call load log
     def _ensure_calls_table(self):
         """Service-owned, additive table in semantic-memory.db; the library's tables are untouched."""
         scripts = str(SCRIPTS_DIR)
@@ -477,7 +477,7 @@ class Recall:
             self._log_threads = [x for x in self._log_threads if x.is_alive()] + [t]
         t.start()
 
-    # ------------------------------------------------------------ feedback (condition 2)
+    # ------------------------------------------------------------ feedback
     def ack(self, query_hash, path, signal, agent=None):
         try:
             sr._import_sm()
@@ -487,7 +487,7 @@ class Recall:
             log.error(f"ack error (non-fatal): {e}")
             return {"ok": False, "reason": f"error:{type(e).__name__}"}
 
-    # ------------------------------------------------------------ daily prune (condition 3)
+    # ------------------------------------------------------------ daily prune
     def prune_tick(self, now=None):
         now = time.time() if now is None else now
         if self._last_prune is not None and (now - self._last_prune) < PRUNE_INTERVAL_S:
@@ -524,7 +524,7 @@ class Recall:
         log.info(f"warm: facts+worldview in {ms:.0f}ms")
         return ms
 
-    # ------------------------------------------------------------ nightly sweep (step 5 / condition 5)
+    # ------------------------------------------------------------ nightly sweep
     def _sweep_impl(self):
         """Run the sweep in a SHORT-LIVED CHILD (option b): the child loads its own
         embedder, sweeps, prints one JSON line, exits — the resident heap never grows (the in-process
@@ -650,7 +650,7 @@ class Recall:
 
 
 def stats(sm_db, hours=24, exclude_prefixes=DEFAULT_EXCLUDE_PREFIXES, now=None):
-    """Budget-exceeded rate per block over REAL calls in the window (review R1). Read-only."""
+    """Budget-exceeded rate per block over REAL calls in the window. Read-only."""
     now = time.time() if now is None else now
     since = now - hours * 3600.0
     out = {"window_h": hours, "since": since, "calls": 0, "real_calls": 0, "degraded": 0, "queue": 0,

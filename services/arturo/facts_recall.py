@@ -232,9 +232,9 @@ def _is_noise(txt):
 
 _KIND_WEIGHT = {"goal": 3, "decision": 3, "insight": 2, "fact": 1}
 
-# Recency x tier decay (spec R2 fork: half-lives are CONFIG, not hardcoded).
+# Recency x tier decay (half-lives are CONFIG, not hardcoded).
 # effective_confidence = base_confidence * 0.5 ** (age_days / half_life_days).
-# durable = ~5y (build-gate #2: a FINITE long value, never literal infinity —
+# durable = ~5y (a FINITE long value, never literal infinity —
 # a mis-tagged fluid fact must still eventually decay); standard ~180d;
 # ephemeral ~7d (daily churn). Unknown tier -> standard's half-life (never
 # treated as no-decay). Override per-tier via ARTURO_FACTS_HALFLIFE_<TIER>_D.
@@ -285,7 +285,7 @@ def _connect_ro(dbpath):
 
 # Tiers that NEVER decay — pulled as candidates regardless of recency so an old
 # immutable/durable fact (e.g. a company ownership record) is never starved out of the
-# recency-ordered window by 250 newer matches (spec R2-3, build-gate #4).
+# recency-ordered window by 250 newer matches.
 _NODECAY_TIERS = ("durable",)
 DURABLE_LIMIT = 250          # bounded cap on the second (tier-aware) candidate pass
 
