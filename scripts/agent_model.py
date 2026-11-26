@@ -245,11 +245,13 @@ def live_model(stored, seen, last_switch):
     last switch record for the session. A confirmed switch newer than the last reply wins (the seat
     has not answered on the new model yet); otherwise the transcript does. The transcript names the
     model without its context suffix, so the exact id is taken from the switch or the stored model
-    when it names the same model."""
+    when it names the same model. No reply yet: the stored model (what this process was spawned with);
+    the switch record is keyed by tmux name, so without a reply to date it against it may be an
+    earlier occupant's."""
+    if not seen:
+        return stored or None
     switched = last_switch if (isinstance(last_switch, dict) and last_switch.get("outcome") == "switched"
                                and isinstance(last_switch.get("model"), str)) else None
-    if not seen:
-        return switched["model"] if switched else (stored or None)
     model, ts = seen
     if switched:
         at, seen_at = _epoch(switched.get("at")), _epoch(ts)

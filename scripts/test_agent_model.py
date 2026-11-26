@@ -1047,9 +1047,11 @@ def test_m4_a_switch_newer_than_the_last_reply_wins_until_the_seat_answers():
     assert AM.live_model("claude-fable-5-1[1m]", seen, failed) == "claude-fable-5-1[1m]"
 
 
-def test_m5_no_transcript_falls_back_to_a_confirmed_switch_then_the_stored_model():
-    last = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"}
-    assert AM.live_model("claude-fable-5-1[1m]", None, last) == "claude-opus-5-5[1m]"
+def test_m5_no_reply_yet_is_the_stored_model_never_an_earlier_occupants_switch():
+    # codex R1 on #672: the switch record is keyed by tmux name only; a fresh spawn in that pane with no
+    # reply yet runs its stored model, so a Fable switch of the previous occupant must not count.
+    last = {"model": "claude-fable-5-1[1m]", "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"}
+    assert AM.live_model("claude-opus-5-5[1m]", None, last) == "claude-opus-5-5[1m]"
     assert AM.live_model("claude-fable-5-1[1m]", None, None) == "claude-fable-5-1[1m]"
     assert AM.live_model(None, None, None) is None
 
