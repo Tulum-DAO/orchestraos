@@ -102,3 +102,16 @@ def test_a_bad_thread_id_never_opens_the_store(tmp_path, monkeypatch):
     import sqlite3
     monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("opened")))
     assert tc.thread_lines("../etc", tmp_path / "x.db") == [] and tc.thread_lines("web_x\n", tmp_path / "x.db") == []
+
+
+def test_a_page_threads_call_phrases_fold_by_role_even_under_one_name(tmp_path):
+    # #645 on the page thread: an operator named like the assistant never folds into the assistant's turn
+    db = _thread(tmp_path, [("user", "are you there", "voice", None), ("assistant", "I am", "voice", None),
+                            ("assistant", "still here", "voice", None),
+                            ("assistant", "Call ended (vc_one).", "voice", {"kind": "call_end", "call_id": "vc_one"})])
+    lines = tc.thread_lines("web_abc123", db, operator_label="Arturo")
+    assert [l.role for l in lines] == ["user", "agent", "agent"]
+    out = tc.render(lines, budget_tokens=2000, tz="UTC", tz_label="UTC")
+    body = out.split("RECENT (verbatim):\n")[1].splitlines()
+    assert [ln.split("] ", 1)[1] for ln in body] == ["call vc_one Arturo: are you there",
+                                                       "call vc_one Arturo: I am still here"]

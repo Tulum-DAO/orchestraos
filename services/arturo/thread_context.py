@@ -462,7 +462,8 @@ def thread_entries(thread_id: str, db, operator_label: str = "Operator", assista
             continue
         who = operator_label if role == "user" else assistant_label
         if mode == "voice":
-            line = Line(at=at, who=who, text=text, channel="call", call_id="live")
+            line = Line(at=at, who=who, text=text, channel="call", call_id="live",
+                        role="user" if role == "user" else "agent")
             pending.append(line)
         else:
             for p in pending:
