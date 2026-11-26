@@ -147,15 +147,23 @@ def test_attribution_rule():
 
 def test_a_labelled_fact_is_served_flagged_not_hidden(world, tmp_path, monkeypatch):
     """The gate and recall together: a fact the gate could not verify is still recalled, flagged as having no
-    source quote, and ranked after a verified one; nothing about it is dropped."""
+    source quote, and ranked after a verified one although it scores higher; nothing about it is dropped."""
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     from services.arturo import facts_recall as fr  # noqa: PLC0415
     monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
     _ingest(tmp_path, world)
-    got = fr.query_facts(str(tmp_path / "facts.db"), ["theme", "replies"], k=10)
+    labelled, verified = "Shaw prefers short replies on calls.", "keep the dark theme on every page"
+    keywords = ["theme", "short", "replies", "calls"]           # three hit the labelled fact, one the verified
+    got = fr.query_facts(str(tmp_path / "facts.db"), keywords, k=10)
     by_text = {f["text"]: f for f in got}
-    assert by_text["Shaw prefers short replies on calls."]["unsourced"] is True
-    assert by_text["keep the dark theme on every page"]["unsourced"] is False
+    assert by_text[labelled]["unsourced"] is True
+    assert by_text[verified]["unsourced"] is False
+    # on raw score alone the labelled fact comes first ...
+    raw = fr._score([{**by_text[t], "confidence": 1.0, "unsourced": False} for t in (verified, labelled)], keywords, 2)
+    assert [f["text"] for f in raw] == [labelled, verified]
+    # ... so only sourced-first ordering puts it after the verified one
+    order = [f["text"] for f in got]
+    assert order.index(verified) < order.index(labelled)
     assert [f["unsourced"] for f in got] == sorted(f["unsourced"] for f in got)
     assert "no source quote found" in fr._render(got)
 
