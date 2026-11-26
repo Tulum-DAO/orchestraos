@@ -103,8 +103,8 @@ def _shaw_names():
 def _named_shaw_label(label, call_turns):
     """A transcript whose speaker label IS Shaw's configured name proves the label by itself."""
     names = _shaw_names()
-    return bool(label and names and label.strip().casefold() in names
-                and any(lab == label for lab, _, _ in call_turns))
+    named = {lab for lab, _, _ in call_turns if lab.strip().casefold() in names}
+    return bool(label and named == {label})     # exactly one label names Shaw, and it is the claimed one
 
 
 def ground(call, extraction):

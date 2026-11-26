@@ -124,3 +124,12 @@ def test_the_name_must_be_a_label_in_the_transcript(monkeypatch):
     monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example")
     with pytest.raises(extract.AttributionError):
         extract.ground(_named(label="SPEAKER_00"), _named_raw(label="Pat Example"))
+
+
+def test_two_labels_matching_configured_names_are_not_proof(monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example,Pat")
+    import dataclasses
+    base = _named()
+    call = dataclasses.replace(base, transcript=base.transcript + "\n**Pat** _[00:20]_\nSure.\n")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(call, _named_raw())

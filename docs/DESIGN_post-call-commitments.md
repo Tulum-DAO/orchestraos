@@ -128,6 +128,7 @@ Two sources are combined, and each participant gets a trust level.
      - **inferred:** every Pocket item.
        - Diarized transcripts carry only `SPEAKER_00`/`SPEAKER_01` labels (checked on disk 2026-11-25), and nothing on the box maps a label to Shaw.
        - When a transcript is diarized, the LLM proposes Shaw's label with quoted evidence, and code requires that label to agree across the call's items; if it doesn't, the call goes `failed_retry` and then to manual review.
+       - **Named labels (gm msg_ac5f49bf, 11-26):** some recorder transcripts label speakers by name. A label equal to a name in `POSTCALL_SHAW_NAMES` (set in the sweep's environment, never in code) proves itself, but only if it is the ONLY label naming Shaw and it is the label claimed. Otherwise quoted evidence is still required. Calendar verification stays the stronger path.
        - **Quote-in-segment rule:** the grounded quote's span must lie entirely inside **one** speaker turn (the text between two `**SPEAKER_xx**` / segment boundaries), and that turn's speaker determines the attribution. An item's `owner` must match it: Shaw's label for `shaw`, any other label for `participant`. A quote that spans turns, or an owner mismatch, drops the item. The same rule applies to segments files, using the `speaker` field.
        - When a transcript isn't diarized, the item is marked `speaker unknown`.
      - **Inferred and unknown items are never covered by Q1 accept-all (§4).** Each needs its own explicit answer, so no task or dispatch comes from an unconfirmed attribution.

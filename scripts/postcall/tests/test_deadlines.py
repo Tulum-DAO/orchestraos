@@ -251,3 +251,15 @@ def test_leading_zeros_are_read_whole(phrase, hours):
 def test_alternatives_and_impossible_clocks_stay_unknown(phrase):
     d = due(phrase, anchor="2026-11-24T10:00:00Z", tz="America/New_York")
     assert d.due_ts is None, d
+
+
+# --- review round 7: a bare clock follows a part-of-day word anywhere in the phrase ---------------
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("tomorrow evening at eight o'clock", "2026-11-25T20:00:00-05:00"),
+    ("tomorrow night at nine", "2026-11-25T21:00:00-05:00"),
+    ("tomorrow morning at five o'clock", "2026-11-25T05:00:00-05:00"),
+    ("tomorrow afternoon at two", "2026-11-25T14:00:00-05:00"),
+])
+def test_a_bare_clock_follows_the_part_of_day_word(phrase, expected):
+    assert due(phrase).due_ts == expected

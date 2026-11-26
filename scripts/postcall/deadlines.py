@@ -18,6 +18,7 @@ _CLOCK = re.compile(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\bat\s+(\d{
 _NUMBERS = {w: str(n) for n, w in enumerate(
     "one two three four five six seven eight nine ten eleven twelve".split(), 1)}
 _SPELLED = re.compile(r"\b(" + "|".join(_NUMBERS) + r")(?=\s*(?:am|pm|o'?clock)\b)")
+_AT_SPELLED = re.compile(r"\b(at\s+)(" + "|".join(_NUMBERS) + r")\b")
 _OCLOCK = re.compile(r"\b(\d{1,2})\s*o'?clock\b")
 # A zone named in the phrase wins over Shaw's zone ("two PM EST"): (region, standard, daylight, name).
 # A standard/daylight abbreviation that disagrees with the season is ambiguous, never guessed.
@@ -106,9 +107,9 @@ def _clock_of(p, default_hour):
             hour += 12
         elif ampm == "a" and hour == 12:
             hour = 0
-        elif not ampm and re.search(r"\bin the morning\b", p):
+        elif not ampm and re.search(r"\bmorning\b", p):
             hour = 0 if hour == 12 else hour
-        elif not ampm and re.search(r"\bin the (?:afternoon|evening)\b|\bat night\b|\btonight\b", p) and hour < 12:
+        elif not ampm and re.search(r"\b(?:afternoon|evening|night|tonight)\b", p) and hour < 12:
             hour += 12
         elif not ampm and 1 <= hour <= 7:
             hour += 12  # "at 3" in a business conversation means the afternoon
@@ -140,6 +141,7 @@ def _localize(day, hour, minute, tz):
 def _normalized(phrase):
     p = phrase.lower().replace("p.m.", "pm").replace("a.m.", "am")
     p = _SPELLED.sub(lambda m: _NUMBERS[m.group(1)], p)
+    p = _AT_SPELLED.sub(lambda m: m.group(1) + _NUMBERS[m.group(2)], p)
     return _OCLOCK.sub(lambda m: f"at {m.group(1)}", p)
 
 
@@ -210,7 +212,7 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     if len(_DAYWORD.findall(p)) > 1:     # "in the morning or in the evening"
         return Due(None, f"unknown ({phrase})")
     if (clocks and not clocks[0].group(3) and int(clocks[0].group(1) or clocks[0].group(4)) == 12
-            and re.search(r"\bat night\b|\bin the evening\b|\btonight\b", p)):
+            and re.search(r"\b(?:night|evening|tonight)\b", p)):
         return Due(None, f"ambiguous: {phrase} (midnight: the end of which day?)")   # never noon
     hours = _hours_ahead(p)
     if hours is not None:      # "in the next couple of hours": from the call, exact
