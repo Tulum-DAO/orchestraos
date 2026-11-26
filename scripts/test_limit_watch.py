@@ -194,3 +194,60 @@ def test_sidecar_has_initiatives_shape_and_marks_the_limited_owners_items(tree):
     assert json.load(open(tree.initiatives))["items"][0]["note"] == ""   # main file untouched
 
 
+
+
+# --- review of #636 (Claude reviewer, codex out of credits): H2, M2, M4, M5 ----------------------
+
+def test_h2_the_active_login_comes_from_the_ledger_not_the_switch_log(tree):
+    # the switch log's last row says strategysimple; the ledger says default holds the shared dir now
+    (tmp := os.path.join(tree.orch, "state", "account_locations.json"))
+    with open(tmp, "w") as f:
+        json.dump({"accounts": {"default": {"where": "shared", "at": "2026-11-25T22:58:59+00:00"},
+                                "strategysimple": {"where": "vault", "at": "2026-11-25T22:58:59+00:00"}}}, f)
+    assert LW.shared_holder(tree) == "default"
+    seen = {}
+
+    class D:
+        def usage(self, a):
+            seen.setdefault("active", a)
+            return None
+
+        def enrolled(self):
+            return []
+    LW.run_once(tree, now=NOW, start_at_end=False, switch_deps=D())
+    assert seen["active"] == "default"
+
+
+def test_h2_no_ledger_falls_back_to_the_switch_log(tree):
+    assert LW.shared_holder(tree) is None
+    assert LW.claude_account_at(tree, None) == "strategysimple"
+
+
+def test_m2_a_switch_error_keeps_the_watchers_own_state(tree):
+    _add(tree.transcript, _err_row("2026-11-25T17:50:00.000Z", WEEKLY_Q))
+
+    class D:
+        def usage(self, a):
+            raise RuntimeError("boom")
+    LW.run_once(tree, now=NOW, start_at_end=False, switch_deps=D())
+    assert os.path.exists(tree.cursors) and os.path.exists(tree.episodes)
+    assert any(r["kind"] == "switch_error" and "boom" in r["error"] for r in _log(tree))
+
+
+def test_m4_a_line_longer_than_a_chunk_is_skipped_not_frozen(tree, monkeypatch):
+    monkeypatch.setattr(LW, "MAX_READ", 64)
+    p = str(tree.transcript)
+    with open(p, "w") as f:
+        f.write("x" * 500 + "\n" + "after\n")
+    cur = {p: 0}
+    assert LW.new_lines(p, cur, start_at_end=False) == []
+    assert cur[p] == 501
+    assert LW.new_lines(p, cur, start_at_end=False) == ["after"]
+
+
+def test_m4_a_short_unfinished_line_waits(tree):
+    p = str(tree.transcript)
+    with open(p, "w") as f:
+        f.write("partial")
+    cur = {p: 0}
+    assert LW.new_lines(p, cur, start_at_end=False) == [] and cur[p] == 0

@@ -147,9 +147,21 @@ def new_lines(path, cursors, *, start_at_end):
     with open(path, "rb") as f:
         f.seek(pos)
         data = f.read(min(size - pos, MAX_READ))
-    last_nl = data.rfind(b"\n")
-    if last_nl < 0:
-        return []
+        last_nl = data.rfind(b"\n")
+        if last_nl < 0:
+            if len(data) < MAX_READ:
+                return []                       # a line still being written: wait for its newline
+            # one line longer than a whole chunk: skip it to its newline, or the cursor never moves again
+            skipped = pos + len(data)
+            while True:
+                piece = f.read(1 << 20)
+                if not piece:
+                    return []                   # no newline yet: next run starts over at pos
+                nl = piece.find(b"\n")
+                if nl >= 0:
+                    cursors[path] = skipped + nl + 1
+                    return []
+                skipped += len(piece)
     cursors[path] = pos + last_nl + 1
     return data[: last_nl + 1].decode("utf-8", "replace").splitlines()
 
@@ -169,6 +181,18 @@ def seat_for_session(paths, sid):
     except sqlite3.Error:
         return None
     return _GEN_SUFFIX.sub("", row[0]) if row else None
+
+
+def shared_holder(paths):
+    """The login the fleet's shared config dir holds NOW, by the switch's own ledger
+    (state/account_locations.json, the where=="shared" row), else None."""
+    acc = _read_json(os.path.join(paths.orch, "state", "account_locations.json"), {}).get("accounts")
+    if isinstance(acc, dict):
+        held = sorted((str(r.get("at") or ""), a) for a, r in acc.items()
+                      if isinstance(r, dict) and r.get("where") == "shared")
+        if held:
+            return held[-1][1]
+    return None
 
 
 def claude_account_at(paths, ts_iso):
@@ -269,7 +293,7 @@ def switch_decision(paths, ev):
         if five is None or week is None:
             why = f"{acct}: no usage reading"
             continue
-        if five < 90 and week < 95:
+        if five < 80 and week < 80:         # the armed switch's own headroom rule (limit_switch)
             best, why = acct, f"{acct} has headroom (5-hour {five:.0f}%, weekly {week:.0f}%)"
             break
         why = f"{acct} has no headroom (5-hour {five:.0f}%, weekly {week:.0f}%)"
@@ -336,20 +360,24 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
                             f"The {ep['window']} limit episode on {ep['account']} is over "
                             f"({', '.join(ep['seats'])}). Orders can go back to the seat.\n")
 
-    if switch_deps is not None:          # --auto-switch: the fleet-wide login switch (limit_switch.py)
-        import limit_switch as LS
-        st_path = os.path.join(paths.state_dir, "switch.json")
-        st = LS.load_state(st_path)
-        LS.tick(paths, episodes, claude_account_at(paths, None), now,
-                lambda row: _append(paths.log, row), switch_deps, st)
-        LS.prune_told(st, episodes)
-        _write_json(st_path, st)
-
     _write_json(paths.seat_rows, {"as_of": stamp, "seats": rows})
     _write_sidecar(paths, rows, now)
     _prune(episodes, now)
     _write_json(paths.episodes, episodes)
     _write_json(paths.cursors, {p: o for p, o in cursors.items() if os.path.exists(p)})
+
+    if switch_deps is not None:          # --auto-switch: the fleet-wide login switch (limit_switch.py)
+        import limit_switch as LS
+        st_path = os.path.join(paths.state_dir, "switch.json")
+        st = LS.load_state(st_path)
+        active = shared_holder(paths) or claude_account_at(paths, None)
+        try:
+            LS.tick(paths, episodes, active, now, lambda row: _append(paths.log, row), switch_deps, st,
+                    save=lambda s: _write_json(st_path, s))
+        except Exception as e:           # the watcher's own state is already written; log and keep the switch state
+            _append(paths.log, {"ts": stamp, "kind": "switch_error", "error": f"{type(e).__name__}: {e}"[:300]})
+        LS.prune_told(st, episodes, now)
+        _write_json(st_path, st)
     return {"events": len(events), "limited_seats": sorted(rows)}
 
 

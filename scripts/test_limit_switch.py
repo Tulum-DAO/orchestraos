@@ -185,7 +185,7 @@ def test_human_typing_reader_ignores_dim_ghost_text(monkeypatch):
 
     def fake_tmux(*a, **k):
         if a[0] == "list-clients":
-            return R(0, "/dev/pts/1: gm [200x50]\n")
+            return R(0, "gm\n")                        # list-clients -F "#{client_session}"
         return R(0, calls["screen"])
 
     monkeypatch.setattr(LS, "_tmux", fake_tmux)
@@ -253,3 +253,136 @@ def test_95_refreshes_the_reading_every_run():
     d.refresh_usage = lambda: calls.append(1)
     _tick({}, d)
     assert calls == [1]
+
+
+# --- review of #636 (Claude reviewer, codex out of credits): H1, H2, M1-M3 ----------------------
+
+def _runs(deps, n, state, step=120, start=NOW, active="strategysimple", episodes=None):
+    """n cron runs as run_once makes them: tick, then prune_told."""
+    out = []
+    for i in range(n):
+        now = start + i * step
+        log = []
+        out.append(LS.tick(None, episodes or {}, active, now, log.append, deps, state))
+        LS.prune_told(state, episodes or {}, now)
+    return out
+
+
+def test_h1_a_usage_trigger_refusal_mails_once_across_runs_until_its_reset():
+    d = _poll_fake(96.0, other_5h=100.0)
+    st = {}
+    assert _runs(d, 5, st) == ["refused"] * 5
+    assert len(d.mails) == 1                           # not one HIGH mail every 2 minutes
+    _runs(d, 1, st, start=RESET + 60)                  # the reset in the key has passed: the tag is dropped
+    assert st["told"] == {} and len(d.mails) == 1
+
+
+def test_h1_a_failed_switch_backs_off_ten_minutes_and_mails_once():
+    d = _poll_fake(96.0, switch_status="error")
+    st = {}
+    res = _runs(d, 5, st)                              # 8 minutes of runs
+    assert res[0] == "failed" and set(res[1:]) == {"held"}
+    assert d.switched == ["default"] and len(d.mails) == 1
+    _runs(d, 1, st, start=NOW + 601)
+    assert d.switched == ["default", "default"] and len(d.mails) == 1
+
+
+def test_h1_an_old_list_state_still_loads():
+    st = {"told": ["refused|poll|strategysimple|5-hour|1"]}
+    LS.prune_told(st, {}, NOW)
+    assert st["told"] == {}
+
+
+def test_h2_noop_is_already_on_that_login_not_a_failure():
+    d = _poll_fake(96.0, switch_status="noop")
+    st = {}
+    res = _runs(d, 3, st)
+    assert res[0] == "noop" and d.mails == []
+    assert st.get("parked") == {}
+
+
+def test_m1_unreadable_registry_holds():
+    d = _poll_fake(96.0)
+    d.claude_seats = lambda: None
+    res, log, _ = _tick({}, d)
+    assert res == "held" and d.switched == []
+    assert any(r.get("reason") == "seat registry unreadable" for r in log)
+
+
+def test_m1_unreadable_tmux_clients_hold():
+    d = _poll_fake(96.0)
+    d.attached_sessions = lambda: None
+    res, log, _ = _tick({}, d)
+    assert res == "held" and d.switched == []
+
+
+def test_m1_live_reader_lists_every_client_once_and_fails_closed(monkeypatch):
+    class R:
+        def __init__(self, rc, out):
+            self.returncode, self.stdout = rc, out
+    seen = []
+
+    def fake_tmux(*a, **k):
+        seen.append(a)
+        if a[0] == "list-clients":
+            return R(state["rc"], "gm\npm-nod\n")
+        return R(0, "❯ hi\n")
+    state = {"rc": 0}
+    monkeypatch.setattr(LS, "_tmux", fake_tmux)
+    deps = LS.LiveDeps(None, None)
+    att = deps.attached_sessions()
+    assert att == {"gm", "pm-nod"} and seen[0] == ("list-clients", "-F", "#{client_session}")
+    assert deps.human_typing("orchestra-builder", att) is None          # nobody on it
+    assert deps.human_typing("gm", att) == "gm: attached and typing"
+    state["rc"] = 1
+    assert deps.attached_sessions() is None
+    assert "cannot list" in deps.human_typing("gm")
+
+
+def test_m2_a_timeout_reads_as_a_failure_not_an_exception(monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(a[0], 1)
+    monkeypatch.setattr(LS.subprocess, "run", boom)
+    deps = LS.LiveDeps(None, None)
+    assert deps.switch("default")["status"] == "error"
+    assert deps.nudge("gm", "x") != 0
+    assert deps.attached_sessions() is None
+
+
+def test_m2_state_is_saved_the_moment_the_switch_happened():
+    d = _poll_fake(96.0)
+    saved = []
+
+    def bad_nudge(s, t):
+        raise RuntimeError("nudge blew up")
+    d.nudge = bad_nudge
+    st = {}
+    with pytest.raises(RuntimeError):
+        LS.tick(None, {}, "strategysimple", NOW, lambda r: None, d, st, save=lambda s: saved.append(dict(s)))
+    assert saved and saved[-1]["last_switch"] == NOW and saved[-1]["parked"] == {"strategysimple": RESET}
+
+
+def test_m2_nudges_are_capped(monkeypatch):
+    d = _poll_fake(96.0)
+    d.claude_seats = lambda: [(f"s{i}", f"s{i}") for i in range(40)]
+    d._banners = {f"s{i}" for i in range(40)}
+    _tick({}, d)
+    assert len(d.nudged) == LS.MAX_NUDGES
+
+
+def test_m3_a_manual_switch_counts_for_the_ten_minute_gap():
+    d = _poll_fake(96.0)
+    d.last_switch = lambda: NOW - 120
+    res, _, _ = _tick({}, d)
+    assert res == "held" and d.switched == []
+
+
+def test_m3_last_fleet_switch_reads_the_audit_log(tmp_path):
+    p = tmp_path / "account-switch.jsonl"
+    p.write_text('{"ts": "2026-11-25T17:58:00+00:00", "seat": "*shared*", "status": "switched"}\n'
+                 '{"ts": "2026-11-25T17:59:00+00:00", "seat": "gm", "status": "switched"}\n'
+                 '{"ts": "2026-11-25T17:59:30+00:00", "seat": "*shared*", "status": "noop"}\n')
+    assert LS.last_fleet_switch(str(p)) == NOW - 120
+    assert LS.last_fleet_switch(str(tmp_path / "missing")) == 0.0

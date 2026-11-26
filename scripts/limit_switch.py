@@ -35,6 +35,8 @@ SWITCH_AT_5H_PCT = 95.0       # the operator's rule: switch at 95% of the 5-hour
 HEADROOM_PCT = 80.0
 MIN_GAP_S = 600
 USAGE_FRESH_S = 30 * 60
+NUDGE_BUDGET_S = 60           # all nudges of one run together; the cron run is killed at 300 s
+MAX_NUDGES = 25
 _PARK_FALLBACK = {"5-hour": 5 * 3600, "weekly": 7 * 86400}
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _DIM = re.compile(r"\x1b\[2m.*?(?=\x1b\[|$)")
@@ -50,9 +52,47 @@ def _nudge_cmd():
         os.path.dirname(os.path.abspath(__file__)), "nudge_pane.py")
 
 
+class _Failed:
+    """A subprocess that could not run or timed out reads as a failure, never as an exception."""
+    returncode, stdout, stderr = 124, "", ""
+
+    def __init__(self, why):
+        self.stderr = why
+
+
+def _run(argv, timeout, env=None):
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        return _Failed(f"{type(e).__name__}: {e}"[:300])
+
+
 def _tmux(*args, timeout=10):
     env = {k: v for k, v in os.environ.items() if k != "TMUX"}
-    return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout, env=env)
+    return _run(["tmux", *args], timeout, env)
+
+
+def last_fleet_switch(switch_log):
+    """Epoch of the newest completed fleet-wide switch in logs/account-switch.jsonl (the dashboard
+    button and the CLI write it too, not only this module), else 0."""
+    try:
+        with open(switch_log, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 262144))
+            raw = f.read().decode("utf-8", "replace")
+    except OSError:
+        return 0.0
+    best = 0.0
+    for line in raw.splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and r.get("status") == "switched" and r.get("seat") == "*shared*":
+            dt = LE._iso_to_dt(r.get("ts"))
+            if dt:
+                best = max(best, dt.timestamp())
+    return best
 
 
 class LiveDeps:
@@ -66,10 +106,7 @@ class LiveDeps:
         cmd = os.environ.get("LIMIT_SWITCH_USAGE_POLL")
         if not cmd:
             return
-        try:
-            subprocess.run(cmd.split(), capture_output=True, text=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            pass
+        _run(cmd.split(), 45)
 
     def usage(self, account):
         try:
@@ -85,8 +122,12 @@ class LiveDeps:
         except (OSError, ValueError, KeyError):
             return []
 
+    def last_switch(self):
+        return last_fleet_switch(self.paths.switch_log)
+
     def claude_seats(self):
-        """[(root, tmux_session)] for online Claude seats (they all share the fleet config dir)."""
+        """[(root, tmux_session)] for online Claude seats (they all share the fleet config dir).
+        None when the registry cannot be read: the caller holds, it never reads that as no seats."""
         try:
             c = sqlite3.connect(f"file:{self.paths.registry_db}?mode=ro", uri=True, timeout=5)
             try:
@@ -96,12 +137,22 @@ class LiveDeps:
             finally:
                 c.close()
         except sqlite3.Error:
-            return []
+            return None
 
-    def human_typing(self, session):
+    def attached_sessions(self):
+        """Every session with a tmux client on it, or None when tmux cannot be asked."""
+        cl = _tmux("list-clients", "-F", "#{client_session}")
+        if cl.returncode != 0:
+            return None
+        return {l.strip() for l in cl.stdout.splitlines() if l.strip()}
+
+    def human_typing(self, session, attached=None):
         """Reason string when a person is attached and mid-typing (or we cannot tell), else None."""
-        cl = _tmux("list-clients", "-t", session)
-        if cl.returncode != 0 or not cl.stdout.strip():
+        if attached is None:
+            attached = self.attached_sessions()
+        if attached is None:
+            return f"{session}: cannot list tmux clients"         # cannot tell = hold
+        if session not in attached:
             return None                                       # no client: nobody watching
         cap = _tmux("capture-pane", "-p", "-e", "-t", session)
         if cap.returncode != 0:
@@ -122,8 +173,7 @@ class LiveDeps:
         return "\n".join(lines[-15:])
 
     def switch(self, account):
-        out = subprocess.run([sys.executable, _account_switch_cmd(), "--shared", account],
-                             capture_output=True, text=True, timeout=120)
+        out = _run([sys.executable, _account_switch_cmd(), "--shared", account], 120)
         try:
             row = json.loads(out.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError):
@@ -132,9 +182,7 @@ class LiveDeps:
         return row
 
     def nudge(self, session, text):
-        out = subprocess.run([sys.executable, _nudge_cmd(), session, text],
-                             capture_output=True, text=True, timeout=60)
-        return out.returncode
+        return _run([sys.executable, _nudge_cmd(), session, text], 20).returncode
 
 
 def _park_until(ep, now):
@@ -161,17 +209,40 @@ def _headroom(u, now):
     return ok, f"5-hour {five:.0f}%, weekly {week:.0f}%"
 
 
-def tick(paths, episodes, active, now, log, deps, state):
-    """One decision pass. `state` (dict, persisted by the caller) carries last_switch, parked, told."""
+def _told(state):
+    """{tag: keep_until or None}. An older state file kept a plain list (kept until its episode closes)."""
+    t = state.get("told")
+    if isinstance(t, list):
+        t = {tag: None for tag in t}
+    state["told"] = t if isinstance(t, dict) else {}
+    return state["told"]
+
+
+def _poll_reset(key):
+    """The reset epoch carried in a usage-reading trigger key (poll|<login>|<window>|<reset>), else None."""
+    try:
+        return int(float(key.rsplit("|", 1)[1]))
+    except (IndexError, ValueError):
+        return None
+
+
+def tick(paths, episodes, active, now, log, deps, state, save=None):
+    """One decision pass. `state` (dict, persisted by the caller) carries last_switch, last_attempt,
+    parked, told. `save(state)`, when given, is called the moment a switch has happened, so a later
+    failure in the same run (a nudge, the cron timeout) cannot lose last_switch or the parked login."""
     stamp = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
-    told = state.setdefault("told", [])
+    told = _told(state)
     parked = {a: u for a, u in state.setdefault("parked", {}).items() if u > now}
     state["parked"] = parked
+    key = None
 
     def once(tag, row, mail=None):
         if tag in told:
             return
-        told.append(tag)
+        # a usage-reading trigger has no episode to close it: its tags live until the reset in the key
+        # (or 5 hours when the reading carried none); an episode's tags live until the episode is pruned
+        told[tag] = ((_poll_reset(key) or int(now + _PARK_FALLBACK["5-hour"]))
+                     if key and key.startswith("poll|") else None)
         log(dict(row, ts=stamp))
         if mail:
             deps.mail("gm", mail[0], mail[1], mail[2])
@@ -238,16 +309,35 @@ def tick(paths, episodes, active, now, log, deps, state):
               f"The shared Claude login {active} is out ({line}). No other login has headroom: {why}.\n"
               f"Only a refill or the reset helps now; seats wait until {LE.reset_label(ep.get('reset_at'))}.\n"))
         return "refused"
-    if now - float(state.get("last_switch") or 0) < MIN_GAP_S:
-        once(f"gap|{key}", {"kind": "switch_held", "key": key, "reason": "last switch under 10 min ago"})
+    # the gap counts every switch: this module's, a failed attempt of its own (back off, never re-run
+    # the switch every 2 minutes), and one made by hand (the dashboard button, the CLI)
+    last = max(float(state.get("last_switch") or 0), float(state.get("last_attempt") or 0),
+               float(deps.last_switch() if hasattr(deps, "last_switch") else 0))
+    if now - last < MIN_GAP_S:
+        once(f"gap|{key}", {"kind": "switch_held", "key": key, "reason": "last switch or attempt under 10 min ago"})
         return "held"
     seats = deps.claude_seats()
-    typing = [r for r in (deps.human_typing(s) for _, s in seats) if r]
+    if seats is None:
+        log({"ts": stamp, "kind": "switch_held", "key": key, "reason": "seat registry unreadable"})
+        return "held"
+    attached = deps.attached_sessions() if hasattr(deps, "attached_sessions") else ()
+    if attached is None:
+        log({"ts": stamp, "kind": "switch_held", "key": key, "reason": "tmux clients unreadable"})
+        return "held"
+    typing = [r for r in ((deps.human_typing(s, attached) if hasattr(deps, "attached_sessions")
+                           else deps.human_typing(s)) for _, s in seats) if r]
     if typing:
         log({"ts": stamp, "kind": "switch_held", "key": key, "reason": "human mid-typing", "detail": typing[:5]})
         return "held"
 
+    state["last_attempt"] = now
+    if save:
+        save(state)
     res = deps.switch(target)
+    if res.get("status") == "noop":
+        # the target already holds the shared login: our idea of the active login was wrong
+        once(f"noop|{key}", {"kind": "switch_noop", "key": key, "from": active, "to": target, "result": res})
+        return "noop"
     if res.get("status") != "switched":
         once(f"failed|{key}", {"kind": "switch_failed", "key": key, "from": active, "to": target, "result": res},
              ("high", f"auto-switch FAILED: {active} -> {target}",
@@ -255,6 +345,8 @@ def tick(paths, episodes, active, now, log, deps, state):
         return "failed"
     state["last_switch"] = now
     parked[active] = _park_until(ep, now)
+    if save:
+        save(state)
     undo = f"python3 {_account_switch_cmd()} --shared {active}"
     log({"ts": stamp, "kind": "switch_done", "key": key, "from": active, "to": target,
          "window": ep["window"], "reset_at": ep.get("reset_at"), "line": line,
@@ -266,10 +358,15 @@ def tick(paths, episodes, active, now, log, deps, state):
 
     text = (f"[limit-watch] The shared Claude login hit its {ep['window']} limit "
             f"({LE.reset_label(ep.get('reset_at'))}); it is now {target}. Continue where you left off.")
+    t0, sent = time.monotonic(), 0
     for root, s in seats:
+        if sent >= MAX_NUDGES or time.monotonic() - t0 > NUDGE_BUDGET_S:
+            log({"ts": stamp, "kind": "nudge_budget_spent", "key": key, "sent": sent})
+            break
         tail = deps.pane_text(s)
         if "continuing automatically" in tail.lower() or LE.from_text(tail) is not None:
             rc = deps.nudge(s, text)
+            sent += 1
             log({"ts": stamp, "kind": "seat_nudged", "seat": root, "session": s, "rc": rc, "key": key})
     return "switched"
 
@@ -282,6 +379,9 @@ def load_state(path):
         return {}
 
 
-def prune_told(state, episodes):
+def prune_told(state, episodes, now=None):
+    """Drop a tag once its episode is gone, or, for a usage-reading trigger, once its reset passed."""
+    now = time.time() if now is None else now
     keys = {k for k in episodes if not k.startswith("_")}
-    state["told"] = [t for t in state.get("told", []) if t.split("|", 1)[-1] in keys]
+    state["told"] = {t: until for t, until in _told(state).items()
+                     if (until is not None and now < until) or (until is None and t.split("|", 1)[-1] in keys)}

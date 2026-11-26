@@ -242,3 +242,10 @@ def test_operator_zone_follows_the_location_file_when_no_env(tmp_path, monkeypat
     assert LE.reset_label(1795641600) == "resets Wed 11-25 16:20 Tulum"
     loc.write_text("not json")
     assert LE.operator_zone()[0]                                       # host zone, never a crash
+
+
+def test_m5_credit_words_mid_line_in_tool_output_are_not_a_limit():
+    assert LE.from_text("  ⎿  scripts/x.py:12:    if code == 'insufficient_quota':") is None
+    assert LE.from_text("  ⎿  grep: credits depleted handling in billing.py") is None
+    ev = LE.from_text("API Error: 429 {\"error\":{\"type\":\"insufficient_quota\"}}")
+    assert ev is not None and ev.window == "credits"

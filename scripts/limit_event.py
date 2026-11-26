@@ -81,7 +81,7 @@ _CODEX_LIMIT = re.compile(_PREFIX + r"Usage limit reached\.\s*You'?ve reached yo
 _GROK_WEEKLY = re.compile(_PREFIX + r"You hit your weekly limit\b", re.I)
 _REACHED = re.compile(_PREFIX + r"(?:Usage limit reached|You'?ve reached your usage limit)\b", re.I)
 _CREDITS = re.compile(_PREFIX + r"(?:You'?re out of usage credits|Out of credits\b|"
-                      r".*\binsufficient_quota\b|.*\bcredits? (?:depleted|exhausted)\b)", re.I)
+                      r"(?:API )?Error\b[^\n]*?\b(?:insufficient_quota|credits? (?:depleted|exhausted))\b)", re.I)
 
 _WINDOW_WORD = {"session": "5-hour", "weekly": "weekly", "usage": "unknown"}
 
