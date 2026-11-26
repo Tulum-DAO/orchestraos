@@ -292,3 +292,29 @@ def test_one_bad_seat_does_not_kill_the_tick():
         assert isinstance(n, int)
         assert "boom-root" in mux.degraded_lineages     # bad seat surfaced degraded
         mux.close()
+
+
+def test_mux_seat_capture_rebuilt_after_a_daemon_restart_emits_no_file_mod_flood(tmp_path):
+    """Requirement (b), mux path (telemetryd restart #2 on 2026-09-20 20:06:26Z re-emitted ~11.7k
+    file_mod rows per multiplexed seat with no sidecar). A _SeatCapture built with the seat's
+    sidecar path seeds the git enricher's last sample, so a restart's first tick emits deltas only."""
+    import subprocess
+    from types import SimpleNamespace
+    from lineage_daemon.wal import multiplexer as M
+    from lineage_daemon.wal.store import WalStore
+    repo = tmp_path / "cwd"; repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "dirty.txt").write_text("x")
+    src = tmp_path / "s.jsonl"; src.write_text("")
+    seat = SimpleNamespace(runtime="claude", lineage_root="r", generation=1, sid="sidA",
+                           cwd=str(repo), panes_dir=None, source_path=str(src))
+    sample = str(tmp_path / "r.gitsample.json")
+    store = WalStore(str(tmp_path / "r.db"))
+    cap1 = M._SeatCapture(seat, store, seat_lock=None, sample_path=sample)
+    cap1.tick()
+    before = sum(1 for r in store.events() if r["kind"] == "file_mod")
+    assert before >= 1
+    cap2 = M._SeatCapture(seat, store, seat_lock=None, sample_path=sample)   # "restart"
+    cap2.tick()
+    after = sum(1 for r in store.events() if r["kind"] == "file_mod")
+    assert after == before

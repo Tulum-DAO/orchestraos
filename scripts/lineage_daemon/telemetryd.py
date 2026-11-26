@@ -48,6 +48,7 @@ from .wal.multiplexer import LivenessLock
 FAST_POLL_S = 0.5           # sub-second FAST lane (the operator-ordered): status transitions
                             # (streaming/idle/offline) land <1s. Cheap pipe-pane
                             # drains + B1 novelty only — no subprocess, no /proc.
+MUX_REFRESH_S = 60.0       # re-resolve capture paths (rotations, new seats) at most once a minute
 SLOW_POLL_S = 5.0           # == MIN_POLL_S CPU floor for the /proc-touching lane;
                             # the "computing" axis stays on this floor (may lag)
 MIN_SLOW_POLL_S = 5.0
@@ -65,7 +66,8 @@ class TelemetryDaemon:
                  wal_dir=None, lock_path=None,
                  fast_poll_s=FAST_POLL_S, slow_poll_s=SLOW_POLL_S,
                  bytes_recency_s=None, clock=time.time, sleep=time.sleep,
-                 live_resolver=None, turn_resolver=None, seats_refresh=None):
+                 live_resolver=None, turn_resolver=None, seats_refresh=None, mux_refresher=None,
+                 mux_refresh_s=MUX_REFRESH_S):
         if slow_poll_s < MIN_SLOW_POLL_S:
             raise ValueError(f"slow poll {slow_poll_s}s below CPU floor {MIN_SLOW_POLL_S}s")
         if bytes_recency_s is None:
@@ -80,6 +82,13 @@ class TelemetryDaemon:
         # started (a fresh install's first `orchestra spawn`) is picked up on the next slow
         # tick instead of never; a retired seat drops out the same way.
         self._seats_refresh = seats_refresh
+        # Capture-path refresh (rotation-following, 10-09): () -> ([MuxSeat], considered roots)
+        # re-resolved from the live stores. Without it each seat's transcript path stayed FROZEN at
+        # boot, so every seat rotated since the boot went uncaptured by the durable lane. Every
+        # mux_refresh_s, never every slow tick (it reads the stores).
+        self._mux_refresher = mux_refresher
+        self._mux_refresh_s = mux_refresh_s
+        self._last_mux_refresh = None
         self.mux = mux
         self.sweep = sweep
         self.sampler = sampler
@@ -302,6 +311,20 @@ class TelemetryDaemon:
                 _LOG.warning("telemetry fast: seat %s failed (%s); continuing",
                              seat.session, type(e).__name__)
 
+    def _maybe_refresh_capture(self, now):
+        if self._mux_refresher is None or self.mux is None:
+            return
+        if self._last_mux_refresh is not None and (now - self._last_mux_refresh) < self._mux_refresh_s:
+            return
+        self._last_mux_refresh = now
+        try:
+            # () -> (fresh MuxSeats, considered lineage roots); the mux logs one line per change.
+            seats, considered = self._mux_refresher()
+            self.mux.refresh(seats, considered_roots=considered)
+        except Exception as e:  # noqa: BLE001 -- a refresh failure keeps the current seats
+            _LOG.warning("telemetry: capture refresh failed (%s); keeping current seats",
+                         type(e).__name__)
+
     def _slow(self, now):
         """Authoritative full classification for EVERY seat + the durable lane.
         PER-SEAT CONTAINED; the durable mux.tick is itself per-seat-contained."""
@@ -312,6 +335,7 @@ class TelemetryDaemon:
                     self.seats = list(fresh)
             except Exception as e:  # noqa: BLE001 — a refresh failure keeps the last seat set
                 _LOG.warning("telemetry seats refresh failed (%s); keeping %d seats", type(e).__name__, len(self.seats))
+        self._maybe_refresh_capture(now)
         try:
             self.sweep.sweep()
         except Exception as e:
