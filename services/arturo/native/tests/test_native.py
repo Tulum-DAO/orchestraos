@@ -549,6 +549,12 @@ def test_the_native_prompts_share_no_text_with_the_relays_f1_prompt():
     assert "READ_BACK_FIRST" in p["backend"]
 
 
+def test_the_live_prompt_says_gm_is_answered_in_its_own_time_and_never_still_on_it():
+    # gm on Shaw's 18:3x call: keep answering Shaw while a question to gm is out; never fill the air with "still on it"
+    live = native_config.prompts()["live"]
+    assert "say once that gm hasn't answered\nyet" in live and 'Never say "I\'m still on it".' in live
+
+
 def test_a_slow_tool_never_stalls_the_audio(tmp_path, monkeypatch):
     """spawn_agent can take up to 120 s. Tool calls ran inside the event loop that moves the audio, so one slow tool
     froze every call (GPT-Live heard nothing, Shaw heard nothing). Audio must keep flowing while a tool runs, and the
@@ -1463,7 +1469,7 @@ def test_a_question_to_gm_never_holds_the_call_and_gms_answer_comes_in_as_a_note
             await c.close()
     got, p = _run(go())
     outs = [f for f in p.sent if f["type"] == "response.item.create"]
-    assert len(outs) == 1 and "Sent to gm." in outs[0]["item"]["output"]
+    assert len(outs) == 1 and json.loads(outs[0]["item"]["output"]) == srv.DETACHED
     assert t["answered"] - t["asked"] < srv.DETACH_AFTER_S + 0.6, "the call waited on gm's reply"
     notes = [json.dumps(f) for f in p.sent if f["type"] not in ("response.item.create", "session.start")]
     assert any("It is the backend" in n and "gm" in n for n in notes), "gm's answer never reached the call"
