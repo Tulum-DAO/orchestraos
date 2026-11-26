@@ -23,6 +23,13 @@ export const MAX_BUDGET_TOKENS = 20000;
 const LINE_MAX_CHARS = 1200;
 const MERGE_GAP_S = 120;  // one speaker's phrases further apart than this in a call are separate turns
 const BACKCHANNEL_WORDS = 2;  // a call phrase this short, wedged between two of the other speaker's, is not a turn
+// ... and only when every word is a wordless sound (codex review of #662): "no", "stop", "yes", "ok" can be the answer
+const SOUND_RE = /^(?:m+(?:-?h+m*)?|h+m+|u+h+(?:-?h+u+h+)?|u+m+|a+h+|o+h+|e+r+m*|mhm+)?$/;
+
+function soundsOnly(text: string): boolean {
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length <= BACKCHANNEL_WORDS && words.every((w) => SOUND_RE.test(w.toLowerCase().replace(/[^a-z-]/g, '')));
+}
 const SUMMARY_SHARE = 0.2;
 // The opening is fenced as history that is over (thread_context.PAST_OPEN/PAST_CLOSE; live probes 2026-11-25: unfenced,
 // the thread ended on verbatim call dialogue and Arturo never greeted; thread off, he greeted at 1.5 s).
@@ -203,11 +210,10 @@ function summaries(dropped: Line[], tz: string, tzLabel: string, red: Redactor):
 const sameSpeaker = (a: Line, b: Line): boolean => a.channel === 'call' && b.channel === 'call'
   && a.call_id === b.call_id && (a.role ?? '') === (b.role ?? '') && a.who === b.who;
 
-/** "Mm-h", "of", "m." (thread_context._backchannel): a call phrase of BACKCHANNEL_WORDS words or fewer between two
- *  phrases of the OTHER speaker in the same call, those two within MERGE_GAP_S of each other. */
+/** "Mm-h", "uh-huh", "m." (thread_context._backchannel): a call phrase of BACKCHANNEL_WORDS wordless sounds or fewer
+ *  between two phrases of the OTHER speaker in the same call, those two within MERGE_GAP_S of each other. */
 function backchannel(prev: Line | undefined, ln: Line, next: Line | undefined): boolean {
-  return prev !== undefined && next !== undefined && ln.channel === 'call'
-    && ln.text.split(/\s+/).filter(Boolean).length <= BACKCHANNEL_WORDS
+  return prev !== undefined && next !== undefined && ln.channel === 'call' && soundsOnly(ln.text)
     && sameSpeaker(prev, next) && prev.call_id === ln.call_id && !sameSpeaker(prev, ln)
     && next.at - prev.at <= MERGE_GAP_S;
 }

@@ -36,6 +36,8 @@ APPEND_MAX_TOKENS = 500           # native protocol.APPEND_MAX_TOKENS
 LINE_MAX_CHARS = 1200             # one very long chat reply must not eat the whole budget
 MERGE_GAP_S = 120                 # one speaker's phrases further apart than this in a call are separate turns
 BACKCHANNEL_WORDS = 2             # a call phrase this short, wedged between two of the other speaker's, is not a turn
+# ... and only when every word is a wordless sound (codex review of #662): "no", "stop", "yes", "ok" can be the answer
+_SOUND_RE = re.compile(r"(?:m+(?:-?h+m*)?|h+m+|u+h+(?:-?h+u+h+)?|u+m+|a+h+|o+h+|e+r+m*|mhm+)?")
 SUMMARY_SHARE = 0.2               # of the budget, for the EARLIER block
 # The opening is fenced as history that is over (live probes 2026-11-25: unfenced, the thread ended on verbatim call
 # dialogue and Arturo never greeted, native-90a7e00cd3d1; thread off, he greeted at 1.5 s, native-8f4a14b348a8).
@@ -273,10 +275,16 @@ def _same_speaker(a, b) -> bool:
     return a.channel == "call" and b.channel == "call" and a.call_id == b.call_id and a.role == b.role and a.who == b.who
 
 
+def _sounds_only(text: str) -> bool:
+    words = text.split()
+    return len(words) <= BACKCHANNEL_WORDS and all(
+        _SOUND_RE.fullmatch(re.sub(r"[^a-z-]", "", w.lower())) for w in words)
+
+
 def _backchannel(prev, ln, nxt) -> bool:
-    """"Mm-h", "of", "m.": a call phrase of BACKCHANNEL_WORDS words or fewer between two phrases of the OTHER speaker
-    in the same call, those two within MERGE_GAP_S of each other."""
-    return (prev is not None and nxt is not None and ln.channel == "call" and len(ln.text.split()) <= BACKCHANNEL_WORDS
+    """"Mm-h", "uh-huh", "m.": a call phrase of BACKCHANNEL_WORDS wordless sounds or fewer between two phrases of the
+    OTHER speaker in the same call, those two within MERGE_GAP_S of each other."""
+    return (prev is not None and nxt is not None and ln.channel == "call" and _sounds_only(ln.text)
             and _same_speaker(prev, nxt) and prev.call_id == ln.call_id and not _same_speaker(prev, ln)
             and nxt.at - prev.at <= MERGE_GAP_S)
 
