@@ -7360,7 +7360,9 @@ def _seat_for_session(session):
         seen = AM.transcript_model(_seat_transcript_path(session, meta))
     except Exception:  # noqa: BLE001 — an unreadable transcript is no reading
         seen = None
-    return name, meta, runtime, AM.live_model(stored, seen, _last_switch(session))
+    root = _orchestra_root()
+    ids = lambda: [r["id"] for r in AM.load_catalog("claude", root / "config" / "providers.json", root / "state")]
+    return name, meta, runtime, AM.live_model(stored, seen, _last_switch(session), ids)
 
 
 def _last_switch(session):

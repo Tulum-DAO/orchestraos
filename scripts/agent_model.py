@@ -239,12 +239,14 @@ def _base(model) -> str:
     return re.sub(r"\[[^\]]*\]$", "", model or "")
 
 
-def live_model(stored, seen, last_switch):
+def live_model(stored, seen, last_switch, catalog_ids=None):
     """The model id the seat is on now, from its own transcript (`seen` = transcript_model()), so a
     switch record left by an earlier occupant of the pane never counts by itself. The transcript names
     the model without its context suffix (an answer) or by display name (a "Set model to" line); the
     exact id is taken from the gateway's last confirmed switch or the stored model when either names
-    that model. No evidence: the stored model (what this process was spawned with)."""
+    that model, else from the catalog (`catalog_ids`: ids, or a callable returning them, read only
+    then). A confirmation nothing resolves is None (unknown), never a model it contradicts. No
+    evidence: the stored model (what this process was spawned with)."""
     if not seen:
         return stored or None
     kind, value, _ts = seen
@@ -252,7 +254,16 @@ def live_model(stored, seen, last_switch):
                                             and last_switch.get("outcome") == "switched") else None
     cands = [c for c in (switched, stored) if isinstance(c, str) and c]
     if kind == "set":
-        return next((c for c in cands if display_matches(value, c)), stored or None)
+        hit = next((c for c in cands if display_matches(value, c)), None)
+        if hit:
+            return hit
+        try:
+            ids = list(catalog_ids() if callable(catalog_ids) else (catalog_ids or ()))
+        except Exception:  # noqa: BLE001 — an unreadable catalog resolves nothing
+            ids = []
+        wide = "1m" in value.lower()             # "Opus 5.5 (1M context)" is the [1m] id
+        ids = sorted((i for i in ids if isinstance(i, str)), key=lambda i: (i.endswith("[1m]") != wide))
+        return next((i for i in ids if display_matches(value, i)), None)
     return next((c for c in cands if _base(c) == value), value)
 
 

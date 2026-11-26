@@ -1081,3 +1081,14 @@ def test_m6_the_gateway_seat_lookup_reports_the_live_model_for_a_dropped_seat(mo
     monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
         lambda s: {"process": {"runtime": "codex"}})})())
     assert G._seat_for_session("gm")[3] == "claude-fable-5-1[1m]"
+
+
+def test_m7_a_persons_own_switch_resolves_by_the_catalog_never_to_a_model_it_contradicts():
+    # codex R3 on #672: registry Fable, no gateway switch, the person re-picks Opus by /model
+    seen = ("set", "Opus 5.5 (1M context)", "2026-11-26T23:30:00.000Z")
+    ids = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5-5[1m]", "claude-sonnet-5-5"]
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, ids) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5", "t"), None, lambda: ids) == "claude-opus-5-5"
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, None) is None        # unknown, not Fable
+    boom = lambda: (_ for _ in ()).throw(OSError("catalog"))
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, boom) is None
