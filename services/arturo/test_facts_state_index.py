@@ -178,21 +178,20 @@ def test_a_bus_write_gives_an_old_db_the_indexes(tmp_path, bus, monkeypatch):
     con.close()
 
 
-@pytest.mark.parametrize("share", [0.1, 0.95])
-def test_the_sourced_windows_search_the_state_index(tmp_path, bus, monkeypatch, share):
+@pytest.mark.parametrize("share", [0.0, 0.1, 0.95])
+def test_every_window_searches_the_state_index(tmp_path, bus, monkeypatch, share):
     _, db = _pair(tmp_path, bus, share)
     _, _, log = _run(db, monkeypatch)
     plans = _plans(db, log)
-    sourced = [(sql, plan) for sql, plan in plans if fr.UNSOURCED_SQL in sql]
-    # both query_facts windows (recency, durable) for each keyword set, and the bounded recent_facts window
-    assert len(sourced) == 2 * len(KEYWORDS) + 1, plans
-    for sql, plan in sourced:
+    # every window ran: recency and durable for each keyword set in query_facts, and recent_facts twice
+    assert len(plans) >= 2 * len(KEYWORDS) + 2, plans
+    for sql, plan in plans:     # sourced rows, then (when the window has room) unsourced ones, each an index search
+        assert f"WHERE {fr.UNSOURCED_SQL} = 0 AND " in sql or f"WHERE {fr.UNSOURCED_SQL} = 1 AND " in sql, sql
         name = "idx_facts_unsourced_expiry_ts" if "expiry_class IN" in sql else "idx_facts_unsourced_ts"
         assert any(p.startswith(f"SEARCH facts USING INDEX {name} (<expr>=?") for p in plan), plan
         assert not any(p.startswith("SCAN facts") or "TEMP B-TREE" in p for p in plan), plan
-    for _, plan in plans:                  # no window reads the whole table or sorts it
-        assert all("USING INDEX" in p or "USING COVERING INDEX" in p for p in plan if p.startswith("SCAN facts")), plan
-        assert not any("TEMP B-TREE" in p for p in plan), plan
+    if share:                   # a window with room read the unsourced rows through the index too
+        assert any(f"WHERE {fr.UNSOURCED_SQL} = 1 AND " in sql for sql, _ in plans)
 
 
 @pytest.mark.parametrize("share", [0.0, 0.1, 0.95])
@@ -203,4 +202,5 @@ def test_every_window_is_the_same_with_the_indexes(tmp_path, bus, monkeypatch, s
     assert windows_new == windows_old
     assert answers_new == answers_old
     assert json.loads(answers_old)[0]                                   # not vacuous: there is something to serve
-    assert (len(log_new) > len(KEYWORDS) * 2 + 2) == (share > 0)        # the sourced reads ran where there are any
+    # without the indexes the windows read the sourced rows apart exactly where there are unsourced ones
+    assert any(fr.UNSOURCED_SQL in sql for sql, _ in log_old) == (share > 0)
