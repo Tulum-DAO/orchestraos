@@ -174,3 +174,25 @@ def test_a_phrase_with_an_unused_number_or_a_second_clock_stays_unknown(phrase):
 ])
 def test_numbers_the_parser_reads_are_still_used(phrase, expected):
     assert due(phrase).due_ts == expected
+
+
+# --- codex gate round 3: the new paths read the WHOLE phrase or nothing ---------------------------
+
+@pytest.mark.parametrize("phrase", ["in 2 hours, and a day", "in an hour after the next call", "at 2pm EST or PST",
+                                    "in a couple hours or tomorrow", "within 3 hours unless it slips",
+                                    "at 2pm eastern or central"])
+def test_relative_hours_and_zones_must_be_the_whole_phrase(phrase):
+    assert due(phrase, anchor="2026-11-24T18:00:00Z").due_ts is None
+
+
+def test_a_morning_qualifier_beats_the_afternoon_heuristic():
+    assert due("tomorrow at two o'clock in the morning").due_ts == "2026-11-25T02:00:00-05:00"
+    assert due("tomorrow at 3 in the afternoon").due_ts == "2026-11-25T15:00:00-05:00"
+    assert due("tomorrow at 8 in the evening").due_ts == "2026-11-25T20:00:00-05:00"
+
+
+def test_spelled_standard_and_daylight_time_are_read():
+    d = due("tomorrow at 2pm Eastern Standard Time", anchor="2027-06-15T15:00:00Z")
+    assert d.due_ts is None and d.due_source.startswith("ambiguous")
+    d = due("tomorrow at 2pm Eastern Daylight Time", anchor="2027-06-15T15:00:00Z")
+    assert deadlines._parse_utc(d.due_ts).isoformat() == "2027-06-16T18:00:00+00:00"

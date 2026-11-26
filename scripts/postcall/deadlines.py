@@ -101,6 +101,10 @@ def _clock_of(p, default_hour):
             hour += 12
         elif ampm == "a" and hour == 12:
             hour = 0
+        elif not ampm and re.search(r"\bin the morning\b", p):
+            hour = 0 if hour == 12 else hour
+        elif not ampm and re.search(r"\bin the (?:afternoon|evening)\b|\bat night\b|\btonight\b", p) and hour < 12:
+            hour += 12
         elif not ampm and 1 <= hour <= 7:
             hour += 12  # "at 3" in a business conversation means the afternoon
         return hour, minute
@@ -135,12 +139,16 @@ def _normalized(phrase):
 
 
 def _named_zone(p):
-    """(region tz, "std" | "dst" | None) for a zone named in the phrase, or (None, None)."""
+    """(region tz, "std" | "dst" | None) for the ONE zone named in the phrase, (None, None) for none,
+    or ("", None) when two are named ("EST or PST"): alternatives are never resolved."""
+    found = []
     for tz, std, dst, name in _ZONES:
-        m = re.search(rf"\b({std}|{dst}|{name})\b", p)
-        if m:
-            return tz, {std: "std", dst: "dst"}.get(m.group(1))
-    return None, None
+        for m in re.finditer(rf"\b({std}|{dst}|{name})(?:\s+(standard|daylight)\s+time)?\b", p):
+            kind = {std: "std", dst: "dst"}.get(m.group(1)) or {"standard": "std", "daylight": "dst"}.get(m.group(2))
+            found.append((tz, kind))
+    if len(found) > 1:
+        return "", None
+    return found[0] if found else (None, None)
 
 
 def _unused_number(p, spans):
@@ -164,7 +172,7 @@ def _clock_only(p):
     """True when the phrase is nothing but a clock time (plus a zone and filler words)."""
     rest = _CLOCK.sub(" ", p)
     for _, std, dst, name in _ZONES:
-        rest = re.sub(rf"\b(?:{std}|{dst}|{name})(?:\s+time)?\b", " ", rest)
+        rest = re.sub(rf"\b(?:{std}|{dst}|{name})(?:\s+(?:standard|daylight))?(?:\s+time)?\b", " ", rest)
     return all(w in _FILLER for w in re.findall(r"[a-z0-9']+", rest))
 
 
@@ -191,11 +199,13 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     if hours is not None:      # "in the next couple of hours": from the call, exact
         m = _HOURS.search(p)
         rest = p[:m.start()] + " " + p[m.end():]
-        if _unused_number(p, [m.span()]) or re.search(r"\b(?:hours?|minutes?|mins?)\b", rest):
+        if not all(w in _FILLER for w in re.findall(r"[a-z0-9']+", rest)):   # the whole phrase, or nothing
             return Due(None, f"unknown ({phrase})")
         when = (start + dt.timedelta(hours=hours)).astimezone(ZoneInfo(tz))
         return Due(when.isoformat(timespec="seconds"), phrase)
     named, kind = _named_zone(p)
+    if named == "":
+        return Due(None, f"ambiguous: {phrase} (two zones named)")
     zone = named or tz
     today = start.astimezone(ZoneInfo(zone)).date()
     day, default_hour = _date_of(p, today)
