@@ -213,8 +213,9 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         # belief never pushes a sourced one out of it. A dropped belief (None) is skipped and takes no place in it.
         out = sourced_window((_belief_entry(con, r) for r in beliefs), k * 2,
                              lambda e: None if e is None else e["unsourced"])
-        # every fetched belief is a candidate, so one dropped is backfilled; sourced ones are picked first
-        out = sourced_first(out)[:k]
+        # every fetched belief is a candidate, so one dropped is backfilled; the window is sourced first, so the cut
+        # at k takes sourced ones first
+        out = out[:k]
         n_sourced = sum(1 for e in out if not e["unsourced"])
         # fluid: recent ephemeral statements, newest-wins per subject-key
         s_like = " OR ".join(["content LIKE ?"] * len(keywords))
@@ -251,7 +252,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 if len(newest) >= slots:
                     break
                 _fluid(row, state)
-        out.extend(sourced_first(list(newest.values()))[:slots])
+        out.extend(list(newest.values())[:slots])       # sourced subjects were seen first, so they come first
         out = sourced_first(out)
         # The WAL->semantic drain's wal pass. The fluid pass above reads ONLY
         # ephemeral rows; the drain writes `standard` (a commit is not ephemeral), so without

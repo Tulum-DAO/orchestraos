@@ -223,7 +223,7 @@ def test_the_location_pin_never_puts_an_unsourced_fact_above_a_sourced_one(tmp_p
     assert core._LOCATION_Q.search(q)
     assert not any(p["unsourced"] for p in core.open_slot_facts(db, "shaw.location"))
     assert _check(rc._query_facts(fr.extract_keywords(q), 20, q)) == SERVED
-    # cut at k, the unsourced entries go first
+    # cut at k: the unsourced entries are the first to go
     short = rc._query_facts(fr.extract_keywords(q), 3, q)
     assert len(short) == 3 and not any(f["unsourced"] for f in short), short
 
@@ -332,6 +332,25 @@ def test_worldview_belief_citation(tmp_path):
                          ("b_unserved", "zinnia c", 0.7, '["s_mid", "s_new", "s_old", "s_gone"]')])
     got = {e["text"]: e["cite"] for e in wv.query_worldview(db, ["zinnia"], k=5)}
     assert got == {"zinnia a": "per slack 2026-11-18", "zinnia b": "", "zinnia c": "per voice 2026-11-21"}
+
+
+def test_worldview_belief_citation_ties_and_unverified_statements(tmp_path):
+    """The last derived-from statement is cited when it is servable, unverified included; when it is unserved, the
+    newest servable one is, unverified included, and on a tie the later one in derived-from order."""
+    st = [("s_t1", "slack", "2026-11-21T00:00:00Z", "x", _plain("active")),
+          ("s_t2", "voice", "2026-11-21T00:00:00Z", "x", _plain("active")),
+          ("s_gone", "dream-facts", "2026-11-24T00:00:00Z", "x", _plain("archived")),
+          ("s_old", "slack", "2026-11-18T00:00:00Z", "x", _plain("active")),
+          ("s_unv", "email", "2026-11-17T00:00:00Z", "x", _plain("unverified")),
+          ("s_unv2", "voice", "2026-11-23T00:00:00Z", "x", _plain("unverified")),
+          ("s_gone2", "dream-facts", "2026-11-24T00:00:00Z", "x", _plain("superseded"))]
+    db = _wv_db(tmp_path / "f.db", statements=st,
+                beliefs=[("b_tie", "zinnia a", 0.9, '["s_t1", "s_t2", "s_gone"]'),
+                         ("b_last_unv", "zinnia b", 0.8, '["s_old", "s_unv"]'),
+                         ("b_newest_unv", "zinnia c", 0.7, '["s_unv2", "s_old", "s_gone2"]')])
+    got = {e["text"]: (e["cite"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)}
+    assert got == {"zinnia a": ("per voice 2026-11-21", False), "zinnia b": ("per email 2026-11-17", False),
+                   "zinnia c": ("per voice 2026-11-23", False)}
 
 
 def test_worldview_an_unsourced_belief_does_not_take_a_fluid_slot(tmp_path):
