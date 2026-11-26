@@ -258,3 +258,63 @@ def test_rr2_shared_holder_takes_the_first_shared_row_like_account_switch(tree):
         json.dump({"accounts": {"strategysimple": {"where": "shared", "at": "2026-11-25T10:00:00+00:00"},
                                 "default": {"where": "shared", "at": "2026-11-25T22:00:00+00:00"}}}, f)
     assert LW.shared_holder(tree) == "strategysimple"
+
+
+# --- 11-26 replay: gm sat on the Fable banner 09:55Z-19:16Z while default's 5-hour read 1% --------------
+
+def test_replay_11_26_the_fable_row_switches_at_its_first_run(tree, monkeypatch):
+    """The sabotage case of gm order msg_f495a92c: before this fix the run logged
+    "no switch: default 5-hour 1% < 95%" and nobody switched for nine hours."""
+    t = 1795658143                                                   # 2026-11-26T09:55:43Z
+    monkeypatch.setenv("LIMIT_SWITCH_PREFER_WEEKLY", "0")            # the banner leg alone must switch
+    _add(os.path.join(tree.orch, "logs", "account-switch.jsonl"),     # the real day: default since 22:58Z 11-25
+         {"ts": "2026-11-25T22:58:59+00:00", "seat": "*shared*", "to": "default", "status": "switched",
+          "from": "strategysimple"})
+    with open(os.path.join(tree.orch, "state", "account_locations.json"), "w") as f:
+        json.dump({"accounts": {"default": {"where": "shared"}, "strategysimple": {"where": "vault"}}}, f)
+    for acct, five, week in (("default", 1.0, 73.0), ("strategysimple", 5.0, 61.0)):
+        (lambda p: open(p, "w").write(json.dumps({"as_of": t - 60, "windows": {
+            "5h": {"used_pct": five, "resets_at": t + 3600}, "weekly": {"used_pct": week, "resets_at": t + 5 * 86400}}})))(
+            os.path.join(tree.usage_dir, f"api-claude-{acct}.json"))
+    _add(tree.transcript, {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+                           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43.537Z",
+                           "sessionId": SID_C, "message": {"model": "<synthetic>", "content": [{"type": "text",
+                           "text": "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."}]}})
+
+    class D:
+        switched = []
+
+        def usage(self, a):
+            return json.load(open(os.path.join(tree.usage_dir, f"api-claude-{a}.json")))
+
+        def enrolled(self):
+            return ["default", "strategysimple"]
+
+        def claude_seats(self):
+            return [("pm-nod", "pm-nod")]
+
+        def attached_sessions(self):
+            return set()
+
+        def human_typing(self, s, attached=None):
+            return None
+
+        def pane_text(self, s):
+            return "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+
+        def switch(self, a):
+            D.switched.append(a)
+            return {"status": "switched", "followers": 1}
+
+        def nudge(self, s, text):
+            return 0
+
+        def mail(self, *a):
+            pass
+
+    LW.run_once(tree, now=t + 30, start_at_end=False, switch_deps=D())
+    log = _log(tree)
+    assert any(r["kind"] == "episode_open" and r["window"] == "credits" for r in log)
+    assert D.switched == ["strategysimple"]
+    assert any(r["kind"] == "switch_done" and r["from"] == "default" and r.get("model") == "Fable" for r in log)
+    assert any(r["kind"] == "switch_check" and r["decision"] == "trigger (banner): credits (Fable)" for r in log)

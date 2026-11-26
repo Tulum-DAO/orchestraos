@@ -271,6 +271,8 @@ def episode_key(ev):
 def _mail_worthy(ev, episodes):
     if ev.window in ("weekly", "monthly-spend"):
         return True
+    if ev.runtime == "claude" and ev.window == "credits":     # a model's credits cap: no reset comes
+        return True
     if ev.runtime == "claude" and ev.spend_capped:
         month = (ev.ts or "")[:7]
         flag = f"spendcap|{ev.account}|{month}"
@@ -282,7 +284,7 @@ def _mail_worthy(ev, episodes):
 
 def switch_decision(paths, ev):
     """What the fleet-wide login switch WOULD do for this Claude episode (dry run, never acts)."""
-    if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend")):
+    if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend", "credits")):
         return None
     profiles = [p.get("id") for p in _read_json(paths.profiles, {}).get("profiles", []) if p.get("enrolled")]
     others = [p for p in profiles if p and p != ev.account]
@@ -318,12 +320,13 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
         if ep is None:
             ep = episodes[key] = {"runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                                   "account": ev.account, "first_seen": ev.ts or stamp, "seats": [],
-                                  "spend_capped": ev.spend_capped,
+                                  "spend_capped": ev.spend_capped, "model": ev.model,
                                   "owners_told": [], "open": True}
             _append(paths.log, {"ts": stamp, "kind": "episode_open", "key": key, "line": line,
                                 "runtime": ev.runtime, "window": ev.window, "reset_at": ev.reset_at,
                                 "reset_local": _local(ev.reset_at), "account": ev.account,
-                                "spend_capped": ev.spend_capped, "source": ev.source, "text": ev.text[:300]})
+                                "spend_capped": ev.spend_capped, "model": ev.model, "source": ev.source,
+                                "text": ev.text[:300]})
             dec = switch_decision(paths, ev)
             if dec is not None:
                 _append(paths.log, dict(dec, ts=stamp, kind="switch_decision", key=key,

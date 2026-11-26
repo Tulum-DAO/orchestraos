@@ -1,4 +1,5 @@
 """limit_switch: each arming condition is a test (gm order msg_4dc56c81, 2026-11-25)."""
+import json
 import os
 import sys
 
@@ -236,16 +237,18 @@ def test_95_with_the_other_login_at_80_or_more_refuses_and_mails_high():
     assert [m[1] for m in d.mails] == ["high"]
 
 
-def test_95_a_fresh_reading_under_95_overrides_a_banner_episode():
+def test_95_a_banner_episode_switches_even_with_a_fresh_reading_under_95():
+    # reversed 2026-11-26 (gm order msg_f495a92c): the reading cannot see every limit (a model's credits
+    # cap), so a banner on the active login is the reactive leg and never waits for the reading
     d = _poll_fake(60.0)
-    assert _tick(_ep(), d)[0] is None and d.switched == []
+    assert _tick(_ep(), d)[0] == "switched" and d.switched == ["default"]
 
 
 def test_95_banner_episode_is_the_fallback_when_the_reading_is_stale():
     d = Fake(usage={"strategysimple": _reading(60.0, age=3600), "default": _reading(20.0)})
     res, log, _ = _tick(_ep(), d)
     assert res == "switched"
-    assert "fallback" in [r for r in log if r["kind"] == "switch_check"][0]["decision"]
+    assert "banner" in [r for r in log if r["kind"] == "switch_check"][0]["decision"]
 
 
 def test_95_refreshes_the_reading_every_run():
@@ -515,3 +518,117 @@ def test_weekly_warning_comes_back_the_next_week():
     d._usage["default"]["windows"]["weekly"]["resets_at"] = WEEK_RESET + 7 * 86400
     _tick({}, d, st, active="default", now=WEEK_RESET + 3060)
     assert len([m for m in d.mails if "70%" in m[2]]) == 2
+
+
+# --- the reactive leg: any banner on the active login switches (gm order msg_f495a92c, 2026-11-26) --------
+
+FABLE_PANE = "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n"
+
+
+class FableFake(Fake):
+    """gm's day: the active login's 5-hour reading is FRESH and LOW, yet its seats sit on the Fable banner."""
+
+    def __init__(self, *, attached=(), limited=(), **kw):
+        kw.setdefault("usage", {"default": _u(1.0, 73.0), "strategysimple": _u(5.0, 61.0)})
+        kw.setdefault("banners", ("gm", "pm-nod"))
+        super().__init__(**kw)
+        self._attached, self._limited = set(attached), set(limited)
+
+    def pane_text(self, s):
+        return FABLE_PANE if s in self._banners else "❯ \n"
+
+    def attached_sessions(self):
+        return set(self._attached)
+
+    def human_typing(self, s, attached=None):
+        return None
+
+    def limited_seats(self):
+        return set(self._limited)
+
+
+def _credits_ep(account="default", model="Fable", seats=("gm",), open_=True):
+    return {f"claude|{account}|credits|2026-11-26": {
+        "runtime": "claude", "window": "credits", "reset_at": None, "account": account, "model": model,
+        "spend_capped": False, "open": open_, "seats": list(seats)}}
+
+
+def test_reactive_a_credits_banner_switches_even_with_a_fresh_low_5h_reading():
+    d = FableFake()
+    res, log, st = _tick(_credits_ep(), d, active="default", state={"last_switch": NOW - 3601})
+    assert res == "switched" and d.switched == ["strategysimple"]
+    done = [r for r in log if r["kind"] == "switch_done"][0]
+    assert done["window"] == "credits" and done["model"] == "Fable"
+    mail = [m for m in d.mails if m[0] == "gm"][-1]
+    assert "Fable" in mail[3] and "default" in mail[3] and "strategysimple" in mail[3] and "Undo" in mail[3]
+
+
+def test_reactive_banner_on_another_login_or_closed_does_not_switch():
+    d = FableFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})   # no weekly preference
+    assert _tick(_credits_ep(account="strategysimple"), d, active="default")[0] != "switched"
+    assert _tick(_credits_ep(open_=False), d, active="default")[0] != "switched"
+    assert d.switched == []
+
+
+def test_reactive_credits_target_with_its_own_credits_episode_is_refused():
+    d = FableFake()
+    eps = {**_credits_ep(), **_credits_ep(account="strategysimple")}
+    res, log, _ = _tick(eps, d, active="default")
+    assert res == "refused" and d.switched == []
+    assert any(m[1] == "high" and "REFUSED" in m[2] for m in d.mails)
+
+
+def test_reactive_credits_target_with_no_usage_reading_is_tried():
+    d = FableFake(usage={"default": _u(1.0, 73.0)})
+    assert _tick(_credits_ep(), d, active="default")[0] == "switched"
+
+
+def test_reactive_credits_target_whose_5h_is_used_up_is_no_headroom():
+    d = FableFake(usage={"default": _u(1.0, 73.0), "strategysimple": _u(100.0, 61.0)})
+    assert _tick(_credits_ep(), d, active="default")[0] == "refused"
+
+
+def test_reactive_safety_conditions_still_hold():
+    d = FableFake()
+    assert _tick(_credits_ep(), d, {"last_switch": NOW - 300}, active="default")[0] == "held"
+    d = FableFake(typing={"gm"})
+    d.human_typing = lambda s, attached=None: f"{s}: attached and typing" if s == "gm" else None
+    assert _tick(_credits_ep(), d, active="default")[0] == "held" and d.switched == []
+
+
+def test_nudges_only_unattached_bannered_seats_with_the_model_named():
+    d = FableFake(attached={"pm-nod"})
+    _tick(_credits_ep(seats=("gm", "pm-nod")), d, active="default")
+    assert [s for s, _ in d.nudged] == ["gm"]
+    assert "Fable" in d.nudged[0][1] and "strategysimple" in d.nudged[0][1]
+
+
+def test_after_the_switch_gm_hears_which_seats_resumed():
+    d = FableFake(banners=("gm",), limited={"gm"})
+    res, log, st = _tick(_credits_ep(), d, active="default")
+    assert res == "switched" and st["verify"]["seats"] == ["gm"]
+    n = len(d.mails)
+    _tick({}, d, st, active="strategysimple", now=NOW + 120)              # gm still limited: nothing yet
+    assert len(d.mails) == n
+    d._limited = set()
+    _tick({}, d, st, active="strategysimple", now=NOW + 240)
+    assert "verify" not in st
+    assert any("resumed" in m[2] and "gm" in m[3] for m in d.mails[n:])
+
+
+def test_after_the_switch_no_resume_in_15_minutes_is_a_high_mail():
+    d = FableFake(banners=("gm",), limited={"gm"})
+    _, _, st = _tick(_credits_ep(), d, active="default")
+    n = len(d.mails)
+    _tick({}, d, st, active="strategysimple", now=NOW + 16 * 60)
+    assert any(m[1] == "high" and "did not resume" in m[2] for m in d.mails[n:])
+    assert "verify" not in st
+
+
+def test_live_deps_reads_the_limited_seats_from_the_seat_rows(tmp_path):
+    class P:
+        seat_rows = str(tmp_path / "limits.json")
+    d = LS.LiveDeps(P(), None)
+    assert d.limited_seats() is None                                  # unreadable: the check waits
+    (tmp_path / "limits.json").write_text(json.dumps({"seats": {"gm": {}, "pm-nod": {}}}))
+    assert d.limited_seats() == {"gm", "pm-nod"}

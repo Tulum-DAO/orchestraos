@@ -4,17 +4,23 @@ When the ACTIVE shared login is out (a 5-hour, weekly or monthly-spend window ex
 limit_event names it from the transcript rows), move every seat on the shared config dir to the
 other enrolled login, the same move the dashboard's account button makes. Conditions, each one a
 test (test_limit_switch.py):
-  1. trigger: the active login's fresh usage reading is at 95% of its 5-hour window (or its weekly
-     window is used up), BEFORE seats hit the banner; only without a fresh reading, an open banner
-     episode on the active login. AND the other login's fresh reading is under 80% on both windows;
+  1. trigger, two legs: PROACTIVE, the active login's fresh usage reading is at 95% of its 5-hour
+     window (or its weekly window is used up), BEFORE seats hit the banner; REACTIVE, any open limit
+     banner episode on the active login (5-hour, weekly, spend, a model's credits cap such as
+     "You've reached your Fable limit", or a limit with no window named), whatever the usage reading
+     says: a credits cap never shows in the 5-hour/weekly readings (2026-11-26, gm dead nine hours on
+     the Fable banner while default read 1%). AND the other login has headroom in that window class:
+     under 80% on both windows for a window limit; for a credits cap, no open credits episode of its
+     own and no window at 100% (no reading = try it, and the resume check below tells);
   2. never while a human is attached to a Claude seat mid-typing (tmux client attached AND the
      composer holds text, or cannot be read): the switch waits for the next run;
   3. at most one switch per 10 minutes, and never back: the login switched away from is parked
      until its window resets;
   4. every switch is logged (before/after login, the triggering window + reset, the seats on the
      dir) and mailed to gm in one line carrying the undo command;
-  5. afterwards every Claude seat whose pane shows a limit banner is nudged once, naming the
-     window, its reset and the new login, so it resumes now rather than at the reset;
+  5. afterwards every Claude seat whose pane shows a limit banner and has no tmux client attached is
+     nudged once, naming the window, model, reset and the new login, so it resumes now rather than
+     at the reset; gm then hears which of them resumed, or HIGH when none did within 15 minutes;
   6. no headroom on the other login: refused, logged, and mailed to gm HIGH once per episode;
   7. weekly-aware (operator order 2026-11-26): with no trigger, when both logins have 5-hour
      headroom, the shared login moves to the one whose weekly use is at least 5 points LOWER, at
@@ -35,7 +41,8 @@ from datetime import datetime, timezone
 
 import limit_event as LE
 
-TRIGGER_WINDOWS = ("monthly-spend", "weekly", "5-hour")   # most severe first
+TRIGGER_WINDOWS = ("monthly-spend", "weekly", "credits", "5-hour", "unknown")   # most severe first
+VERIFY_S = 15 * 60            # a switch whose nudged seats have not resumed by then is mailed HIGH
 SWITCH_AT_5H_PCT = 95.0       # the operator's rule: switch at 95% of the 5-hour window, before the banner
 HEADROOM_PCT = 80.0
 MIN_GAP_S = 600
@@ -180,6 +187,14 @@ class LiveDeps:
         typed = _ANSI.sub("", _DIM.sub("", lines[-1].split("❯", 1)[-1])).strip()
         return f"{session}: attached and typing" if typed else None
 
+    def limited_seats(self):
+        """Seats limit_watch holds as limited right now (state/usage/limits.json), or None when unreadable."""
+        try:
+            with open(self.paths.seat_rows) as f:
+                return set((json.load(f).get("seats") or {}).keys())
+        except (OSError, ValueError, AttributeError):
+            return None
+
     def pane_text(self, session):
         """The bottom of the visible screen only: a banner that scrolled up belongs to a seat that
         already resumed, and nudging it would type a stale line into an idle seat."""
@@ -224,6 +239,48 @@ def _headroom(u, now):
         return False, "usage reading lacks the 5-hour or weekly window"
     ok = five < HEADROOM_PCT and week < HEADROOM_PCT
     return ok, f"5-hour {five:.0f}%, weekly {week:.0f}%"
+
+
+def _credits_headroom(u, now, episodes, acct, model):
+    """(ok, why) for moving off a credits cap: the target's own credits must not be known to be out."""
+    for e in (episodes or {}).values():
+        if (isinstance(e, dict) and e.get("open") and e.get("runtime") == "claude" and e.get("account") == acct
+                and e.get("window") == "credits" and (model is None or e.get("model") in (None, model))):
+            return False, f"its own {model or 'model'} credits are out too"
+    if u and now - float(u.get("as_of") or 0) <= USAGE_FRESH_S:
+        w = u.get("windows") or {}
+        five, week = (w.get("5h") or {}).get("used_pct"), (w.get("weekly") or {}).get("used_pct")
+        if (five or 0) >= 100 or (week or 0) >= 100:
+            return False, f"5-hour {five or 0:.0f}%, weekly {week or 0:.0f}% (a window is used up)"
+        return True, f"5-hour {five or 0:.0f}%, weekly {week or 0:.0f}%, credits not known to be out"
+    return True, "no usage reading; credits not known to be out (trying it)"
+
+
+def _root(name):
+    return re.sub(r"-g(?:en)?\d+$", "", str(name or ""))
+
+
+def _check_resumed(state, now, log, deps, stamp):
+    """After a switch: tell gm which nudged seats resumed (left the limited rows), or HIGH after 15 min."""
+    v = state.get("verify")
+    if not v or not hasattr(deps, "limited_seats"):
+        return
+    limited = deps.limited_seats()
+    if limited is None:
+        return
+    lim = {_root(s) for s in limited}
+    resumed = [s for s in v.get("seats", []) if _root(s) not in lim]
+    if resumed:
+        log({"ts": stamp, "kind": "switch_verified", "resumed": resumed, "to": v.get("to")})
+        deps.mail("gm", "medium", f"auto-switch: seats resumed on {v.get('to')}",
+                  f"Resumed after the switch to {v.get('to')} ({v.get('line')}): {', '.join(resumed)}.\n")
+        state.pop("verify", None)
+    elif now - float(v.get("since") or now) > VERIFY_S:
+        log({"ts": stamp, "kind": "switch_unverified", "seats": v.get("seats"), "to": v.get("to")})
+        deps.mail("gm", "high", f"auto-switch did not resume seats on {v.get('to')}",
+                  f"15 minutes after the switch to {v.get('to')} ({v.get('line')}) none of the nudged seats "
+                  f"left the limit: {', '.join(v.get('seats', []))}. The new login may be out too.\n")
+        state.pop("verify", None)
 
 
 def _told(state):
@@ -343,6 +400,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
     parked = {a: u for a, u in state.setdefault("parked", {}).items() if u > now}
     state["parked"] = parked
     key = None
+    _check_resumed(state, now, log, deps, stamp)
 
     def once(tag, row, mail=None):
         if tag in told:
@@ -355,9 +413,10 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         if mail:
             deps.mail("gm", mail[0], mail[1], mail[2])
 
-    # PRIMARY trigger (the operator, 2026-11-25): the active login's own usage reading. At 95% of its
-    # 5-hour window (or a weekly window used up) switch BEFORE any seat hits the banner. The episode
-    # (banner) trigger is only the fallback for when there is no fresh reading.
+    # PROACTIVE leg (the operator, 2026-11-25): the active login's own usage reading. At 95% of its
+    # 5-hour window (or a weekly window used up) switch BEFORE any seat hits the banner.
+    # REACTIVE leg (gm order 2026-11-26): any open banner episode on the active login, whatever the
+    # reading says: a model's credits cap never shows in the 5-hour/weekly readings.
     if hasattr(deps, "refresh_usage"):
         deps.refresh_usage()
     au = deps.usage(active)
@@ -386,7 +445,8 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         key = f"poll|{active}|{window}|{reset}"
         ep = {"window": window, "reset_at": reset, "spend_capped": False}
         check["decision"] = f"trigger: {active} {window} at {a5 if window == '5-hour' else aweek:.0f}%"
-    elif not fresh:
+    if key is None:
+        # REACTIVE leg: a banner on the active login switches whatever the usage reading says
         live = [(k, e) for k, e in episodes.items()
                 if not k.startswith("_") and e.get("open") and e.get("runtime") == "claude"
                 and e.get("account") == active and e.get("window") in TRIGGER_WINDOWS
@@ -394,7 +454,8 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         if live:
             live.sort(key=lambda ke: TRIGGER_WINDOWS.index(ke[1]["window"]))
             key, ep = live[0]
-            check["decision"] = f"trigger (fallback, no fresh reading): banner {ep['window']}"
+            check["decision"] = (f"trigger (banner): {ep['window']}"
+                                 + (f" ({ep['model']})" if ep.get("model") else ""))
     if key is None:
         check["decision"] = (f"no switch: {active} 5-hour {a5:.0f}% < {SWITCH_AT_5H_PCT:.0f}%"
                              if fresh and a5 is not None else "no switch: no fresh reading, no banner episode")
@@ -402,7 +463,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         return _prefer_weekly(active, now, log, deps, state, save, stamp)
     log(check)
     ev = LE.LimitEvent("claude", ep["window"], ep.get("reset_at"), ep.get("spend_capped", False),
-                       account=active)
+                       account=active, model=ep.get("model"))
     line = LE.describe(ev)
     first = state.setdefault("first_trigger", {})
     first.setdefault(key, now)
@@ -425,7 +486,10 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         if acct in parked:
             reasons.append(f"{acct} parked until {LE.reset_label(parked[acct])} (no switching back)")
             continue
-        ok, why = _headroom(deps.usage(acct), now)
+        if ep["window"] == "credits":
+            ok, why = _credits_headroom(deps.usage(acct), now, episodes, acct, ep.get("model"))
+        else:
+            ok, why = _headroom(deps.usage(acct), now)
         reasons.append(f"{acct}: {why}")
         if ok:
             target = acct
@@ -480,25 +544,32 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         save(state)
     undo = f"python3 {_account_switch_cmd()} --shared {active}"
     log({"ts": stamp, "kind": "switch_done", "key": key, "from": active, "to": target,
-         "window": ep["window"], "reset_at": ep.get("reset_at"), "line": line,
+         "window": ep["window"], "model": ep.get("model"), "reset_at": ep.get("reset_at"), "line": line,
          "headroom": reasons[-1] if reasons else "", "followers": res.get("followers"),
          "seats": [r for r, _ in seats], "parked_until": parked[active], "undo": undo})
-    deps.mail("gm", "high", f"auto-switch: Claude login {active} -> {target}",
-              f"Switched the shared Claude login {active} -> {target} ({line}; {target} {reasons[-1].split(': ', 1)[-1]}). "
-              f"{res.get('followers', len(seats))} seats follow. Undo: {undo}\n")
-
-    text = (f"[limit-watch] The shared Claude login hit its {ep['window']} limit "
-            f"({LE.reset_label(ep.get('reset_at'))}); it is now {target}. Continue where you left off.")
-    t0, sent = time.monotonic(), 0
+    text = (f"[limit-watch] The shared Claude login hit its {ep['window']} limit"
+            + (f" ({ep['model']})" if ep.get("model") else "")
+            + f" ({LE.reset_label(ep.get('reset_at'))}); it is now {target}. Continue where you left off.")
+    t0, nudged = time.monotonic(), []
     for root, s in seats:
-        if sent >= MAX_NUDGES or time.monotonic() - t0 > NUDGE_BUDGET_S:
-            log({"ts": stamp, "kind": "nudge_budget_spent", "key": key, "sent": sent})
+        if len(nudged) >= MAX_NUDGES or time.monotonic() - t0 > NUDGE_BUDGET_S:
+            log({"ts": stamp, "kind": "nudge_budget_spent", "key": key, "sent": len(nudged)})
             break
+        if attached and s in attached:
+            continue                     # a person is on that pane: they see the banner and the switch
         tail = deps.pane_text(s)
         if "continuing automatically" in tail.lower() or LE.from_text(tail) is not None:
             rc = deps.nudge(s, text)
-            sent += 1
+            nudged.append(root)
             log({"ts": stamp, "kind": "seat_nudged", "seat": root, "session": s, "rc": rc, "key": key})
+    if nudged:
+        state["verify"] = {"seats": nudged, "since": now, "to": target, "line": line}
+        if save:
+            save(state)
+    deps.mail("gm", "high", f"auto-switch: Claude login {active} -> {target}",
+              f"Switched the shared Claude login {active} -> {target} ({line}; {target} {reasons[-1].split(': ', 1)[-1]}). "
+              f"{res.get('followers', len(seats))} seats follow; nudged {', '.join(nudged) or 'none'} "
+              f"(gm hears when they resume). Undo: {undo}\n")
     return "switched"
 
 

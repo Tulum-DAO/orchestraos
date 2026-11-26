@@ -249,3 +249,36 @@ def test_m5_credit_words_mid_line_in_tool_output_are_not_a_limit():
     assert LE.from_text("  ⎿  grep: credits depleted handling in billing.py") is None
     ev = LE.from_text("API Error: 429 {\"error\":{\"type\":\"insufficient_quota\"}}")
     assert ev is not None and ev.window == "credits"
+
+
+# --- per-model credits caps (gm order msg_f495a92c, 2026-11-26: gm dead 9 h on this banner) ----------
+
+FABLE = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+
+
+@pytest.mark.parametrize("model", ["Fable", "Opus", "Sonnet", "Haiku"])
+def test_model_limit_banner_is_credits_with_the_model_named(model):
+    ev = LE.from_text("  ⎿  " + FABLE.replace("Fable", model), now=NOW_PM)
+    assert (ev.runtime, ev.window, ev.model) == ("claude", "credits", model)
+
+
+def test_usage_limit_banner_is_not_a_model():
+    ev = LE.from_text("■ Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.",
+                      now=NOW_PM)
+    assert ev.model is None
+
+
+def test_the_real_fable_transcript_row_is_a_credits_event():
+    row = {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43.537Z",
+           "sessionId": "a7b9e0d0-0000-4000-8000-000000000001",
+           "message": {"model": "<synthetic>", "content": [{"type": "text", "text": FABLE}]}}
+    ev = LE.from_claude_row(row)
+    assert (ev.runtime, ev.window, ev.model, ev.source) == ("claude", "credits", "Fable", "transcript")
+    row["message"]["content"][0]["text"] = "something else"          # the structured field alone is enough
+    assert LE.from_claude_row(row).window == "credits"
+
+
+def test_describe_names_the_model():
+    ev = LE.LimitEvent("claude", "credits", None, account="default", model="Fable")
+    assert "Fable" in LE.describe(ev) and "credits" in LE.describe(ev)
