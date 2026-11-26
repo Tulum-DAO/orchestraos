@@ -4561,7 +4561,8 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
     nothing on screen that reads as a turn (a stale detector) the words go onto the idle prompt (outcome
     delivered-now); with something that reads as a turn but no spinner above the input box (a quoted hint) no
     Escape and the conservative delivered-steer. Under force with text in the composer there is no Escape either
-    (it would discard the draft); without force, text found at that look refuses the send.
+    (what Escape does to a draft is not measured: it may discard it); without force, text found at that look refuses
+    the send.
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
     composer's async paste ingest -> instruction sits unsubmitted. Sequence:
@@ -4728,8 +4729,8 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
             if interrupt:
                 # ONE fresh look decides everything about the Escape (a capture is evidence: nothing it shows is
                 # thrown away): a menu or permission -> refuse before any Escape; text in the composer -> refused
-                # without force (it appeared since the recheck above), and under force no Escape (it would DISCARD
-                # the draft force appends to); no spinner drawn above the input box -> no Escape, the words go in
+                # without force (it appeared since the recheck above), and under force no Escape (what Escape does
+                # to the draft force appends to is not measured); no spinner drawn above the input box -> no Escape, the words go in
                 # as a plain send; the CLI's spinner above the input box -> Escape.
                 raw_look = _capture_pane(session, lines=0, ansi=True)
                 strict = _mid_turn_recheck(session, force=False, raw=raw_look if raw_look is not None else "")
@@ -4744,8 +4745,10 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
                         out["composer_text"] = strict["composer_text"]
                     return False, out
                 if strict:
-                    # force only: the draft is appended to, as force means, but no Escape (it would discard it).
-                    interrupt_failed = "typed text in the composer; force appends to it, Escape would discard it"
+                    # force only: the draft is appended to, as force means, but no Escape (what Escape does to a draft
+                    # is not measured; it may discard it).
+                    interrupt_failed = ("typed text in the composer; force appends to it, and Escape was not sent "
+                                        "(its effect on a draft is not measured)")
                 elif not _turn_above_composer(plain_look):
                     if _pane_shows_active_turn(plain_look):
                         # Something on screen reads as a turn (a quoted hint, or a spinner drawn where the anchored
@@ -7550,7 +7553,7 @@ async def handle_agent_interrupt(request):
         with _session_send_lock(session):
             # The wait for the lock can be seconds (an interrupt send holds it): the "mid-turn" read above is
             # stale by now. Look again under the lock, the way the send path does. Escape goes onto the anchored
-            # spinner (whatever the input box holds: the CLI's own stop, as before this PR), or when only the
+            # spinner (whatever the input box holds: the stop button's long-standing behaviour), or when only the
             # whole-screen read sees a turn and the input box is EMPTY (a layout the anchored read misses must
             # still be stoppable). Three refusals, no Escape: an unreadable screen; a screen where nothing reads
             # as a turn; a whole-screen-only read with text in the box (Escape on a draft is not measured).

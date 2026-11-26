@@ -197,11 +197,11 @@ def test_force_with_text_appearing_after_the_escape_is_refused_not_appended(monk
 
 
 def test_force_with_a_draft_in_the_composer_never_sends_escape(monkeypatch):
-    # force skips the typed-text look (it appends to the draft): Escape would discard that draft instead
+    # force skips the typed-text look (it appends to the draft): no Escape over a draft, its effect on one is not measured
     t, det = _pane_i(monkeypatch, "working", [DRAFT_PANE, DRAFT_PANE, DRAFT_PANE, WORKING_CLEARED])
     ok, info = G.verified_inject("seat", "hi", force=True, source="person", interrupt=True)
     assert ok and info["queued_mid_turn"] is True and "interrupted" not in info, info
-    assert "typed text in the composer" in info["interrupt_failed"]
+    assert "typed text in the composer" in info["interrupt_failed"] and "not measured" in info["interrupt_failed"]
     assert ("Escape",) not in _keys(t) and ("-l", "hi") in _keys(t) and det.marked == []
 
 
@@ -452,8 +452,8 @@ QUOTED_DRAFT_PANE = "the log line said: esc to interrupt\nmore output\n❯ my ow
     (QUOTED_DRAFT_PANE, False),  # only the whole screen reads a turn AND a draft sits in the box: Escape on a draft was not measured
     (QUOTED_PANE, True),         # something reads as a turn, the anchored read sees no spinner: the stop button still works
     (TODO_PANE, True),           # the anchored spinner
-    (DRAFT_PANE, True),          # the anchored spinner with a draft: the CLI's own stop, as before this PR; what Escape does to
-                                 # the draft is NOT measured (the send path refuses to Escape over one for that reason)
+    (DRAFT_PANE, True),          # the anchored spinner with a draft: the stop button's long-standing behaviour; what Escape
+                                 # does to the draft is NOT measured (the send path sends no Escape over a draft for that reason)
 ], ids=["idle", "todo-idle", "unreadable", "whole-screen-turn-with-draft", "whole-screen-turn", "anchored-spinner", "anchored-spinner-with-draft"])
 def test_the_stop_button_looks_again_under_the_lock_with_the_send_paths_three_way_read(box, monkeypatch, screen, escapes):
     # the detector still says working (the read before the lock wait); under the lock the screen decides
