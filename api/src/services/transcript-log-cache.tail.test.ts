@@ -372,3 +372,17 @@ test('an entry over the cache budget is never kept, from the tail path or a stit
     logCacheBudgetForTests(null);
   }
 });
+
+test('a reply of more lines than the back-scan guard: the chunk still starts outside it (the whole file, never inside)', () => {
+  const { path, parser } = fresh();
+  const lines: string[] = [user('q', 'u-first')];
+  for (let i = 0; i < 70; i++) lines.push(assistant('msg_long', `block ${i} ${'x'.repeat(200)}`, { input_tokens: 5000, output_tokens: 1 }, `a-long-${i}`));
+  for (let i = 0; i < 5; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const whole = oracle(path);
+  const tail = cachedLogTail(path, parser, size - offsetOf(path, 'a-long-69'));
+  assert.ok(tail.start <= offsetOf(path, 'a-long-0'), `the chunk starts at ${tail.start}, inside the reply`);
+  const usage = (items: readonly any[]) => items.filter((it: any) => String(it.uuid).startsWith('a-long-')).map((it: any) => it.usage?.input_tokens ?? null);
+  assert.deepEqual(usage(tail.items), usage(whole), 'usage counted once');
+});

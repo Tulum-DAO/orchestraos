@@ -432,7 +432,8 @@ function chunkStartAt(path: string, pos: number, size: number): number {
   let start = lineStartAt(path, pos);
   if (start > 0) {
     let k = keysOfLineAt(path, start, size);
-    for (let guard = 0; k && start > 0 && guard < 64; guard++) {
+    for (let guard = 0; k && start > 0; guard++) {
+      if (guard >= BACK_SCAN_MAX) return 0;   // a record group longer than the scan: the whole file, never a start inside it
       const prev = lineStartAt(path, start - 1);
       const pk = keysOfLineAt(path, prev, size);
       if (!sameRecord(k, pk)) break;
@@ -442,6 +443,8 @@ function chunkStartAt(path: string, pos: number, size: number): number {
   }
   return start;
 }
+/** How many lines back a chunk start is moved over one record group before the whole file is read instead. */
+const BACK_SCAN_MAX = 64;
 
 /** The lines of [from, to) parsed on their own, to go above an entry's raw items that start at `to` (a line start):
  *  their items (offsets stamped from `from`), or null when the grammar cannot be read from them or carries something
