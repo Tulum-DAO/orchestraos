@@ -5,7 +5,7 @@
 - **Last Commit SHA:** `git log -1` on fix/arturo-call-context (this file). Older baton text: git history (fdf68b5 and before).
 
 ## HAZARD (read first)
-- **LIVE native voice**: pane arturo-native:0.0, pid 3390560, from the detached worktree **/home/shaw/wt/arturo-context-dev/native-main** (main 7c659c7), env ARTURO_NATIVE_CONTEXT_TOKENS=2500. Rollback = the same command with `cd /home/shaw/wt/arturo-context-dev/native-live` (aa84d24). Never remove/move/checkout either worktree. Respawn ONLY on gm's GO, quiet check first (`curl -s 127.0.0.1:5076/native/healthz` calls 0; no ESTAB on :5076; no gptlive lines in ~/.orchestra/logs/gateway.log or [voice-ws] in api.log in the last 60 s), `tmux respawn-pane -k -t arturo-native:0.0 "<cmd>"` with only the cd changed, then verify the NEW pid owns :5076 (`ss -ltnp | grep :5076`). Current cmd: `tmux display -p -t arturo-native:0.0 '#{pane_start_command}'`.
+- **LIVE native voice** (since 23:58Z 11-26): pane arturo-native:0.0, pid 126918, from the detached worktree **/home/shaw/wt/arturo-context-dev/native-627d503** (main 627d503 = #674), env ARTURO_NATIVE_CONTEXT_TOKENS=2500. Rollback = the same command with `cd /home/shaw/wt/arturo-context-dev/native-main` (7c659c7); older rollback native-live (aa84d24). Never remove/move/checkout either worktree. Respawn ONLY on gm's GO, quiet check first (`curl -s 127.0.0.1:5076/native/healthz` calls 0; no ESTAB on :5076; no gptlive lines in ~/.orchestra/logs/gateway.log or [voice-ws] in api.log in the last 60 s), `tmux respawn-pane -k -t arturo-native:0.0 "<cmd>"` with only the cd changed, then verify the NEW pid owns :5076 (`ss -ltnp | grep :5076`). Current cmd: `tmux display -p -t arturo-native:0.0 '#{pane_start_command}'`.
 - ~/orchestraos (the live tree, proxy + API) is far behind main and dirty: never pull it. Proxy changes go live only via orchestraos-builder's main-forward.
 - Git guard: merging main into a branch needs `LAND_CHAIN=<every non-merge sha in HEAD..origin/main, 10-char, comma>` as its own command, no `2>&1`.
 - One `msg_store.py send` per Bash call (send-shape guard). `--body-file` always.
@@ -18,7 +18,7 @@
 - **Dates (gm msg_d9158653, Shaw: accelerate):** #674 live 23:00 Tulum TONIGHT (needs Shaw's approve by ~22:30 + respawn); leg-2 probe numbers 21:00 Tulum tonight (T2), fix PR 10:00 tomorrow.
 
 ## 2. Open Loops (in order)
-- [ ] **#674 CARD FILED apr_d47c32bf_37436328 (23:57Z, decide by 22:00 Tulum; gm wants the respawn THE MINUTE Shaw approves)** (fix/native-gm-no-wait-main, worktree ~/wt/arturo-context-dev/gm-main, head 5886187, base MAIN; #673 closed as its stacked twin). codex MERGE-OK (same lines at 70fa227 + 1e6b77c). CI was 17/19 at 23:53Z. NEXT: when 19/19 by name -> file the card with gm's approved draft (scratch gm-dead3.txt item NEXT-1, text also in msg_f724c3c4; keep "Decide by: 22:00 Tulum") via surface-decision lane 1, `--from arturo-context-dev --op-key pr674-merge-5886187`, list every CI job by name -> on approve `gh pr merge 674 --squash --match-head-commit 588618743a31b919a67ceae62d89423ed2db9013`, note + ack the card -> fresh `git worktree add --detach ~/wt/arturo-context-dev/native-<sha> origin/main` -> quiet check -> respawn (rollback = native-main) -> report pid/healthz to gm.
+- [x] **#674 LIVE**: approved (Shaw "MERGE GO", apr_d47c32bf noted+acked), merged 627d503, respawned 23:58:43Z pid 126918 (gm told msg_5a964d68). Proof = Shaw's next call: on a question to gm Arturo speaks within ~2 s and says once gm hasn't answered. Check the next real call's report (hold_wait_s should be ~1.5 s for gm_command) and tell gm.
 - [ ] **#662** card apr_3867bdee (head 1263773, codex MERGE-OK, CI 19/19) is PENDING with Shaw. On approve: `gh pr merge 662 --squash --match-head-commit 12637730ae5506744701a6bb5218725746bd317c`, note + ack, then a second quiet respawn. #662's text-side line (arturo-proxy build_context) needs the relay restart (builder).
 - [ ] **#675** (fix/native-journal-tools, worktree ~/wt/arturo-context-dev/journal, head 8b96927, base main): a native call's journal counts its tool runs from the native tool ledger; dedup by call_id after codex probed a re-notify double count. Codex review was CUT OFF (credits): re-run codex on the full diff `git diff origin/main..HEAD`, then CI by name, then mail orchestraos-builder (it rides their packet; told in msg_56ecc6ab; builder g64 plan msg_38d54b72: verdict at the EXACT head + CI 19/19 by name -> my card -> after merge the relay restart rides their next packet window on its own gm GO; builder noted c3c0d1a, head is now 8b96927, so the gate must be at 8b96927). gm wants it on the same card lane as the proxy main-forward.
 - [ ] **T2 arturo-latency-dev** (spawned by me, cwd ~/wt/arturo-latency-dev/instr = feat/native-opening-read c3e15e4 pushed: opening_read_s + delegated_s, stacked on #662). GO sent msg_39ee300a: 3 spoken-uplink probes, PROBE_DURATION_S=40, cap 3; scope (a) backend reasoning setting, (b) trim the backend's copy of the opening, (c) instrumentation PR after #662 merges. Numbers 21:00 Tulum; it warns by 20:30 if late. Relay its results to gm.
@@ -31,10 +31,10 @@
 4. **Parallel tracks on named T2s** — gm rule msg_92b9405e (Shaw).
 
 ## 4. Declared First Effect
-`timeout 60 gh pr checks 674 --repo Tulum-DAO/orchestraos | awk -F'\t' '{print $2"\t"$1}' | sort`
+`ss -ltnp | grep ':5076 '; curl -s 127.0.0.1:5076/native/healthz` (expect pid 126918, calls 0)
 
 ## 5. Next 3 Immediate Actions
-1. Watch apr_d47c32bf: on approve, squash-merge #674 (--match-head-commit 588618743a31b919a67ceae62d89423ed2db9013), note+ack, fresh detached worktree of new origin/main, quiet check, respawn, verify new pid on :5076, tell gm.
+1. Read the next real call's native report (~/.orchestra/state/arturo/native/calls/, newest): gm_command hold_wait_s ~1.5 s, no 25 s gaps; tell gm.
 2. Retry codex on #675 (`git -C ~/wt/arturo-context-dev/journal diff origin/main..HEAD`), then CI, then mail builder the verdict.
 3. Read inbox for arturo-latency-dev's 21:00 numbers and gm's replies; relay leg-2 numbers to gm.
 
