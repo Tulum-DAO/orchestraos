@@ -158,3 +158,78 @@ def test_a_labelled_fact_is_served_flagged_not_hidden(world, tmp_path, monkeypat
     assert by_text["keep the dark theme on every page"]["unsourced"] is False
     assert [f["unsourced"] for f in got] == sorted(f["unsourced"] for f in got)
     assert "no source quote found" in fr._render(got)
+
+
+def _append(path, rows):
+    """Append rows to a jsonl file; returns the 1-based line number of the first one."""
+    first = len(path.read_text().splitlines()) + 1
+    with path.open("a") as fh:
+        fh.write("".join(json.dumps(r) + "\n" for r in rows))
+    return first
+
+
+def _dream_at(day, line, text, actor="shaw", path=None):
+    return make_fact(ts=TS, kind="fact", text=text, actor=actor,
+                     provenance={"source_kind": "dream-facts", "source_id": f"{day.name}:{line}",
+                                 "path": str(day) if path is None else path, "surface": "cli", "agent": "seat",
+                                 "source_row_kind": "prompt"})
+
+
+def _cli_row(text, cite, actor="shaw"):
+    return {"ts": TS, "surface": "cli", "agent": "seat", "actor": actor, "kind": "prompt", "text": text,
+            "citation": cite}
+
+
+def test_malformed_source_data_is_labelled_never_raised(world, tmp_path, monkeypatch):
+    """Each malformed input gets its own reason; the batch is written and every other fact is unaffected."""
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    _append(tmp_path / "projects" / "proj" / "sess.jsonl", [
+        {"type": "user", "uuid": "u-strmsg", "message": "a string message"},
+        {"type": "user", "uuid": "u-intcontent", "message": {"content": 5}},
+    ])
+    day = tmp_path / "2026-11-25.jsonl"
+    texts = ["a string message", "a record whose content is a number", "a row whose actor is a number",
+             "a row whose citation path has a nul byte"]
+    first = _append(day, [
+        _cli_row(texts[0], {"transcript": "proj/sess.jsonl", "uuid": "u-strmsg", "part": 0}),
+        _cli_row(texts[1], {"transcript": "proj/sess.jsonl", "uuid": "u-intcontent", "part": 0}),
+        _cli_row(texts[2], {"transcript": "proj/sess.jsonl", "uuid": "u-typed", "part": 0}, actor=7),
+        _cli_row(texts[3], {"transcript": "proj/sess\x00.jsonl", "uuid": "u-typed", "part": 0}),
+    ])
+    bad = {name: _dream_at(day, first + i, texts[i])
+           for i, name in enumerate(["str_message", "int_content", "int_row_actor", "nul_cite_path"])}
+    bad["nul_day_path"] = _dream_at(day, 1, "keep the dark theme on every page", path=str(day) + "\x00")
+    bad["list_day_path"] = _dream_at(day, 1, "keep the dark theme on every page", path=[str(day)])
+    bad["int_actor"] = make_fact(ts=TS, kind="fact", text="the disk filled at noon", actor=7,
+                                 provenance={"source_kind": "dag-events", "source_id": "d2", "path": "x"})
+    bad["int_actor_claim"] = make_fact(ts=TS, kind="fact", text="Shaw prefers email over calls.", actor=7,
+                                       provenance={"source_kind": "pocket", "source_id": "rec2", "path": "x"})
+    r, states, prov = _ingest(tmp_path, {**world, **bad})
+    assert r["inserted"] == len(world) + len(bad)
+    assert {k: states[k] for k in world} == EXPECT
+    reasons = {k: (prov[k].get("quote_gate") or {}).get("reason") for k in bad}
+    assert reasons == {"str_message": "cited transcript turn not found",
+                       "int_content": "cited transcript turn not found",
+                       "int_row_actor": "dream row author is 7",
+                       "nul_cite_path": "cited transcript turn not found",
+                       "nul_day_path": "dream day file not readable",
+                       "list_day_path": "dream day file not readable",
+                       "int_actor": None,
+                       "int_actor_claim": "no quote to check for this source"}
+    assert states["int_actor"] == "active"
+    assert {states[k] for k in bad if k != "int_actor"} == {"unverified"}
+
+
+def test_a_gate_error_labels_that_fact_and_spares_the_rest(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+
+    def boom(fact, src):
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setitem(quote_gate._CHECKS, "voice", boom)
+    r, states, prov = _ingest(tmp_path, world)
+    assert r["inserted"] == len(world)
+    assert states == {**EXPECT, "voice_shaw": "unverified"}
+    for k in ("voice_shaw", "voice_system_claim"):
+        assert prov[k]["quote_gate"] == {"status": "unverified", "reason": "gate error"}
+    assert prov["typed"]["quote_gate"]["status"] == "verified"

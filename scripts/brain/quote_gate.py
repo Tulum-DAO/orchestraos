@@ -37,7 +37,11 @@ def enabled() -> bool:
 
 
 def attributed(fact: dict) -> bool:
-    return (fact.get("actor") or "").lower() == OPERATOR or bool(ATTRIBUTION_RE.search(fact.get("text") or ""))
+    return _lower(fact.get("actor")) == OPERATOR or bool(ATTRIBUTION_RE.search(str(fact.get("text") or "")))
+
+
+def _lower(s) -> str:
+    return str(s or "").lower()
 
 
 def _norm(s) -> str:
@@ -52,6 +56,8 @@ class _Sources:
         self._jsonl = {}
 
     def rows(self, path: str) -> list:
+        if not isinstance(path, str) or not path:
+            return None
         if path not in self._jsonl:
             out = []
             try:
@@ -61,7 +67,7 @@ class _Sources:
                             out.append(json.loads(line))
                         except ValueError:
                             out.append(None)
-            except OSError:
+            except (OSError, ValueError):             # ValueError: a NUL byte in the path
                 out = None
             self._jsonl[path] = out
         return self._jsonl[path]
@@ -74,9 +80,11 @@ class _Sources:
         rows = self.rows(os.path.join(self.projects_dir, rel))
         for o in rows or []:
             if isinstance(o, dict) and o.get("uuid") == citation.get("uuid"):
-                c = (o.get("message") or {}).get("content")
+                m = o.get("message")
+                c = m.get("content") if isinstance(m, dict) else None
                 blocks = [c] if isinstance(c, str) else [
-                    b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text"]
+                    b.get("text", "") for b in (c if isinstance(c, list) else [])
+                    if isinstance(b, dict) and b.get("type") == "text"]
                 part = citation.get("part")
                 return blocks[part] if isinstance(part, int) and 0 <= part < len(blocks) else None
         return None
@@ -84,14 +92,14 @@ class _Sources:
 
 def _check_dream(fact: dict, src: _Sources):
     p = fact.get("provenance") or {}
-    rows = src.rows(p.get("path") or "")
+    rows = src.rows(p.get("path"))
     if rows is None:
         return False, "dream day file not readable"
     want = _norm(fact.get("text"))
     row = next((r for r in rows if isinstance(r, dict) and _norm(r.get("text")) == want), None)
     if row is None:
         return False, "dream row not found"
-    if (row.get("actor") or "").lower() != OPERATOR:
+    if _lower(row.get("actor")) != OPERATOR:
         return False, f"dream row author is {row.get('actor')!r}"
     cite = row.get("citation")
     if not isinstance(cite, dict) or not cite.get("uuid"):
@@ -106,7 +114,7 @@ def _check_dream(fact: dict, src: _Sources):
 
 def _check_voice(fact: dict, src: _Sources):
     p = fact.get("provenance") or {}
-    for o in src.rows(p.get("path") or "") or []:
+    for o in src.rows(p.get("path")) or []:
         if not isinstance(o, dict):
             continue
         ts = o.get("ts") or o.get("timestamp")
@@ -127,16 +135,23 @@ _CHECKS = {"dream-facts": _check_dream, "voice": _check_voice}
 
 def label(facts: list, projects_dir: str | None = None) -> list:
     """Copies of `facts` with each attributed, active fact labelled. Verified facts keep their state; the rest
-    become 'unverified'. Both record provenance.quote_gate = {status, reason}. Other facts come back unchanged."""
+    become 'unverified'. Both record provenance.quote_gate = {status, reason}. Other facts come back unchanged.
+    Never raises on a fact's data: a check that fails labels that fact unverified, reason "gate error"."""
     src = _Sources(projects_dir or os.environ.get("QUOTE_GATE_PROJECTS_DIR")
                    or os.path.expanduser("~/.claude/projects"))
     out = []
     for f in facts:
-        if f.get("state") != "active" or not attributed(f):
+        if f.get("state") != "active":
             out.append(f)
             continue
-        check = _CHECKS.get((f.get("provenance") or {}).get("source_kind"))
-        ok, why = check(f, src) if check else (False, "no quote to check for this source")
+        try:                                     # one fact's bad source data never reaches ingest
+            if not attributed(f):
+                out.append(f)
+                continue
+            check = _CHECKS.get((f.get("provenance") or {}).get("source_kind"))
+            ok, why = check(f, src) if check else (False, "no quote to check for this source")
+        except Exception:  # noqa: BLE001
+            ok, why = False, "gate error"
         g = dict(f)
         g["provenance"] = {**(f.get("provenance") or {}),
                            "quote_gate": {"status": "verified" if ok else "unverified", "reason": why}}
