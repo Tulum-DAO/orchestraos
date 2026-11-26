@@ -180,3 +180,11 @@ test('the agents\' login is the one the rows mark, not the literal "default": fi
   const [legacy] = usageOverview(rows, NOW).providers;
   assert.equal(legacy.accounts[0].id, 'default');
 });
+
+test('the Fable weekly allowance is its own bar, labelled, right after the weekly one', () => {
+  const fable = [...rows,
+    { provider: 'claude', account: 'default', window: 'weekly-fable', used_pct: 86, resets_at: at('2026-12-01T10:00:00Z'), stale: false }];
+  const [claude] = usageOverview(fable, NOW).providers;
+  assert.deepEqual(claude.accounts[0].windows.map((w) => [w.label, w.pct]),
+    [['5-hour session', 3], ['Weekly', 10], ['Weekly · Fable', 86]]);
+});

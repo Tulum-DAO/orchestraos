@@ -17,9 +17,14 @@ Conditions, each one a test (test_model_drop.py):
      continue; an attached seat is not typed into (the person there sees the banner), and the client
      list is read fresh right before typing: unreadable means no nudge;
   5. every drop is logged and gm hears one line per run naming the seats.
-No automatic return: the gateway stores Opus 5.5 as the seat's model, so it stays there until a person
-switches it back. A seat PINNED to Fable (state/model_pins.json) comes back on Fable at its next
-rotation; if Fable is still out, this drops it again.
+The weekly Fable allowance is also READ (usage_poll's "weekly-fable" window, from the usage body's
+limits[]; operator ask 2026-11-26, gm order msg_514c57ad), so tick_window() adds:
+  6. proactive: when the shared login's fresh weekly-fable reading is at 95% or more, every Claude seat
+     on a Fable model moves to Opus 5.5 BEFORE the banner (the banner leg above stays the backstop);
+  7. return: a seat this module moved goes back to the Fable model it was on once that window has
+     reset (a fresh reading taken after the recorded reset, under 95%), if it is still on Opus 5.5;
+     a seat someone moved by hand since is left alone and forgotten. A drop with no known prior model
+     never returns on its own.
 """
 from __future__ import annotations
 
@@ -38,10 +43,36 @@ TARGET = "claude-opus-5-5[1m]"
 ACTOR = "automation:limit-watch"
 FABLE = re.compile(r"fable", re.I)
 FRESH_S = 2 * 3600           # a credits row with no newer sighting than this is not acted on
+PROACTIVE_PCT = 95.0         # the weekly-fable reading that moves Fable seats before the banner
+USAGE_FRESH_S = 30 * 60      # an older usage reading is no reading
 RETRY_S = 600
 MAX_TRIES = 3
 NUDGE = ("[limit-watch] This seat hit its Fable limit, so it now runs on Opus 5.5. "
          "Continue where you left off.")
+RETURNS = "returns to its Fable model when the weekly Fable window resets"
+
+
+def fable_reading(u, now):
+    """(used_pct, resets_at, as_of) of a fresh weekly-fable reading in a usage file's dict, else None."""
+    if not isinstance(u, dict):
+        return None
+    try:
+        as_of = float(u.get("as_of") or 0)
+    except (TypeError, ValueError):
+        return None
+    w = (u.get("windows") or {}).get("weekly-fable") if isinstance(u.get("windows"), dict) else None
+    used = w.get("used_pct") if isinstance(w, dict) else None
+    if now - as_of > USAGE_FRESH_S or isinstance(used, bool) or not isinstance(used, (int, float)):
+        return None
+    reset = w.get("resets_at")
+    return float(used), (float(reset) if isinstance(reset, (int, float)) and not isinstance(reset, bool) else None), as_of
+
+
+def _record(state, seat, session, prior, now, resets_at):
+    """Remember a drop for the return leg: only a Fable model we saw is ever switched back to."""
+    state.setdefault("dropped", {})[seat] = {
+        "from": prior if isinstance(prior, str) and FABLE.search(prior) else None,
+        "session": session, "at": now, "resets_at": resets_at}
 
 
 def wanted(row) -> bool:
@@ -91,6 +122,20 @@ class LiveDeps:
         """(status, body) of PUT /agent-model."""
         return self._gateway("PUT", "/agent-model", {"session": session, "model": model})
 
+    def seat_model(self, session):
+        """The model the gateway says this seat is on now (GET /agent-model), or None."""
+        from urllib.parse import quote
+        status, body = self._gateway("GET", f"/agent-model?session={quote(session)}")
+        return body.get("model") if status == 200 and isinstance(body.get("model"), str) else None
+
+    def usage(self, account):
+        import limit_switch as LS
+        return LS.LiveDeps(self.paths, self.mail).usage(account)
+
+    def claude_seats(self):
+        import limit_switch as LS
+        return LS.LiveDeps(self.paths, self.mail).claude_seats()
+
     def attached_sessions(self):
         import limit_switch as LS
         return LS.LiveDeps(self.paths, self.mail).attached_sessions()
@@ -139,18 +184,19 @@ def tick(rows, now, log, deps, state):
             d.update(done=True)
             continue
         d["tries"], d["last"] = int(d.get("tries") or 0) + 1, now
+        prior = deps.seat_model(session)
         status, body = deps.switch_model(session, TARGET)
         row = {"ts": stamp, "seat": seat, "session": session, "key": r.get("key"), "to": TARGET,
                "http": status, "result": body.get("switching") or body.get("status") or body.get("error")}
         if status in (200, 202) and body.get("ok"):
             d["done"] = True
+            _record(state, seat, session, prior, now, None)
             nudged = None
             if status == 200:
                 attached = deps.attached_sessions()           # fresh, right before typing; unreadable = hold
                 if attached is not None and session not in attached and LE.from_text(deps.pane_text(session)):
                     nudged = deps.nudge(session, NUDGE)
-            log(dict(row, kind="model_dropped", nudged=nudged,
-                     returns="stays on Opus; return to Fable is manual or v2 on credits reset (a seat pinned to Fable returns at its next rotation)"))
+            log(dict(row, kind="model_dropped", why="banner", nudged=nudged, returns=RETURNS))
             done.append(f"{seat}{' (at its turn end)' if status == 202 else ''}")
         elif body.get("reason") == "not_fable":
             # the gateway says this seat is not on a Fable model now (moved by hand, or rotated): nothing to do
@@ -166,13 +212,94 @@ def tick(rows, now, log, deps, state):
     if done:
         deps.mail("gm", "medium", f"Fable limit: {len(done)} seat(s) moved to Opus 5.5",
                   f"Fable credits are out on these seats, so they now run {TARGET}: {', '.join(done)}. "
-                  f"The shared login was not switched. They stay on Opus; return to Fable is manual or v2 on credits "
-                  f"reset (a seat pinned to Fable returns to it at its next rotation).\n")
+                  f"The shared login was not switched. Each {RETURNS}.\n")
     return done
 
 
+def tick_window(active, now, log, deps, state):
+    """Rules 6 and 7, on the shared login's weekly-fable reading. Returns {"dropped": [...], "returned": [...]}."""
+    stamp = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
+    out = {"dropped": [], "returned": []}
+    r = fable_reading(deps.usage(active), now) if active else None
+    if r is None:
+        return out
+    used, resets, as_of = r
+    dropped = state.setdefault("dropped", {})
+    for d in dropped.values():               # a banner drop learns its window's reset from the first reading after it
+        if d.get("resets_at") is None and resets is not None:
+            d["resets_at"] = resets
+    if used >= PROACTIVE_PCT:
+        seats = deps.claude_seats()
+        if seats is None:
+            log({"ts": stamp, "kind": "model_drop_held", "reason": "seat registry unreadable"})
+            return out
+        tried = state.setdefault("proactive", {})
+        for root, session in seats:
+            if tried.get(root) and now - float(tried[root]) < RETRY_S:
+                continue
+            prior = deps.seat_model(session)
+            if not (isinstance(prior, str) and FABLE.search(prior)):
+                continue
+            tried[root] = now
+            status, body = deps.switch_model(session, TARGET)
+            row = {"ts": stamp, "seat": root, "session": session, "to": TARGET, "http": status, "why": "proactive",
+                   "weekly_fable": used, "resets_at": resets,
+                   "result": body.get("switching") or body.get("status") or body.get("error")}
+            if status in (200, 202) and body.get("ok"):
+                _record(state, root, session, prior, now, resets)
+                log(dict(row, kind="model_dropped", returns=RETURNS))
+                out["dropped"].append(f"{root}{' (at its turn end)' if status == 202 else ''}")
+            else:
+                log(dict(row, kind="model_drop_failed"))
+        if out["dropped"]:
+            deps.mail("gm", "medium", f"Fable weekly at {used:.0f}%: {len(out['dropped'])} seat(s) moved to Opus 5.5",
+                      f"The shared login {active} has used {used:.0f}% of its weekly Fable allowance"
+                      f" ({LE.reset_label(resets)}), so these seats now run {TARGET} before the limit stops them: "
+                      f"{', '.join(out['dropped'])}. Each {RETURNS}.\n")
+        return out
+    sessions = None
+    for seat, d in sorted(dropped.items()):
+        reset = d.get("resets_at")
+        if not d.get("from") or reset is None or now < float(reset) or as_of < float(reset):
+            continue                         # no known model to go back to, or the window has not reset yet
+        if d.get("return_last") and now - float(d["return_last"]) < RETRY_S:
+            continue
+        if sessions is None:
+            sessions = deps.sessions()
+            if sessions is None:
+                log({"ts": stamp, "kind": "model_return_held", "reason": "seat registry unreadable"})
+                return out
+        session = sessions.get(seat)
+        current = deps.seat_model(session) if session else None
+        if current != TARGET:
+            # moved by hand since, rotated onto another model, or gone: theirs stands, forget it
+            log({"ts": stamp, "kind": "model_return_skipped", "seat": seat, "session": session, "current": current})
+            del dropped[seat]
+            continue
+        d["return_last"] = now
+        status, body = deps.switch_model(session, d["from"])
+        row = {"ts": stamp, "seat": seat, "session": session, "to": d["from"], "http": status, "weekly_fable": used,
+               "result": body.get("switching") or body.get("status") or body.get("error")}
+        if status in (200, 202) and body.get("ok"):
+            del dropped[seat]
+            log(dict(row, kind="model_returned"))
+            out["returned"].append(f"{seat}{' (at its turn end)' if status == 202 else ''}")
+        else:
+            log(dict(row, kind="model_return_failed"))
+    if out["returned"]:
+        deps.mail("gm", "medium", f"Fable weekly reset: {len(out['returned'])} seat(s) back on Fable",
+                  f"The weekly Fable window on {active} has reset ({used:.0f}% used now), so these seats went back "
+                  f"to the Fable model they were on: {', '.join(out['returned'])}.\n")
+    return out
+
+
 def prune(state, rows, now, keep_s=86400):
-    """Forget drops whose seat is no longer limited, a day after their last try."""
+    """Forget drops whose seat is no longer limited, a day after their last try; a recorded drop that never
+    learned a reset, after 14 days; proactive try stamps after a day."""
+    for seat in [s for s, d in state.get("dropped", {}).items() if now - float(d.get("at") or 0) > 14 * 86400]:
+        del state["dropped"][seat]
+    for seat in [s for s, t in state.get("proactive", {}).items() if now - float(t or 0) > keep_s]:
+        del state["proactive"][seat]
     live = {f"{s}|{r.get('key')}|{r.get('session')}" for s, r in rows.items()}
     for k in [k for k, d in state.get("drops", {}).items()
               if k not in live and now - float(d.get("last") or 0) > keep_s]:

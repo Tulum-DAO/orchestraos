@@ -894,3 +894,85 @@ def test_r1_a_persons_waiting_pick_is_never_replaced_by_the_drop(gw, fable, monk
     monkeypatch.setattr(AMP, "get", lambda f, s: {"model": "claude-sonnet-5-5", "by": "app:ios"})
     r = _drop()
     assert r.status == 409 and _body(r)["reason"] == "person_pick_waiting" and gw["live"] == []
+
+
+# --- the weekly Fable window: proactive drop at 95% and the way back after its reset (gm order msg_514c57ad) ---
+
+import time as _t
+
+
+def _reading(tmp_path, pct, as_of=None, reset=None, login="strategysimple"):
+    (tmp_path / "state" / "account_locations.json").write_text(json.dumps(
+        {"accounts": {login: {"where": "shared"}, "default": {"where": "vault"}}}))
+    (tmp_path / "state" / "usage" / f"api-claude-{login}.json").write_text(json.dumps(
+        {"as_of": _t.time() - 60 if as_of is None else as_of,
+         "windows": {"weekly-fable": {"used_pct": pct, "resets_at": reset}}}))
+
+
+def _dropped(tmp_path, rec):
+    (tmp_path / "state" / "limit_watch").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "limit_watch" / "model-drop.json").write_text(json.dumps({"dropped": {"dev": rec}}))
+
+
+def test_w_proactive_drop_needs_no_banner_when_the_shared_login_reads_95(gw, fable, tmp_path):
+    fable(None)                                                             # no banner row
+    _reading(tmp_path, 95.0)
+    r = _drop()
+    assert r.status == 200 and gw["live"] == [OPUS1M]
+
+
+def test_w_proactive_drop_refused_under_95_or_on_a_stale_reading(gw, fable, tmp_path):
+    fable(None)
+    for pct, age in ((94.0, 60), (99.0, 31 * 60)):
+        _reading(tmp_path, pct, as_of=_t.time() - age)
+        r = _drop()
+        assert r.status == 409 and _body(r)["reason"] == "no_limit"
+    assert gw["live"] == []
+
+
+def _back(monkeypatch, current=OPUS1M):
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", current))
+    return _drop(model=FABLE)
+
+
+def test_w_return_to_the_recorded_fable_model_after_the_reset(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
+    _reading(tmp_path, 3.0, as_of=_t.time() - 60, reset=reset + 7 * 86400)
+    r = _back(monkeypatch)
+    assert r.status == 200 and gw["live"] == [FABLE]
+
+
+def test_w_return_refusals(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    cases = [
+        ({"from": FABLE, "resets_at": reset}, (3.0, _t.time() - 60), "claude-opus-5[1m]", "not_dropped"),
+        (None, (3.0, _t.time() - 60), OPUS1M, "no_drop"),
+        ({"from": "claude-fable-9[1m]", "resets_at": reset}, (3.0, _t.time() - 60), OPUS1M, "no_drop"),
+        ({"from": FABLE, "resets_at": reset}, (96.0, _t.time() - 60), OPUS1M, "not_reset"),
+        ({"from": FABLE, "resets_at": reset}, (3.0, reset - 60), OPUS1M, "not_reset"),        # read before the reset
+        ({"from": FABLE, "resets_at": _t.time() + 600}, (3.0, _t.time() - 60), OPUS1M, "not_reset"),
+    ]
+    for rec, (pct, as_of), current, reason in cases:
+        _dropped(tmp_path, rec) if rec else _dropped(tmp_path, {})
+        _reading(tmp_path, pct, as_of=as_of)
+        r = _back(monkeypatch, current)
+        assert r.status == 409 and _body(r)["reason"] == reason, (rec, pct, current, _body(r))
+    assert gw["live"] == []
+
+
+def test_w_limit_watch_may_not_switch_to_any_other_model(gw, fable, monkeypatch):
+    for m in ("claude-sonnet-5-5", "claude-opus-5[1m]", "claude-fable-5-1; rm", "gpt-5"):
+        r = _drop(model=m)
+        assert r.status == 403, m
+    assert gw["live"] == []
+
+
+def test_w_the_return_is_rechecked_under_the_lock(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
+    _reading(tmp_path, 3.0)
+    reads = iter([("dev", {}, "claude", OPUS1M), ("dev", {}, "claude", "claude-opus-5[1m]")])
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: next(reads))
+    r = _drop(model=FABLE)
+    assert r.status == 409 and _body(r)["reason"] == "not_dropped" and gw["live"] == []

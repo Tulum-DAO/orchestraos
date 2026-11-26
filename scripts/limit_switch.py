@@ -440,9 +440,11 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         if acct != active:
             ow = (deps.usage(acct) or {}).get("windows") or {}
             others[acct] = {"5h": (ow.get("5h") or {}).get("used_pct"),
-                            "weekly": (ow.get("weekly") or {}).get("used_pct")}
+                            "weekly": (ow.get("weekly") or {}).get("used_pct"),
+                            "weekly-fable": (ow.get("weekly-fable") or {}).get("used_pct")}
     check = {"ts": stamp, "kind": "switch_check", "active": active, "active_fresh": fresh,
-             "active_5h": a5, "active_weekly": aweek, "others": others}
+             "active_5h": a5, "active_weekly": aweek,
+             "active_weekly_fable": (aw.get("weekly-fable") or {}).get("used_pct"), "others": others}
     _weekly_warnings(deps, now, told, log, stamp)
     key = ep = None
     hot = fresh and a5 is not None and (a5 >= SWITCH_AT_5H_PCT or (aweek is not None and aweek >= 100))

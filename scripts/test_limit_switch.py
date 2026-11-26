@@ -726,3 +726,12 @@ def test_r2_every_switch_records_where_it_went():
     d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
     _, _, st = _tick({}, d, active="default")
     assert st["last_to"] == "strategysimple"
+
+
+def test_the_check_row_carries_the_weekly_fable_reading_of_both_logins():
+    u = {"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)}
+    u["default"]["windows"]["weekly-fable"] = {"used_pct": 86.0}
+    u["strategysimple"]["windows"]["weekly-fable"] = {"used_pct": 12.0}
+    _, log, _ = _tick({}, FableFake(usage=u), active="default")
+    row = [r for r in log if r["kind"] == "switch_check"][0]
+    assert row["active_weekly_fable"] == 86.0 and row["others"]["strategysimple"]["weekly-fable"] == 12.0

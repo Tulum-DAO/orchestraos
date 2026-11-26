@@ -546,3 +546,43 @@ def test_the_attempt_is_on_disk_before_the_request_goes_out(homes):
     assert seen[0]["claude:default"]["last_status"] == "in-flight"
     assert seen[1]["last_status"] == "in-flight" and seen[1]["next_allowed"] >= NOW + 270
     _no_secret_written(homes["data"], homes["locks"])
+
+
+# --- a model's own weekly allowance (the Fable limit), from the body's limits[] (measured 2026-11-26) ---------
+
+LIMITS_BODY = {
+    "five_hour": {"utilization": 39.0, "resets_at": "2026-11-26T22:40:00.044465+00:00"},
+    "seven_day": {"utilization": 68.0, "resets_at": "2026-12-01T10:00:00.044481+00:00"},
+    "seven_day_opus": None,
+    "limits": [
+        {"kind": "session", "group": "session", "percent": 39, "severity": "normal",
+         "resets_at": "2026-11-26T22:40:00.044465+00:00", "scope": None, "is_active": False},
+        {"kind": "weekly_all", "group": "weekly", "percent": 68, "severity": "normal",
+         "resets_at": "2026-12-01T10:00:00.044481+00:00", "scope": None, "is_active": False},
+        {"kind": "weekly_scoped", "group": "weekly", "percent": 86, "severity": "warning",
+         "resets_at": "2026-12-01T10:00:00.044627+00:00",
+         "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}, "is_active": True}],
+}
+
+
+def test_the_fable_weekly_allowance_is_read_from_limits():
+    w = P.parse_claude(LIMITS_BODY, NOW)
+    assert w["weekly-fable"] == {"used_pct": 86.0, "resets_at": UM._iso_to_epoch("2026-12-01T10:00:00.044627+00:00")}
+    assert w["5h"]["used_pct"] == 39.0 and w["weekly"]["used_pct"] == 68.0
+
+
+def test_a_scoped_limit_never_overwrites_a_named_window_and_junk_is_skipped():
+    body = {"seven_day_opus": {"utilization": 10.0, "resets_at": None}, "limits": [
+        {"kind": "weekly_scoped", "percent": 90, "scope": {"model": {"display_name": "Opus"}}},
+        {"kind": "weekly_scoped", "percent": 200, "scope": {"model": {"display_name": "Sonnet"}}},
+        {"kind": "weekly_scoped", "percent": 50, "scope": {"model": {"display_name": "../x y"}}},
+        {"kind": "weekly_scoped", "percent": 50, "scope": None},
+        "junk", {"kind": "session", "percent": 5}]}
+    w = P.parse_claude(body, NOW)
+    assert w["weekly-opus"]["used_pct"] == 10.0
+    assert "weekly-sonnet" not in w and "weekly-x-y" in w
+    assert set(w) == {"weekly-opus", "weekly-x-y"}
+
+
+def test_limits_that_is_not_a_list_is_ignored():
+    assert P.parse_claude({"limits": {"kind": "weekly_scoped"}}, NOW) == {}
