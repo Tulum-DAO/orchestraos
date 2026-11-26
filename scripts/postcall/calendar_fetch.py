@@ -28,6 +28,22 @@ def _urlopen(url, timeout):
         return r.read(_MAX_BYTES + 1).decode("utf-8", "replace")
 
 
+def _complete(body):
+    """A whole calendar: BEGIN/END:VCALENDAR as the first and last lines, components balanced, so a
+    truncated download never replaces a good copy."""
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if len(lines) < 2 or lines[0] != "BEGIN:VCALENDAR" or lines[-1] != "END:VCALENDAR":
+        return False
+    depth = []
+    for ln in lines:
+        if ln.startswith("BEGIN:"):
+            depth.append(ln[6:])
+        elif ln.startswith("END:"):
+            if not depth or depth.pop() != ln[4:]:
+                return False
+    return not depth
+
+
 def refresh(url_path=None, out_path=None, *, opener=None, now=None, max_age_s=MAX_AGE_S, timeout=20):
     url_path, out_path = url_path or url_file(), out_path or calendar_file()
     try:
@@ -53,8 +69,8 @@ def refresh(url_path=None, out_path=None, *, opener=None, now=None, max_age_s=MA
         body = (opener or _urlopen)(url, timeout)
     except Exception as e:      # never repr(e): it can carry the URL
         return f"error: fetch failed ({type(e).__name__})"
-    if not isinstance(body, str) or len(body) > _MAX_BYTES or not body.lstrip().startswith("BEGIN:VCALENDAR"):
-        return "error: the feed is not an iCalendar file (old copy kept)"
+    if not isinstance(body, str) or len(body) > _MAX_BYTES or not _complete(body):
+        return "error: the feed is not a complete iCalendar file (old copy kept)"
     d = os.path.dirname(out_path)
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".shaw.ics.")

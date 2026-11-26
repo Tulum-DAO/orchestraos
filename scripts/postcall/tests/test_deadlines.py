@@ -128,3 +128,30 @@ def test_relative_hours_count_from_the_call(phrase, hours):
 def test_conditions_without_a_time_stay_unknown():
     for phrase in ("once I'm at my desk", "in the meantime", "whenever you're back at your desk"):
         assert due(phrase).due_ts is None
+
+
+# --- codex gate on #655: never a confidently wrong date -------------------------------------------
+
+@pytest.mark.parametrize("phrase", ["next month at 2pm", "in two days at 4pm", "after the launch at 3pm",
+                                    "half past two pm", "quarter to five pm", "in an hour and a half",
+                                    "tomorrow at half past two pm", "friday at quarter to five pm",
+                                    "in 2 hours and 20 minutes"])
+def test_a_partly_understood_phrase_stays_unknown(phrase):
+    d = due(phrase, anchor="2026-11-24T18:00:00Z")
+    assert d.due_ts is None, d
+
+
+def test_a_standard_time_abbreviation_named_during_daylight_time_is_ambiguous():
+    d = due("tomorrow at 2pm EST", anchor="2027-06-15T15:00:00Z")
+    assert d.due_ts is None and d.due_source.startswith("ambiguous")
+
+
+def test_a_matching_abbreviation_and_season_resolves():
+    d = due("tomorrow at 2pm EDT", anchor="2027-06-15T15:00:00Z")
+    assert deadlines._parse_utc(d.due_ts).isoformat() == "2027-06-16T18:00:00+00:00"
+
+
+def test_the_next_occurrence_counts_the_second_fall_back_hour():
+    # New York falls back at 06:00Z on 2027-11-07; 06:15Z is 01:15 EST, so 01:30 is 15 min away.
+    d = due("at 1:30am", anchor="2027-11-07T06:15:00Z", tz="America/New_York")
+    assert deadlines._parse_utc(d.due_ts).isoformat() == "2027-11-07T06:30:00+00:00"

@@ -51,3 +51,29 @@ def test_a_routed_dispatch_asks_gm_to_pick_the_seat(monkeypatch):
     assert sent["subject"].startswith("please route: draft the pricing deck email")
     assert sent["body"].splitlines()[0].startswith("No client seat resolved for this work: please pick")
     assert "never send anything as Shaw" in sent["body"]
+
+
+def test_a_chase_item_with_agent_work_and_no_seat_routes_its_nudge_through_gm(tmp_path):
+    led, world = ledger.Ledger(str(tmp_path / "l.db")), effects.Recorder()
+    theirs = _calls.item("I will share the API credentials with you tomorrow morning.", owner="participant",
+                         deliverable="api credentials", text="Dana shares the API credentials",
+                         timeframe="tomorrow morning", agent_takeable=True, agent_work="draft a reminder")
+    call, ex = _calls.call([theirs])
+    pipeline.process(call, ledger=led, extractor=ex, effects=world)
+    (f,) = world.sent[0].payload["frozen"]
+    assign = [o for o in f["options"] if o["action"] == "assign"]
+    assert assign == [{"action": "assign", "seat": "gm", "agent_work": "draft a follow-up nudge", "route": True}]
+    labels = [o["label"] for o in world.sent[0].payload["questions"][1]["menu"]["options"]]
+    assert any(lab.startswith("Assign to gm to route: draft a follow-up nudge") for lab in labels)
+
+
+def test_a_routed_dispatch_is_sent_once_and_reconciled_on_replay(tmp_path):
+    led, world = ledger.Ledger(str(tmp_path / "l.db")), effects.Recorder()
+    call, ex = _calls.call([_calls.item(DECK, agent_takeable=True, agent_work="draft the pricing deck email")])
+    pipeline.process(call, ledger=led, extractor=ex, effects=world)
+    led.apply_answers(world.sent[0].effect_id, status="submitted", answers={2: {"option_n": 1, "final": True}})
+    led.run_pending(world)
+    led.run_pending(world)
+    pipeline.process(call, ledger=led, extractor=ex, effects=world)
+    sent = [e for e in world.sent if e.kind == "dispatch"]
+    assert len(sent) == 1 and sent[0].payload["route"] is True and sent[0].payload["seat"] == "gm"

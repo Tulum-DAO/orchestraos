@@ -63,7 +63,10 @@ def _options(it, tz, label):
     if it.owner == "participant":
         opts = [(f"Track it: chase {it.counterpart} on {_local(it.chase_date, tz, label)}",
                  {"action": "track", "chase_date": it.chase_date})]
-        if it.seat:
+        if it.seat and it.route:
+            opts.append((f"Assign to {it.seat} to route: draft a follow-up nudge for me to send",
+                         {"action": "assign", "seat": it.seat, "agent_work": "draft a follow-up nudge", "route": True}))
+        elif it.seat:
             opts.append((f"Assign to {it.seat}: draft a follow-up nudge for me to send",
                          {"action": "assign", "seat": it.seat, "agent_work": "draft a follow-up nudge"}))
     elif it.seat and it.agent_work and it.route:

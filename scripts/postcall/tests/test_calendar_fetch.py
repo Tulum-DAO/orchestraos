@@ -84,3 +84,39 @@ def test_the_sweep_refreshes_the_calendar_and_reports_a_failure_without_the_url(
     assert seen == [1] and res["calendar"].startswith("error")
     assert any(e["error"].startswith("calendar: error") for e in res["errors"])
     assert URL not in json.dumps(res)
+
+
+def test_a_truncated_or_garbled_feed_keeps_the_old_copy(tmp_path):
+    url_file, out = _paths(tmp_path)
+    good = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    calendar_fetch.refresh(url_file, out, opener=_opener(good, []), now=1000.0)
+    for bad in ("BEGIN:VCALENDAR\r\n", "BEGIN:VCALENDARgarbage", "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\n",
+                "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VCALENDAR\r\n",
+                "BEGIN:VCALENDAR\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",          # never closed
+                good + "<html>sign in</html>\r\n"):                                  # junk after the end
+        os.utime(out, (0, 0))
+        assert calendar_fetch.refresh(url_file, out, opener=_opener(bad, []), now=1e9).startswith("error"), bad
+        assert open(out, newline="").read() == good
+
+
+def test_an_oversized_feed_is_refused(tmp_path, monkeypatch):
+    url_file, out = _paths(tmp_path)
+    monkeypatch.setattr(calendar_fetch, "_MAX_BYTES", 100)
+    big = "BEGIN:VCALENDAR\r\n" + "X-PAD:" + "x" * 200 + "\r\nEND:VCALENDAR\r\n"
+    assert calendar_fetch.refresh(url_file, out, opener=_opener(big, []), now=1e9).startswith("error")
+    assert not os.path.exists(out)
+
+
+def test_a_failed_replace_leaves_no_temp_file_and_the_old_copy(tmp_path, monkeypatch):
+    url_file, out = _paths(tmp_path)
+    calendar_fetch.refresh(url_file, out, opener=_opener(ICS, []), now=1000.0)
+    os.utime(out, (0, 0))
+
+    def boom(a, b):
+        raise OSError("disk full")
+    monkeypatch.setattr(calendar_fetch.os, "replace", boom)
+    import pytest
+    with pytest.raises(OSError):
+        calendar_fetch.refresh(url_file, out, opener=_opener(ICS.replace("2.0", "2.1"), []), now=1e9)
+    assert open(out, newline="").read() == ICS
+    assert [n for n in os.listdir(os.path.dirname(out)) if n.startswith(".shaw.ics.")] == []
