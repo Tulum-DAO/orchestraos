@@ -23,7 +23,7 @@ const userLine = (uuid: string, s: number, text: string) =>
 const assistantLine = (uuid: string, s: number, text: string) =>
   JSON.stringify({ type: 'assistant', uuid, timestamp: T(s), message: { role: 'assistant', content: [{ type: 'text', text }] } });
 
-const SENT = '[Replying to gm 21:42 Cancun: "the count"] yes, and the time too';
+const SENT = '[Replying to gm 21:42 Local: "the count"] yes, and the time too';
 const store = new ReplyToStore(replyToDbPath(dir));
 store.record({ agent: 'seat-a', sent_text: SENT, reply_to: { uuid: 'orig-uuid-1', excerpt: 'the count' }, message_id: 'msg_1', ts: T(0) });
 store.record({ agent: 'seat-a', sent_text: 'another send', reply_to: { excerpt: 'no uuid here' }, ts: T(0) });

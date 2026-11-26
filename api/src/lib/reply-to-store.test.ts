@@ -19,7 +19,7 @@ const store = new ReplyToStore(path);
 after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
 
 const T0 = '2026-11-26T02:00:00.000Z';
-const PREFIX = '[Replying to gm 21:42 Cancun: "The folded header could carry the count"]';
+const PREFIX = '[Replying to gm 21:42 Local: "The folded header could carry the count"]';
 const SENT = `${PREFIX} yes, and the time too`;
 const send = (over: Partial<SentReply> = {}): SentReply =>
   ({ agent: 'gm', sent_text: SENT, reply_to: { uuid: 'u-orig-1', excerpt: 'The folded header could carry the count' }, message_id: 'msg_1', ts: T0, ...over });

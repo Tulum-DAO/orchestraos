@@ -442,7 +442,7 @@ test('other refusals keep their durable-first fallback', async () => {
 // ── reply_to on the turn (reply threads P1, the API half) ───────────────────
 
 const REPLY = { uuid: 'abc-123', excerpt: 'The folded header could carry the count' };
-const PREFIXED = '[Replying to gm 21:42 Cancun: "The folded header could carry the count"] yes, and the time too';
+const PREFIXED = '[Replying to gm 21:42 Local: "The folded header could carry the count"] yes, and the time too';
 
 test('reply_to: kept at every 2xx with the words as sent and the message id when there is one', async () => {
   const kept: any[] = [];
