@@ -241,3 +241,13 @@ def test_leading_zeros_are_read_whole(phrase, hours):
     import datetime as dt
     d = due(phrase)
     assert deadlines._parse_utc(d.due_ts) == dt.datetime(2026, 11, 24, 19, tzinfo=dt.timezone.utc) + dt.timedelta(hours=hours)
+
+
+# --- codex gate round 6: no alternatives through filler; clock ranges validated --------------------
+
+@pytest.mark.parametrize("phrase", ["at 8 in the morning or in the evening", "at 8 in the morning or evening",
+                                    "tomorrow at 8 in the morning or in the evening", "at 3 or so",
+                                    "at 25", "at 9:99am", "tomorrow at 13pm", "at 0am"])
+def test_alternatives_and_impossible_clocks_stay_unknown(phrase):
+    d = due(phrase, anchor="2026-11-24T10:00:00Z", tz="America/New_York")
+    assert d.due_ts is None, d

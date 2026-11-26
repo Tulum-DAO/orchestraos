@@ -37,8 +37,9 @@ _NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|
                      r"sixty|seventy|eighty|ninety)\b")
 _IN_DAYS = re.compile(r"\bin\s+\d+\s+days?\b")
 _WEEK_OR_TWO = re.compile(r"\bweek or two\b|\btwo weeks\b")
-_FILLER = frozenset("at by around about before until till say like approx approximately ish or so the latest"
-                    .split())
+# Words that add nothing. Never "or": an alternative is never resolved to its first half.
+_FILLER = frozenset("at by around about before until till say like approx approximately ish the latest".split())
+_DAYWORD = re.compile(r"\b(?:morning|afternoon|evening|night|tonight)\b")
 _PARTS = (("morning", 9, 0), ("noon", 12, 0), ("afternoon", 15, 0), ("end of day", 17, 0),
           ("eod", 17, 0), ("evening", 21, 0), ("tonight", 21, 0))
 
@@ -200,6 +201,13 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     start = _parse_utc(anchor)
     clocks = list(_CLOCK.finditer(p))
     if len(clocks) > 1:        # "at 2pm or 4pm": alternatives, never the first one
+        return Due(None, f"unknown ({phrase})")
+    if clocks:     # an impossible clock ("at 25", "9:99am", "13pm") is not a time
+        c = clocks[0]
+        h, mi = int(c.group(1) or c.group(4)), int(c.group(2) or c.group(5) or 0)
+        if mi > 59 or h > 23 or (c.group(3) and not 1 <= h <= 12):
+            return Due(None, f"unknown ({phrase})")
+    if len(_DAYWORD.findall(p)) > 1:     # "in the morning or in the evening"
         return Due(None, f"unknown ({phrase})")
     if (clocks and not clocks[0].group(3) and int(clocks[0].group(1) or clocks[0].group(4)) == 12
             and re.search(r"\bat night\b|\bin the evening\b|\btonight\b", p)):
