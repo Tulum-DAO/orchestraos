@@ -13,8 +13,8 @@ append-only triggers:
     CREATE TRIGGER statements_no_delete BEFORE DELETE ON statements ...
 
 That is the L1 immutable statement ledger invariant the Universal Worldview architecture rests on,
-and the drain spec's §3.3 watermark reasoning cites it by name ("the append-only triggers make it
-immutable"). A plain UPDATE does not fail silently here — it ABORTS. So redacting these rows means
+and the drain's watermark reasoning depends on it (the append-only triggers make the ledger
+immutable). A plain UPDATE does not fail silently here — it ABORTS. So redacting these rows means
 deliberately suspending the invariant, and the only responsible way to do that is: inside one
 transaction, with the restore in a `finally`, and with a test that PROVES the triggers bite again
 afterwards. `test_the_append_only_triggers_are_RESTORED_after_the_purge` and
@@ -25,7 +25,7 @@ WHAT DOES NOT BREAK, checked rather than assumed: `statement_id` is derived from
 orphan the id, and a later drain pass over the same WAL rows recomputes the SAME id and is
 suppressed by `INSERT OR IGNORE`. The secret cannot walk back in through dedup.
 
-WHAT THIS DOES NOT DO: it does not revoke the token (Shaw's card), and it does not touch the
+WHAT THIS DOES NOT DO: it does not revoke the token (that is done at the issuer), and it does not touch the
 source transcripts on disk, where the string also lives. Purging the brain is one layer.
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ def redact(text: str) -> str:
 # ---------------------------------------------------------------- output filter (read side)
 # redact() above is the PURGE/ingest filter and stays Telegram-only: it rewrites the append-only ledger, so its
 # net must not widen silently. redact_for_output is the READ-side filter every facts.db consumer applies before
-# text reaches a seat (recall CLI, prompt hook): facts.db holds raw pasted pages (Cloudflare token screens, curl
+# text reaches an agent (recall CLI, prompt hook): facts.db holds raw pasted pages (Cloudflare token screens, curl
 # lines with Bearer headers), and nothing is lost by over-redacting a display string.
 OUT_PLACEHOLDER = "<REDACTED>"
 _OUT_PATTERNS = (
@@ -95,7 +95,7 @@ _OUT_PATTERNS = (
 )
 # a value right after a credential word: Bearer xyz / API_TOKEN=xyz / "token is xyz"
 # The gap may not contain '<': it must never skip over a placeholder, or a second pass eats the next long run
-# (found 10-09 purging semantic-memory chunks: redaction was not idempotent).
+# (otherwise redaction is not idempotent: a second pass would eat the run after a placeholder).
 _OUT_AFTER_WORD = re.compile(
     r"(?i)(\b(?:bearer|token|secret|password|passwd|passphrase|api[_ -]?key|access[_ -]?key|private[_ -]?key|"
     r"client[_ -]?secret|[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)|[A-Z0-9_]*_KEY)\b[^\n<]{0,40}?[\s=:\"'])"
@@ -127,7 +127,7 @@ def scrub_fact_text(text: str) -> str:
     """The drain-time filter: call this on the way IN, so a token never becomes a fact.
 
     Deliberately the same function as the purge uses. A filter that redacts differently from the
-    purge would leave two spellings of the same secret in one store. Since the 10-09 wide purge
+    purge would leave two spellings of the same secret in one store. Since the wide purge,
     that function is redact_for_output, which applies redact() first.
     """
     return redact_for_output(text)
