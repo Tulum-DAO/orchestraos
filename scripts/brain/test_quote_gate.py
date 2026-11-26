@@ -337,3 +337,15 @@ def test_only_a_user_record_in_the_transcript_verifies(world, tmp_path, monkeypa
         assert states[k] == "unverified"
         assert prov[k]["quote_gate"]["reason"] == "cited transcript record is not the user's"
     assert {k: states[k] for k in EXPECT} == EXPECT
+
+
+def test_the_voice_speaker_check_ignores_case(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    conv = tmp_path / "conversation.jsonl"
+    _append(conv, [{"ts": "2026-11-25T11:02:00Z", "channel": "voice", "role": "Shaw", "content": "close the blinds"},
+                   {"timestamp": "2026-11-25T11:03:00Z", "channel": "voice", "from": "SHAW", "text": "open them"}])
+    world["capital_role"] = _voice_at(conv, "voice:2026-11-25T11:02:00Z", "close the blinds")
+    world["upper_from"] = _voice_at(conv, "voice:2026-11-25T11:03:00Z", "open them")
+    _, states, prov = _ingest(tmp_path, world)
+    assert states["capital_role"] == states["upper_from"] == "active"
+    assert {k: states[k] for k in EXPECT} == EXPECT

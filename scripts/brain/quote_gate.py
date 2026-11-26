@@ -183,7 +183,7 @@ def _check_voice(fact: dict, src: _Sources):
         if f"{o.get('channel')}:{ts}" != p.get("source_id"):
             continue
         who = o.get("role") or o.get("from")
-        if who != OPERATOR:
+        if _lower(who) != OPERATOR:
             return False, f"conversation row speaker is {who!r}"
         text = o.get("content") if o.get("content") is not None else o.get("text")
         if _norm(text) != _norm(fact.get("text")):
