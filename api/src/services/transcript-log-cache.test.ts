@@ -197,6 +197,19 @@ test('a complete last line with no newline is parsed for a whole-file grammar, a
   assert.deepEqual(cachedLog(path, parser).items, oracle(path));
 });
 
+test('a one-line Claude log with no newline yet, then an append, equals a whole-file parse: the first line is not parsed twice', () => {
+  // Delta review of #660 at beaa5695: the remainder re-parse handed back a Claude state while `offset` stayed before the
+  // remainder, so the next append re-read that line: [x, x, y] against the whole-file parse's [x, y].
+  const { path, parser } = fresh();
+  writeFileSync(path, user('the first words'));                  // complete line, newline not yet written
+  const first = cachedLog(path, parser);
+  assert.deepEqual(first.items, oracle(path));
+  appendFileSync(path, '\n' + user('the second words') + '\n');
+  const grown = cachedLog(path, parser);
+  assert.deepEqual(grown.items, oracle(path));
+  assert.equal(grown.items.length, 2);
+});
+
 test('an append equals a whole-file parse when it drops a queued opener: no stale exchange on the items before it', () => {
   // Review of #660: `finish` re-ran tagAudience IN PLACE on the raw items; when dedupeQueuedCommands later dropped the
   // queued opener (its real user turn landed after the boundary), the reply kept exchange = the dropped uuid.

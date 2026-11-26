@@ -114,6 +114,12 @@ function probeMatches(path: string, hit: Entry): boolean {
   }
 }
 
+/** A complete JSONL line (one JSON value): a line cut mid-way is never valid JSON. */
+function isWholeJsonLine(text: string): boolean {
+  if (!text.trim()) return false;
+  try { JSON.parse(text); return true; } catch { return false; }
+}
+
 /** The complete lines of `buf` (up to and including its last newline) and where they end. */
 function completeLines(buf: Buffer): { lines: string[]; end: number } {
   const cut = buf.lastIndexOf(0x0a);
@@ -165,13 +171,18 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
   }
   drop(slot);
   const buf = readFileSync(path);
-  const { lines, end } = completeLines(buf);
-  let got = parser.full(lines);
-  // A grammar that cannot resume (state null) is re-parsed in full on every change anyway, so its parse may take the
-  // torn remainder too: a complete last line with no newline yet was parsed by the old split-on-newline read, and a
-  // one-line codex/grok file must not read as empty. A torn line fails JSON.parse harmlessly, as before. A resumable
-  // grammar keeps the remainder for the append that lands its newline (parsing it now would parse it twice).
-  if (got.state === null && end < buf.length) got = parser.full(buf.toString('utf-8').split('\n'));
+  const { lines, end: lineEnd } = completeLines(buf);
+  // The remainder after the last newline: a line still being written (fails JSON.parse: left for the append that lands
+  // its newline, as before) or a COMPLETE line whose newline is not written yet (parses: a JSONL line is one JSON value,
+  // and a truncated one is never valid JSON). The old split-on-newline read parsed a complete last line; so does this,
+  // and the parsed end then moves past it so the append never reads it again (a one-line codex file is not empty; a
+  // one-line Claude file is not parsed twice).
+  let end = lineEnd;
+  if (lineEnd < buf.length) {
+    const rest = buf.subarray(lineEnd).toString('utf-8');
+    if (isWholeJsonLine(rest)) { lines.push(rest); end = buf.length; }
+  }
+  const got = parser.full(lines);
   const items = parser.finish(got.items, got.state);
   parses += 1;
   fullParses += 1;

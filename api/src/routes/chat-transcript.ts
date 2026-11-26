@@ -321,15 +321,17 @@ export function looksLikeGrok(lines: string[]): boolean {
 
 /** Codex rollout lines are self-describing, so the SSE tail and the poll path cannot disagree
  *  about which parser to use (they call normalizeTranscript independently). */
-/** Positive evidence of the Claude Code grammar: at least one well-formed line of a type its parser reads. Used only
- *  to decide whether a parse may be RESUMED (transcript-log-cache.ts); detection of the other grammars stays as it is. */
+/** Positive evidence of the Claude Code grammar: at least one well-formed user/assistant/attachment/system line with a
+ *  uuid. Used only to decide whether a parse may be RESUMED (transcript-log-cache.ts); detection of the other grammars
+ *  stays as it is. A log that so far holds only lines without a uuid (summary carries leafUuid; file-history-snapshot,
+ *  queue-operation) stays on a full parse per change until its first user line: slower for those reads, never wrong. */
 export function looksLikeClaude(lines: string[]): boolean {
   for (const l of lines) {
     if (!l.trim()) continue;
     try {
       const d = JSON.parse(l);
-      if (d && (d.type === 'user' || d.type === 'assistant' || d.type === 'attachment' || d.type === 'summary'
-        || d.type === 'system') && typeof d.uuid === 'string') return true;
+      if (d && (d.type === 'user' || d.type === 'assistant' || d.type === 'attachment' || d.type === 'system')
+        && typeof d.uuid === 'string') return true;
     } catch { /* torn or foreign line */ }
   }
   return false;

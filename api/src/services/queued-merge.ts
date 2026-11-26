@@ -276,22 +276,21 @@ export function queuedStateSig(agentId: string): string {
   try {
     let st = sigStatements.get(db);
     if (!st) {
-      st = {
-        // count(acknowledged_at) / max(acknowledged_at): B2 admits a batched row at its ACK, and delivered -> acknowledged
-        // changes neither the row count nor the open set (review of #660).
-        all: db.prepare(`SELECT count(*) AS n, max(rowid) AS r, count(acknowledged_at) AS a, max(acknowledged_at) AS t FROM messages WHERE to_agent = ?`),
-        open: db.prepare(`SELECT count(*) AS n, max(rowid) AS r FROM messages WHERE to_agent = ? AND status IN ('pending', 'processing')`),
-      };
+      // ONE query, served from idx_messages_inbox (to_agent, status, created_at) as a COVERING index: per status, how many
+      // rows and the newest rowid. Any status move (pending -> processing -> delivered -> acknowledged / archived) and any
+      // new row changes it, so B2's admission at the ack (delivered -> acknowledged) is a new state. Measured on the live
+      // store, busiest agent (17,195 rows): 3.9 ms; the earlier count(acknowledged_at) shape left the covering index and
+      // read every row's overflow pages: 61 ms (delta review of #660).
+      st = db.prepare(`SELECT status, count(*) AS n, max(rowid) AS r FROM messages WHERE to_agent = ? GROUP BY status ORDER BY status`);
       sigStatements.set(db, st);
     }
-    const all = st.all.get(agentId) as { n: number; r: number | null; a: number; t: string | null };
-    const open = st.open.get(agentId) as { n: number; r: number | null };
-    return `${all.n}:${all.r ?? ''}:${all.a}:${all.t ?? ''}:${open.n}:${open.r ?? ''}`;
+    const rows = st.all(agentId) as { status: string; n: number; r: number | null }[];
+    return rows.length ? rows.map((x) => `${x.status}=${x.n}:${x.r ?? ''}`).join(',') : 'none';
   } catch {
     return '';
   }
 }
-const sigStatements = new WeakMap<DB, { all: ReturnType<DB['prepare']>; open: ReturnType<DB['prepare']> }>();
+const sigStatements = new WeakMap<DB, ReturnType<DB['prepare']>>();
 
 /** The B1 and B2 rows of one agent, as read under one state signature (queuedStateSig). B2's query is a LIKE over every
  *  row addressed to the agent (17,000 rows, a 250 MB store: 0.2-1 s per read on a loaded box), and it ran on EVERY page
@@ -350,7 +349,9 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
     // Copies: the kept rows are tagged in place later (lib/audience.ts tagSynthetics stamps audience/exchange only when
     // audience is undefined), so a shared object would carry the FIRST window's tags into every later build.
     pending = rows.pending.map((r) => ({ ...r }));
-    batches = boundQueuedBatches(rows.batches.map((b) => ({ ...b, entries: Array.isArray(b.entries) ? b.entries.map((e: any) => ({ ...e })) : b.entries })), floor);
+    // bound first (it returns the same objects), then copy only what is kept
+    batches = boundQueuedBatches(rows.batches, floor)
+      .map((b) => ({ ...b, entries: Array.isArray(b.entries) ? b.entries.map((e: any) => ({ ...e })) : b.entries }));
     // B3 needs the transcript's own evidence of injection, so it can never show a row early.
     live = b3LiveCards(db, agentId, items, floor, rows.claimed);
   } catch {

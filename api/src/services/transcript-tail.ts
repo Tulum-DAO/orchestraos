@@ -76,8 +76,10 @@ export function alignShift(prev: any[], next: any[]): number | null {
   return null;
 }
 
-const READ_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ENOTDIR', 'EMFILE', 'EBUSY', 'ELOOP', 'ENAMETOOLONG']);
-/** A failure to stat or read the log file (the file is gone, a directory, unreadable), as opposed to a failure to parse it. */
+const READ_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG']);
+/** A failure to stat or read the log file (the file is gone, a directory, unreadable), as opposed to a failure to parse it.
+ *  Transient errors (EMFILE, EBUSY) are not here on purpose: they propagate out of tick() and the next beat retries with
+ *  nothing sent, where a fallback would blank the chat with an empty reset snapshot for a beat. */
 function isReadError(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   return typeof code === 'string' && READ_ERROR_CODES.has(code);
