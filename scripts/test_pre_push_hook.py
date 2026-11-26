@@ -114,3 +114,51 @@ def test_two_pushes_queue_on_the_lock_instead_of_scanning_at_once(repo, tmp_path
     assert rc2 == 0 and p1.returncode == 0
     assert "waiting for the heavy-gate lock held by pid" in err2
     assert time.time() - t0 >= 3, "the second scan ran only after the first released the lock"
+
+
+# --- trailer addresses: a sign-off is the author's own address or a noreply one ---------------------------
+
+def _commit(repo, body):
+    (repo / "a.py").write_text(body[:20] + "\n")
+    git(repo, "commit", "-qam", body)
+    return git(repo, "rev-parse", "HEAD")
+
+
+def test_a_sign_off_with_the_authors_address_or_a_noreply_passes(repo, tmp_path):
+    base = git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "x\n\nSigned-off-by: t <t@example.com>\nCo-Authored-By: Bot <noreply@example.org>")
+    rc, err = run(repo, tmp_path, head, base)
+    assert rc == 0, err
+
+
+def test_a_hand_typed_sign_off_with_another_address_blocks_the_push(repo, tmp_path):
+    base = git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "x\n\nSigned-off-by: Someone <someone@private.example>")
+    rc, err = run(repo, tmp_path, head, base)
+    assert rc == 1 and "someone@private.example" in err and head[:8] in err
+    assert scanned(tmp_path) == []                                          # refused before the scan
+
+
+def test_the_trailer_check_runs_even_without_detect_secrets(repo, tmp_path):
+    (repo / ".venv" / "bin" / "detect-secrets-hook").unlink()
+    base = git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "x\n\nco-authored-by: A <a@private.example>")
+    rc, err = run(repo, tmp_path, head, base, {"PATH": "/usr/bin:/bin"})
+    assert rc == 1 and "a@private.example" in err
+
+
+def test_a_locally_listed_private_address_is_refused_anywhere_in_the_message(repo, tmp_path):
+    git(repo, "config", "--add", "orchestra.privateEmail", "me@home.example")
+    base = git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "x\n\nmail me at ME@home.example")
+    rc, err = run(repo, tmp_path, head, base)
+    assert rc == 1 and "private address" in err and "me@home.example" not in err.lower()
+
+
+def test_only_the_pushed_range_is_checked(repo, tmp_path):
+    _commit(repo, "old\n\nSigned-off-by: Someone <someone@private.example>")   # already on the remote
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    base = git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "new\n\nSigned-off-by: t <t@example.com>")
+    rc, err = run(repo, tmp_path, head, base)
+    assert rc == 0, err

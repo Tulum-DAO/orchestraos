@@ -116,6 +116,7 @@ tell them the command to run in their own terminal instead.
 
 Never print, paste, log or commit a token, key or password, even in a message to another seat.
 Refer to a secret by where it is stored, never by its value.
+Sign commits with `git commit -s` only (your configured noreply identity); never type an address into a commit message.
 
 ## When there is no work
 
