@@ -25,7 +25,7 @@ UNSOURCED_STATE = "unverified"
 
 
 def state_key(state) -> str:
-    """A state as it is compared: lowercased, surrounding whitespace removed (facts_recall.state_key)."""
+    """A state as it is compared and stored: lowercased, surrounding whitespace removed (facts_recall.state_key)."""
     return str(state or "").strip().lower()
 
 
@@ -130,7 +130,7 @@ def make_fact(*, ts: str, kind: str, text: str, actor: str, provenance: dict,
         "entities": entities or {"people": [], "companies": [], "projects": []},
         "lanes": lanes or ["unrouted"],
         "provenance": dict(provenance),
-        "state": state,
+        "state": state_key(state),
         "expiry_class": expiry_class,
         "superseded_by": superseded_by,
     }
@@ -151,7 +151,7 @@ def validate_fact(fact: dict) -> list:
     conf = fact.get("confidence")
     if not isinstance(conf, (int, float)) or not (0.0 <= conf <= 1.0):
         errs.append(f"confidence out of range [0,1]: {conf!r}")
-    if "state" in fact and fact["state"] not in STATES:
+    if "state" in fact and state_key(fact["state"]) not in STATES:
         errs.append(f"invalid state: {fact['state']!r}")
     if "expiry_class" in fact and fact["expiry_class"] not in EXPIRY_CLASSES:
         errs.append(f"invalid expiry_class: {fact['expiry_class']!r}")

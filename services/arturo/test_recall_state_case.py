@@ -215,3 +215,26 @@ def test_the_sql_statement_state_rule_is_the_python_one(sourced_only):
         want = fr.served(st) and not (sourced_only and fr.unsourced(st))
         assert (i in kept) == (want or "\\" in meta), (meta, want)
 
+
+# --- write side: a state is stored lowercased, and nothing accepted before is refused now --------------------------
+
+def test_make_fact_and_ingest_store_the_state_lowercased(tmp_path, monkeypatch):
+    import bus
+    redactor = tmp_path / "redact.py"
+    redactor.write_text("def scrub_fact_text(t):\n    return t\n")
+    monkeypatch.setenv("REDACT_SECRETS_PATH", str(redactor))
+    kw = dict(ts="2026-11-25T10:00:00Z", kind="fact", actor="operator", provenance={"source_kind": "t"})
+    assert facts_schema.make_fact(text="a", state=" Superseded ", **kw)["state"] == "superseded"
+    for st in facts_schema.STATES:
+        assert facts_schema.make_fact(text="b", state=st, **kw)["state"] == st
+    with pytest.raises(ValueError):
+        facts_schema.make_fact(text="c", state="gone", **kw)
+    raw = facts_schema.make_fact(text="d", **kw)
+    raw["state"] = "ARCHIVED"
+    assert facts_schema.validate_fact(raw) == []
+    db = str(tmp_path / "facts.db")
+    bus.ingest(db, [raw, facts_schema.make_fact(text="e", state="unverified", **kw)], source_kind="t",
+               last_source_event_ts=None)
+    con = sqlite3.connect(db)
+    assert sorted(r[0] for r in con.execute("SELECT state FROM facts")) == ["archived", "unverified"]
+    con.close()

@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:                      # its sibling modules import flat, also when loaded by file path
     sys.path.append(_HERE)
-from facts_schema import STATES, classify_expiry_class, is_noise_text, validate_fact  # noqa: E402
+from facts_schema import STATES, classify_expiry_class, is_noise_text, state_key, validate_fact  # noqa: E402
 
 # The redactor sits next to this file. REDACT_SECRETS_PATH overrides it.
 _LIVE_REDACTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "redact_secrets.py")
@@ -177,7 +177,7 @@ def ingest(db_path: str, facts: list, *, source_kind: str,
                     (f["fact_id"], f["ts"], f["kind"], scrub(f["text"]), f["actor"],
                      f["confidence"], json.dumps(f["entities"]),
                      json.dumps(f["lanes"]), json.dumps(f["provenance"]),
-                     f["state"], f["expiry_class"], f.get("superseded_by"), now))
+                     state_key(f["state"]), f["expiry_class"], f.get("superseded_by"), now))
                 inserted += cur.rowcount
             con.execute(
                 "INSERT INTO ingest_meta (source_kind, last_source_event_ts, "
