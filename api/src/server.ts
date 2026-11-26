@@ -193,7 +193,7 @@ app.get('/api/me', (req, res) => {
   const p = principal(req);
   if (!p) { res.status(401).json({ error: 'unauthenticated' }); return; }
   // The operator's current zone (lib/operatorZone.ts), read per request: a client labels the times it shows with it
-  // (a quoted reply's "16:57 Tulum"). ADDITIVE; absent when the install keeps no location file.
+  // (the hour a quoted reply shows, with the zone's label). ADDITIVE; absent when the install keeps no location file.
   const zone = operatorZone(process.env.ORCHESTRA_DIR || loadConfig().dataDir);
   res.json({
     username: p.username,
