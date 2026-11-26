@@ -186,7 +186,7 @@ def _hours_ahead(p):
     if not m:
         return None
     n = m.group(1).replace("a ", "").strip()
-    hours = 1 if n in ("a", "an") else 2 if n.startswith("couple") else 3 if n == "few" else int(n[:6])
+    hours = 1 if n in ("a", "an") else 2 if n.startswith("couple") else 3 if n == "few" else int(n)
     return hours if hours <= MAX_RELATIVE_HOURS else None
 
 
@@ -201,6 +201,9 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     clocks = list(_CLOCK.finditer(p))
     if len(clocks) > 1:        # "at 2pm or 4pm": alternatives, never the first one
         return Due(None, f"unknown ({phrase})")
+    if (clocks and not clocks[0].group(3) and int(clocks[0].group(1) or clocks[0].group(4)) == 12
+            and re.search(r"\bat night\b|\bin the evening\b|\btonight\b", p)):
+        return Due(None, f"ambiguous: {phrase} (midnight: the end of which day?)")   # never noon
     hours = _hours_ahead(p)
     if hours is not None:      # "in the next couple of hours": from the call, exact
         m = _HOURS.search(p)

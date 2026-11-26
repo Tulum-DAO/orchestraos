@@ -221,3 +221,23 @@ def test_a_clock_only_phrase_with_a_part_of_day_qualifier_resolves():
 @pytest.mark.parametrize("phrase", ["in 999999999999999 hours", "in 100 hours"])
 def test_relative_hours_are_bounded(phrase):
     assert due(phrase).due_ts is None
+
+
+# --- codex gate round 5: midnight is never noon; hour counts are parsed whole ---------------------
+
+@pytest.mark.parametrize("phrase", ["at 12 at night", "at twelve o'clock at night", "tomorrow at 12 at night",
+                                    "at 12 in the evening", "tonight at 12"])
+def test_twelve_at_night_is_ambiguous_never_noon(phrase):
+    d = due(phrase, anchor="2026-11-24T18:00:00Z", tz="America/New_York")
+    assert d.due_ts is None and d.due_source.startswith("ambiguous"), d
+
+
+def test_twelve_in_the_morning_is_midnight_starting_the_day():
+    assert due("tomorrow at 12 in the morning").due_ts == "2026-11-25T00:00:00-05:00"
+
+
+@pytest.mark.parametrize("phrase,hours", [("in 0000002 hours", 2), ("in 02 hours", 2)])
+def test_leading_zeros_are_read_whole(phrase, hours):
+    import datetime as dt
+    d = due(phrase)
+    assert deadlines._parse_utc(d.due_ts) == dt.datetime(2026, 11, 24, 19, tzinfo=dt.timezone.utc) + dt.timedelta(hours=hours)
