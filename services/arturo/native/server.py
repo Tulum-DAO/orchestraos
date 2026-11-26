@@ -56,7 +56,8 @@ CONTEXT_DEVICES = {"iphone", "ipad", "quest", "watch", "mac"}
 CONTEXT_ENABLED = os.environ.get("ARTURO_NATIVE_CONTEXT", "0") == "1"
 CONTEXT_MIN_GAP_S = 2.0
 CONTEXT_MAX_SENDS = 10
-_OPENING_UNREAD = {"budget": None, "reread": None, "source": None, "short": None, "skipped": None}
+_OPENING_UNREAD = {"budget": None, "reread": None, "reread_result": None, "source": None, "short": None,
+                   "skipped": None}   # source None: the loader never answered (skipped says why)
 OPENING_WAIT_S = 6.0          # the thread above the call loads while the provider connects; never holds a call longer
 # Arturo used from inside another app (the finance tracker's widget; services/arturo/host_page.py): its page is sent as
 # its own appends, capped separately (a page and a filter change each resend it), plus one finances snapshot a call.
@@ -542,7 +543,8 @@ class NativeCall:
         opening, skipped = "", None
         if opening_fut is not None:
             try:
-                opening = await asyncio.wait_for(asyncio.shield(opening_fut), OPENING_WAIT_S) or ""
+                opening = await asyncio.wait_for(asyncio.shield(opening_fut), OPENING_WAIT_S)
+                opening = "" if opening is None else opening   # an empty Opening keeps its info (never `or ""`)
             except Exception as e:  # noqa: BLE001 — timeout or a loader error: the call starts without its thread
                 skipped = "timeout" if isinstance(e, asyncio.TimeoutError) else "error"
                 log.warning(f"native {self.binding.conversation_id}: opening context skipped: {e!r}")

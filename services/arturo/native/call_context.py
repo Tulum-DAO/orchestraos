@@ -43,6 +43,9 @@ DEFAULT_BUDGET_TOKENS = 2500
 MIN_TURNS = 25
 FLOOR_BUDGET_TOKENS = 4000
 FLOOR_MAX_ELAPSED_S = 2.0   # a first read slower than this gets no second one (the server waits 6 s in all)
+READ_DEADLINE_S = 5.0       # both reads end by this, inside the server's OPENING_WAIT_S (6 s), so a slow second read
+#                             never costs the first; the second read gets what is left, from the route alone
+SECOND_READ_MIN_S = 0.5     # less time left than this: no second read
 
 
 def budget_tokens():
@@ -77,8 +80,12 @@ def fetch_route(agent, budget, timeout=4.0):
 
 
 class Opening(str):
-    """The opening text, and how it was read (`info`, for the call report): the budget, the second read's budget
-    (None: no second read), where it came from (route | twin | none), and whether it is still short of MIN_TURNS."""
+    """The opening text, and how it was read (`info`, for the call report):
+      budget         the first read's token budget (0 when the flag is off)
+      reread         the second read's budget, or None when there was no second read
+      reread_result  kept (more turns, cut to the newest MIN_TURNS) | not_more | failed | None
+      source         route | twin | none (nothing could be read) | off (flag off)
+      short          still under MIN_TURNS verbatim turns"""
 
     def __new__(cls, text, info):
         self = super().__new__(cls, text)
@@ -92,29 +99,55 @@ def opening(agent, load=None, directory=None, route=None):
     MIN_TURNS (an explicit ARTURO_NATIVE_CONTEXT_TOKENS is taken as meant)."""
     if not enabled():
         return _OFF
-    return _with_floor(lambda budget: _read(agent, budget, load, directory, route))
+    return _with_floor(lambda budget, timeout=None: _read(agent, budget, load, directory, route, timeout))
 
 
-_OFF = Opening("", {"budget": 0, "reread": None, "source": "off", "short": False})
+_SECOND_READ_SOURCES = ("route", "thread", "calls")   # not the twin: its transcript fetch would not fit the deadline
+_OFF = Opening("", {"budget": 0, "reread": None, "reread_result": None, "source": "off", "short": False})
 
 
 def _with_floor(read):
-    """`read(budget)` -> (text, source). The second read only when it can help and cannot cost the thread (Claude
-    review of #638): something older exists to fetch (an EARLIER block), and the first read was quick enough that a
-    second fits inside the server's opening wait (server.OPENING_WAIT_S); a junk setting is not an explicit one. It
-    asks for what MIN_TURNS cost at the first read's rate, capped at the floor, and is kept only with more turns."""
+    """`read(budget, timeout=None)` -> (text, source); with a timeout it reads the route alone. The second read only
+    when it can help and cannot cost the thread (Claude reviews of #638): something older exists to fetch (an EARLIER
+    block), the first came quickly from the route or a local read (never the twin), and the second fits inside READ_DEADLINE_S. It asks for what
+    MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more turns, then cut to the newest
+    MIN_TURNS. A junk setting is not an explicit one."""
     budget = budget_tokens()
     t0 = time.monotonic()
     text, source = read(budget)
     turns = describe(text)["turns"]
-    reread = None
-    if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and "EARLIER (summarized):" in text
-            and turns < MIN_TURNS and time.monotonic() - t0 <= FLOOR_MAX_ELAPSED_S):
+    reread = result = None
+    elapsed = time.monotonic() - t0
+    if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source in _SECOND_READ_SOURCES
+            and turns < MIN_TURNS
+            and "EARLIER (summarized):" in text and elapsed <= FLOOR_MAX_ELAPSED_S
+            and READ_DEADLINE_S - elapsed >= SECOND_READ_MIN_S):
         reread = min(FLOOR_BUDGET_TOKENS, math.ceil(budget * MIN_TURNS / max(turns, 1)))
-        more, more_source = read(reread)
-        if describe(more)["turns"] > turns:
-            text, source, turns = more, more_source, describe(more)["turns"]
-    return Opening(text, {"budget": budget, "reread": reread, "source": source, "short": turns < MIN_TURNS})
+        more, _ = read(reread, timeout=READ_DEADLINE_S - elapsed)
+        more_turns = describe(more)["turns"]
+        if not more:
+            result = "failed"
+        elif more_turns > turns:
+            text, turns, result = _newest(more, MIN_TURNS), min(more_turns, MIN_TURNS), "kept"
+        else:
+            result = "not_more"
+    return Opening(text, {"budget": budget, "reread": reread, "reread_result": result, "source": source,
+                          "short": turns < MIN_TURNS})
+
+
+def _newest(text, keep):
+    """`text` with only its newest `keep` verbatim turns; the cut ones are counted at the end of EARLIER."""
+    lines = text.splitlines()
+    verbatim = [i for i, ln in enumerate(lines) if _LINE_RE.match(ln)]
+    cut = verbatim[:max(0, len(verbatim) - keep)]
+    if not cut:
+        return text
+    at = lines.index("RECENT (verbatim):")
+    drop = set(cut)
+    out = [ln for i, ln in enumerate(lines[:at]) if i not in drop]
+    out.append(f"- ({len(cut)} older item(s) omitted)")
+    out += [ln for i, ln in enumerate(lines[at:], start=at) if i not in drop]
+    return "\n".join(out)
 
 
 def _explicit_budget():
@@ -132,9 +165,10 @@ def opening_thread(thread_id, load=None, principal="fleet"):
         return _OFF
     if not thread_context.thread_readable(thread_id, principal):
         log.warning(f"native: thread {thread_id!r} is not readable by {principal!r}; the call opens without it")
-        return Opening("", {"budget": 0, "reread": None, "source": "refused", "short": False})
+        return Opening("", {"budget": 0, "reread": None, "reread_result": None, "source": "refused",
+                            "short": False})
 
-    def read(budget):
+    def read(budget, timeout=None):              # a local read: the deadline cannot be blown by it
         try:
             text = (load or thread_context.load_thread)(thread_id, calls_dir=calls_dir(), budget_tokens=budget)
             return (text, "thread") if text and text.strip() else ("", "none")
@@ -150,7 +184,7 @@ def opening_calls(load=None):
     if not enabled():
         return _OFF
 
-    def read(budget):
+    def read(budget, timeout=None):              # a local read: the deadline cannot be blown by it
         try:
             text = (load or thread_context.load)(chat_agent="arturo", call_owner=None, calls_dir=calls_dir(),
                                                  fetch=lambda a, n: [], budget_tokens=budget)
@@ -161,14 +195,17 @@ def opening_calls(load=None):
     return _with_floor(read)
 
 
-def _read(agent, budget, load=None, directory=None, route=None):
-    """(text, source): source is "route", "twin", or "none" when neither could be read."""
+def _read(agent, budget, load=None, directory=None, route=None, timeout=None):
+    """(text, source): source is "route", "twin", or "none" when neither could be read. With a timeout (the second
+    read) only the route is asked, within it: the twin's own transcript fetch and file reads would not fit."""
     try:
-        text = (route or fetch_route)(agent, budget)
+        text = (route or fetch_route)(agent, budget, timeout=4.0 if timeout is None else timeout)
         if text and text.strip():
             return text, "route"
     except Exception as e:  # noqa: BLE001 — the twin reads the same sources
         log.info(f"native: call-context route for {agent!r} unavailable ({e!r}); using the twin")
+    if timeout is not None:
+        return "", "none"
     try:
         text = (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
                                              budget_tokens=budget)
