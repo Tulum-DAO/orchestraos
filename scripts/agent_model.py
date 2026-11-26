@@ -32,7 +32,6 @@ import os
 import re
 import tempfile
 import time
-from datetime import datetime
 from pathlib import Path
 
 LOCK_NAME = ".orchestra-model-switch.lock"
@@ -202,18 +201,11 @@ def describe(runtime: str | None, current: str | None, catalog: list[dict], off:
 TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
 
 
-def _epoch(s) -> float | None:
-    if not isinstance(s, str):
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
 def transcript_model(path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
-    """(model, timestamp) of the transcript's last assistant line, None when unknown. The CLI's own
-    stand-in lines ("<synthetic>") answer for no model and are skipped."""
+    """The newest model evidence in this transcript: ("model", id, ts) from the last assistant line (the
+    model that answered), or ("set", display, ts) when the CLI's "Set model to `<display>`" line is newer
+    (a switch the seat has not answered on yet). None when there is neither. The CLI's own stand-in lines
+    ("<synthetic>") answer for no model and are skipped."""
     if not path:
         return None
     try:
@@ -224,15 +216,22 @@ def transcript_model(path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
     except OSError:
         return None
     for raw in reversed(lines):
-        if b'"assistant"' not in raw:
+        if b'"assistant"' not in raw and b"Set model to" not in raw:
             continue
         try:
             row = json.loads(raw)
         except ValueError:
             continue
-        model = (row.get("message") or {}).get("model") if isinstance(row, dict) else None
-        if row.get("type") == "assistant" and isinstance(model, str) and model and not model.startswith("<"):
-            return model, row.get("timestamp")
+        if not isinstance(row, dict):
+            continue
+        if row.get("type") == "assistant":
+            model = (row.get("message") or {}).get("model")
+            if isinstance(model, str) and model and not model.startswith("<"):
+                return "model", model, row.get("timestamp")
+        elif row.get("type") == "user":
+            m = _SET_MODEL.search(_entry_text(row))
+            if m:
+                return "set", m.group(1).strip(), row.get("timestamp")
     return None
 
 
@@ -241,26 +240,20 @@ def _base(model) -> str:
 
 
 def live_model(stored, seen, last_switch):
-    """The model id the seat is on now. `seen` = transcript_model(); `last_switch` = the gateway's
-    last switch record for the session. A confirmed switch newer than the last reply wins (the seat
-    has not answered on the new model yet); otherwise the transcript does. The transcript names the
-    model without its context suffix, so the exact id is taken from the switch or the stored model
-    when it names the same model. No reply yet: the stored model (what this process was spawned with);
-    the switch record is keyed by tmux name, so without a reply to date it against it may be an
-    earlier occupant's."""
+    """The model id the seat is on now, from its own transcript (`seen` = transcript_model()), so a
+    switch record left by an earlier occupant of the pane never counts by itself. The transcript names
+    the model without its context suffix (an answer) or by display name (a "Set model to" line); the
+    exact id is taken from the gateway's last confirmed switch or the stored model when either names
+    that model. No evidence: the stored model (what this process was spawned with)."""
     if not seen:
         return stored or None
-    switched = last_switch if (isinstance(last_switch, dict) and last_switch.get("outcome") == "switched"
-                               and isinstance(last_switch.get("model"), str)) else None
-    model, ts = seen
-    if switched:
-        at, seen_at = _epoch(switched.get("at")), _epoch(ts)
-        if at is not None and seen_at is not None and at > seen_at:
-            return switched["model"]
-    for cand in ((switched or {}).get("model"), stored):
-        if isinstance(cand, str) and _base(cand) == model:
-            return cand
-    return model
+    kind, value, _ts = seen
+    switched = last_switch.get("model") if (isinstance(last_switch, dict)
+                                            and last_switch.get("outcome") == "switched") else None
+    cands = [c for c in (switched, stored) if isinstance(c, str) and c]
+    if kind == "set":
+        return next((c for c in cands if display_matches(value, c)), stored or None)
+    return next((c for c in cands if _base(c) == value), value)
 
 
 # --- the host settings key -------------------------------------------------------------------
