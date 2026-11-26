@@ -277,7 +277,7 @@ def test_replay_11_26_the_fable_row_switches_at_its_first_run(tree, monkeypatch)
             "5h": {"used_pct": five, "resets_at": t + 3600}, "weekly": {"used_pct": week, "resets_at": t + 5 * 86400}}})))(
             os.path.join(tree.usage_dir, f"api-claude-{acct}.json"))
     _add(tree.transcript, {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
-                           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43.537Z",
+                           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43Z",
                            "sessionId": SID_C, "message": {"model": "<synthetic>", "content": [{"type": "text",
                            "text": "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."}]}})
 

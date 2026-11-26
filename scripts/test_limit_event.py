@@ -270,8 +270,8 @@ def test_usage_limit_banner_is_not_a_model():
 
 def test_the_real_fable_transcript_row_is_a_credits_event():
     row = {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
-           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43.537Z",
-           "sessionId": "a7b9e0d0-0000-4000-8000-000000000001",
+           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43Z",
+           "sessionId": "00000000-0000-4000-8000-00000000f0b1",
            "message": {"model": "<synthetic>", "content": [{"type": "text", "text": FABLE}]}}
     ev = LE.from_claude_row(row)
     assert (ev.runtime, ev.window, ev.model, ev.source) == ("claude", "credits", "Fable", "transcript")
