@@ -65,6 +65,27 @@ def test_strip_matches_only_the_proxys_context_line():
     assert derive_title(OPENER) == ""
 
 
+REPLY = '[Replying to Arturo 21:42 Local: "what should I call you?"]'
+
+
+def test_a_reply_as_the_first_message_titles_the_thread_with_the_words_not_the_reply_line():
+    # The client's one-line quote header (dashboard replyTo.ts) is stored with the words; a thread whose first user
+    # message answers Arturo's greeting must not be titled "[Replying to Arturo ...".
+    assert derive_title(f"{REPLY} call me Sam") == "call me Sam"
+    assert derive_title(f"{CTX}\n{REPLY} call me Sam") == "call me Sam"
+    assert derive_title(f"{REPLY}call me Sam") == "call me Sam"               # no space after the header
+    # a reply with nothing but a file: the quoted excerpt titles it, so the thread is not nameless
+    assert derive_title(REPLY) == "what should I call you?"
+    assert derive_title(f"{REPLY} ") == "what should I call you?"
+    # only ONE leading header goes; the words themselves are kept whole
+    assert derive_title(f"{REPLY} {REPLY} twice") == f"{REPLY} twice"
+    # not a header: the phrase inside a sentence, or a bracket without the quoted excerpt
+    assert derive_title("I keep [Replying to Arturo 21:42 Local: \"x\"] in my notes") == "I keep [Replying to Arturo 21:42 Local: \"x\"] in my notes"
+    assert derive_title("[Replying to Arturo] hello") == "[Replying to Arturo] hello"
+    # the stored message a client reads keeps its header (the client draws the quote from it)
+    assert strip_context_line(f"{CTX}\n{REPLY} call me Sam") == f"{REPLY} call me Sam"
+
+
 def test_two_turns_at_once_on_one_thread_both_land_in_order(tmp_path):
     # The page's opener and the operator's first message start a NEW thread at the same moment:
     # before the fix one of them lost the INSERT race ("UNIQUE constraint failed: threads.id") and

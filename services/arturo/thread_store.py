@@ -196,6 +196,11 @@ _CONTEXT_LINE = re.compile(r"^\[Context: route=[^\n]*\]\n")
 _CONTEXT_TITLE = re.compile(r"^\[Context: route=[^\]\n]*\] ")
 # The page's hidden opener (services/arturo/onboarding.py OPENER_SENTINEL): never a title.
 _OPENER = "(first run:"
+# The client's one-line quote header on a reply (dashboard replyTo.ts withReply / PREFIX_RE), stored with the words
+# because the model saw it: `[Replying to <sender> <HH:MM> <zone>: "<excerpt>"] <words>`. Kept in what a client reads
+# (the client draws the quote from it); never a title. Group 1 is the excerpt, the fallback title for a reply that
+# carries only a file. One leading header only: the words after it are kept whole.
+_REPLY_HEADER = re.compile(r'^\[Replying to [^\n]*?: "([^"\n]*)"\] ?')
 
 
 def strip_context_line(text):
@@ -214,7 +219,13 @@ def derive_title(text, limit=TITLE_MAX):
     opener is not the operator's words: it titles nothing (""), and the first real message does."""
     if _is_opener(text):
         return ""
-    one_line = " ".join(strip_context_line(text).split())
+    body = strip_context_line(text)
+    reply = _REPLY_HEADER.match(body)
+    if reply:
+        body = body[reply.end():]
+        if not body.strip():
+            body = reply.group(1)          # a reply with only a file: the excerpt names the thread
+    one_line = " ".join(body.split())
     if len(one_line) <= limit:
         return one_line
     cut = one_line[:limit]
