@@ -94,3 +94,5 @@
   - End of user speech -> first audio: p50 0.31-0.94 s, p90 1.0-1.6 s. Outliers of 9-17 s are tool turns.
   - Tool result -> audio: 2-4 s typical, tail 18-42 s (old tree). These turns are the latency problem more than the greet.
 - 00:45Z: #645 re-review MERGE-OK at 652c59b, CI 19/19 green by name; HOLD lifted on card apr_f7e96424. Merge after #638. Follow-up PR after it merges (non-blocking): pin whether the 120 s gap counts from the previous phrase or the turn's first (a third phrase at ~200 s), and a non-ASCII tail-cut case, so a UTF-16 slice in the TS tail path turns red.
+- 01:25Z: #638 delta review at 94e76a7 BLOCKED (empty Opening lost its info to `or ""`; the second read had no deadline of its own). Fixed in 01c8481: route-only second read inside READ_DEADLINE_S 5.0, no twin fallback, kept read cut to the newest 25, reread_result field, exact fixture test. 6/6 sabotages red; 252 passed. Delta asked (msg_b673fdaf); card apr_fe545d12 still on HOLD.
+- #644 caught up again at e7faee2: second read allowed for sources route|thread|calls (never twin). 270 passed.
