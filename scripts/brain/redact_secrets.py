@@ -1,9 +1,9 @@
 """Redact secrets-at-rest from the brain, and stop them coming back.
 
-Commissioned by gm (msg_1c943bc8) against revoke card apr_686b7d70: the LIVE Telegram bot token
+Written after a live bot token was found
 sits in state/brain/facts.db because agents pasted infrastructure.md's `curl` line and the brain
 drained it as facts. Measured read-only before any write: 34 rows of facts.text, 34 of
-statements.content, and — NOT in gm's brief — 47 rows of chunks.text in state/semantic-memory.db.
+statements.content, and 47 rows of chunks.text in state/semantic-memory.db.
 
 WHY THIS IS A MODULE AND NOT A ONE-LINE UPDATE. `statements` carries two UNCONDITIONAL
 append-only triggers:
@@ -45,13 +45,13 @@ PLACEHOLDER = "<TELEGRAM_TOKEN_REDACTED>"
 TARGETS = (
     ("facts", "fact_id", "text"),
     ("statements", "statement_id", "content"),
-    # state/semantic-memory.db — NOT in gm's brief; found by scanning every text column of every
+    # state/semantic-memory.db — found by scanning every text column of every
     # table on the box. 47 chunks carried the same token. A table absent from a given DB is
     # skipped, so one TARGETS list serves both stores.
     ("chunks", "chunk_id", "text"),
 )
-# wide=True (gm PASS msg_570b48a2, one live write): CONTENT columns only, matched + rewritten with redact_for_output.
-# Never facts.provenance / statements.source_ref: they carry mixed-case source_ids (freq_ArkData_...) that the
+# wide=True (one reviewed live write): CONTENT columns only, matched + rewritten with redact_for_output.
+# Never facts.provenance / statements.source_ref: they carry mixed-case source_ids (freq_<Company>_...) that the
 # display redactor flags but that are join keys.
 WIDE_TARGETS = (
     ("facts", "fact_id", "text"),
@@ -88,8 +88,8 @@ _OUT_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),                                            # AWS access key id
     re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),                                 # Slack
     re.compile(r"\bAIza[0-9A-Za-z_-]{30,}"),                                        # Google API key
-    # <vendor>_live_/_test_ keys of any vendor and length: Stripe sk/rk/pk, ArkData ark_live_ (gm msg_1febddc6: three
-    # ark_live_ keys survived because a \b before [spr]k_ never fires inside "ark_"); never anchored on a word boundary
+    # <vendor>_live_/_test_ keys of any vendor and length (Stripe sk/rk/pk and others). Never anchored on a word
+    # boundary: a \b before [spr]k_ never fires inside a longer prefix, and such keys once survived
     re.compile(r"[A-Za-z]{1,12}_(?:live|test)_[A-Za-z0-9]{16,}"),
     re.compile(r"whsec_[A-Za-z0-9]{16,}"),                                          # Stripe webhook secret
 )
@@ -128,7 +128,7 @@ def scrub_fact_text(text: str) -> str:
 
     Deliberately the same function as the purge uses. A filter that redacts differently from the
     purge would leave two spellings of the same secret in one store. Since the 10-09 wide purge
-    (gm msg_570b48a2) that function is redact_for_output, which applies redact() first.
+    that function is redact_for_output, which applies redact() first.
     """
     return redact_for_output(text)
 
