@@ -32,6 +32,7 @@ import os
 import re
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 LOCK_NAME = ".orchestra-model-switch.lock"
@@ -190,6 +191,74 @@ def describe(runtime: str | None, current: str | None, catalog: list[dict], off:
         "unavailable": {r["id"]: reason for r in catalog} if reason else {},
         "models": models,
     }
+
+
+# --- the model a seat is on now ---------------------------------------------------------------
+# The registry's stored model is what the NEXT spawn passes as --model; it can lag a live switch (its
+# projection is rewritten later) or a person's own /model. What the seat runs is in its transcript:
+# every assistant line carries the model that answered (measured 2026-11-26: after the first Fable
+# drop the transcript said claude-opus-5-5 while registry.json still said claude-fable-5-1[1m]).
+
+TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
+
+
+def _epoch(s) -> float | None:
+    if not isinstance(s, str):
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def transcript_model(path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
+    """(model, timestamp) of the transcript's last assistant line, None when unknown. The CLI's own
+    stand-in lines ("<synthetic>") answer for no model and are skipped."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - tail_bytes))
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for raw in reversed(lines):
+        if b'"assistant"' not in raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        model = (row.get("message") or {}).get("model") if isinstance(row, dict) else None
+        if row.get("type") == "assistant" and isinstance(model, str) and model and not model.startswith("<"):
+            return model, row.get("timestamp")
+    return None
+
+
+def _base(model) -> str:
+    return re.sub(r"\[[^\]]*\]$", "", model or "")
+
+
+def live_model(stored, seen, last_switch):
+    """The model id the seat is on now. `seen` = transcript_model(); `last_switch` = the gateway's
+    last switch record for the session. A confirmed switch newer than the last reply wins (the seat
+    has not answered on the new model yet); otherwise the transcript does. The transcript names the
+    model without its context suffix, so the exact id is taken from the switch or the stored model
+    when it names the same model."""
+    switched = last_switch if (isinstance(last_switch, dict) and last_switch.get("outcome") == "switched"
+                               and isinstance(last_switch.get("model"), str)) else None
+    if not seen:
+        return switched["model"] if switched else (stored or None)
+    model, ts = seen
+    if switched:
+        at, seen_at = _epoch(switched.get("at")), _epoch(ts)
+        if at is not None and seen_at is not None and at > seen_at:
+            return switched["model"]
+    for cand in ((switched or {}).get("model"), stored):
+        if isinstance(cand, str) and _base(cand) == model:
+            return cand
+    return model
 
 
 # --- the host settings key -------------------------------------------------------------------

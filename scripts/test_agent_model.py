@@ -1001,3 +1001,71 @@ def test_r1_every_immediate_switch_records_who_made_it(gw, fable):
     assert _drop().status == 200
     assert AMP.last(AMP.state_path(G.ORCH_DIR), "dev") == {**AMP.last(AMP.state_path(G.ORCH_DIR), "dev"),
                                                           "model": OPUS1M, "by": "limit-watch", "outcome": "switched"}
+
+
+# --- the model a seat is on NOW (gm 2026-11-26): the live transcript, not the registry's stored model -------
+# The first proactive Fable drop switched gm to Opus 5.5 (transcript: claude-opus-5-5 from 23:10:50Z), but
+# GET /agent-model kept reading registry.json, which still said claude-fable-5-1[1m].
+
+def _transcript(path, *rows):
+    with open(path, "w") as f:
+        for model, ts in rows:
+            f.write(json.dumps({"type": "assistant", "timestamp": ts, "message": {"model": model}}) + "\n")
+            f.write(json.dumps({"type": "user", "timestamp": ts, "message": {"content": "x"}}) + "\n")
+    return path
+
+
+def test_m1_the_transcripts_last_assistant_model_is_read(tmp_path):
+    p = _transcript(tmp_path / "t.jsonl", ("claude-fable-5-1", "2026-11-26T22:48:46.872Z"),
+                    ("claude-opus-5-5", "2026-11-26T23:10:50.152Z"), ("<synthetic>", "2026-11-26T23:11:00.000Z"))
+    assert AM.transcript_model(p) == ("claude-opus-5-5", "2026-11-26T23:10:50.152Z")
+    assert AM.transcript_model(tmp_path / "missing.jsonl") is None
+    assert AM.transcript_model(None) is None
+
+
+def test_m2_a_dropped_seat_reads_opus_with_its_exact_id_though_the_registry_says_fable():
+    seen = ("claude-opus-5-5", "2026-11-26T23:10:50.152Z")
+    last = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20.686801+00:00", "outcome": "switched"}
+    assert AM.live_model("claude-fable-5-1[1m]", seen, last) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-opus-5-5"
+
+
+def test_m3_the_stored_id_is_kept_when_the_transcript_agrees_with_it():
+    seen = ("claude-fable-5-1", "2026-11-26T22:48:46.872Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-fable-5-1[1m]"
+
+
+def test_m4_a_switch_newer_than_the_last_reply_wins_until_the_seat_answers():
+    seen = ("claude-fable-5-1", "2026-11-26T23:00:00.000Z")
+    last = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"}
+    assert AM.live_model("claude-fable-5-1[1m]", seen, last) == "claude-opus-5-5[1m]"
+    # a person switched it back after the drop, and the seat has answered since: the transcript wins
+    seen2 = ("claude-fable-5-1", "2026-11-26T23:20:00.000Z")
+    assert AM.live_model("claude-opus-5-5[1m]", seen2, last) == "claude-fable-5-1"
+    # a switch that did not happen is no evidence
+    failed = dict(last, outcome="failed")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, failed) == "claude-fable-5-1[1m]"
+
+
+def test_m5_no_transcript_falls_back_to_a_confirmed_switch_then_the_stored_model():
+    last = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"}
+    assert AM.live_model("claude-fable-5-1[1m]", None, last) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", None, None) == "claude-fable-5-1[1m]"
+    assert AM.live_model(None, None, None) is None
+
+
+def test_m6_the_gateway_seat_lookup_reports_the_live_model_for_a_dropped_seat(monkeypatch, tmp_path):
+    t = _transcript(tmp_path / "t.jsonl", ("claude-opus-5-5", "2026-11-26T23:10:50.152Z"))
+    meta = {"runtime": "claude", "model": "claude-fable-5-1[1m]"}
+    monkeypatch.setattr(G, "_load_json", lambda p: {"agents": {"gm": meta}})
+    monkeypatch.setattr(G, "_resolve_sess_meta", lambda agents: {"gm": ("gm", meta)})
+    monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
+        lambda s: {"process": {"runtime": "claude"}})})())
+    monkeypatch.setattr(G, "_seat_transcript_path", lambda s, m=None: t)
+    monkeypatch.setattr(G, "_last_switch", lambda s: {"model": "claude-opus-5-5[1m]",
+                                                      "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"})
+    assert G._seat_for_session("gm") == ("gm", meta, "claude", "claude-opus-5-5[1m]")
+    # a Codex seat has no Claude transcript: its stored model stands
+    monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
+        lambda s: {"process": {"runtime": "codex"}})})())
+    assert G._seat_for_session("gm")[3] == "claude-fable-5-1[1m]"
