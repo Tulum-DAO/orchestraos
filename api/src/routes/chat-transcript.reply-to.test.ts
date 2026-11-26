@@ -34,7 +34,9 @@ const lines = [
   assistantLine('a1', 2, 'hi'),
   userLine('u2', 3, SENT),
   assistantLine('a2', 4, SENT),                     // the agent quoting the same words is not the operator's send
-  userLine('u3', 5, 'another send [page: /agents/seat-a]'),
+  userLine('u3', 5, 'another send <page-context>The person is looking at this page in the dashboard as they send this: /agents/seat-a. Use it only if they ask about the page; do not mention it otherwise.</page-context>'),
+  userLine('u4', 6, 'another send, and one more thing'),   // more words = a different message, never this send
+  userLine('u5', -3, SENT),                               // the same words three minutes BEFORE the send = an earlier message
 ];
 
 test('the poll window stamps reply_to on the operator item whose words were sent with one, by uuid and excerpt', () => {
@@ -44,6 +46,8 @@ test('the poll window stamps reply_to on the operator item whose words were sent
   assert.equal('reply_to' in by('u1'), false, 'a message that answered nothing');
   assert.equal('reply_to' in by('a2'), false, 'the agent, not the operator');
   assert.deepEqual(by('u3').reply_to, { excerpt: 'no uuid here' }, 'a send with no uuid still carries its excerpt; the page tag after the words does not break the match');
+  assert.equal('reply_to' in by('u4'), false, 'more words after the send are another message');
+  assert.equal('reply_to' in by('u5'), false, 'the same words before the send are an earlier message');
 });
 
 test('another agent\'s window is not stamped with this agent\'s sends', () => {

@@ -6,8 +6,11 @@
 // server never adds a second one). At a 2xx (delivered, steered, interrupted, held, stored) the route records
 // {agent, sent_text, reply_to, message_id, ts} here. The transcript routes (the poll page, an older ?before= page, the
 // SSE snapshot and its appends) then STAMP `reply_to` back onto the user-role text item whose words are that send: same
-// agent, text equal to or starting with sent_text, within STAMP_WINDOW_MS of the send. The client jumps by
-// `item.reply_to.uuid`; without the stamp it falls back to matching the quoted words.
+// agent, text equal to sent_text (or sent_text followed only by the server's own delivery tags, when a reader left
+// them), written no earlier than STAMP_SKEW_MS before the send and no later than STAMP_WINDOW_MS after it. More words
+// after the send ("ok" vs "okay then") are a different message and never match; a line from before the send is an
+// earlier message that happens to read the same. The client jumps by `item.reply_to.uuid`; without the stamp it falls
+// back to matching the quoted words.
 //
 // sent_replies(agent, sent_text, reply_uuid, excerpt, message_id, ts): one row per recorded send. Rows older than
 // KEEP_DAYS are pruned on write. Everything here is fail-open for readers: a store that cannot be opened or read
@@ -28,6 +31,13 @@ export const REPLY_UUID_RE = /^[A-Za-z0-9_.:~#-]{1,200}$/;
 export const EXCERPT_MAX = 200;
 /** A stamp matches a send this long after it: the transcript line's `ts` is the CLI's, the row's is the API's. */
 export const STAMP_WINDOW_MS = 24 * 3600 * 1000;
+/** ...and at most this long BEFORE it: the line is written when the words reach the agent, never before the send;
+ *  the allowance covers the two clocks (the API's at record time, the CLI's at the line) disagreeing a little. */
+export const STAMP_SKEW_MS = 60 * 1000;
+/** What may follow the words on a transcript line and still be this send: the server's own delivery tags
+ *  (routes/agent-send.ts pageContextLine + VOICE_CALL_LIVE_TAG), whitespace-separated, nothing else. The readers strip
+ *  them (routes/chat-transcript.ts PAGE_CONTEXT_TAG, VOICE_CALL_LIVE_TAG_RE); this is for a line a reader left whole. */
+const SERVER_TAGS_ONLY_RE = /^(?:\s+<(page-context|voice-call-live)>[\s\S]*?<\/\1>)+\s*$/;
 const KEEP_DAYS = 7;
 /** How many recent sends per agent a stamp pass reads (a window of a few hundred items spans far fewer sends). */
 const RECENT_PER_AGENT = 400;
@@ -113,10 +123,27 @@ function stampable(it: any): boolean {
   return !!it && it.kind === 'text' && it.role === 'user' && typeof it.text === 'string' && !it.machine && !it.reply_to;
 }
 
-/** `reply_to` onto the items whose words are a recorded send of this agent (same agent; the item's text equals or
- *  starts with the recorded sent_text; the item's `ts`, when it has one, within STAMP_WINDOW_MS of the send). The
- *  newest send wins when two match. Items are returned as new objects where stamped, untouched otherwise. Fail-open:
- *  any trouble (no store, an unreadable file) returns the items as they were. */
+/** The item's text is this send's words: equal, or the words followed only by the server's delivery tags. */
+function sameWords(text: string, sent: string): boolean {
+  if (text === sent) return true;
+  return text.length > sent.length && text.startsWith(sent) && SERVER_TAGS_ONLY_RE.test(text.slice(sent.length));
+}
+
+/** The item was written when this send landed: no earlier than STAMP_SKEW_MS before it, no later than
+ *  STAMP_WINDOW_MS after. An item or a send with no parsable time matches on the words alone. */
+function inWindow(itemMs: number, s: SentReply): boolean {
+  if (Number.isNaN(itemMs)) return true;
+  const sentMs = Date.parse(s.ts);
+  if (Number.isNaN(sentMs)) return true;
+  const delta = itemMs - sentMs;
+  return delta >= -STAMP_SKEW_MS && delta <= STAMP_WINDOW_MS;
+}
+
+/** `reply_to` onto the items whose words are a recorded send of this agent (same agent; the item's text equal to the
+ *  recorded sent_text, or to it plus the server's own tags; the item's `ts`, when it has one, no earlier than
+ *  STAMP_SKEW_MS before the send and no later than STAMP_WINDOW_MS after it). An exact match beats a tagged one; among
+ *  equals the newest send wins. Items are returned as new objects where stamped, untouched otherwise. Fail-open: any
+ *  trouble (no store, an unreadable file) returns the items as they were. */
 export function stampReplyTo(items: any[], agentId: string, sends?: SentReply[] | null): any[] {
   let recent: SentReply[];
   try {
@@ -125,18 +152,14 @@ export function stampReplyTo(items: any[], agentId: string, sends?: SentReply[] 
     return items;
   }
   if (!recent.length || !items.some(stampable)) return items;
+  const mine = recent.filter((s) => s.agent === agentId && !!s.sent_text);
+  if (!mine.length) return items;
   return items.map((it) => {
     if (!stampable(it)) return it;
     const itemMs = typeof it.ts === 'string' ? Date.parse(it.ts) : NaN;
-    for (const s of recent) {
-      if (s.agent !== agentId || !s.sent_text) continue;
-      if (it.text !== s.sent_text && !it.text.startsWith(s.sent_text)) continue;
-      if (!Number.isNaN(itemMs)) {
-        const sentMs = Date.parse(s.ts);
-        if (!Number.isNaN(sentMs) && Math.abs(itemMs - sentMs) > STAMP_WINDOW_MS) continue;
-      }
-      return { ...it, reply_to: { ...(s.reply_to.uuid ? { uuid: s.reply_to.uuid } : {}), excerpt: s.reply_to.excerpt } };
-    }
-    return it;
+    const s = mine.find((c) => it.text === c.sent_text && inWindow(itemMs, c))
+      ?? mine.find((c) => sameWords(it.text, c.sent_text) && inWindow(itemMs, c));
+    if (!s) return it;
+    return { ...it, reply_to: { ...(s.reply_to.uuid ? { uuid: s.reply_to.uuid } : {}), excerpt: s.reply_to.excerpt } };
   });
 }
