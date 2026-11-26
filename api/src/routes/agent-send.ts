@@ -59,6 +59,7 @@ import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { resolveMsgStorePath } from './messages.js';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
+import { replyToStore, validateReplyTo, type ReplyTo, type SentReply } from '../lib/reply-to-store.js';
 
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || loadConfig().dataDir;   // the same rule as lib/db.ts
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
@@ -100,6 +101,10 @@ export interface SendBody {
   /** The page the person is on as they send (pageContextLine). It reaches the agent with this turn, never as
    *  their words: the transcript reader strips it from the user's bubble. */
   page_context?: { path?: unknown; title?: unknown };
+  /** The message these words answer (reply threads P1): the transcript line's uuid when the server named it, and the
+   *  quote (one line). The words ALREADY carry the client's one-line quote header; the server adds none. Kept on the
+   *  turn (lib/reply-to-store.ts) and stamped back onto the transcript item as `reply_to`. */
+  reply_to?: { uuid?: unknown; excerpt?: unknown };
 }
 
 // The quiet page line: one tag at the end of the text the agent receives. One line, so a pane delivery is not turned
@@ -195,6 +200,8 @@ export interface AgentSendDeps {
   voiceCallLive?(seat: string): boolean;
   /** The typed words, to the live call's relay at once (noteTypedOnCall). */
   noteTypedOnCall?(seat: string, text: string): void;
+  /** Keep a send's reply_to on its turn (lib/reply-to-store.ts), at a 2xx only. Optional: absent = not kept. */
+  recordReplyTo?(r: SentReply): void;
 }
 
 // ── real deps ────────────────────────────────────────────────────────────
@@ -300,6 +307,7 @@ export const defaultAgentSendDeps: AgentSendDeps = {
   msgStoreSend: realMsgStoreSend,
   voiceCallLive: (seat) => voiceCallLive(seat),
   noteTypedOnCall: (seat, text) => noteTypedOnCall(seat, text),
+  recordReplyTo: (r) => replyToStore().record(r),
 };
 
 // ── capability gate (D5) ─────────────────────────────────────────────────
@@ -394,6 +402,15 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   }
   const tags = [context, onCall ? VOICE_CALL_LIVE_TAG : ''].filter(Boolean).join(' ');
   const deliveredText = tags ? `${messageText} ${tags}` : messageText;
+  // reply_to (reply threads P1): validated here, never part of what the agent receives (the words already carry the
+  // client's quote header), kept on the turn at a 2xx so the transcript item can be stamped with it. Fail-open: a
+  // store that cannot be written never fails the send.
+  const replyTo: ReplyTo | undefined = validateReplyTo(body.reply_to);
+  const keepReplyTo = (message_id?: string) => {
+    if (!replyTo || !deps.recordReplyTo) return;
+    try { deps.recordReplyTo({ agent: agentId, sent_text: messageText, reply_to: replyTo, ...(message_id ? { message_id } : {}), ts: new Date().toISOString() }); }
+    catch (err) { console.error('[agent-send] reply_to not kept:', (err as any)?.message || err); }
+  };
 
   // force: the route's own contract (header: "a client can re-POST with force:true") was never
   // honoured. It was dropped here, so "Overwrite draft & send" got the same 409 forever (review of #198).
@@ -412,6 +429,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // Delivered — the parser-confirmed submit landed. agent_state says whether the agent was
   // mid-turn (the CLI then holds it in its input queue until the turn ends), for the "queued" chip.
   if (gw.ok && gw.delivered) {
+    keepReplyTo();
     res.status(200).json(shape('delivered', { session, attempts: gw.attempts, agent_state: gw.state, ...pointer }));
     return;
   }
@@ -431,6 +449,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // Gateway durable-held it (accepts:['held']). NOT a plain mid-turn seat any more — those
   // inject — but a pane that genuinely cannot take a keystroke right now.
   if (gw.ok && gw.held) {
+    keepReplyTo(typeof gw.message_id === 'string' ? gw.message_id : undefined);
     res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working', ...pointer }));
     return;
   }
@@ -490,6 +509,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   }
 
   const state: SendState = isMenuOrPrompt ? 'held' : 'queued';
+  keepReplyTo(write.id);
   res.status(200).json(shape(state, {
     message_id: write.id,
     sent_text: messageText,

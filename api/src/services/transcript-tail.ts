@@ -36,6 +36,7 @@ import {
 } from '../routes/chat-transcript.js';
 import { storeRules } from './conversation-store.js';
 import { stampRefs } from '../lib/messageRef.js';
+import { stampReplyTo } from '../lib/reply-to-store.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
@@ -188,6 +189,8 @@ export class TranscriptTailer {
     env.items = stampRefs(env.items, sid);
     // A reaction wake's silent or emoji answer (chat-transcript markWakeReplies): numbered like the poll route, never sent.
     env.items = dropWakeReplies(env.items);
+    // reply_to (reply threads P1): the same stamp the poll route's finishWindow gives its items. Fail-open.
+    env.items = stampReplyTo(env.items, this.agentId);
     // A cut-turn line new this beat and placed before the old tail: every later item moved, which
     // a delta (append only) cannot say. Sent as a snapshot.
     const sentUuids = new Set(this.items.map((it) => it?.uuid));
