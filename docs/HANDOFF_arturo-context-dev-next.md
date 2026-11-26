@@ -22,7 +22,7 @@
   2. test_native.py around 1434: drop `msg_be42d949` from the comment.
   Non-blocking (your call): an offline first call counts as cold; no session.started gives raw monotonic values (return None); speech already under way at result time is never stamped; first_audio_s adds two rounded numbers; `start` beside `started`.
   The bee255c commit (legs) hasn't been reviewed yet. Mail builder the new head for one delta review.
-- Probe runner: this session's scratchpad probe2.py (copy it). Knobs: PROBE_CALLS, PROBE_TOOLS, PROBE_SPENDING=1 (the live 39 tools, declare-only); a live run needs `live` + PROBE_LIVE_OK=1.
+- Probe runner: /home/shaw/wt/arturo-context-dev/probe2.py (run from a worktree root). Knobs: PROBE_CALLS, PROBE_TOOLS, PROBE_SPENDING=1 (the live 39 tools, declare-only); a live run needs `live` + PROBE_LIVE_OK=1.
 
 ## 2. Open loops (in order)
 - [ ] Fold #662's 2 blockers, push, mail builder, then CI, then its card (draft to gm first; gm approved the earlier card style).
