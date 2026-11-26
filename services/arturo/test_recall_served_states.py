@@ -148,3 +148,67 @@ def test_end_to_end_through_the_recall_core(tmp_path, hidden):
         if "unverified" in line:
             assert FLAG in line, line
     assert " said" not in rendered.lower()
+
+
+# --- the proxy's own fact printers: the time-window answer, the knowledge-tool blend, recent_work -------------------
+
+from services.arturo.test_text_turn_brain import P  # noqa: E402,F401 — the shared proxy fixture
+
+
+@pytest.fixture()
+def proxy_store(tmp_path, monkeypatch):
+    """A sourced fact, a NEWER unverified one and a newest superseded one, all inside the last few hours."""
+    from datetime import timedelta
+    p = tmp_path / "facts.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE facts (fact_id TEXT, ts TEXT, kind TEXT, text TEXT, expiry_class TEXT, "
+                "confidence REAL, state TEXT)")
+    now = datetime.now(timezone.utc)
+    for fid, ago, st in [("p1", timedelta(hours=3), "active"), ("p2", timedelta(hours=2), "unverified"),
+                         ("p3", timedelta(hours=1), "superseded")]:
+        con.execute("INSERT INTO facts VALUES (?,?,?,?,?,?,?)",
+                    (fid, (now - ago).isoformat().replace("+00:00", "Z"), "fact", f"marigold rollout note {st}",
+                     "standard", 1.0, st))
+    con.commit()
+    con.close()
+    monkeypatch.setitem(sys.modules, "facts_recall", fr)    # the proxy also imports it by its bare name
+    monkeypatch.setattr(fr, "default_db_path", lambda: str(p))
+    monkeypatch.setattr(fr, "default_json_path", lambda: str(tmp_path / "none.json"))
+    monkeypatch.delenv("ARTURO_FACTS_RECALL", raising=False)
+    monkeypatch.setenv("ARTURO_KNOWLEDGE_FACTS", "1")
+    return p
+
+
+def _fact_lines(block):
+    """The printed fact lines of one block, as (state, line)."""
+    return [(_state_of(ln), ln) for ln in block.splitlines() if "marigold rollout note" in ln]
+
+
+def _check_printed(block):
+    lines = _fact_lines(block)
+    assert [st for st, _ in lines] == ["active", "unverified"], block      # sourced first, superseded never
+    (_, sourced), (_, unsrc) = lines
+    assert FLAG not in sourced
+    # the flag sits in the bracket, the way the FACTS block prints it; the text is never anyone's words
+    assert unsrc.endswith(f" · {FLAG}] marigold rollout note unverified"), unsrc
+    return lines
+
+
+def test_the_time_window_answer_flags_an_unsourced_fact_and_prints_it_last(P, proxy_store):
+    out = P._knowledge_lookup("what happened last night")
+    block = out[out.index("[RECENT"):].split("\n\n")[0]
+    _check_printed(block)
+    assert "no source quote found last" in block.splitlines()[0]          # the header still tells the truth
+
+
+def test_the_knowledge_blend_flags_an_unsourced_fact_and_prints_it_last(P, proxy_store):
+    out = P._knowledge_lookup("marigold rollout")
+    _check_printed(out[out.index("[BRAIN FACTS"):].split("\n\n")[0])
+
+
+def test_recent_work_flags_an_unsourced_fact_and_prints_it_last(P, proxy_store, monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "VOICE_CALLS_DIR", tmp_path / "no-calls")
+    monkeypatch.setattr(P, "_git_since", lambda repo, hours: [])
+    out = P._recent_work(24)
+    _check_printed(out)
+    assert "no source quote found last" in out.splitlines()[0]

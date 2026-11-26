@@ -1504,8 +1504,11 @@ def _knowledge_lookup(query, category=None):
             if _hours:
                 _rf = _frt.recent_facts(_hours, keywords=_frt.topic_keywords(query), k=12)
                 if _rf:
-                    results.append(f"[RECENT — the last {_hours:g} h, newest first]\n" + "\n".join(
-                        f"  - [{(_f.get('ts') or '')[:16]}Z {_f.get('kind', 'fact')}] "
+                    # recent_facts puts a fact with no source quote found after every sourced one, so say so
+                    _last = f"; any with {_frt.UNSOURCED_FLAG} last" if any(_f.get("unsourced") for _f in _rf) else ""
+                    results.append(f"[RECENT — the last {_hours:g} h, newest first{_last}]\n" + "\n".join(
+                        f"  - [{(_f.get('ts') or '')[:16]}Z {_f.get('kind', 'fact')}"
+                        f"{f' · {_frt.UNSOURCED_FLAG}' if _f.get('unsourced') else ''}] "
                         f"{' '.join((_f.get('text') or '').split())[:220]}" for _f in _rf))
         except Exception:
             pass
@@ -1534,7 +1537,8 @@ def _knowledge_lookup(query, category=None):
                     for _f in _bf:
                         _snip = " ".join((_f.get("text") or "").split())[:220]
                         _d = (_f.get("ts") or "")[:10]
-                        _lines.append(f"  - [{_f.get('kind', 'fact')} {_d}] {_snip}")
+                        _tag = f" · {_fr.UNSOURCED_FLAG}" if _f.get("unsourced") else ""   # never framed as anyone's words
+                        _lines.append(f"  - [{_f.get('kind', 'fact')} {_d}{_tag}] {_snip}")
                     results.append("[BRAIN FACTS — freshest relevant from the daily fact store]\n"
                                    + "\n".join(_lines))
         except Exception:
@@ -2865,8 +2869,13 @@ def _recent_work(hours):
     except Exception as e:  # noqa: BLE001
         facts, parts = [], parts + [f"(facts store could not be read: {type(e).__name__})"]
     if facts:
+        if any(f.get("unsourced") for f in facts):
+            # recent_facts puts a fact with no source quote found after every sourced one, so say so
+            parts[0] = (f"RECENT WORK — the last {hours:g} h, newest first, any fact with {_frw.UNSOURCED_FLAG} "
+                        "last (times UTC).")
         parts.append("Facts and decisions:")
-        parts += [f"  - [{(f.get('ts') or '')[:16]}Z {f.get('kind', 'fact')}] "
+        parts += [f"  - [{(f.get('ts') or '')[:16]}Z {f.get('kind', 'fact')}"
+                  f"{f' · {_frw.UNSOURCED_FLAG}' if f.get('unsourced') else ''}] "
                   f"{' '.join((f.get('text') or '').split())[:220]}" for f in facts]
     for repo in _work_repos():
         commits = _git_since(repo, hours)
