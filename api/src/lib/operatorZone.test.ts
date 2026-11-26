@@ -38,3 +38,18 @@ test('no label: the tz is the label; no file, no tz, or a tz the runtime does no
   rmSync(file);
   assert.equal(operatorZone(dir), null);
 });
+
+test('only a canonical IANA zone (or UTC) is served: an alias this runtime accepts but a browser may not, or maps elsewhere, is null', () => {
+  // The runtime's Intl constructor takes EST (and resolves it to America/Panama), EST5EDT, SystemV/EST5, +05:00: none
+  // is a browser's zone, and the label would sit on the wrong hour. The file names a canonical zone or nothing.
+  for (const tz of ['EST', 'EST5EDT', 'SystemV/EST5', '+05:00', 'utc', 'america/cancun']) {
+    writeFileSync(file, JSON.stringify({ tz, label: 'x' }));
+    assert.equal(operatorZone(dir), null, tz);
+  }
+  for (const tz of ['UTC', 'America/Cancun', 'Asia/Tokyo']) {
+    writeFileSync(file, JSON.stringify({ tz, label: 'x' }));
+    const z = operatorZone(dir);
+    assert.ok(z && (z.tz === 'UTC' || Intl.supportedValuesOf('timeZone').includes(z.tz)), tz);
+    assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: z!.tz }).resolvedOptions().timeZone, z!.tz, tz);
+  }
+});
