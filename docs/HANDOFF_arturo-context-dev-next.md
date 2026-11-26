@@ -30,7 +30,8 @@
 - Probe runner: /home/shaw/wt/arturo-context-dev/probe2.py (run from a worktree root). Knobs: PROBE_CALLS, PROBE_TOOLS, PROBE_SPENDING=1 (the live 39 tools, declare-only); a live run needs `live` + PROBE_LIVE_OK=1.
 
 ## 2. Open loops (in order)
-- [x] #662 BLOCK(3) folded at e8f92ff (test-only + :884 wrap; 6 sabotages red); delta asked of builder msg_0b228745. NEXT: on MERGE-OK, wait for CI green by name on e8f92ff, then the card (draft to gm first).
+- [ ] #662: MERGE-OK at e8f92ff (builder msg_0ee9aac9); flake margin closed at dc01594 (pushed 07:11Z, test-only). NEXT: CI green by name on dc01594 -> draft the card to gm -> file. Follow-ups queued: test_native_uplink freeze test 0.3 s budget; test_spending_native timestamp-float flake (builder msg_8a12f0ef: compare content fields, not the ledger dump).
+- [x] MERGED 07:12Z: #644 -> 03c4506, #661 -> 81bcb24 (cards apr_93693b11 / apr_704ba3ae noted + acked). Respawn GO asked of gm (msg_6e5135c8): fresh detached worktree ~/wt/arturo-context-dev/native-main of origin/main, same command with only the cd changed; rollback = cd native-live. #661 reaches the relay only via a proxy restart (builder's main-forward).
 - [ ] On each approval: squash-merge with `--match-head-commit`, note the card with the sha, ack it, and tell gm the sha.
 - [ ] After #644 (and #662 if approved) merge: one respawn from a fresh worktree of new main on gm's GO. Report pid, healthz, the first real call's START (turns=, start=, connect_s=) and the report's legs.
 - [ ] From the first real call after the respawn: split the 3.27 s after-START leg into provider (session_started -> first_transcript) vs return path. Then propose to gm. 2(b) (8 spending tools, +0.3-0.6 s) waits on those numbers; 2(a) warm-up connect was DROPPED; 3(a)/3(b) wait for tool_timeline from real calls.
