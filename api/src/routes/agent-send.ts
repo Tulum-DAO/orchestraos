@@ -183,15 +183,22 @@ export interface GatewayInjectResult {
   /** interrupt was asked for and there was no Escape, or the turn did not stop in time: the words went in as a
    *  steer (or onto an idle prompt), and this says why. */
   interrupt_failed?: string;
-  /** On a held or refused answer: Escape WAS sent (the agent's step stopped) but the words were not typed. */
+  /** On a held or refused answer: Escape WAS sent but the words were not typed. */
   escape_sent?: boolean;
+  /** With escape_sent: whether the turn was seen to stop within the wait. */
+  turn_stopped?: boolean;
 }
 
 /** What happened to an accepted send, as the gateway said it. */
 export type SendOutcome = 'delivered-now' | 'delivered-steer' | 'interrupted' | 'held';
 export const SEND_OUTCOMES: readonly SendOutcome[] = ['delivered-now', 'delivered-steer', 'interrupted', 'held'];
-export const asOutcome = (v: unknown): SendOutcome | undefined =>
-  (SEND_OUTCOMES as readonly string[]).includes(String(v)) ? (v as SendOutcome) : undefined;
+export const asOutcome = (v: unknown): SendOutcome | undefined => {
+  if (v === undefined || v === null || v === '') return undefined;
+  if ((SEND_OUTCOMES as readonly string[]).includes(String(v))) return v as SendOutcome;
+  // A word neither side knows (a newer gateway, a typo) is dropped, but never silently.
+  console.warn(`[agent-send] unknown gateway outcome dropped: ${JSON.stringify(v)}`);
+  return undefined;
+};
 
 export interface MsgStoreSendResult {
   sent: boolean;
@@ -275,6 +282,7 @@ export async function postAgentMessage(session: string, text: string,
       interrupted: body.interrupted === true ? true : undefined,
       interrupt_failed: typeof body.interrupt_failed === 'string' ? body.interrupt_failed : undefined,
       escape_sent: body.escape_sent === true ? true : undefined,
+      turn_stopped: body.escape_sent === true ? body.turn_stopped === true : undefined,
     };
   } catch (err: any) {
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -444,7 +452,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     ...(gw.outcome ? { outcome: gw.outcome } : {}),
     ...(gw.interrupted ? { interrupted: true } : {}),
     ...(gw.interrupt_failed ? { interrupt_failed: gw.interrupt_failed } : {}),
-    ...(gw.escape_sent ? { escape_sent: true } : {}),
+    ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
   };
 
   // Delivered — the parser-confirmed submit landed. agent_state says whether the agent was
@@ -470,7 +478,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // inject — but a pane that genuinely cannot take a keystroke right now.
   if (gw.ok && gw.held) {
     res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working',
-                                         outcome: 'held', ...(gw.escape_sent ? { escape_sent: true } : {}), ...pointer }));
+                                         outcome: 'held', ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
+                                         ...pointer }));
     return;
   }
 
@@ -484,8 +493,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
       activity: gw.activity,
       composer_text: gw.composer_text,
       stranded: gw.stranded,
-      // An interrupt whose look after Escape found text: the agent's step WAS stopped, nothing was typed.
-      ...(gw.escape_sent ? { escape_sent: true } : {}),
+      // An interrupt whose look after Escape found text: Escape went, nothing was typed.
+      ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
     };
     res.status(409).json({
       ...legacy,
@@ -534,6 +543,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   res.status(200).json(shape(state, {
     message_id: write.id,
     outcome: 'held',
+    // An interrupt refusal the gateway could not hold (a stranded chip after Escape): the Escape still went.
+    ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
     sent_text: messageText,
     reason: isMenuOrPrompt
       ? 'agent pane is showing a menu/permission prompt'

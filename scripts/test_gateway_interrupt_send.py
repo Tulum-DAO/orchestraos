@@ -39,8 +39,21 @@ def _everything_under_tmp(tmp_path, monkeypatch):
 
 #: An idle prompt under output that merely QUOTES the esc hint: the whole-screen heuristic reads it as a turn.
 QUOTED_PANE = "the log line said: esc to interrupt\nmore output\n❯ \n"
-#: After Escape stopped the turn, text sits in the composer (the CLI restoring its queued input, or someone typing).
+#: After Escape stopped the turn, text sits in the composer (someone typing, or the CLI's own doing).
 RESTORED_PANE = "some output\n❯ an earlier steer the CLI put back\n"
+#: MEASURED on Claude Code 2.1.284 (2026-11-25, a scratch seat): a turn with a todo list in progress. The spinner
+#: label is the todo item (no gerund), there is no "esc to interrupt" anywhere on screen, and the spinner sits nine
+#: rows above the prompt over the indented todo rows, a blank row and the rule line.
+TODO_PANE = ("● Bash(for i in $(seq 1 45); do echo \"tick $i\"; sleep 1; done)\n"
+             "  ⎿  tick 27\n     tick 28\n     +26 lines (30s)\n     (ctrl+b ctrl+b (twice) to run in background)\n\n"
+             "✻ alpha… (51s · ↓ 2.0k tokens)\n"
+             "  ⎿  ◼ alpha\n     ◻ beta\n     ◻ gamma\n     ◻ delta\n     ◻ epsilon\n      … +2 pending\n\n"
+             "────────────────────────────────────────────\n❯ \n────────────────────────────────────────────\n"
+             "  ⬆ /gsd:update │ Haiku 4.5 │ seat ██░░░░░░░░ 25%\n")
+#: The same seat after Escape: the todo rows stay, the spinner row is gone.
+TODO_IDLE = ("  ⎿  Interrupted · What should Claude do instead?\n\n"
+             "  ⎿  ◼ alpha\n     ◻ beta\n     ◻ gamma\n     ◻ delta\n     ◻ epsilon\n      … +2 pending\n\n"
+             "────────────────────────────────────────────\n❯ \n────────────────────────────────────────────\n")
 
 
 class _DetI(_Det):
@@ -133,13 +146,44 @@ def test_quoted_esc_hint_above_an_idle_prompt_gets_no_escape(monkeypatch):
     t, det = _pane_i(monkeypatch, "idle", [QUOTED_PANE, QUOTED_PANE, QUOTED_PANE, QUOTED_PANE])
     assert G._pane_shows_active_turn(QUOTED_PANE) and not G._turn_above_composer(QUOTED_PANE)
     ok, info = G.verified_inject("seat", "hi", source="person", interrupt=True)
-    assert ok and "interrupted" not in info and "queued_mid_turn" not in info, info
+    # something on screen reads as a turn and the anchored read cannot see a spinner: no Escape, and the
+    # conservative label stays (the words may have been queued by a turn the anchored read missed)
+    assert ok and "interrupted" not in info and info["queued_mid_turn"] is True, info
+    assert "no spinner is drawn above the input box" in info["interrupt_failed"]
     assert ("Escape",) not in _keys(t) and det.marked == []
+
+
+def test_the_measured_todo_list_layout_is_a_running_turn_and_gets_the_escape(monkeypatch):
+    assert G._turn_above_composer(TODO_PANE) and G._pane_shows_active_turn(TODO_PANE)
+    assert not G._turn_above_composer(TODO_IDLE) and not G._pane_shows_active_turn(TODO_IDLE)
+    assert not G._SPINNER_GERUND_RE.match("✻ alpha… (51s · ↓ 2.0k tokens)"), "the todo spinner has no gerund: the timed shape must carry it"
+    assert not G._is_spinner_row("● Cogitated for 2s · done 7:45 PM") and not G._is_spinner_row("● Bash(sleep 45)")
+    t, det = _pane_i(monkeypatch, "working", [TODO_PANE, TODO_PANE, TODO_PANE, TODO_IDLE, TODO_IDLE, TODO_IDLE])
+    ok, info = G.verified_inject("seat", "hi", source="person", interrupt=True)
+    assert ok and info["interrupted"] is True, info
+    assert _keys(t)[0] == ("Escape",) and det.marked == ["seat"]
+
+
+def test_a_menu_at_the_interrupts_own_look_refuses_before_any_escape(monkeypatch):
+    # the recheck before the branch saw a safe pane; the interrupt's one look sees a permission menu
+    for force in (False, True):
+        t, det = _pane_i(monkeypatch, "working", [WORKING_PANE, WORKING_PANE, MENU_PANE])
+        ok, info = G.verified_inject("seat", "hi", force=force, source="person", interrupt=True)
+        assert not ok and info["recheck"] == "no_composer" and "escape_sent" not in info, (force, info)
+        assert ("Escape",) not in _keys(t) and not _typed(t) and det.marked == []
+
+
+def test_force_with_text_appearing_after_the_escape_is_refused_not_appended(monkeypatch):
+    # force appends to a draft that was there; text that appears AFTER the Escape is never that draft
+    t, det = _pane_i(monkeypatch, "working", [WORKING_PANE, WORKING_PANE, WORKING_PANE, IDLE_PANE, RESTORED_PANE])
+    ok, info = G.verified_inject("seat", "hi", force=True, source="person", interrupt=True)
+    assert not ok and info["recheck"] == "composer_text" and info["escape_sent"] is True and info["turn_stopped"] is True, info
+    assert not _typed(t) and det.marked == ["seat"]
 
 
 def test_force_with_a_draft_in_the_composer_never_sends_escape(monkeypatch):
     # force skips the typed-text look (it appends to the draft): Escape would discard that draft instead
-    t, det = _pane_i(monkeypatch, "working", [DRAFT_PANE, DRAFT_PANE, DRAFT_PANE, DRAFT_PANE, WORKING_CLEARED])
+    t, det = _pane_i(monkeypatch, "working", [DRAFT_PANE, DRAFT_PANE, DRAFT_PANE, WORKING_CLEARED])
     ok, info = G.verified_inject("seat", "hi", force=True, source="person", interrupt=True)
     assert ok and info["queued_mid_turn"] is True and "interrupted" not in info, info
     assert "typed text in the composer" in info["interrupt_failed"]
@@ -147,7 +191,7 @@ def test_force_with_a_draft_in_the_composer_never_sends_escape(monkeypatch):
 
 
 def test_force_with_an_empty_composer_still_interrupts(monkeypatch):
-    t, det = _pane_i(monkeypatch, "working", [WORKING_PANE, WORKING_PANE, WORKING_PANE, WORKING_PANE, IDLE_PANE, IDLE_PANE, IDLE_PANE])
+    t, det = _pane_i(monkeypatch, "working", [WORKING_PANE, WORKING_PANE, WORKING_PANE, IDLE_PANE, IDLE_PANE, IDLE_PANE])
     ok, info = G.verified_inject("seat", "hi", force=True, source="person", interrupt=True)
     assert ok and info["interrupted"] is True, info
     assert _keys(t)[0] == ("Escape",) and det.marked == ["seat"]
@@ -165,10 +209,13 @@ def test_a_headless_seat_has_no_pane_to_interrupt_and_says_so(monkeypatch):
     assert ok and "interrupt_failed" not in info
 
 
-@pytest.mark.parametrize("raw,want", [("abc", 3.0), (None, 3.0), ("nan", 3.0), ("99", 3.0), ("0.01", 0.25), ("1.5", 1.5), ("3", 3.0)])
+@pytest.mark.parametrize("raw,want", [("abc", 1.5), (None, 1.5), ("nan", 1.5), ("99", 1.5), ("3", 1.5), ("0.01", 0.25), ("1.0", 1.0)])
 def test_the_wait_env_var_never_stops_the_boot_and_stays_within_the_lock_budget(raw, want):
     assert G._interrupt_wait_s(raw) == want
-    assert G.INTERRUPT_WAIT_MAX_S + 2.5 + 2.0 + 0.5 <= G.PANE_LOCK_WAIT_S, "an interrupt send outlives PANE_LOCK_WAIT_S"
+    # the cap is DERIVED from the lock budget: every second a send spends under the lock is in the sum
+    assert G.INTERRUPT_WAIT_MAX_S == 1.5
+    assert G.INTERRUPT_WAIT_MAX_S + G.INJECT_INGEST_WAIT_S + G.SUBMIT_WITNESS_S + 0.5 <= G.PANE_LOCK_WAIT_S
+    assert G.SUBMIT_WITNESS_S == 2.5 + 2.0 + 0.5, "the submit witness sleeps changed: update SUBMIT_WITNESS_S"
 
 
 def test_interrupt_on_an_idle_pane_never_sends_escape(monkeypatch):
@@ -301,7 +348,7 @@ def test_every_held_answer_says_held(box, monkeypatch):
     assert status == 200 and body["held"] is True and body["outcome"] == "held"           # the legacy mid-turn hold too
 
 
-def test_a_held_answer_after_an_escape_says_the_step_was_stopped(box, monkeypatch):
+def test_a_held_answer_after_an_escape_says_the_step_was_stopped(box, monkeypatch, caplog):
     # the look after Escape found a menu: held for the operator's answer, and the person is told their agent's step stopped
     monkeypatch.setattr(G, "verified_inject", _refuse({"reason": "busy", "state": "working", "recheck": "no_composer",
                                                        "escape_sent": True, "turn_stopped": False,
@@ -309,12 +356,18 @@ def test_a_held_answer_after_an_escape_says_the_step_was_stopped(box, monkeypatc
     status, body = _post(box, {**PHONE, "interrupt": True})
     assert status == 200 and body["held"] is True and body["outcome"] == "held", body
     assert body["escape_sent"] is True and body["turn_stopped"] is False
-    # text appeared after the stop: the legacy 409 with the text, and escape_sent on it
+    # text appeared after the stop: the legacy 409 with the text, escape_sent on it, and the interrupt's OWN words
+    # (not the generic composer_text line), with the caller in the log
     monkeypatch.setattr(G, "verified_inject", _refuse({"reason": "busy", "state": "working", "recheck": "composer_text",
                                                        "composer_text": "restored", "escape_sent": True, "turn_stopped": True,
-                                                       "activity": "text appeared"}))
-    status, body = _post(box, {**PHONE, "interrupt": True})
+                                                       "activity": "Escape stopped the turn and text appeared in the composer"}))
+    with caplog.at_level(logging.INFO, logger=G.log.name):
+        status, body = _post(box, {**PHONE, "interrupt": True})
     assert status == 409 and body["escape_sent"] is True and body["composer_text"] == "restored" and "outcome" not in body
+    assert body["activity"].startswith("Escape stopped the turn"), body
+    assert any("escape_sent turn_stopped=True" in r.getMessage() and "ua=" in r.getMessage() or
+               "escape_sent turn_stopped=True" in r.getMessage() and "OrchestraUltra" in r.getMessage()
+               for r in caplog.records), [r.getMessage() for r in caplog.records]
     # a hold with no Escape carries neither key
     monkeypatch.setattr(G, "verified_inject", _refuse(BUSY_SUBTYPES["permission_dialog"]))
     status, body = _post(box, {**PHONE, "interrupt": True})
@@ -330,7 +383,7 @@ def test_the_stop_button_presses_escape_under_the_send_lock(box, monkeypatch):
     det = _DetI("working")
     monkeypatch.setattr(G, "_agent_status", lambda: det)
     lk = threading.Lock()
-    entered = []
+    entered, at_escape = [], []
 
     class _Rec:
         def __enter__(self):
@@ -340,14 +393,38 @@ def test_the_stop_button_presses_escape_under_the_send_lock(box, monkeypatch):
             lk.release()
     monkeypatch.setattr(G, "_session_send_lock", lambda s: _Rec())
 
+    class _TmuxEsc(_Tmux):
+        def __call__(self, *args, timeout=5):
+            if args[0] == "send-keys" and args[-1] == "Escape":
+                at_escape.append(lk.locked())                 # the lock must be HELD at the moment of the Escape
+            return super().__call__(*args, timeout=timeout)
+    t = _TmuxEsc([WORKING_PANE])                              # the look under the lock: a spinner is drawn
+    monkeypatch.setattr(G, "_tmux", t)
+
     async def go():
         async with TestClient(TestServer(G.build_app())) as c:
             r = await c.post("/agent-interrupt", json={"session": "seat"}, headers=_headers(box))
             return r.status, await r.json()
     status, body = asyncio.run(go())
     assert status == 200 and body["interrupted"] is True and body["hook_cleared"] is True, body
-    assert entered == [False] and ("Escape",) in _keys(t) and not lk.locked()
+    assert entered == [False] and at_escape == [True] and not lk.locked()
     assert det.marked == ["seat"]
+
+
+def test_the_stop_button_looks_again_under_the_lock_and_sends_no_escape_onto_an_idle_prompt(box, monkeypatch):
+    # the detector still says working (the read before the lock wait); under the lock the screen is idle
+    t = _Tmux([IDLE_PANE])
+    monkeypatch.setattr(G, "_tmux", t)
+    det = _DetI("working")
+    monkeypatch.setattr(G, "_agent_status", lambda: det)
+
+    async def go():
+        async with TestClient(TestServer(G.build_app())) as c:
+            r = await c.post("/agent-interrupt", json={"session": "seat"}, headers=_headers(box))
+            return r.status, await r.json()
+    status, body = asyncio.run(go())
+    assert status == 409 and body["error"] == "not mid-turn", body
+    assert ("Escape",) not in _keys(t) and det.marked == []
 
 
 def test_a_refusal_carries_no_outcome(box, monkeypatch):

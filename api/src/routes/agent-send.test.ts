@@ -465,7 +465,39 @@ test('outcome: only the four known words pass the gateway parser; anything else 
   const { asOutcome, SEND_OUTCOMES } = await import('./agent-send.js');
   assert.deepEqual([...SEND_OUTCOMES], ['delivered-now', 'delivered-steer', 'interrupted', 'held']);
   for (const w of SEND_OUTCOMES) assert.equal(asOutcome(w), w);
-  for (const bad of ['Delivered-Now', 'typed', '', undefined, null, 3, {}]) assert.equal(asOutcome(bad), undefined, String(bad));
+  const warned: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: any[]) => { warned.push(args.join(' ')); };
+  try {
+    for (const bad of ['Delivered-Now', 'typed', 3, {}]) assert.equal(asOutcome(bad), undefined, String(bad));
+    assert.equal(warned.length, 4, 'every unknown word is warned about');
+    for (const empty of ['', undefined, null]) assert.equal(asOutcome(empty), undefined);
+    assert.equal(warned.length, 4, 'an absent outcome is not a warning');
+  } finally { console.warn = origWarn; }
+});
+
+test('escape_sent + turn_stopped ride every answer shape the gateway can give after an Escape', async () => {
+  // durable-first fallback (a refusal the gateway could not hold, e.g. a stranded chip after Escape)
+  let r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working', escape_sent: true, turn_stopped: true }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.status, 200);
+  assert.equal(r.calls.json.state, 'queued');
+  assert.equal(r.calls.json.outcome, 'held');
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(r.calls.json.turn_stopped, true);
+  // gateway-held: turn_stopped carried too
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h4', outcome: 'held', escape_sent: true, turn_stopped: false }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(r.calls.json.turn_stopped, false);
+  // without an Escape neither key appears on the durable-first answer
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working' }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'] } }), r.res);
+  assert.equal('escape_sent' in r.calls.json, false);
+  assert.equal('turn_stopped' in r.calls.json, false);
 });
 
 test('escape_sent: a held or 409 answer after an interrupt says the agent\'s step was stopped', async () => {
