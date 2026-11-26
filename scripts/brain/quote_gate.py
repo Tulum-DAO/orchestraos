@@ -12,6 +12,8 @@ What verifies today, read-only at ingest time:
   contains the fact's text.
 - voice rows: the conversation row the fact cites says the operator spoke, and its text is the fact's text.
 Every other attributed fact (summaries, inferences, goals) has no quote to check, so it is labelled.
+Known limit: the dream check accepts any substring of the cited block, so a fact that drops a negation
+("deploy on friday" out of "never deploy on friday") still verifies.
 
 QUOTE_GATE_PROJECTS_DIR sets where transcripts are read (default ~/.claude/projects).
 """
