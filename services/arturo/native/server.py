@@ -271,6 +271,8 @@ class NativeCall:
         self.out = asyncio.Queue()
         self.transport = self.driver = None
         self.t0 = None
+        self._accepted = time.monotonic()                          # the leg clock's zero: this socket accepted
+        self.legs = {}                                             # leg -> seconds since accept (first time only)
         self.closed = False
         self.close_reason = None
         # ``close`` can be requested concurrently by the socket loop, the
@@ -348,6 +350,9 @@ class NativeCall:
             except (ConnectionResetError, RuntimeError):
                 return
 
+    def _mark(self, leg):
+        self.legs.setdefault(leg, round(time.monotonic() - self._accepted, 3))
+
     def on_frame(self, direction, frame):
         if direction != "in":
             if frame.get("type") in ("response.item.create", "response.create"):
@@ -355,6 +360,8 @@ class NativeCall:
             return
         t = frame.get("type")
         now = time.monotonic()
+        if t == "session.started":
+            self._mark("session_started_s")
         if t == "session.output_audio.delta":
             self._in_t = _gap(self._in_gaps, self._in_t)
             try:
@@ -365,6 +372,7 @@ class NativeCall:
                 from services.arturo import openai_live
                 if openai_live.is_speech(pcm):
                     self._out_speech_t = now
+                    self._mark("first_audio_s")
                 if not self._force_muted:                 # a forced barge: the rest of this utterance never plays
                     self.gate.feed_audio(pcm, now)
             speaking = self.session.assistant_speaking
@@ -385,6 +393,7 @@ class NativeCall:
                 log.warning(f"native {self.binding.conversation_id}: CLAIM-UNBACKED {self.gate.blocked_text[-120:]!r}")
                 self.emit({"type": "transcript", "who": "arturo", "text": "", "new": False, "withdrawn": True})
             if not self.gate.blocked:
+                self._mark("first_transcript_s")
                 self.arturo_text += frame.get("delta") or ""
                 self.emit({"type": "transcript", "who": "arturo", "text": self.arturo_text.strip(), "new": fresh})
         elif t == "session.input_transcript.delta":
@@ -501,6 +510,7 @@ class NativeCall:
             raise
 
     async def _open(self):
+        self._mark("start_frame_s")
         threaded = call_context.enabled()
         opening_fut = (asyncio.get_running_loop().run_in_executor(
             self.server.connect_pool, self.server.thread_loader, self.chat_agent) if threaded else None)
@@ -516,6 +526,7 @@ class NativeCall:
                 return False
             try:
                 self.transport = await self._connect()
+                self._mark("provider_connected_s")
             except Exception as e:  # noqa: BLE001 — no key, timeout, refused, DNS: the caller is told, nothing leaks
                 log.warning(f"native: provider connect failed: {e!r}")
                 self.emit({"type": "refused", "reason": f"voice service unreachable: {e}"})
@@ -546,10 +557,12 @@ class NativeCall:
                 log.warning(f"native {self.binding.conversation_id}: chat feed off: {e!r}")
         if self.provider is not None:
             asyncio.ensure_future(self.provider.start())
+        self._mark("start_s")
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
                  f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent} "
-                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']} start={self.start_kind}")
+                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']} start={self.start_kind} "
+                 f"connect_s={self.legs.get('provider_connected_s')} start_s={self.legs.get('start_s')}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -866,7 +879,9 @@ class NativeCall:
         except Exception as e:  # noqa: BLE001 — never lose the report for a usage-store hiccup
             log.error(f"native {self.binding.conversation_id}: usage record failed: {e!r}")
         rep = self.session.report()
-        rep.update(start=getattr(self, "start_kind", None), reason=reason, spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
+        legs = {k: self.legs.get(k) for k in ("start_frame_s", "provider_connected_s", "start_s", "session_started_s",
+                                              "first_transcript_s", "first_audio_s")}
+        rep.update(start=getattr(self, "start_kind", None), legs=legs, reason=reason, spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,

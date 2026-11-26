@@ -1501,3 +1501,44 @@ def test_the_first_call_since_process_start_is_cold_and_the_next_warm(tmp_path, 
     assert len(starts) == 2 and " start=cold" in starts[0] and " start=warm" in starts[1]
     reps = sorted((tmp_path / "native" / "calls").glob("*.json"), key=lambda p: p.stat().st_mtime)
     assert [json.loads(p.read_text())["start"] for p in reps] == ["cold", "warm"]
+
+
+def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, monkeypatch, caplog):
+    # latency leg timing (gm msg_3a21b3e6): on a real call START came 1.37 s after the API dialled and the first
+    # words 3.27 s after the client saw "state"; nothing on the native side split those legs
+    import base64
+    import logging
+
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        s.thread_loader = lambda agent: ""
+        c = await _client(s)
+        try:
+            ws = await c.ws_connect("/native/ws", headers=HDRS)
+            await ws.send_str(json.dumps({"type": "start"}))
+            for _ in range(100):
+                if FakeProvider.instances and FakeProvider.instances[-1].sent:
+                    break
+                await asyncio.sleep(0.02)
+            p = FakeProvider.instances[-1]
+            p.push({"type": "session.started"})
+            await asyncio.sleep(0.1)
+            p.push({"type": "session.output_transcript.delta", "delta": "Hey"})
+            await asyncio.sleep(0.1)
+            loud = base64.b64encode((b"\xff\x7f\x01\x80") * 800).decode()
+            p.push({"type": "session.output_audio.delta", "delta": loud})
+            await asyncio.sleep(0.2)
+            await ws.send_str(json.dumps({"type": "disconnect"}))
+            await ws.close()
+            await asyncio.sleep(0.2)
+        finally:
+            await c.close()
+    with caplog.at_level(logging.INFO, logger="arturo-native"):
+        _run(go())
+    legs = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())["legs"]
+    order = ["start_frame_s", "provider_connected_s", "start_s", "session_started_s", "first_transcript_s",
+             "first_audio_s"]
+    assert all(legs[k] is not None for k in order), legs
+    assert [legs[k] for k in order] == sorted(legs[k] for k in order)
+    start = next(r.getMessage() for r in caplog.records if ": START " in r.getMessage())
+    assert " connect_s=" in start
