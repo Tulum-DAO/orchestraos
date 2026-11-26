@@ -219,16 +219,28 @@ class OpenAITransport:
         return st
 
 
+# A question to gm never holds the call (Shaw's 18:3x call, 2026-11-26: gm_command polled gm's reply for 25 s, three
+# times, and the voice went silent each time). After DETACH_AFTER_S the call hears DETACHED at once; gm's answer, if
+# it lands while the call is up, comes in as a note (late=), and gm's own "the answer comes to your chat" is dropped.
+DETACH_TOOLS = frozenset({"gm_command"})
+DETACH_AFTER_S = 1.5
+DETACHED = {"ok": True, "result": "Sent to gm. Tell the operator that in a few words and keep talking; gm's answer "
+                                  "comes into this call when it lands, or to the chat after it."}
+_GM_ANSWER = "gm says:"
+
+
 class ToolRunner:
     """Runs Arturo's tools OFF the audio loop. The session calls execute() on every pump; the first call for a
     tool_call_id starts it on a worker thread and returns RUNNING, later calls return RUNNING until the result is in,
     then the result. (Before this, a 120 s spawn_agent ran inside the event loop and froze every call's audio.)
-    Idempotency stays in ArturoTools/ToolLedger: a call id runs at most once there whatever happens here."""
+    Idempotency stays in ArturoTools/ToolLedger: a call id runs at most once there whatever happens here.
+    A DETACH_TOOLS call is handed over after DETACH_AFTER_S instead (see DETACHED)."""
 
-    def __init__(self, tools, pool):
+    def __init__(self, tools, pool, late=None, clock=time.monotonic):
         self.tools, self.pool = tools, pool
         self.ledger = tools.ledger
-        self._futs = {}
+        self.late, self.clock = late, clock
+        self._futs, self._started, self._detached = {}, {}, set()
 
     def new_turn(self, conversation_id):
         self.tools.new_turn(conversation_id)
@@ -238,13 +250,28 @@ class ToolRunner:
         if fut is None:
             fut = self._futs[tool_call_id] = self.pool.submit(self.tools.execute, binding, tool_call_id, name,
                                                               arguments_json)
+            self._started[tool_call_id] = self.clock()
         if not fut.done():
+            if name in DETACH_TOOLS and self.clock() - self._started[tool_call_id] >= DETACH_AFTER_S:
+                if tool_call_id not in self._detached:
+                    self._detached.add(tool_call_id)
+                    fut.add_done_callback(self._answer_late)
+                return dict(DETACHED)
             return RUNNING
         try:
             return fut.result()
         except Exception as e:  # noqa: BLE001 — a tool crash is the model's refusal, never the call's death
             log.error(f"native {binding.conversation_id}: tool {name} raised {e!r}")
             return {"ok": False, "error": "TOOL_ERROR", "detail": type(e).__name__}
+
+    def _answer_late(self, fut):
+        """A handed-over call finished: gm's real answer goes into the call as a note; anything else was said already."""
+        try:
+            text = str((fut.result() or {}).get("result") or "").strip()
+        except Exception:  # noqa: BLE001 — the call already heard "sent"
+            return
+        if self.late is not None and text.startswith(_GM_ANSWER):
+            self.late(" ".join(text[len(_GM_ANSWER):].split()))
 
 
 class _Observer:
@@ -262,7 +289,7 @@ class NativeCall:
         self.principal, self.device = principal, device
         self.mode = "live"
         self.provider = None                                       # offline: the simulator
-        self._use(server.tools, ToolRunner(server.tools, server.pool))
+        self._use(server.tools, ToolRunner(server.tools, server.pool, late=self._late_note))
         self.spend = spend.CallSpend(server.usage_store, native_config.BACKEND_MODEL)
         self.gate = claim_gate.ClaimGate(
             is_backed=lambda kind: self.toolset.backed(self.binding.conversation_id, self.session.turn_started_epoch,
@@ -681,13 +708,25 @@ class NativeCall:
         self._context, self._context_pending = key, None
         self._context_sent_at, self._context_sends = now, self._context_sends + 1
 
+    def _late_note(self, answer):
+        """gm's answer to a question the call handed over (ToolRunner, on a tool thread): stamped notes for the next
+        _flush_chat_feed, the same path as a chat line typed during the call."""
+        try:
+            tc = call_context.thread_context
+            tz, label = tc.shaw_tz()
+            self._feed_notes.extend(tc.live_notes(tc.Line(at=time.time(), who="gm", text=answer, channel="chat"),
+                                                  tz, label))
+        except Exception as e:  # noqa: BLE001 — the answer still reaches the chat
+            log.warning(f"native: gm's late answer could not be queued: {e!r}")
+
     def _flush_chat_feed(self):
         """From _tick, after session.started: poll the chat every CHAT_POLL_S off the loop; send at most one stamped
-        note per tick as a session append (call_context.feed_kind; thinking by default)."""
-        if self.chat_feed is None or self.driver is None or not self.session.started:
+        note per tick as a session append (call_context.feed_kind; thinking by default). gm's late answers
+        (_late_note) go out the same way, with or without a chat feed."""
+        if self.driver is None or not self.session.started:
             return
         now = time.monotonic()
-        if self._feed_future is None and now >= self._feed_next:
+        if self.chat_feed is not None and self._feed_future is None and now >= self._feed_next:
             self._feed_future = self.server.connect_pool.submit(self.chat_feed.poll)
             self._feed_next = now + call_context.CHAT_POLL_S
         if self._feed_future is not None and self._feed_future.done():
