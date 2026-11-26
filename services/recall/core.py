@@ -256,7 +256,10 @@ class Recall:
             closed = closed_slot_ids(self.facts_db, "shaw.location",
                                      [f.get("fact_id") for f in facts if f.get("fact_id")])
             # a CLOSED location fact (Florida) is history here; it may still be active for its other content
-            facts = (pinned + [f for f in facts if f.get("fact_id") not in ids | closed])[:k]
+            rest = [f for f in facts if f.get("fact_id") not in ids | closed]
+            # sourced pins, sourced facts, unsourced pins, unsourced facts: a pinned fact with no source quote found
+            # still ranks below every sourced fact, and the cut at k drops unsourced entries first
+            facts = fr.sourced_first(pinned + rest)[:k]
         return facts
 
     def _query_worldview(self, keywords, k):

@@ -212,3 +212,16 @@ def test_recent_work_flags_an_unsourced_fact_and_prints_it_last(P, proxy_store, 
     out = P._recent_work(24)
     _check_printed(out)
     assert "no source quote found last" in out.splitlines()[0]
+
+
+def test_the_location_pin_never_puts_an_unsourced_fact_above_a_sourced_one(tmp_path):
+    """Every fixture fact is an open location-slot fact and the unverified one is the newest, so it is pinned."""
+    db = _facts_db(tmp_path / "f.db")
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    q = "where is shaw with the marigold rollout"
+    assert core._LOCATION_Q.search(q)
+    assert any(p["unsourced"] for p in core.open_slot_facts(db, "shaw.location"))
+    assert _check(rc._query_facts(fr.extract_keywords(q), 20, q)) == SERVED
+    # cut at k, the unsourced entries go first
+    short = rc._query_facts(fr.extract_keywords(q), 3, q)
+    assert len(short) == 3 and not any(f["unsourced"] for f in short), short
