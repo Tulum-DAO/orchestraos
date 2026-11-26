@@ -14,7 +14,7 @@ import limit_event as LE  # noqa: E402
 @pytest.fixture(autouse=True)
 def _operator_zone(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ", "America/Cancun")
-    monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ_LABEL", "Tulum")
+    monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ_LABEL", "Local")
 
 
 NY = "America/New_York"
@@ -26,7 +26,7 @@ def _epoch(s):
 
 # --- Claude transcript API-error rows (structured quotaLimits first) -------------------------
 
-def _claude_row(text, quota, ts="2026-11-25T20:16:31.303Z"):
+def _claude_row(text, quota, ts="2026-11-25T20:16:31.000Z"):
     return {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
             "apiErrorStatus": 429, "timestamp": ts, "sessionId": "sid-test-0001",
             "message": {"model": "<synthetic>", "role": "assistant",
@@ -53,7 +53,7 @@ def test_claude_row_five_hour_with_spend_cap_uses_quota_limits():
     assert ev.runtime == "claude"
     assert ev.window == "5-hour"
     assert ev.spend_capped is True
-    assert ev.reset_at == 1795641600          # 2026-11-25 21:20Z = 16:20 Tulum
+    assert ev.reset_at == 1795641600          # 2026-11-25 21:20Z = 16:20 operator-local
     assert ev.source == "transcript"
     assert ev.session_id == "sid-test-0001"
 
@@ -62,7 +62,7 @@ def test_claude_row_weekly_from_quota_limits():
     row = _claude_row(SPEND_WEEKLY, {"status": "rejected", "resetsAt": 1795514400,
                                      "rateLimitType": "seven_day", "overageStatus": "rejected",
                                      "overageDisabledReason": "org_level_disabled_until"},
-                      ts="2026-11-23T05:13:28.072Z")
+                      ts="2026-11-23T05:13:28.000Z")
     ev = LE.from_claude_row(row)
     assert ev.window == "weekly"
     assert ev.reset_at == 1795514400
@@ -220,7 +220,7 @@ def test_describe_names_window_reset_in_tulum_and_account():
                        source="transcript", text=SPEND_5H, account="strategysimple")
     s = LE.describe(ev)
     assert "5-hour limit" in s
-    assert "resets Wed 11-25 16:20 Tulum" in s
+    assert "resets Wed 11-25 16:20 Local" in s
     assert "account strategysimple" in s
     assert "monthly spend cap" in s
 
@@ -238,8 +238,8 @@ def test_operator_zone_follows_the_location_file_when_no_env(tmp_path, monkeypat
     monkeypatch.setenv("ORCHESTRA_OPERATOR_LOCATION_FILE", str(loc))
     assert LE.operator_zone() == ("America/New_York", "ET")
     assert LE.reset_label(1795641600) == "resets Wed 11-25 16:20 ET"
-    loc.write_text('{"tz": "America/Cancun", "label": "Tulum"}')      # a move: no restart needed
-    assert LE.reset_label(1795641600) == "resets Wed 11-25 16:20 Tulum"
+    loc.write_text('{"tz": "America/Cancun", "label": "Local"}')      # a move: no restart needed
+    assert LE.reset_label(1795641600) == "resets Wed 11-25 16:20 Local"
     loc.write_text("not json")
     assert LE.operator_zone()[0]                                       # host zone, never a crash
 

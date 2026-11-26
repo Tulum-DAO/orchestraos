@@ -14,7 +14,7 @@ RESET = NOW + 3 * 3600
 @pytest.fixture(autouse=True)
 def _operator_zone(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ", "America/Cancun")
-    monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ_LABEL", "Tulum")
+    monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ_LABEL", "Local")
     monkeypatch.setenv("ORCHESTRA_ACCOUNT_SWITCH", "/x/account_switch.py")
 
 
@@ -149,7 +149,7 @@ def test_5_banner_stuck_seats_are_nudged_once_with_window_reset_and_new_login():
     _, log, _ = _tick(_ep(), d)
     assert sorted(s for s, _ in d.nudged) == ["gm", "pm-nod"]
     text = d.nudged[0][1]
-    assert "5-hour limit" in text and "Tulum" in text and "now default" in text
+    assert "5-hour limit" in text and "Local" in text and "now default" in text
     assert [r["seat"] for r in log if r["kind"] == "seat_nudged"] == ["gm", "pm-nod"]
 
 

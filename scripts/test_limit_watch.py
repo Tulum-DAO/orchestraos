@@ -12,11 +12,11 @@ import limit_watch as LW  # noqa: E402
 @pytest.fixture(autouse=True)
 def _operator_zone(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ", "America/Cancun")
-    monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ_LABEL", "Tulum")
+    monkeypatch.setenv("ORCHESTRA_OPERATOR_TZ_LABEL", "Local")
 
 
 SID_C = "11111111-2222-3333-4444-555555555555"
-SID_X = "01a21472-cdaf-7801-a7a1-b706a70c66ce"
+SID_X = "00000000-0000-7000-a000-00000000c0de"
 
 NOW = 1795629600            # 2026-11-25 18:00Z, the fixtures' clock
 WEEKLY_Q = {"status": "rejected", "resetsAt": NOW + 3 * 86400, "rateLimitType": "seven_day",
@@ -98,7 +98,7 @@ def test_weekly_hit_names_window_reset_account_mails_gm_and_logs_the_switch_deci
     assert kinds[:3] == ["episode_open", "switch_decision", "seat_limited"]
     opened = _log(tree)[0]
     assert opened["window"] == "weekly" and opened["account"] == "strategysimple"
-    assert "account strategysimple" in opened["line"] and "Tulum" in opened["line"]
+    assert "account strategysimple" in opened["line"] and "Local" in opened["line"]
     dec = _log(tree)[1]
     assert dec["would_switch"] is True and dec["to"] == "default" and dec["armed"] is False
     assert [(m[0], m[1]) for m in mail.sent] == [("gm", "high")]
@@ -190,7 +190,7 @@ def test_sidecar_has_initiatives_shape_and_marks_the_limited_owners_items(tree):
     ids = {i["id"] for i in side["items"]}
     assert {"limit-pm-nod-weekly", "nod-review"} <= ids and "other" not in ids
     nod = [i for i in side["items"] if i["id"] == "nod-review"][0]
-    assert nod["note"].startswith("blocked: weekly limit, resets ") and nod["note"].endswith(" Tulum") and nod["status"] == "open"
+    assert nod["note"].startswith("blocked: weekly limit, resets ") and nod["note"].endswith(" Local") and nod["status"] == "open"
     assert json.load(open(tree.initiatives))["items"][0]["note"] == ""   # main file untouched
 
 
