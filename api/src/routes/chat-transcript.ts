@@ -14,9 +14,9 @@ import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, cl
 import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems, queuedStateSig } from '../services/queued-merge.js';
-import { tagAudience, tagSynthetics } from '../lib/audience.js';
+import { tagAudience, tagSynthetics, openerKind } from '../lib/audience.js';
 import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
-import { refable, partAt } from '../lib/messageRef.js';
+import { refable, partAt, messageRef } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices, storePath } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff, CALL_ID_RE } from '../lib/agentCalls.js';
 import { buildCallContext, readJournals, clampBudget, shawTz, operatorName, redact } from '../lib/callContext.js';
@@ -29,7 +29,7 @@ import { agentScopeParam, canPrincipalSeeAgent, defaultResolveTags } from '../li
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
 import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents, identityStoreSig } from '../services/identity-store-reader.js';
-import { cachedLog, type LogParser } from '../services/transcript-log-cache.js';
+import { cachedLog, cachedLogTail, logRange, type LogParser } from '../services/transcript-log-cache.js';
 import { firstPage } from '../services/transcript-first-page-cache.js';
 import { callsDir } from '../lib/agentCalls.js';
 import { dataDir } from '../lib/config.js';
@@ -928,20 +928,71 @@ export function dropWarmup(items: readonly any[], mark: WarmupMark | null): any[
 }
 
 /** A generation's items as the chat shows them, plus the first position of each uuid in them, and the text of each
- *  user message by uuid (what carriedOver compares). */
-interface SegmentView { items: readonly any[]; firstAt: Map<string, number>; userTexts: Map<string, string> }
+ *  user message by uuid (what carriedOver compares). `start`/`end`: the bytes of the log this view was read from
+ *  (start 0 and end null = the whole file; a tail read has start > 0; a cursor page's middle read has both). */
+interface SegmentView {
+  items: readonly any[]; firstAt: Map<string, number>; userTexts: Map<string, string>;
+  start: number; end: number | null;
+  /** The view reaches the file's end (a tail or whole read always does; a middle read may not). */
+  eof: boolean;
+}
+
+// ---- Tail-first pages ---------------------------------------------------------------------------
+// A page costs the bytes of the page: the newest page reads the last TAIL_WANT0 bytes of the log (a line start at or
+// under it), an older page reads a window around its cursor, and either is widened (doubled) until it holds the page
+// AND a PERSON turn opener older than the page's oldest item (the audience pass carries the person's exchange across
+// the machine turns after it, and only a person turn makes the newest reply fold) AND, for a cursor page, a person
+// opener newer than the cursor (the turn the cursor is in ends there: its closing reply, and the real user turn a
+// queued copy before the cursor is deduped against). So the whole-array passes (audience, queued dedupe, wake replies)
+// see the same turns the whole-file build does. The cache keeps the newest page's chunk and grows it by appends; a
+// cursor page's window is read once. Never on the whole file unless the file is that small (or has no person turn), a
+// cursor is in an old form, or the grammar cannot be read from a chunk.
+let TAIL_WANT0 = 256 * 1024;
+/** Bytes read past a cursor's line: the turn after it, so a queued copy and the real turn that landed after it meet. */
+const TAIL_LOOKAHEAD = 64 * 1024;
+/** Tests: TAIL_WANT0 = Infinity is the whole-file build (the oracle every tail-first page must equal). */
+export function tailFirstForTests(o: { want0?: number }): void {
+  if (o.want0 !== undefined) TAIL_WANT0 = o.want0;
+}
+
+/** What of a log a view reads: the last `want` bytes, a middle window, or the whole file. */
+type Range = { want: number } | { lo: number; hi: number } | 'whole';
+
+const isPartial = (v: SegmentView | null | undefined): boolean => !!v && v.start > 0;
+
+/** The same range reaching twice as far back (never past the file's start). */
+function widened(r: Range): Range {
+  if (r === 'whole') return r;
+  if ('want' in r) return { want: Number.isFinite(r.want) ? r.want * 2 : r.want };
+  return { lo: Math.max(0, r.lo - Math.max(r.hi - r.lo, TAIL_WANT0)), hi: r.hi };
+}
+
+/** A middle range reaching twice as far forward. */
+function widenedForward(r: Range): Range {
+  if (r === 'whole' || 'want' in r) return r;
+  return { lo: r.lo, hi: r.hi + Math.max(r.hi - r.lo, TAIL_LOOKAHEAD) };
+}
 
 const isUserText = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !!it.uuid;
+const isTurnOpener = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !it.mid_turn;
+/** A turn the operator opened (lib/audience.ts): what the audience pass anchors an exchange on. */
+const isPersonOpener = (it: any): boolean => isTurnOpener(it) && openerKind(it) === 'person';
 
-function segmentView(agentId: string, seg: Segment): SegmentView | null {
+function segmentView(agentId: string, seg: Segment, range: Range = 'whole'): SegmentView | null {
   const path = seg.file();
   if (!path) return null;
-  let log;
-  try { log = cachedLog(path, logParser(path.includes('antigravity-cli'))); } catch { return null; }
+  const parser = logParser(path.includes('antigravity-cli'));
+  let log: { items: readonly any[]; memo: Map<string, unknown>; start: number; end?: number; eof?: boolean };
+  try {
+    if (range === 'whole') log = cachedLog(path, parser);
+    else if ('want' in range) log = cachedLogTail(path, parser, range.want);
+    else log = logRange(path, parser, range.lo, range.hi);
+  } catch { return null; }
+  const end = log.end === undefined ? null : log.end;
   const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
   // What a session only saw (the earlier-conversation block, seed rows) is never shown (services/conversation-store.ts).
   const rules = storeRules(seg.session || null);
-  const key = `view:${seg.session}:${sig}:${rules.sig}`;
+  const key = `view:${seg.session}:${sig}:${rules.sig}:${log.start}:${end ?? ''}`;
   const memo = log.memo.get(key) as SegmentView | undefined;
   if (memo) return memo;
   const items = applyStoreRules(dropWarmup(log.items, mark), rules);
@@ -951,7 +1002,7 @@ function segmentView(agentId: string, seg: Segment): SegmentView | null {
     if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i);
     if (isUserText(it) && !userTexts.has(String(it.uuid))) userTexts.set(String(it.uuid), String(it.text ?? ''));
   });
-  const view = { items, firstAt, userTexts };
+  const view: SegmentView = { items, firstAt, userTexts, start: log.start, end, eof: log.eof ?? true };
   // One view per file: an older warm-up signature is never asked for again.
   for (const k of [...log.memo.keys()]) if (k.startsWith('view:')) log.memo.delete(k);
   log.memo.set(key, view);
@@ -971,17 +1022,47 @@ function rotationMarker(older: Segment, newer: Segment): Record<string, unknown>
 /** One chat position, newest to oldest: an item of a generation, or the marker above one. */
 interface Unit { item: any; seg: number; at: number }   // at = -1: the marker above segment `seg`
 
+/** The views of one window build: each generation's view over its range, made as the walk reaches it, and the WHOLE
+ *  view of a generation when a pass needs every item of it (carriedOver). */
+class Views {
+  readonly ranges: Range[];
+  private readonly made: (SegmentView | null | undefined)[];
+  private readonly wholes: (SegmentView | null | undefined)[];
+  constructor(private readonly agentId: string, readonly segs: Segment[], range: Range) {
+    this.ranges = segs.map(() => range);
+    this.made = segs.map(() => undefined);
+    this.wholes = segs.map(() => undefined);
+  }
+  get(i: number): SegmentView | null {
+    if (this.made[i] === undefined) this.made[i] = segmentView(this.agentId, this.segs[i], this.ranges[i]);
+    return this.made[i] ?? null;
+  }
+  /** Every item of generation `i`: the whole file (a retired generation's is parsed once and kept). */
+  whole(i: number): SegmentView | null {
+    if (this.ranges[i] === 'whole') return this.get(i);
+    if (this.wholes[i] === undefined) this.wholes[i] = segmentView(this.agentId, this.segs[i], 'whole');
+    return this.wholes[i] ?? null;
+  }
+  /** The view of `i` read again over `range` (a widened one). */
+  reset(i: number, range: Range): void {
+    this.ranges[i] = range;
+    this.made[i] = undefined;
+  }
+}
+
 /** The positions in generation `s` that a newer generation carried over: a user message that was being answered when
  *  the CLI went down is written again, with the same uuid and text, into the rebuilt conversation, and answered there.
  *  The chat shows it once, at the newer copy. Only user messages, and only on the same text too, because some logs
  *  number their ids per file (a codex ordinal, an antigravity step) and those repeat between generations by chance.
- *  Positions keep their index, so a cursor naming a hidden entry still resolves. */
-function carriedOver(s: number, count: number, view: (i: number) => SegmentView | null | undefined): Set<number> {
+ *  Positions keep their index, so a cursor naming a hidden entry still resolves. The newer generations are read
+ *  WHOLE here: the carried copy sits at the start of the rebuilt conversation, which a tail read does not reach. */
+function carriedOver(s: number, views: Views): Set<number> {
   const out = new Set<number>();
-  const v = view(s);
+  const v = views.get(s);
+  const count = views.segs.length;
   if (!v || !v.userTexts.size || s >= count - 1) return out;
   const newer: SegmentView[] = [];
-  for (let j = s + 1; j < count; j++) { const w = view(j); if (w?.userTexts.size) newer.push(w); }
+  for (let j = s + 1; j < count; j++) { const w = views.whole(j); if (w?.userTexts.size) newer.push(w); }
   if (!newer.length) return out;
   v.items.forEach((it, k) => {
     if (!isUserText(it)) return;
@@ -993,32 +1074,29 @@ function carriedOver(s: number, count: number, view: (i: number) => SegmentView 
 }
 
 /** Everything older than position (seg, at), newest first; markers only between two generations
- *  that both show something. Views are made only as the walk reaches them, and the newer ones a
- *  carried-over check needs. */
-function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[],
-                    seg: number, at: number): Generator<Unit> {
-  const view = (i: number) => {
-    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
-    return views[i];
-  };
+ *  that both show something. Views are made only as the walk reaches them. The walk STOPS at the start of a
+ *  partial view (a tail or middle read): what is older is in the same file, below the chunk, and the caller widens. */
+function* olderThan(views: Views, seg: number, at: number): Generator<Unit> {
+  const segs = views.segs;
   const hiddenMemo = new Map<number, Set<number>>();
   const hidden = (i: number) => {
     let h = hiddenMemo.get(i);
-    if (!h) { h = carriedOver(i, segs.length, view); hiddenMemo.set(i, h); }
+    if (!h) { h = carriedOver(i, views); hiddenMemo.set(i, h); }
     return h;
   };
   const shows = (i: number) => {
-    const v = view(i);
+    const v = views.get(i);
     return !!v && v.items.length > hidden(i).size;
   };
   let s = seg;
   let i = at;
   for (;;) {
-    const v = view(s);
+    const v = views.get(s);
     if (i > 0 && v) {
       const h = hidden(s);
       for (let k = Math.min(i, v.items.length) - 1; k >= 0; k--) if (!h.has(k)) yield { item: v.items[k], seg: s, at: k };
     }
+    if (isPartial(v)) return;                   // the rest of this generation is below the chunk
     // Above the start of segment s: the next older generation that shows anything, if any.
     let t = s - 1;
     while (t >= 0 && !shows(t)) t--;
@@ -1029,37 +1107,41 @@ function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null
   }
 }
 
-/** The cursor for a unit: the marker's own uuid, `<session>~<uuid>`, or `<session>~#<index>` for
- *  an item with no uuid. Sessions are plain ids, so '~' never appears in one. */
+/** The cursor for a unit: the marker's own uuid; `<session>~@<line offset>~<uuid>` (or `~#<part in line>` for an item
+ *  with no uuid) for an item whose line the cache located; `<session>~<uuid>` / `<session>~#<index>` otherwise (a
+ *  whole-file grammar). Sessions are plain ids, so '~' never appears in one. */
 function cursorOf(u: Unit, segs: Segment[]): string {
   if (u.at < 0) return String(u.item.uuid);
   const s = segs[u.seg].session;
+  if (typeof u.item?.line_off === 'number') {
+    return u.item?.uuid ? `${s}~@${u.item.line_off}~${u.item.uuid}` : `${s}~@${u.item.line_off}~#${u.item.line_part}`;
+  }
   return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${u.at}`;
 }
 
 /** A unit's item as a shallow copy (the cache keeps the originals), with the server's message ref
- *  `cursorOf(u) + '#' + part` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a
- *  generation with a known session. part is counted from the uuid's first position in that generation's view, NOT
- *  in the window, so a block has the same ref in the newest window, an older page and every re-read. */
-function withRef(u: Unit, segs: Segment[], views: (SegmentView | null | undefined)[]): any {
-  // The line fields are the cache's (what a byte cursor names); the envelope's items never carry them.
+ *  `<session>~<uuid>#<part>` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a generation
+ *  with a known session. part is counted from the uuid's first position in that generation's view, NOT in the window,
+ *  so a block has the same ref in the newest window, an older page and every re-read (a chunk never starts inside one
+ *  uuid's lines). The line fields are the cache's: the envelope's items never carry them. */
+function withRef(u: Unit, views: Views): any {
   const { line_off: _off, line_part: _part, ...copy } = u.item;
-  const v = u.at >= 0 ? views[u.seg] : null;
-  if (v && segs[u.seg]?.session && refable(u.item)) {
+  const v = u.at >= 0 ? views.get(u.seg) : null;
+  const session = views.segs[u.seg]?.session;
+  if (v && session && refable(u.item)) {
     const from = v.firstAt.get(String(u.item.uuid)) ?? 0;
-    copy.ref = `${cursorOf(u, segs)}#${partAt(v.items, u.at, from)}`;
+    copy.ref = messageRef(session, String(u.item.uuid), partAt(v.items, u.at, from));
   }
   return copy;
 }
 
-/** Where a cursor points: (segment, index), or null for one this chat does not have. A bare uuid
- *  is looked for from the newest generation back. */
-function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[], cursor: string):
-    { seg: number; at: number } | null {
-  const view = (i: number) => {
-    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
-    return views[i];
-  };
+const OFFSET_CURSOR = /^@(\d+)~(.*)$/;
+
+/** Where a cursor points: (segment, index), or null for one this chat does not have. An `@<offset>` cursor is looked
+ *  for in a window just under its line (the view's range is set here; the caller widens it); the older forms read the
+ *  whole file (cached), as they did; a bare uuid is looked for from the newest generation back. */
+function cursorAt(views: Views, cursor: string): { seg: number; at: number } | null {
+  const segs = views.segs;
   if (cursor.startsWith('rot:')) {
     const s = segs.findIndex((g) => g.session && `rot:${g.session}` === cursor);
     return s > 0 ? { seg: s, at: -1 } : null;
@@ -1067,8 +1149,23 @@ function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null |
   const tilde = cursor.indexOf('~');
   if (tilde >= 0) {
     const s = segs.findIndex((g) => g.session === cursor.slice(0, tilde));
+    if (s < 0) return null;
     const rest = cursor.slice(tilde + 1);
-    const v = s >= 0 ? view(s) : null;
+    const m = OFFSET_CURSOR.exec(rest);
+    if (m) {
+      const off = Number(m[1]);
+      if (!Number.isSafeInteger(off)) return null;
+      const r = views.ranges[s];
+      if (r === 'whole' || 'want' in r) views.reset(s, { lo: Math.max(0, off - TAIL_WANT0), hi: off + TAIL_LOOKAHEAD });
+      const v = views.get(s);
+      if (!v) return null;
+      const want = m[2];
+      const at = v.items.findIndex((it) => it?.line_off === off
+        && (want.startsWith('#') ? it.line_part === Number(want.slice(1)) : String(it.uuid) === want));
+      return at < 0 ? null : { seg: s, at };
+    }
+    if (views.ranges[s] !== 'whole') views.reset(s, 'whole');
+    const v = views.get(s);
     if (!v) return null;
     if (/^#\d+$/.test(rest)) {
       const n = Number(rest.slice(1));
@@ -1078,73 +1175,117 @@ function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null |
     return at === undefined ? null : { seg: s, at };
   }
   for (let s = segs.length - 1; s >= 0; s--) {
-    const at = view(s)?.firstAt.get(cursor);
+    if (views.ranges[s] !== 'whole') views.reset(s, 'whole');
+    const at = views.get(s)?.firstAt.get(cursor);
     if (at !== undefined) return { seg: s, at };
   }
   return null;
 }
 
+/** Throws when this generation's own log cannot be opened (the route answers an error envelope, outside the fail-open
+ *  views). A probe, not a parse: the page reads the log tail-first. */
+function readableLog(path: string): void {
+  closeSync(openSync(path, 'r'));
+}
+
 /** A window of the stitched chat: the newest `limit` positions (no cursor), or the `limit`
  *  positions just older than `before`. A page never starts inside one log line's items, so the
- *  next page, read from its `oldest_id`, neither repeats nor skips any. */
+ *  next page, read from its `oldest_id`, neither repeats nor skips any. Read tail-first: see TAIL_WANT0. */
 export function chatWindow(agentId: string, segs: Segment[], limit: number, before: string | null):
     { items: any[]; has_older: boolean; oldest_id: string | null; cursor_ts: string | null } | null {
-  const views: (SegmentView | null | undefined)[] = segs.map(() => undefined);
+  const views = new Views(agentId, segs, { want: TAIL_WANT0 });
   const last = segs.length - 1;
-  let from = { seg: last, at: Number.POSITIVE_INFINITY };
-  let cursorTs: string | null = null;
-  if (before !== null) {
-    const at = cursorAt(agentId, segs, views, before);
-    if (!at) return null;
-    from = at;
-    const v = views[at.seg];
-    cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
-  }
-  const walk = olderThan(agentId, segs, views, from.seg, from.at);
-  const units: Unit[] = [];
-  // Never one step past `limit` without a cursor: a window the current log fills must not look
-  // for, or read, an older generation's file.
-  while (units.length < limit) {
-    const got = walk.next();
-    if (got.done) break;
-    units.push(got.value);
-  }
-  let hasOlder = false;
-  if (before === null) {
-    // Without reading further (an older generation's file above all): the window is full and its
-    // oldest position has log lines below it in its own generation, or a generation above it in
-    // the chain. The chain's file may turn out unreadable; the next page then says has_older false.
-    // Keep one line's items together here too: a window that landed inside a line (an assistant's
-    // text and its tool call share a uuid) takes the rest of that line, so oldest_id names a whole
-    // line and the next page continues from it without losing an item. Only while the edge has
-    // lines below it in its own segment (edge.at > 0): no step into an older generation's file.
-    let edge = units.length >= limit ? units[units.length - 1] : undefined;
-    while (edge && edge.at > 0 && edge.item?.uuid) {
-      const next = walk.next();
-      if (next.done) break;
-      if (next.value.seg !== edge.seg || next.value.item?.uuid !== edge.item.uuid) break;
-      units.push(next.value);
-      edge = next.value;
+  // Each round reads over the ranges so far; a round that ran out of chunk, or whose page has no turn opener below
+  // it in its chunk, widens that generation's range and builds again. Ranges only widen, so this ends.
+  for (let round = 0; round < 64; round++) {
+    let from = { seg: last, at: Number.POSITIVE_INFINITY };
+    let cursorTs: string | null = null;
+    if (before !== null) {
+      const at = cursorAt(views, before);
+      if (!at) return null;
+      from = at;
+      const v = views.get(at.seg);
+      cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
+      // The turn the cursor is in must end inside the window (a person opener after the cursor, or the file's end):
+      // its closing reply is the last assistant text of the turn, and a queued copy before the cursor is deduped
+      // against the real turn written after it.
+      if (v && at.at >= 0 && !v.eof) {
+        let closed = false;
+        for (let k = at.at + 1; k < v.items.length && !closed; k++) if (isPersonOpener(v.items[k])) closed = true;
+        if (!closed) {
+          views.reset(at.seg, widenedForward(views.ranges[at.seg]));
+          continue;
+        }
+      }
     }
-    hasOlder = !!edge && (edge.at > 0 || edge.seg > 0);
-  } else {
-    let next = walk.next();
-    // Keep one line's items together: take the rest of the oldest item's line too.
-    const edge = units[units.length - 1];
-    while (edge && edge.at >= 0 && edge.item?.uuid && !next.done
-           && next.value.seg === edge.seg && next.value.item?.uuid === edge.item.uuid) {
-      units.push(next.value);
-      next = walk.next();
+    const walk = olderThan(views, from.seg, from.at);
+    const units: Unit[] = [];
+    let done = false;
+    // Never one step past `limit` without a cursor: a window the current log fills must not look
+    // for, or read, an older generation's file.
+    while (units.length < limit) {
+      const got = walk.next();
+      if (got.done) { done = true; break; }
+      units.push(got.value);
     }
-    hasOlder = !next.done;
+    const stopSeg = units.length ? units[units.length - 1].seg : from.seg;
+    if (done && isPartial(views.get(stopSeg))) {
+      // The chunk ran out before the page was full: what is older is in the same file, below it.
+      views.reset(stopSeg, widened(views.ranges[stopSeg]));
+      continue;
+    }
+    let hasOlder = false;
+    if (before === null) {
+      // Without reading further (an older generation's file above all): the window is full and its
+      // oldest position has log lines below it in its own generation (or below its chunk), or a
+      // generation above it in the chain. The chain's file may turn out unreadable; the next page then says
+      // has_older false. Keep one line's items together here too: a window that landed inside a line (an
+      // assistant's text and its tool call share a uuid) takes the rest of that line, so oldest_id names a
+      // whole line and the next page continues from it without losing an item. Only while the edge has
+      // lines below it in its own segment (edge.at > 0): no step into an older generation's file.
+      let edge = units.length >= limit ? units[units.length - 1] : undefined;
+      while (edge && edge.at > 0 && edge.item?.uuid) {
+        const next = walk.next();
+        if (next.done) break;
+        if (next.value.seg !== edge.seg || next.value.item?.uuid !== edge.item.uuid) break;
+        units.push(next.value);
+        edge = next.value;
+      }
+      hasOlder = !!edge && (edge.at > 0 || isPartial(views.get(edge.seg)) || edge.seg > 0);
+    } else {
+      let next = walk.next();
+      // Keep one line's items together: take the rest of the oldest item's line too.
+      const edge = units[units.length - 1];
+      while (edge && edge.at >= 0 && edge.item?.uuid && !next.done
+             && next.value.seg === edge.seg && next.value.item?.uuid === edge.item.uuid) {
+        units.push(next.value);
+        next = walk.next();
+      }
+      hasOlder = !next.done || (!!edge && edge.at >= 0 && isPartial(views.get(edge.seg)));
+    }
+    // The whole-array passes saw the turn the page starts in only if a PERSON opener lies below the page's oldest
+    // item inside its chunk (or the chunk is the file's start). Otherwise: wider.
+    const oldest = units[units.length - 1];
+    if (oldest && oldest.at >= 0) {
+      const v = views.get(oldest.seg);
+      if (isPartial(v)) {
+        let opened = false;
+        for (let k = oldest.at - 1; k >= 0 && !opened; k--) if (isPersonOpener(v!.items[k])) opened = true;
+        if (!opened) {
+          views.reset(oldest.seg, widened(views.ranges[oldest.seg]));
+          continue;
+        }
+      }
+    }
+    units.reverse();
+    return {
+      items: units.map((u) => withRef(u, views)),  // shallow copies (the cache keeps the originals), with refs
+      has_older: hasOlder,
+      oldest_id: units.length ? cursorOf(units[0], segs) : null,
+      cursor_ts: cursorTs,
+    };
   }
-  units.reverse();
-  return {
-    items: units.map((u) => withRef(u, segs, views)),  // shallow copies (the cache keeps the originals), with refs
-    has_older: hasOlder,
-    oldest_id: units.length ? cursorOf(units[0], segs) : null,
-    cursor_ts: cursorTs,
-  };
+  return null;
 }
 
 function cleanArgs(args: any): Record<string, unknown> {
@@ -2391,7 +2532,7 @@ export function pageItemsFor(agentId: string, limit = 300): any[] {
     const { path, sid } = resolveTranscriptPath(agentId);
     if (!path) return [];
     const current = path;
-    cachedLog(current, logParser(current.includes('antigravity-cli')));
+    readableLog(current);
     let segs: Segment[];
     try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
     const win = chatWindow(agentId, segs, limit, null);
@@ -2509,7 +2650,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     const read = new Set<string>();
     const missing: Segment[] = [];
     const build = (): Record<string, unknown> | null => {
-      cachedLog(current, logParser(current.includes('antigravity-cli')));
+      readableLog(current);
       let segs: Segment[];
       try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
       segs = segs.map((s) => ({ ...s, file: () => { const f = s.file(); if (f && f !== current) read.add(f); else if (!f && s.refind) missing.push(s); return f; } }));

@@ -295,6 +295,51 @@ function read<S>(path: string, parser: LogParser<S>, want: number): Entry {
   return entry;
 }
 
+/** The items of [lo, hi) of the file, rounded out to whole lines (lo down to a line start, then back while the line
+ *  before shares the first line's uuid; hi up to the end of the line holding hi - 1, capped at the file's size). Not
+ *  kept: a cursor page is read once, scrolling back. `end` is where the read stopped. A grammar that cannot be read
+ *  from a chunk is the whole file (cached), as for a tail read. Throws when the file cannot be read. */
+export function logRange<S>(path: string, parser: LogParser<S>, lo: number, hi: number): CachedLog & { end: number; eof: boolean } {
+  const st = statSync(path);
+  let start = lo <= 0 ? 0 : lineStartAt(path, Math.min(lo, st.size));
+  if (start > 0) {
+    const u0 = uuidOfLineAt(path, start, st.size);
+    for (let guard = 0; u0 && start > 0 && guard < 64; guard++) {
+      const prev = lineStartAt(path, start - 1);
+      if (uuidOfLineAt(path, prev, st.size) !== u0) break;
+      start = prev;
+    }
+  }
+  const end = hi >= st.size ? st.size : lineEndAt(path, Math.max(hi, start), st.size);
+  if (start === 0 && end === st.size) return { ...cachedLog(path, parser), end: st.size, eof: true };
+  const buf = readRange(path, start, end);
+  const { lines, end: lineEnd } = completeLines(buf);
+  if (lineEnd < buf.length) {   // the last line of the file, complete but without its newline yet
+    const rest = buf.subarray(lineEnd).toString('utf-8');
+    if (isWholeJsonLine(rest)) lines.push(rest);
+  }
+  const got = parser.full(lines);
+  if (got.state === null) return { ...cachedLog(path, parser), end: st.size, eof: true };
+  stampLines(got.items, lines, start);
+  const items = parser.finish(got.items, got.state, start === 0);
+  parses += 1;
+  tailParses += 1;
+  return { items, memo: new Map(), start, end, eof: end >= st.size };
+}
+
+/** One past the newline that ends the line holding byte `pos`, or `size` when that line has none yet. */
+function lineEndAt(path: string, pos: number, size: number): number {
+  let lo = pos;
+  while (lo < size) {
+    const block = readRange(path, lo, Math.min(size, lo + SCAN_BLOCK));
+    if (!block.length) break;
+    const nl = block.indexOf(0x0a);
+    if (nl >= 0) return lo + nl + 1;
+    lo += block.length;
+  }
+  return size;
+}
+
 /** The entry for [start, size) of the file. For start > 0 (a tail read) a grammar that hands back no resumable state is
  *  not readable from a chunk: null, so the caller reads the whole file. */
 function parseRange<S>(path: string, st: { ino: number; size: number; mtimeMs: number }, start: number, parser: LogParser<S>): Entry | null {

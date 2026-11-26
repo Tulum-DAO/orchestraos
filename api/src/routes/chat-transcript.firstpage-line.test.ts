@@ -78,7 +78,7 @@ test('the first page keeps a split line whole, and page 1 + page 2 are the whole
     assert.equal(first.has_older, true);
     assert.equal(first.items[0].ref, `${SID}~a1#0`, 'the window landed inside the a1 line: its first item is pulled in too');
     assert.equal(first.items.length, 41, 'one more than the limit, never a line cut in two');
-    assert.equal(first.oldest_id, `${SID}~a1`);
+    assert.match(first.oldest_id, new RegExp(`^${SID}~@\\d+~a1$`), 'the cursor: the a1 line\'s byte offset, then its uuid');
     const second = await get(`?before=${encodeURIComponent(first.oldest_id)}`);
     assert.deepEqual(refs(second), [`${SID}~u0#0`]);
     assert.equal(second.has_older, false);
