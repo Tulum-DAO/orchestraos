@@ -18,7 +18,7 @@ delete process.env.TMUX;
 process.env.ORCHESTRA_TRANSCRIPT_RESOLVE_BUDGET = '2';
 const seats: Record<string, unknown> = {};
 for (let i = 0; i < 5; i++) {
-  seats[`s${i}`] = { session_id: `0c0ffee0-0000-4000-8000-00000000000${i}`, tmux_session: `s${i}`, runtime: 'claude' };
+  seats[`s${i}`] = { session_id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, tmux_session: `s${i}`, runtime: 'claude' };
 }
 writeFileSync(join(dir, 'state', 'agent-sessions.json'), JSON.stringify(seats));
 process.env.ORCHESTRA_DIR = dir;
