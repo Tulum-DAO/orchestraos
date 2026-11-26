@@ -8,8 +8,8 @@ Off unless QUOTE_GATE_LABEL=1.
 
 What verifies today, read-only at ingest time:
 - dream CLI rows: the dream row (the day file line its source_id names) has the fact's text, says actor "shaw"
-  and carries a citation {transcript, uuid, part}; that transcript record exists, and its text block contains
-  the fact's text.
+  and carries a citation {transcript, uuid, part}; that transcript record is a user record, and its text block
+  contains the fact's text.
 - voice rows: the conversation row the fact cites says the operator spoke, and its text is the fact's text.
 Every other attributed fact (summaries, inferences, goals) has no quote to check, so it is labelled.
 
@@ -118,11 +118,12 @@ class _Sources:
             self._jsonl[key] = out
         return self._jsonl[key]
 
-    def transcript_block(self, citation: dict):
-        """The text of block `part` of the record `uuid` in `transcript`, or None."""
+    def transcript_turn(self, citation: dict):
+        """(record, text of its block `part`) for the record `uuid` in `transcript`. (None, None) if there is
+        no such record; the text is None if the record has no such block."""
         rel = str(citation.get("transcript") or "")
         if not rel or rel.startswith("/") or ".." in rel.split("/"):
-            return None
+            return None, None
         rows = self.rows(os.path.join(self.projects_dir, rel))
         for o in rows or []:
             if isinstance(o, dict) and o.get("uuid") == citation.get("uuid"):
@@ -132,8 +133,14 @@ class _Sources:
                     b.get("text", "") for b in (c if isinstance(c, list) else [])
                     if isinstance(b, dict) and b.get("type") == "text"]
                 part = citation.get("part")
-                return blocks[part] if isinstance(part, int) and 0 <= part < len(blocks) else None
-        return None
+                return o, (blocks[part] if isinstance(part, int) and 0 <= part < len(blocks) else None)
+        return None, None
+
+
+def _user_record(o: dict) -> bool:
+    """A record the user typed: type "user", and no message role other than "user"."""
+    m = o.get("message")
+    return o.get("type") == "user" and (not isinstance(m, dict) or m.get("role", "user") == "user")
 
 
 def _check_dream(fact: dict, src: _Sources):
@@ -155,7 +162,11 @@ def _check_dream(fact: dict, src: _Sources):
     cite = row.get("citation")
     if not isinstance(cite, dict) or not cite.get("uuid"):
         return False, "dream row carries no citation"
-    block = src.transcript_block(cite)
+    record, block = src.transcript_turn(cite)
+    if record is None:
+        return False, "cited transcript turn not found"
+    if not _user_record(record):
+        return False, "cited transcript record is not the user's"
     if block is None:
         return False, "cited transcript turn not found"
     if want not in _norm(block):

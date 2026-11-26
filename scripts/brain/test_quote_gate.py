@@ -317,3 +317,23 @@ def test_a_dream_fact_is_checked_against_the_row_its_source_id_names(world, tmp_
                        "other_file": "dream row not found"}
     assert states["operator_line"] == "active"
     assert {k: states[k] for k in EXPECT} == EXPECT
+
+
+def test_only_a_user_record_in_the_transcript_verifies(world, tmp_path, monkeypatch):
+    """A dream row that cites the assistant's record is quoting the model, not the operator."""
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    text = "the light theme reads better at night"
+    _append(tmp_path / "projects" / "proj" / "sess.jsonl", [
+        {"type": "assistant", "uuid": "a-said", "message": {"role": "assistant",
+                                                            "content": [{"type": "text", "text": text}]}},
+        {"type": "user", "uuid": "u-role", "message": {"role": "assistant", "content": text}}])
+    day = tmp_path / "2026-11-25.jsonl"
+    first = _append(day, [_cli_row(text, {"transcript": "proj/sess.jsonl", "uuid": "a-said", "part": 0}),
+                          _cli_row(text, {"transcript": "proj/sess.jsonl", "uuid": "u-role", "part": 0})])
+    world["assistant_record"] = _dream_at(day, first, text)
+    world["assistant_role"] = _dream_at(day, first + 1, text)
+    _, states, prov = _ingest(tmp_path, world)
+    for k in ("assistant_record", "assistant_role"):
+        assert states[k] == "unverified"
+        assert prov[k]["quote_gate"]["reason"] == "cited transcript record is not the user's"
+    assert {k: states[k] for k in EXPECT} == EXPECT
