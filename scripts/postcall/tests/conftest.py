@@ -59,6 +59,7 @@ def _no_outside_effects(monkeypatch, request, tmp_path):
         monkeypatch.setenv(key, value)
     for key in [k for k in os.environ if k.startswith("TELEGRAM_")]:
         monkeypatch.delenv(key)
+    monkeypatch.delenv("POSTCALL_SHAW_NAMES", raising=False)   # a test opts in; never the sweep's own value
     for key in ("APPROVAL_DB_PATH", "NTFY_TOKEN_FILE", "MSG_DB_PATH", "POSTCALL_STATE_DIR", "POSTCALL_CLIENTS_DIR",
                 "POSTCALL_REGISTRY_FILE", "POSTCALL_CALENDAR_URL_FILE"):
         assert not _under_live(os.environ[key]), f"postcall fence: {key} points at a live path"

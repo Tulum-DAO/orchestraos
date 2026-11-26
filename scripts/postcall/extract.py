@@ -93,6 +93,20 @@ def _substantive(text):
     return len(words) >= MIN_CONTENT_WORDS
 
 
+def _shaw_names():
+    """Shaw's own name(s) as a recorder labels him (POSTCALL_SHAW_NAMES, comma list; set by the sweep's
+    environment, never written in code)."""
+    import os
+    return {n.strip().casefold() for n in (os.environ.get("POSTCALL_SHAW_NAMES") or "").split(",") if n.strip()}
+
+
+def _named_shaw_label(label, call_turns):
+    """A transcript whose speaker label IS Shaw's configured name proves the label by itself."""
+    names = _shaw_names()
+    return bool(label and names and label.strip().casefold() in names
+                and any(lab == label for lab, _, _ in call_turns))
+
+
 def ground(call, extraction):
     """Grounded items. A diarized call binds each quote to one speaker turn (inferred trust); a call
     that is not diarized (or has no turns) keeps the item with speaker "" and trust "unknown", the
@@ -101,7 +115,7 @@ def ground(call, extraction):
     call_turns = turns(call.transcript)
     diarized = bool(getattr(call, "diarized", True)) and bool(call_turns)
     shaw_label = raw_all.get("shaw_label")
-    if diarized and raw_all.get("items"):
+    if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns):
         evidence = locate_quote(raw_all.get("shaw_label_evidence"), call.transcript)
         if not shaw_label or evidence is None or _speaker_of(evidence, call_turns) != shaw_label:
             raise AttributionError(f"{call.call_id}: shaw_label {shaw_label!r} not evidenced in that speaker's turn")
