@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover — py<3.9
 DEFAULT_BUDGET_TOKENS = 6000      # opening context; GPT-Live's start frame has no stated cap, appends do (500)
 APPEND_MAX_TOKENS = 500           # native protocol.APPEND_MAX_TOKENS
 LINE_MAX_CHARS = 1200             # one very long chat reply must not eat the whole budget
+MERGE_GAP_S = 120                 # one speaker's phrases further apart than this in a call are separate turns
 SUMMARY_SHARE = 0.2               # of the budget, for the EARLIER block
 # The opening is fenced as history that is over (live probes 2026-11-25: unfenced, the thread ended on verbatim call
 # dialogue and Arturo never greeted, native-90a7e00cd3d1; thread off, he greeted at 1.5 s, native-8f4a14b348a8).
@@ -53,6 +54,8 @@ class Line:
     text: str
     channel: str                  # "chat" | "call"
     call_id: str = ""
+    role: str = ""                # "user" | "agent": who spoke, by role, so a name clash never folds two speakers
+    phrases: int = 1              # call phrases folded into this turn (merge_phrases)
 
 
 def estimate_tokens(text: str) -> int:
@@ -123,9 +126,11 @@ def _redact(text: str) -> str:
     return _SECRET_RE.sub(lambda m: (m.group(1) + "[redacted]") if m.group(1) else (m.group(2) + "[redacted]"), text)
 
 
-def _clip(text: str, n: int) -> str:
+def _clip(text: str, n: int, tail: bool = False) -> str:
     text = " ".join(_redact(str(text or "")).split())
-    return text if len(text) <= n else text[: n - 1] + "…"
+    if len(text) <= n:
+        return text
+    return "…" + text[len(text) - (n - 1):] if tail else text[: n - 1] + "…"
 
 
 # --- sources --------------------------------------------------------------------------------------------------------
@@ -206,7 +211,7 @@ def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, a
             if at is None:
                 continue
             out.append(Line(at=at, who=operator_label if role == "user" else label, text=text, channel="call",
-                            call_id=cid))
+                            call_id=cid, role="user" if role == "user" else "agent"))
     return out
 
 
@@ -232,7 +237,9 @@ def _where(line: Line) -> str:
 
 
 def format_line(line: Line, tz: str, tz_label: str) -> str:
-    return f"{stamp(line.at, tz, tz_label)} {_where(line)} {line.who}: {_clip(line.text, LINE_MAX_CHARS)}"
+    # a merged turn over the cap keeps its tail: the newest words are the ones a caller refers back to
+    return (f"{stamp(line.at, tz, tz_label)} {_where(line)} {line.who}: "
+            f"{_clip(line.text, LINE_MAX_CHARS, tail=line.phrases > 1)}")
 
 
 def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> list:
@@ -247,7 +254,7 @@ def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> lis
     out = []
     for key, lines in groups:
         first = lines[0]
-        n = len(lines)
+        n = sum(l.phrases for l in lines)
         if key == "chat":
             gist = _clip(" / ".join(f"{l.who}: {l.text}" for l in lines[-2:]), SUMMARY_ITEM_CHARS)
             out.append(f"- {stamp(first.at, tz, tz_label)} chat, {n} message(s) not shown; last: {gist}")
@@ -259,17 +266,19 @@ def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> lis
 
 
 def merge_phrases(lines: list) -> list:
-    """A turn is an exchange (gm ruling msg_5bfe3426): consecutive phrases by the same speaker in the same call become
-    one turn, stamped at its first phrase. Chat lines never merge. `lines` in time order."""
-    out = []
+    """A turn is an exchange: consecutive phrases by the same speaker (same role and name) in the same call become one
+    turn, stamped at its first phrase, while each phrase follows the one before within MERGE_GAP_S. Chat lines never
+    merge. `lines` in time order."""
+    out, last_at = [], None
     for ln in lines:
         prev = out[-1] if out else None
         if (prev is not None and ln.channel == "call" and prev.channel == "call" and ln.call_id == prev.call_id
-                and ln.who == prev.who):
+                and ln.role == prev.role and ln.who == prev.who and ln.at - last_at <= MERGE_GAP_S):
             out[-1] = Line(at=prev.at, who=prev.who, text=f"{prev.text} {ln.text}", channel="call",
-                           call_id=prev.call_id)
+                           call_id=prev.call_id, role=prev.role, phrases=prev.phrases + 1)
         else:
             out.append(ln)
+        last_at = ln.at
     return out
 
 

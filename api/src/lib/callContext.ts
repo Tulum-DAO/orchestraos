@@ -21,6 +21,7 @@ export const DEFAULT_BUDGET_TOKENS = 6000;
 export const MIN_BUDGET_TOKENS = 500;
 export const MAX_BUDGET_TOKENS = 20000;
 const LINE_MAX_CHARS = 1200;
+const MERGE_GAP_S = 120;  // one speaker's phrases further apart than this in a call are separate turns
 const SUMMARY_SHARE = 0.2;
 // The opening is fenced as history that is over (thread_context.PAST_OPEN/PAST_CLOSE; live probes 2026-11-25: unfenced,
 // the thread ended on verbatim call dialogue and Arturo never greeted; thread off, he greeted at 1.5 s).
@@ -32,7 +33,11 @@ const CALL_MAX_AGE_S = 14 * 86400;
 const SECRET_RE = /(sk-)[A-Za-z0-9_-]{6,}|((?:KEY|TOKEN|SECRET|PASSWORD)[A-Z_]*=)\S+/gi;
 const SPOKEN_ROLES_SKIP = new Set(['tool', 'system', 'tool_result', 'function']);
 
-export interface Line { at: number; who: string; text: string; channel: 'chat' | 'call'; call_id: string }
+/** `role` is who spoke by role, so a name clash never folds two speakers; `phrases` counts call phrases folded into
+ *  this turn (mergePhrases). Both optional: a chat line has neither. */
+export interface Line {
+  at: number; who: string; text: string; channel: 'chat' | 'call'; call_id: string; role?: 'user' | 'agent'; phrases?: number;
+}
 
 const cpLen = (s: string) => Array.from(s).length;
 const cpSlice = (s: string, a: number, b?: number) => Array.from(s).slice(a, b).join('');
@@ -79,9 +84,11 @@ export const redact = (text: string) =>
 
 export type Redactor = (s: string) => string;
 
-function clip(text: string, n: number, red: Redactor): string {
+function clip(text: string, n: number, red: Redactor, tail = false): string {
   const t = squash(red(String(text || '')));
-  return cpLen(t) <= n ? t : cpSlice(t, 0, n - 1) + '…';
+  const len = cpLen(t);
+  if (len <= n) return t;
+  return tail ? '…' + cpSlice(t, len - (n - 1)) : cpSlice(t, 0, n - 1) + '…';
 }
 
 // --- sources --------------------------------------------------------------------------------------------------------
@@ -143,7 +150,8 @@ export function callLines(journals: Journal[], owner: string | null, exclude: st
       if (!text || SPOKEN_ROLES_SKIP.has(role)) continue;
       const at = epoch(t.ts) ?? start;
       if (at === null) continue;
-      out.push({ at, who: role === 'user' ? operatorLabel : label, text, channel: 'call', call_id: cid });
+      out.push({ at, who: role === 'user' ? operatorLabel : label, text, channel: 'call', call_id: cid,
+        role: role === 'user' ? 'user' : 'agent' });
     }
   }
   return out;
@@ -171,8 +179,9 @@ export function stamp(at: number, tz: string, tzLabel: string): string {
 
 const where = (l: Line) => (l.channel === 'call' ? `call ${l.call_id}` : 'chat');
 
+// a merged turn over the cap keeps its tail: the newest words are the ones a caller refers back to
 export const formatLine = (l: Line, tz: string, tzLabel: string, red: Redactor = redact) =>
-  `${stamp(l.at, tz, tzLabel)} ${where(l)} ${l.who}: ${clip(l.text, LINE_MAX_CHARS, red)}`;
+  `${stamp(l.at, tz, tzLabel)} ${where(l)} ${l.who}: ${clip(l.text, LINE_MAX_CHARS, red, (l.phrases ?? 1) > 1)}`;
 
 function summaries(dropped: Line[], tz: string, tzLabel: string, red: Redactor): string[] {
   const groups: [string, Line[]][] = [];
@@ -186,19 +195,23 @@ function summaries(dropped: Line[], tz: string, tzLabel: string, red: Redactor):
     const gist = clip(ls.slice(-2).map((l) => `${l.who}: ${l.text}`).join(' / '), SUMMARY_ITEM_CHARS, red);
     return key === 'chat'
       ? `- ${stamp(first.at, tz, tzLabel)} chat, ${ls.length} message(s) not shown; last: ${gist}`
-      : `- ${stamp(first.at, tz, tzLabel)} call ${key}, ${ls.length} phrase(s) not shown; ${gist}`;
+      : `- ${stamp(first.at, tz, tzLabel)} call ${key}, ${ls.reduce((n, l) => n + (l.phrases ?? 1), 0)} phrase(s) not shown; ${gist}`;
   });
 }
 
-/** A turn is an exchange (thread_context.merge_phrases): consecutive phrases by the same speaker in the same call are
- *  one turn, stamped at its first phrase. Chat lines never merge. `lines` in time order. */
+/** A turn is an exchange (thread_context.merge_phrases): consecutive phrases by the same speaker (same role and name)
+ *  in the same call are one turn, stamped at its first phrase, while each phrase follows the one before within
+ *  MERGE_GAP_S. Chat lines never merge. `lines` in time order. */
 export function mergePhrases(lines: Line[]): Line[] {
   const out: Line[] = [];
+  let lastAt = 0;
   for (const ln of lines) {
     const prev = out[out.length - 1];
-    if (prev && ln.channel === 'call' && prev.channel === 'call' && ln.call_id === prev.call_id && ln.who === prev.who) {
-      out[out.length - 1] = { ...prev, text: `${prev.text} ${ln.text}` };
+    if (prev && ln.channel === 'call' && prev.channel === 'call' && ln.call_id === prev.call_id
+      && (ln.role ?? '') === (prev.role ?? '') && ln.who === prev.who && ln.at - lastAt <= MERGE_GAP_S) {
+      out[out.length - 1] = { ...prev, text: `${prev.text} ${ln.text}`, phrases: (prev.phrases ?? 1) + 1 };
     } else out.push(ln);
+    lastAt = ln.at;
   }
   return out;
 }
