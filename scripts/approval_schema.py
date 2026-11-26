@@ -189,12 +189,16 @@ def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None,
     return True, None
 
 
-def reopen_card(c, rid, caller, reason, reg, now_iso=None):
+def reopen_card(c, rid, caller, reason, reg, now_iso=None, ledger_has_card=None):
     """THE one RE-OPEN transition: undo a retire done IN ERROR. retired -> pending on
     approval_requests, the retire columns cleared, one history line appended
     ("— RE-OPENED <stamp> by <caller>: <reason>"); the RETIRED line above it stays, so the history
     shows both. gm only (bare or current generation). Sends nothing and resumes nothing: notified_at
-    is untouched, so no notifier fires again. Returns (ok, reason)."""
+    is untouched, so no notifier fires again. Never re-opens a safety-gate card (the gate retires its
+    own cards when a grant covers them), a card another card superseded (the winner is the live
+    question), or a card the outward-action ledger already settled (an approve would then do
+    nothing). ledger_has_card(rid) -> True | False | None (None = cannot tell = refuse).
+    Returns (ok, reason)."""
     reason = (reason or "").strip()
     if not reason:
         return False, "a reason is required: say why the retire was wrong"
@@ -207,11 +211,23 @@ def reopen_card(c, rid, caller, reason, reg, now_iso=None):
         return False, f"only gm may re-open a retired card ({caller} is not gm)"
     if not set(RETIRE_COLS) <= _cols(c, "approval_requests"):
         return False, f"DDL not armed: {RETIRE_MIGRATION}"
-    row = c.execute("SELECT status FROM approval_requests WHERE id=?", [rid]).fetchone()
+    row = c.execute("SELECT status, origin, menu, superseded_by FROM approval_requests WHERE id=?",
+                    [rid]).fetchone()
     if not row:
         return False, f"no card {rid}"
     if row["status"] != "retired":
         return False, f"{rid} is {row['status']}, not retired: only a retired card can be re-opened"
+    if is_gate_row(dict(row)):
+        return False, f"{rid} is a safety-gate card: the gate settled it; it is never re-opened"
+    if row["superseded_by"]:
+        return False, (f"{rid} was superseded by {row['superseded_by']}: that card is the live question; "
+                       f"re-open would ask it twice")
+    held = ledger_has_card(rid) if ledger_has_card else False
+    if held is None:
+        return False, f"{rid}: the outward-action ledger cannot be read, so re-open is refused"
+    if held:
+        return False, (f"{rid} has an outward-action ledger row (settled when it was retired): an approve "
+                       f"would do nothing; file a new card instead")
     stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = f"\n\n— RE-OPENED {stamp} by {caller}: {reason}"
     res = c.execute(
@@ -769,10 +785,14 @@ class ApprovalStore:
         c = self._conn()
         try:
             row = c.execute(
-                "SELECT from_agent, summary, question FROM approval_requests WHERE id=?",
+                "SELECT from_agent, summary, question, origin, menu FROM approval_requests WHERE id=?",
                 [rid]).fetchone()
             if not row:
                 return False, f"no approval row {rid}"
+            if is_gate_row(dict(row)):
+                # a gate card's from_agent is the HELD agent: a note would put its words in front of
+                # the person deciding whether to let it run
+                return False, f"{rid} is a safety-gate card: it takes no notes; only a person answers it"
             # The author, its own seat across rotations (a successor annotating a predecessor's
             # card, by POSITIVE registry evidence; seat_identity), or the operator, who owns every
             # surface.
@@ -786,10 +806,11 @@ class ApprovalStore:
                                           f"(authored by {row['from_agent']}); only the author, "
                                           f"its current successor, or the operator may annotate it")
             stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            base = row["summary"] or row["question"] or ""
             who = f"{author} (orphan steward)" if why == "orphan-steward" else author
             note = f"\n\n— NOTE {stamp} by {who}: {text}"
-            c.execute("UPDATE approval_requests SET summary=? WHERE id=?", [base + note, rid])
+            # one statement: a retire/close/note landing between our read and this write keeps its line
+            c.execute("UPDATE approval_requests SET summary=COALESCE(summary, question, '') || ? WHERE id=?",
+                      [note, rid])
             c.commit()
             return True, None
         finally:
@@ -808,12 +829,13 @@ class ApprovalStore:
         finally:
             c.close()
 
-    def reopen(self, rid, caller, reason, now_iso=None):
+    def reopen(self, rid, caller, reason, now_iso=None, ledger_has_card=None):
         """See reopen_card. Returns (ok, reason)."""
         import seat_identity
         c = self._conn()
         try:
-            return reopen_card(c, rid, caller, reason, seat_identity.registry_beside(self.db_path), now_iso)
+            return reopen_card(c, rid, caller, reason, seat_identity.registry_beside(self.db_path), now_iso,
+                               ledger_has_card=ledger_has_card)
         finally:
             c.close()
 

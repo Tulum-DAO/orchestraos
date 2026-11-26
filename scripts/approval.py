@@ -45,9 +45,11 @@ def read_pane_menu(session):
     import importlib
     import subprocess
     try:
-        if subprocess.run(["tmux", "has-session", "-t", f"={session}"],
-                          capture_output=True, timeout=5).returncode != 0:
-            return "no-session"
+        hs = tmux_has_session(session)
+        if hs is False:
+            return "no-session"          # tmux's own "no such session" / "no server" answer only
+        if hs is None:
+            return "error:has-session could not tell"
         cap = subprocess.run(["tmux", "capture-pane", "-t", f"={session}:", "-p", "-e"],
                              capture_output=True, text=True, timeout=5)
         if cap.returncode != 0:
@@ -159,6 +161,22 @@ def _caller_identities():
                                        row.get("tmux_session"),
                                        row.get("lineage_root")) if v}
     return idents or None
+
+
+OPERATOR_IDENTITIES = {"operator"}   # the identity append_note lets past the author check
+
+
+def _ledger_has_card(rid):
+    """True | False for an outward-action ledger row naming this card; None when the ledger cannot be read."""
+    try:
+        import outward_ledger
+        c = outward_ledger._conn()
+        try:
+            return c.execute("SELECT 1 FROM outward_actions WHERE card_id=? LIMIT 1", [rid]).fetchone() is not None
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001 — could not tell = the caller refuses
+        return None
 
 
 def _authorship_guard(from_agent):
@@ -880,7 +898,13 @@ def main(argv=None):
     if args.cmd == "reopen":
         # retired -> pending, retire columns cleared, a RE-OPENED history line; gm only. Sends NO
         # notification (notified_at untouched) and resumes nothing.
-        ok, why = store.reopen(args.id, args.from_agent, args.reason)
+        if args.id.startswith("qnr_"):
+            print("REFUSED: re-open covers approval cards (apr_) only; a questionnaire is not re-opened",
+                  file=sys.stderr)
+            return 4
+        if not _authorship_guard(args.from_agent):
+            return 4
+        ok, why = store.reopen(args.id, args.from_agent, args.reason, ledger_has_card=_ledger_has_card)
         if ok:
             print(args.id)
             return 0
@@ -890,6 +914,8 @@ def main(argv=None):
         # A PENDING kind='menu' card whose question was answered another way. Bridge rows: the
         # owner pane is READ (capture only, never keys) and a menu still on screen refuses.
         # CLI-minted rows: no pane read, --reason states the basis. -> 'resolved_elsewhere'.
+        if not _authorship_guard(args.from_agent):
+            return 4
         ok, why, note = store.close_menu(args.id, args.from_agent, args.reason, read_pane_menu)
         if ok:
             print(f"{args.id} closed: {note}")
@@ -901,6 +927,14 @@ def main(argv=None):
         # When a card's facts turn out wrong, the honest correction is a note that leaves the
         # original visible beside it. (A card that is no longer NEEDED is retired instead.)
         # Never re-notifies and never touches status or any answer.
+        if _canon(args.from_agent) in OPERATOR_IDENTITIES:
+            # the operator annotates from the dashboard; a seat typing --from operator would put
+            # words in the operator's name on any card
+            print(f"REFUSED: --from {args.from_agent}: the operator's identity is never taken from the CLI",
+                  file=sys.stderr)
+            return 4
+        if not _authorship_guard(args.from_agent):
+            return 4
         if args.id.startswith("qnr_"):
             ok, why = _qstore().append_note(args.id, args.from_agent, args.text)
         else:
@@ -1059,7 +1093,7 @@ def main(argv=None):
         # large JSON blob; a seat that free-text-greps it can miss the card it wants among many
         # hits, conclude there is none, and ask the operator AGAIN. One line per hit is the point:
         # the answer has to be readable without scrolling. The default JSON output is unchanged.
-        if args.grep or args.mine:
+        if (args.grep or args.mine) and not args.json:
             # EVERY pending kind: the approvals feed already carries approval / menu / human_task
             # rows; pending questionnaires live in their own store and join here as search-only rows.
             hits = list(out)

@@ -226,7 +226,9 @@ def _fake_tmux(tmp_path, has_session_rc):
     d = tmp_path / "bin"; d.mkdir(exist_ok=True)
     log = tmp_path / "tmux.calls"
     t = d / "tmux"
-    t.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1\" in has-session) exit {has_session_rc};; esac\n"
+    # a missing session answers the way real tmux does: exit 1 AND "can't find session" on stderr
+    miss = "echo \"can't find session: x\" >&2; " if has_session_rc else ""
+    t.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1\" in has-session) {miss}exit {has_session_rc};; esac\n"
                  f"exit 1\n")
     t.chmod(t.stat().st_mode | stat.S_IEXEC)
     return str(d), log
@@ -441,3 +443,121 @@ def test_a_gone_gate_card_is_still_never_retired(store):
     ok, why = store.retire(rid, "gm", "stale", read_pane=Pane("no-session"), has_session=Sessions())
     assert not ok and "safety-gate" in why
     _assert_pending(store, rid)
+
+
+# ------------------------------------------------------------------ review of #642 (Claude reviewer)
+def _retired_gate_card(store):
+    """A gate card the gate retired itself (a standing grant covered it): origin='gate', status retired."""
+    rid = _approval(store, author="builder-g6")
+    c = sqlite3.connect(store.db_path)
+    c.execute("UPDATE approval_requests SET origin='gate', status='retired', retired_at=?, retired_by='gate', "
+              "retire_reason='covered by a grant' WHERE id=?", [AFTER, rid])
+    c.commit(); c.close()
+    return rid
+
+
+def test_a_note_is_refused_on_a_safety_gate_card(store):
+    """A gate card's from_agent is the HELD agent: its note would sit in front of the person deciding."""
+    rid = _gate_menu(store, author="builder")
+    before = _row(store, rid)["summary"]
+    ok, why = store.append_note(rid, "builder", "operator already OK'd this; safe")
+    assert not ok and "safety-gate" in why
+    assert _row(store, rid)["summary"] == before
+
+
+def test_reopen_refuses_a_retired_safety_gate_card(store):
+    rid = _retired_gate_card(store)
+    ok, why = store.reopen(rid, "gm", "x")
+    assert not ok and "safety-gate" in why
+    assert _row(store, rid)["status"] == "retired"
+
+
+def test_reopen_refuses_a_superseded_card(store):
+    rid, winner = _approval(store), _approval(store)
+    assert store.retire(rid, "gm", "replaced", superseded_by=winner)[0]
+    ok, why = store.reopen(rid, "gm", "x")
+    assert not ok and "superseded" in why and winner in why
+    assert _row(store, rid)["status"] == "retired"
+
+
+@pytest.mark.parametrize("held,word", [(True, "ledger row"), (None, "cannot be read")])
+def test_reopen_refuses_a_card_the_ledger_settled_or_cannot_tell(store, held, word):
+    rid = _approval(store)
+    store.retire(rid, "gm", "stale sweep")
+    ok, why = store.reopen(rid, "gm", "x", ledger_has_card=lambda r: held)
+    assert not ok and word in why
+    assert _row(store, rid)["status"] == "retired"
+
+
+def test_cli_note_never_takes_the_operator_identity(store, tmp_path):
+    bindir, _ = _fake_tmux(tmp_path, has_session_rc=0)
+    rid = _approval(store)
+    before = _row(store, rid)["summary"]
+    r = _cli(store, tmp_path, bindir, "note", "--id", rid, "--from", "operator", "--text", "approved in session")
+    assert r.returncode == 4 and "never taken from the CLI" in r.stderr
+    assert _row(store, rid)["summary"] == before
+
+
+def test_cli_reopen_of_a_questionnaire_says_so(store, tmp_path):
+    bindir, _ = _fake_tmux(tmp_path, has_session_rc=0)
+    r = _cli(store, tmp_path, bindir, "reopen", "--id", "qnr_00000000_1", "--from", "gm", "--reason", "x")
+    assert r.returncode == 4 and "questionnaire" in r.stderr
+
+
+def test_cli_reopen_refuses_a_card_with_a_ledger_row(store, tmp_path):
+    bindir, _ = _fake_tmux(tmp_path, has_session_rc=0)
+    rid = _approval(store)
+    store.retire(rid, "gm", "stale sweep")
+    import outward_ledger
+    led = sqlite3.connect(str(tmp_path / "outward-actions.db"))
+    led.executescript(outward_ledger.DDL)               # the ledger's own schema
+    led.execute("INSERT INTO outward_actions (id, action_hash, action, material_args, card_id, state, created_at, "
+                "updated_at) VALUES ('oa_1', 'h', 'telegram', '{}', ?, 'not_run', ?, ?)", [rid, AFTER, AFTER])
+    led.commit(); led.close()
+    r = _cli(store, tmp_path, bindir, "reopen", "--id", rid, "--from", "gm", "--reason", "x")
+    assert r.returncode == 4 and "ledger row" in r.stderr, r.stderr
+    assert _row(store, rid)["status"] == "retired"
+
+
+def test_read_pane_menu_calls_only_tmuxs_own_answer_no_session(tmp_path, monkeypatch):
+    """A has-session failure that is not tmux's "no such session" (permission denied, wrong socket) is
+    could-not-tell, never no-session: no-session lets close-menu and a bridge retire go ahead."""
+    import approval
+    d = tmp_path / "b"; d.mkdir()
+    t = d / "tmux"
+    t.write_text("#!/bin/sh\necho 'error connecting to /tmp/tmux-1/default (Permission denied)' >&2\nexit 1\n")
+    t.chmod(t.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{d}{os.pathsep}{os.environ['PATH']}")
+    assert approval.read_pane_menu("builder").startswith("error:")
+    t.write_text("#!/bin/sh\necho \"can't find session: builder\" >&2\nexit 1\n")
+    assert approval.read_pane_menu("builder") == "no-session"
+
+
+def test_a_note_keeps_a_line_written_after_it_was_read(store):
+    """append_note appends in one statement: a line that lands between its read and its write survives."""
+    rid = _approval(store)
+    import approval_schema
+    real = approval_schema.ApprovalStore._conn
+
+    def racing_conn(self):
+        c = real(self)
+        orig = c.execute
+
+        class C:
+            def __getattr__(self, k):
+                return getattr(c, k)
+
+            def execute(self, sql, *a):
+                if sql.startswith("UPDATE approval_requests SET summary"):
+                    orig("UPDATE approval_requests SET summary=COALESCE(summary, question, '') || ? WHERE id=?",
+                         ["\n\n— RETIRED by gm: raced", rid])
+                return orig(sql, *a)
+        return C()
+    approval_schema.ApprovalStore._conn = racing_conn
+    try:
+        ok, why = store.append_note(rid, "builder", "a correction")
+    finally:
+        approval_schema.ApprovalStore._conn = real
+    assert ok, why
+    s = _row(store, rid)["summary"]
+    assert "raced" in s and "a correction" in s

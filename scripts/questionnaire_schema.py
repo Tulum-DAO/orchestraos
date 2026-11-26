@@ -270,10 +270,9 @@ class QuestionnaireStore:
                                           f"(authored by {row['from_agent']}); only the author, "
                                           f"its current successor, or the operator may annotate it")
             stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            base = row["summary"] or row["title"] or ""
             who = f"{author} (orphan steward)" if why == "orphan-steward" else author
-            c.execute("UPDATE questionnaires SET summary=? WHERE id=?",
-                      [base + f"\n\n— NOTE {stamp} by {who}: {text}", qid])
+            c.execute("UPDATE questionnaires SET summary=COALESCE(summary, title, '') || ? WHERE id=?",
+                      [f"\n\n— NOTE {stamp} by {who}: {text}", qid])
             c.commit()
             return True, None
         finally:

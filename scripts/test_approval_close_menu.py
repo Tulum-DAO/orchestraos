@@ -193,7 +193,9 @@ sys.exit(97)   # anything else (send-keys, respawn, kill...) is a failure AND is
 
 def _cli(db, home, bin_dir, *args):
     tmp = os.path.dirname(db)
-    env = dict(os.environ, APPROVAL_DB_PATH=db, NTFY_TOKEN_FILE=NO_NTFY, HOME=str(home),
+    # no caller pane: the authorship check must not ask the real tmux who is calling
+    base = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    env = dict(base, APPROVAL_DB_PATH=db, NTFY_TOKEN_FILE=NO_NTFY, HOME=str(home),
                ORCHESTRA_DIR=os.path.join(tmp, "orch"),
                OUTWARD_LEDGER_PATH=os.path.join(tmp, "outward-actions.db"),
                PATH=f"{bin_dir}:{os.environ['PATH']}",
