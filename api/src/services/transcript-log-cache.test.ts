@@ -39,6 +39,10 @@ function oracle(path: string): any[] {
   return logItems(readFileSync(path, 'utf-8').split('\n'), false);
 }
 
+/** The cache's items minus the line fields it stamps (line_off/line_part: what a byte cursor names; the whole-array
+ *  parse outside the cache has none). */
+const bare = (items: readonly any[]) => items.map(({ line_off, line_part, ...rest }: any) => rest);
+
 function fresh(): { path: string; parser: ReturnType<typeof logParser> } {
   clearLogCache();
   const path = join(dir, `log-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`);
@@ -51,7 +55,7 @@ test('an appended log is read from its old end: no second full parse, and the it
   const full0 = logCacheFullParses();
   const first = cachedLog(path, parser);
   assert.equal(logCacheFullParses(), full0 + 1);
-  assert.deepEqual(first.items, oracle(path));
+  assert.deepEqual(bare(first.items), oracle(path));
   // the same file again: nothing read
   const reads = logCacheParses();
   assert.equal(cachedLog(path, parser), first);
@@ -63,7 +67,7 @@ test('an appended log is read from its old end: no second full parse, and the it
   assert.equal(logCacheFullParses(), full0 + 1, 'no full parse on an append');
   assert.equal(logCacheAppends(), appends0 + 1);
   assert.equal(logCacheParses(), reads + 1, 'an append counts as a parse for the callers that count reads');
-  assert.deepEqual(grown.items, oracle(path));
+  assert.deepEqual(bare(grown.items), oracle(path));
   assert.equal(grown.items.length, 5);
 });
 
@@ -77,7 +81,7 @@ test('the Claude usage state survives the append boundary: a reply split across 
     drewNothing('msg_2', { input_tokens: 7, output_tokens: 1 }),
     assistant('msg_3', 'after the tool', { input_tokens: 30, output_tokens: 3 })].join('\n') + '\n');
   const grown = cachedLog(path, parser);
-  assert.deepEqual(grown.items, oracle(path));
+  assert.deepEqual(bare(grown.items), oracle(path));
   const withUsage = grown.items.filter((it: any) => it.usage);
   assert.equal(withUsage.length, 2, 'msg_1 once, msg_3 once (msg_2 carried into it)');
   assert.equal(grown.items.filter((it: any) => it.text === 'part two')[0].usage, undefined);
@@ -92,7 +96,7 @@ test('a log that shrank, or was rewritten under its old end, is parsed in full a
   const full0 = logCacheFullParses();
   truncateSync(path, 0);
   writeFileSync(path, [user('uno'), user('dos')].join('\n') + '\n');
-  assert.deepEqual(cachedLog(path, parser).items, oracle(path));
+  assert.deepEqual(bare(cachedLog(path, parser).items), oracle(path));
   assert.equal(logCacheFullParses(), full0 + 1, 'shorter: full parse');
   // same length as before, different bytes under the old end (the probe differs): full parse, not an append
   const before = readFileSync(path, 'utf-8');
@@ -100,7 +104,7 @@ test('a log that shrank, or was rewritten under its old end, is parsed in full a
   assert.equal(rewritten.length, before.length);
   writeFileSync(path, rewritten + user('tres') + '\n');
   const got = cachedLog(path, parser);
-  assert.deepEqual(got.items, oracle(path));
+  assert.deepEqual(bare(got.items), oracle(path));
   assert.equal(got.items.some((it: any) => it.text === 'DOS'), true);
   assert.equal(logCacheFullParses(), full0 + 2, 'rewritten under the old end: full parse');
 });
@@ -118,7 +122,7 @@ test('an atomic replace (new inode, same size and mtime) is a full parse', () =>
   const got = cachedLog(path, parser);
   assert.notEqual(got, first);
   assert.equal(logCacheFullParses(), full0 + 1);
-  assert.deepEqual(got.items, oracle(path));
+  assert.deepEqual(bare(got.items), oracle(path));
 });
 
 test('a half-written last line is not parsed, and is read whole once its newline lands', () => {
@@ -132,7 +136,7 @@ test('a half-written last line is not parsed, and is read whole once its newline
   appendFileSync(path, partial.slice(20) + '\n');
   const done = cachedLog(path, parser);
   assert.equal(done.items.length, 2);
-  assert.deepEqual(done.items, oracle(path));
+  assert.deepEqual(bare(done.items), oracle(path));
   assert.equal(done.items[1].text, 'partial line');
 });
 
@@ -173,7 +177,7 @@ test('an empty first read does not lock the file to the Claude grammar: a codex 
   assert.equal(cachedLog(path, parser).items.length, 0);
   appendFileSync(path, [codexMeta(1), codexUser(2, 'spawn my gm agent')].join('\n') + '\n');
   const grown = cachedLog(path, parser);
-  assert.deepEqual(grown.items, oracle(path));
+  assert.deepEqual(bare(grown.items), oracle(path));
   assert.equal(grown.items.length, 1, 'the codex user line is an item');
   assert.equal(grown.items[0].text, 'spawn my gm agent');
 });
@@ -185,7 +189,7 @@ test('a half-written first line does not lock the grammar either: the torn sessi
   assert.equal(cachedLog(path, parser).items.length, 0);
   appendFileSync(path, meta.slice(Math.floor(meta.length / 2)) + '\n' + codexUser(2, 'hello from codex') + '\n');
   const grown = cachedLog(path, parser);
-  assert.deepEqual(grown.items, oracle(path));
+  assert.deepEqual(bare(grown.items), oracle(path));
   assert.equal(grown.items.length, 1);
 });
 
@@ -194,7 +198,7 @@ test('a complete last line with no newline is parsed for a whole-file grammar, a
   const { path, parser } = fresh();
   writeFileSync(path, codexUser(1, 'the only line'));            // no trailing newline
   assert.equal(cachedLog(path, parser).items.length, 1);
-  assert.deepEqual(cachedLog(path, parser).items, oracle(path));
+  assert.deepEqual(bare(cachedLog(path, parser).items), oracle(path));
 });
 
 test('a one-line Claude log with no newline yet, then an append, equals a whole-file parse: the first line is not parsed twice', () => {
@@ -203,10 +207,10 @@ test('a one-line Claude log with no newline yet, then an append, equals a whole-
   const { path, parser } = fresh();
   writeFileSync(path, user('the first words'));                  // complete line, newline not yet written
   const first = cachedLog(path, parser);
-  assert.deepEqual(first.items, oracle(path));
+  assert.deepEqual(bare(first.items), oracle(path));
   appendFileSync(path, '\n' + user('the second words') + '\n');
   const grown = cachedLog(path, parser);
-  assert.deepEqual(grown.items, oracle(path));
+  assert.deepEqual(bare(grown.items), oracle(path));
   assert.equal(grown.items.length, 2);
 });
 
@@ -218,10 +222,10 @@ test('an append equals a whole-file parse when it drops a queued opener: no stal
     attachment: { type: 'queued_command', prompt: text, origin: { kind: 'human' }, commandMode: 'prompt' } });
   writeFileSync(path, [queued('please summarize the log'), assistant('msg_1', 'working on it', { input_tokens: 3, output_tokens: 1 })].join('\n') + '\n');
   const first = cachedLog(path, parser);
-  assert.deepEqual(first.items, oracle(path));
+  assert.deepEqual(bare(first.items), oracle(path));
   appendFileSync(path, user('please summarize the log') + '\n');
   const grown = cachedLog(path, parser);
-  assert.deepEqual(grown.items, oracle(path));
+  assert.deepEqual(bare(grown.items), oracle(path));
 });
 
 test('a 5 MB log: an append costs a small fraction of the full parse', () => {

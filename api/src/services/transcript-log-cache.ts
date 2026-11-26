@@ -15,9 +15,17 @@
  * every request found the cache stale and parsed the whole file again (4 MB: 0.8 s of read + JSON
  * on an idle box, 10+ s on a throttled one, past the client's timeout). An append is a few lines.
  *
+ * TAIL READS (step 2 part B): `cachedLogTail(path, parser, wantBytes)` parses the file from a line start at or under
+ * size - wantBytes, so a page costs the bytes of the page: the entry carries `start` (0 = the whole file). One entry per
+ * (grammar, file): a wider request re-parses from an earlier start and REPLACES the entry (ranges only widen, never
+ * shrink), the whole file is the widest, and an append extends a tail entry like any other. A grammar that cannot be
+ * read from a chunk (codex/grok/antigravity rollouts carry a header line; `full` hands back no state) falls back to the
+ * whole file once. Every item of a resumable grammar carries `line_off` (the byte offset of its log line) and
+ * `line_part` (its index within that line): what a byte cursor names.
+ *
  * Callers must not mutate the items they get back: they are shared with the next request.
  */
-import { closeSync, openSync, readFileSync, readSync, statSync } from 'fs';
+import { closeSync, openSync, readSync, statSync } from 'fs';
 
 export const LOG_CACHE_MAX_BYTES = 64 * 1024 * 1024;   // source bytes; parsed items take several times that
 export const LOG_CACHE_MAX_FILES = 32;
@@ -32,15 +40,21 @@ export interface LogParser<S = unknown> {
   /** What of this grammar changes the items it yields (its flags): two parsers with different keys keep separate
    *  entries for one file. Without it, a subagent log read once WITH its sidechain rows served them to a plain reader. */
   readonly key: string;
+  /** Items may carry `li`, the index in `lines` of the line they came from: the cache turns it into the line's byte
+   *  offset (`line_off`) and the item's index within the line (`line_part`). A grammar without it yields no offsets. */
   full(lines: string[]): { items: any[]; state: S | null };
   append(lines: string[], state: S): { items: any[]; state: S };
-  finish(raw: any[], state: S | null): any[];
+  /** `atStart`: the raw items begin at the file's first line (a tail read's do not: its first user text is not the
+   *  spawn brief, and the items before its first turn opener belong to a turn whose opener is above the chunk). */
+  finish(raw: any[], state: S | null, atStart: boolean): any[];
 }
 
 export interface CachedLog {
   readonly items: readonly any[];
   /** Derived views of `items` (a filtered list, an index), dropped with the entry. */
   readonly memo: Map<string, unknown>;
+  /** The byte offset of the first parsed line: 0 for the whole file, a line start for a tail read. */
+  readonly start: number;
 }
 
 interface Entry extends CachedLog {
@@ -58,6 +72,8 @@ let bytes = 0;
 let parses = 0;        // every read that produced items (full or append)
 let fullParses = 0;
 let appends = 0;
+let tailParses = 0;    // range parses from a line start > 0
+let bytesRead = 0;     // file bytes read by every parse (tests: a tail read costs the tail)
 
 /** How many reads produced items (tests: a page that hits the cache parses nothing). */
 export function logCacheParses(): number { return parses; }
@@ -66,18 +82,26 @@ export function logCacheFullParses(): number { return fullParses; }
 /** How many were an append read (new bytes only). */
 export function logCacheAppends(): number { return appends; }
 
+/** How many reads parsed a tail range (start > 0) rather than the whole file. */
+export function logCacheTailParses(): number { return tailParses; }
+/** How many file bytes the parses read in all. */
+export function logCacheBytesRead(): number { return bytesRead; }
+
 export function clearLogCache(): void { entries.clear(); bytes = 0; }
+
+/** What an entry costs the budget: the bytes it parsed. */
+const cost = (e: Entry): number => e.size - e.start;
 
 function drop(slot: string): void {
   const e = entries.get(slot);
   if (!e) return;
   entries.delete(slot);
-  bytes -= e.size;
+  bytes -= cost(e);
 }
 
 function keep(slot: string, entry: Entry): void {
   entries.set(slot, entry);
-  bytes += entry.size;
+  bytes += cost(entry);
   for (const [k] of entries) {
     if (bytes <= LOG_CACHE_MAX_BYTES && entries.size <= LOG_CACHE_MAX_FILES) break;
     if (k !== slot) drop(k);
@@ -95,9 +119,65 @@ function readRange(path: string, from: number, to: number): Buffer {
       if (n <= 0) break;
       got += n;
     }
+    bytesRead += got;
     return got === buf.length ? buf : buf.subarray(0, got);
   } finally {
     closeSync(fd);
+  }
+}
+
+const SCAN_BLOCK = 4096;
+
+/** The start of the line that holds byte `pos` (0 <= pos <= size): one past the last newline before `pos`, or 0. */
+function lineStartAt(path: string, pos: number): number {
+  let hi = pos;
+  while (hi > 0) {
+    const lo = Math.max(0, hi - SCAN_BLOCK);
+    const block = readRange(path, lo, hi);
+    const nl = block.lastIndexOf(0x0a);
+    if (nl >= 0) return lo + nl + 1;
+    hi = lo;
+  }
+  return 0;
+}
+
+/** The uuid of the JSON line starting at `off`, or null when that line is not one JSON value with a uuid. */
+function uuidOfLineAt(path: string, off: number, size: number): string | null {
+  let end = off;
+  let text = '';
+  while (end < size) {
+    const block = readRange(path, end, Math.min(size, end + SCAN_BLOCK));
+    const nl = block.indexOf(0x0a);
+    if (nl >= 0) { text += block.subarray(0, nl).toString('utf-8'); break; }
+    text += block.toString('utf-8');
+    end += block.length;
+    if (!block.length) break;
+  }
+  try {
+    const u = JSON.parse(text)?.uuid;
+    return typeof u === 'string' && u ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Items that came with a line index (`li`): stamp the line's byte offset from `base` and the item's index within
+ *  the line, then drop `li`. Items without one are left as they are (a whole-file grammar). */
+function stampLines(items: any[], lines: string[], base: number): void {
+  let offs: number[] | null = null;
+  let lastLi = -1;
+  let part = 0;
+  for (const it of items) {
+    if (!it || typeof it.li !== 'number') continue;
+    if (!offs) {
+      offs = new Array(lines.length);
+      let o = base;
+      for (let i = 0; i < lines.length; i++) { offs[i] = o; o += Buffer.byteLength(lines[i], 'utf8') + 1; }
+    }
+    if (it.li !== lastLi) { lastLi = it.li; part = 0; }
+    it.line_off = offs[it.li];
+    it.line_part = part++;
+    delete it.li;
   }
 }
 
@@ -135,12 +215,25 @@ function probeOf(prev: Buffer, added: Buffer): Buffer {
 /** The parsed items of `path`, from the cache while the file is unchanged; the new lines only when it
  *  grew. Throws when the file cannot be read (the caller decides what a missing log means). */
 export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
+  return read(path, parser, Number.POSITIVE_INFINITY);
+}
+
+/** The items of the last `wantBytes` of `path` (rounded out to a line start; the whole file when it is that small,
+ *  or when the grammar cannot be read from a chunk). The entry's `start` says where the items begin. */
+export function cachedLogTail<S>(path: string, parser: LogParser<S>, wantBytes: number): CachedLog {
+  return read(path, parser, Math.max(0, wantBytes));
+}
+
+/** An entry covers a want when it is the whole file or reaches back `want` bytes from the end. */
+const covers = (e: Entry, want: number): boolean => e.start === 0 || e.size - e.start >= want;
+
+function read<S>(path: string, parser: LogParser<S>, want: number): Entry {
   // Stat BEFORE reading: if the file grows in between, the entry records the older size and the
   // next request reads again. The other order could keep a short read under the longer size.
   const st = statSync(path);
   const slot = `${parser.key}\n${path}`;
   const hit = entries.get(slot);
-  if (hit && hit.ino === st.ino && hit.size === st.size && hit.mtimeMs === st.mtimeMs) {   // ino: an atomic replace keeps size and mtime
+  if (hit && hit.ino === st.ino && hit.size === st.size && hit.mtimeMs === st.mtimeMs && covers(hit, want)) {   // ino: an atomic replace keeps size and mtime
     entries.delete(slot);
     entries.set(slot, hit);
     return hit;
@@ -156,21 +249,56 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
       entry = { ...hit, size: st.size, mtimeMs: st.mtimeMs };
     } else {
       const got = parser.append(lines, hit.state as S);
+      stampLines(got.items, lines, hit.offset);
       const raw = hit.raw.concat(got.items);
-      const items = parser.finish(raw, got.state);
+      const items = parser.finish(raw, got.state, hit.start === 0);
       parses += 1;
       appends += 1;
       entry = {
-        items, memo: new Map(), raw, state: got.state,
+        items, memo: new Map(), raw, state: got.state, start: hit.start,
         ino: st.ino, size: st.size, mtimeMs: st.mtimeMs,
         offset: hit.offset + end, probe: probeOf(hit.probe, added.subarray(0, end)),
       };
     }
-    if (st.size <= LOG_CACHE_MAX_BYTES) keep(slot, entry);
-    return entry;
+    if (covers(entry, want)) {
+      if (cost(entry) <= LOG_CACHE_MAX_BYTES) keep(slot, entry);
+      return entry;
+    }
+    // Grown, but the caller wants further back than this entry reaches: widen below.
   }
   drop(slot);
-  const buf = readFileSync(path);
+  // A tail read: from the line start at or under size - want, moved back while the line before shares the first
+  // line's uuid (one Claude reply's lines never straddle a chunk edge, so parts and refs equal the whole-file build's).
+  let start = 0;
+  if (Number.isFinite(want) && want < st.size) {
+    start = lineStartAt(path, st.size - want);
+    if (start > 0) {
+      const u0 = uuidOfLineAt(path, start, st.size);
+      for (let guard = 0; u0 && start > 0 && guard < 64; guard++) {
+        const prev = lineStartAt(path, start - 1);
+        if (uuidOfLineAt(path, prev, st.size) !== u0) break;
+        start = prev;
+      }
+    }
+  }
+  if (start > 0) {
+    const entry = parseRange(path, st, start, parser);
+    if (entry) {
+      keep(slot, entry);
+      return entry;
+    }
+    // the grammar cannot be read from a chunk: the whole file, once
+  }
+  const entry = parseRange(path, st, 0, parser)!;
+  if (cost(entry) > LOG_CACHE_MAX_BYTES) return entry;
+  keep(slot, entry);
+  return entry;
+}
+
+/** The entry for [start, size) of the file. For start > 0 (a tail read) a grammar that hands back no resumable state is
+ *  not readable from a chunk: null, so the caller reads the whole file. */
+function parseRange<S>(path: string, st: { ino: number; size: number; mtimeMs: number }, start: number, parser: LogParser<S>): Entry | null {
+  const buf = readRange(path, start, st.size);
   const { lines, end: lineEnd } = completeLines(buf);
   // The remainder after the last newline: a line still being written (fails JSON.parse: left for the append that lands
   // its newline, as before) or a COMPLETE line whose newline is not written yet (parses: a JSONL line is one JSON value,
@@ -183,15 +311,14 @@ export function cachedLog<S>(path: string, parser: LogParser<S>): CachedLog {
     if (isWholeJsonLine(rest)) { lines.push(rest); end = buf.length; }
   }
   const got = parser.full(lines);
-  const items = parser.finish(got.items, got.state);
+  if (start > 0 && got.state === null) return null;
+  stampLines(got.items, lines, start);
+  const items = parser.finish(got.items, got.state, start === 0);
   parses += 1;
-  fullParses += 1;
-  const entry: Entry = {
-    items, memo: new Map(), raw: got.items, state: got.state,
+  if (start === 0) fullParses += 1; else tailParses += 1;
+  return {
+    items, memo: new Map(), raw: got.items, state: got.state, start,
     ino: st.ino, size: st.size, mtimeMs: st.mtimeMs,
-    offset: end, probe: probeOf(Buffer.alloc(0), buf.subarray(0, end)),
+    offset: start + end, probe: probeOf(Buffer.alloc(0), buf.subarray(0, end)),
   };
-  if (st.size > LOG_CACHE_MAX_BYTES) return entry;
-  keep(slot, entry);
-  return entry;
 }

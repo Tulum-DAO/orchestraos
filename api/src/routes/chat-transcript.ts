@@ -1042,7 +1042,8 @@ function cursorOf(u: Unit, segs: Segment[]): string {
  *  generation with a known session. part is counted from the uuid's first position in that generation's view, NOT
  *  in the window, so a block has the same ref in the newest window, an older page and every re-read. */
 function withRef(u: Unit, segs: Segment[], views: (SegmentView | null | undefined)[]): any {
-  const copy = { ...u.item };
+  // The line fields are the cache's (what a byte cursor names); the envelope's items never carry them.
+  const { line_off: _off, line_part: _part, ...copy } = u.item;
   const v = u.at >= 0 ? views[u.seg] : null;
   if (v && segs[u.seg]?.session && refable(u.item)) {
     const from = v.firstAt.get(String(u.item.uuid)) ?? 0;
@@ -1678,8 +1679,15 @@ function capInput(input: Record<string, unknown>): { capped: Record<string, unkn
 // v2 enrichment pass over the flat v1 items (mutating a fresh copy):
 // summary (from FULL input) -> cap input -> input_full, and is_system on the
 // first user text (spawn brief rule shared with web buildRenderList).
-function enrichItems(items: any[]): any[] {
-  let firstUserSeen = false;
+/** The line fields a tail read stamps (services/transcript-log-cache.ts), carried onto a rebuilt item. */
+function withLine(out: any, it: any): any {
+  if (typeof it?.line_off === 'number') { out.line_off = it.line_off; out.line_part = it.line_part; }
+  return out;
+}
+
+function enrichItems(items: any[], atStart = true): any[] {
+  // The log's first user text can be the spawn brief: only when these items start at the file's first line.
+  let firstUserSeen = !atStart;
   return items.map((it) => {
     if (it.kind === 'tool_use') {
       const input = (it.input && typeof it.input === 'object') ? it.input : {};
@@ -1692,13 +1700,13 @@ function enrichItems(items: any[]): any[] {
       if (it.model) out.model = it.model;      // the model that made the call (additive)
       if (it.usage) out.usage = it.usage;      // tokens its reply spent, OTel terms (additive)
       withTs(out, it.ts);
-      return out;
+      return withLine(out, it);
     }
     if (it.kind === 'text' && it.role === 'user' && !firstUserSeen) {
       firstUserSeen = true;
       const text = (it.text || '').trim();
       if (text.length > 800 || /^You are\b/.test(text)) {
-        return withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts);
+        return withLine(withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts), it);
       }
     }
     return it;
@@ -1970,11 +1978,13 @@ export interface ClaudeParseState {
  *  drew anything carries its tokens to the next reply's first item. */
 function parseClaudeLines(lines: string[], keepSidechain: boolean, state: ClaudeParseState): any[] {
   const items: any[] = [];
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     if (!line.trim()) continue;
     try {
       const o = JSON.parse(line);
       const got = normalizeClaudeEntry(o, keepSidechain);
+      for (const it of got) it.li = li;   // which line: the cache turns it into the line's byte offset (line_off/line_part)
       const msg = o?.message;
       const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
       const first = got.find((it) => it.role === 'assistant');
@@ -2027,14 +2037,15 @@ export function logParser(antigravityHint: boolean, keepSidechain = false): LogP
     append(lines, state) {
       return { items: parseClaudeLines(lines, keepSidechain, state), state };
     },
-    finish(raw, state) {
+    finish(raw, state, atStart) {
       // On COPIES of the raw items: the whole-array passes (tagAudience above all) stamp audience/exchange in place and
       // never clear them, and `raw` is kept by the cache for the next append. Tagging raw itself left a reply with the
       // exchange of a queued opener that dedupeQueuedCommands dropped on a later pass (append != whole-file parse).
-      const items = raw.map((it) => ({ ...it }));
+      // `li` (which line) is the cache's to turn into line_off/line_part; a whole-array parse outside the cache drops it.
+      const items = raw.map(({ li: _li, ...it }) => it);
       // Whole-file pass (Claude): a queued message the log later recorded as a real user turn must
       // show ONCE, and the real turn is the one that wins.
-      return finishLogItems(state ? dedupeQueuedCommands(items) : items);
+      return finishLogItems(state ? dedupeQueuedCommands(items) : items, atStart);
     },
   };
 }
@@ -2044,11 +2055,12 @@ export function logParser(antigravityHint: boolean, keepSidechain = false): LogP
 export function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
   const parser = logParser(antigravityHint, keepSidechain);
   const got = parser.full(lines);
-  return parser.finish(got.items, got.state);
+  return parser.finish(got.items, got.state, true);
 }
 
-/** The whole-array passes every grammar's raw items get, in order, then the audience/exchange tags. */
-function finishLogItems(items: any[]): any[] {
+/** The whole-array passes every grammar's raw items get, in order, then the audience/exchange tags. `atStart` false
+ *  for a tail chunk: its first user text is not the log's first message (never the spawn brief by position). */
+function finishLogItems(items: any[], atStart = true): any[] {
   // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
   // Kept as the turn's opener (audience/exchange tagging and the interrupted-turn merge need it), flagged, words only;
   // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
@@ -2076,7 +2088,7 @@ function finishLogItems(items: any[]): any[] {
   });
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
-  return tagAudience(enrichItems(items));
+  return tagAudience(enrichItems(items, atStart));
 }
 
 /** The assistant text answering a reaction wake (after a reaction_wake turn, before the next user text) that is not a
