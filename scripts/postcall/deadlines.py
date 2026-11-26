@@ -27,6 +27,10 @@ _ZONES = (("America/New_York", "est", "edt", "eastern"), ("America/Chicago", "cs
 _HOURS = re.compile(r"\b(?:in|within)\s+(?:the\s+next\s+)?(an?|\d+|(?:a\s+)?couple(?:\s+of)?|(?:a\s+)?few)"
                     r"\s+hours?\b(?!\s+and\b)")
 # Clock or duration words this parser does not read: the phrase stays unknown rather than half-read.
+# One zone grammar for reading AND for consuming: "<abbr|name> [standard|daylight] [time]".
+_ZONE_TAIL = r"(?:\s+(standard|daylight))?(?:\s+time)?"
+_DAYPART = re.compile(r"\bin the (?:morning|afternoon|evening)\b|\bat night\b")
+MAX_RELATIVE_HOURS = 72
 _COMPOUND = re.compile(r"\b(?:half|quarter|past)\b")
 _NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
                      r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
@@ -143,7 +147,7 @@ def _named_zone(p):
     or ("", None) when two are named ("EST or PST"): alternatives are never resolved."""
     found = []
     for tz, std, dst, name in _ZONES:
-        for m in re.finditer(rf"\b({std}|{dst}|{name})(?:\s+(standard|daylight)\s+time)?\b", p):
+        for m in re.finditer(rf"\b({std}|{dst}|{name}){_ZONE_TAIL}\b", p):
             kind = {std: "std", dst: "dst"}.get(m.group(1)) or {"standard": "std", "daylight": "dst"}.get(m.group(2))
             found.append((tz, kind))
     if len(found) > 1:
@@ -172,7 +176,8 @@ def _clock_only(p):
     """True when the phrase is nothing but a clock time (plus a zone and filler words)."""
     rest = _CLOCK.sub(" ", p)
     for _, std, dst, name in _ZONES:
-        rest = re.sub(rf"\b(?:{std}|{dst}|{name})(?:\s+(?:standard|daylight))?(?:\s+time)?\b", " ", rest)
+        rest = re.sub(rf"\b(?:{std}|{dst}|{name}){_ZONE_TAIL}\b", " ", rest)
+    rest = _DAYPART.sub(" ", rest)
     return all(w in _FILLER for w in re.findall(r"[a-z0-9']+", rest))
 
 
@@ -181,7 +186,8 @@ def _hours_ahead(p):
     if not m:
         return None
     n = m.group(1).replace("a ", "").strip()
-    return 1 if n in ("a", "an") else 2 if n.startswith("couple") else 3 if n == "few" else int(n)
+    hours = 1 if n in ("a", "an") else 2 if n.startswith("couple") else 3 if n == "few" else int(n[:6])
+    return hours if hours <= MAX_RELATIVE_HOURS else None
 
 
 def resolve(timeframe, anchor, tz, *, zone_assumed=None):

@@ -196,3 +196,28 @@ def test_spelled_standard_and_daylight_time_are_read():
     assert d.due_ts is None and d.due_source.startswith("ambiguous")
     d = due("tomorrow at 2pm Eastern Daylight Time", anchor="2027-06-15T15:00:00Z")
     assert deadlines._parse_utc(d.due_ts).isoformat() == "2027-06-16T18:00:00+00:00"
+
+
+# --- codex gate round 4: one zone grammar everywhere; clock-only qualifiers; bounded hours ---------
+
+@pytest.mark.parametrize("phrase,anchor,expected", [
+    ("at 2pm Eastern Standard", "2027-06-15T15:00:00Z", None),                 # summer: ambiguous
+    ("at 2pm Eastern Standard Time", "2027-06-15T15:00:00Z", None),
+    ("at 2pm Eastern Daylight", "2026-11-24T15:00:00Z", None),                  # winter: ambiguous
+    ("at 2pm Eastern Daylight", "2027-06-15T15:00:00Z", "2027-06-15T18:00:00+00:00"),
+    ("at 2pm Eastern Standard", "2026-11-24T15:00:00Z", "2026-11-24T19:00:00+00:00"),
+])
+def test_standard_and_daylight_are_read_with_or_without_time(phrase, anchor, expected):
+    d = due(phrase, anchor=anchor)
+    got = deadlines._parse_utc(d.due_ts).isoformat() if d.due_ts else None
+    assert got == expected, d
+
+
+def test_a_clock_only_phrase_with_a_part_of_day_qualifier_resolves():
+    assert due("at 3 in the morning", anchor="2026-11-24T18:00:00Z").due_ts == "2026-11-25T03:00:00-05:00"
+    assert due("at 8 in the evening", anchor="2026-11-24T18:00:00Z").due_ts == "2026-11-24T20:00:00-05:00"
+
+
+@pytest.mark.parametrize("phrase", ["in 999999999999999 hours", "in 100 hours"])
+def test_relative_hours_are_bounded(phrase):
+    assert due(phrase).due_ts is None
