@@ -346,3 +346,41 @@ def test_worldview_an_unsourced_belief_does_not_take_a_fluid_slot(tmp_path):
     got = wv.query_worldview(db, ["zinnia"], k=2)
     assert [e["text"] for e in got] == ["zinnia sourced belief", "zinnia f0 is up", "zinnia f1 is up",
                                         "zinnia f2 is up"]
+
+
+# --- facts: the bounded candidate windows fill with sourced rows first -------------------------------------------
+
+def _window_db(path, rows):
+    """rows: (fact_id, ts, expiry_class, state)."""
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE facts (fact_id TEXT, ts TEXT, kind TEXT, text TEXT, expiry_class TEXT, "
+                "confidence REAL, state TEXT)")
+    for fid, ts, tier, st in rows:
+        con.execute("INSERT INTO facts VALUES (?,?,?,?,?,?,?)",
+                    (fid, ts, "fact", f"marigold rollout note {st} {fid}", tier, 1.0, st))
+    con.commit()
+    con.close()
+    return str(path)
+
+
+def test_query_facts_windows_fill_with_sourced_rows_first(tmp_path, monkeypatch):
+    """Both windows hold three rows. Three newer unverified durable rows would fill each; the sourced rows are older."""
+    rows = [(f"std{i}", f"2026-11-2{i}T00:00:00Z", "standard", "active") for i in range(3)]
+    rows += [("dur0", "2026-11-10T00:00:00Z", "durable", "active")]
+    rows += [(f"unv{i}", f"2026-11-2{i + 3}T00:00:00Z", "durable", "unverified") for i in range(3)]
+    db = _window_db(tmp_path / "f.db", rows)
+    monkeypatch.setattr(fr, "DURABLE_LIMIT", 3)
+    got = fr.query_facts(db, ["marigold"], k=20, candidate_limit=3)
+    flags = [f["unsourced"] for f in got]
+    assert sorted(f["fact_id"] for f in got if not f["unsourced"]) == ["dur0", "std0", "std1", "std2"]
+    assert flags == sorted(flags) and True in flags                    # every sourced fact before every unsourced one
+
+
+def test_recent_facts_window_fills_with_sourced_rows_first(tmp_path):
+    """The window holds max(k*8, 100) rows; 100 newer unverified rows would fill it."""
+    rows = [(f"unv{i:03d}", f"2026-11-25T{i // 60:02d}:{i % 60:02d}:00Z", "standard", "unverified")
+            for i in range(100)]
+    rows += [("src", "2026-11-24T12:00:00Z", "standard", "active")]
+    got = fr.recent_facts(48, k=5, dbpath=_window_db(tmp_path / "f.db", rows),
+                          now=datetime(2026, 11, 25, 6, tzinfo=timezone.utc))
+    assert [f["fact_id"] for f in got][:1] == ["src"] and len(got) == 5

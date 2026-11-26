@@ -66,6 +66,25 @@ def sourced_first(entries):
     """Stable: every sourced entry keeps its order and comes before every unsourced one."""
     return [e for e in entries if not e.get("unsourced")] + [e for e in entries if e.get("unsourced")]
 
+
+def sourced_window(cursor, limit):
+    """At most `limit` rows from a cursor ordered newest first (rows with a `state` column): sourced rows fill the
+    window first, then the newest unsourced ones fill what is left. The same rows as
+    `ORDER BY (state = 'unverified'), ts DESC LIMIT n`, but read in index order: the scan stops as soon as `limit`
+    sourced rows are in, so with no unsourced row it reads exactly what `ORDER BY ts DESC LIMIT n` reads."""
+    src, uns = [], []
+    if limit <= 0:
+        return []
+    for r in cursor:
+        if unsourced(r["state"]):
+            if len(uns) < limit:
+                uns.append(r)
+        else:
+            src.append(r)
+            if len(src) >= limit:
+                break
+    return src + uns[: limit - len(src)]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -176,8 +195,10 @@ def topic_keywords(text):
 
 
 def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
-    """Facts from the last `hours`, newest first, noise and unserved (superseded, archived, unverified) rows left out; with keywords, the rows that
-    match one come first (still newest first within each group). Read-only; no store, or an unreadable one: []."""
+    """Facts from the last `hours`, newest first, noise and unserved (superseded, archived) rows left out; with
+    keywords, the rows that match one come first (still newest first within each group). A fact with no source quote
+    found (unverified) is served, flagged `unsourced`, after every sourced one, and the bounded window fills with
+    sourced rows first. Read-only; no store, or an unreadable one: []."""
     dbpath = dbpath or default_db_path()
     if not os.path.exists(dbpath):
         return []
@@ -187,11 +208,11 @@ def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
     try:
         con = _connect_ro(dbpath)
         try:
-            rows = con.execute(
+            rows = sourced_window(con.execute(
                 "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
                 "WHERE ts >= ? AND " + SERVED_SQL
-                + ((" AND " + noise_clause) if noise_clause else "") + " ORDER BY ts DESC LIMIT ?",
-                [cutoff] + [p + "%" for p in _NOISE_PREFIXES] + [max(k * 8, 100)]).fetchall()
+                + ((" AND " + noise_clause) if noise_clause else "") + " ORDER BY ts DESC",
+                [cutoff] + [p + "%" for p in _NOISE_PREFIXES]), max(k * 8, 100))
         finally:
             con.close()
     except sqlite3.Error as e:
@@ -274,11 +295,11 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
 
     Two bounded candidate passes, then score:
       1. recency window — newest CANDIDATE_LIMIT rows matching any keyword
-         (idx_facts_ts, newest-first, early-terminating LIMIT).
+         (idx_facts_ts, newest-first, early-terminating), sourced rows filling it first.
       2. tier-aware — durable/immutable rows matching any keyword regardless of
-         recency (bounded by DURABLE_LIMIT), so no-decay facts are never starved.
+         recency (bounded by DURABLE_LIMIT, sourced rows first), so no-decay facts are never starved.
     Candidates are de-duped by fact_id, then keyword-density + kind + recency
-    scored in Python. Both passes are LIMIT-bounded to hold the 250ms wall.
+    scored in Python. Both passes are bounded (each stops reading at its cap) to hold the 250ms wall.
     """
     if not keywords:
         return []
@@ -286,28 +307,29 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
     params = [f"%{kw}%" for kw in keywords]
     con = _connect_ro(dbpath)
     try:
-        # E1: unserved facts (superseded, archived, unverified) stay out of recall — for
-        # a superseded one, the newer fact that replaced it surfaces instead. Guarded so it works on
-        # older dbs whose rows predate the state column population.
+        # Unserved facts (superseded, archived) stay out of recall — for a superseded one, the newer
+        # fact that replaced it surfaces instead. A fact with no source quote found (unverified) is
+        # served and both windows fill with sourced rows first. Guarded so it works on older dbs whose
+        # rows predate the state column population.
         not_sup = SERVED_SQL
         # SQL-level noise exclusion mirrors _is_noise (lstrip+lower+startswith) so
-        # the bounded recency window (LIMIT ?) is filled with REAL candidates —
+        # the bounded recency window is filled with REAL candidates —
         # otherwise a burst of recent distiller prompt-echoes (all dated today)
         # crowds every real fact out of the 250-row window BEFORE the Python
         # filter runs. Defense-in-depth: _is_noise still runs on the survivors.
         noise_clause = " AND ".join(["lower(ltrim(text)) NOT LIKE ?"] * len(_NOISE_PREFIXES))
         noise_params = [p + "%" for p in _NOISE_PREFIXES]
         not_noise = (" AND " + noise_clause) if noise_clause else ""
-        rows = con.execute(
+        rows = sourced_window(con.execute(
             "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
-            f"WHERE ({like}) AND {not_sup}{not_noise} ORDER BY ts DESC LIMIT ?",
-            params + noise_params + [candidate_limit]).fetchall()
+            f"WHERE ({like}) AND {not_sup}{not_noise} ORDER BY ts DESC",
+            params + noise_params), candidate_limit)
         tier_ph = ",".join("?" * len(_NODECAY_TIERS))
-        rows2 = con.execute(
+        rows2 = sourced_window(con.execute(
             "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
             f"WHERE ({like}) AND {not_sup}{not_noise} AND expiry_class IN ({tier_ph}) "
-            "ORDER BY ts DESC LIMIT ?",
-            params + noise_params + list(_NODECAY_TIERS) + [DURABLE_LIMIT]).fetchall()
+            "ORDER BY ts DESC",
+            params + noise_params + list(_NODECAY_TIERS)), DURABLE_LIMIT)
     finally:
         con.close()
 
