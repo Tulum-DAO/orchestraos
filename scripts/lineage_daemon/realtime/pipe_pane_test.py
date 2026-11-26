@@ -380,3 +380,25 @@ def test_a_name_renamed_away_is_retired_a_dead_one_is_not():
     tmux.sessions = [("gm", "$5"), ("gm-g6", "$8")]   # a new green reuses the alias
     sweep.sweep()
     assert not sweep.is_retired("gm-g6")
+
+
+def test_a_failed_listing_keeps_the_saved_pane_map(tmp_path):
+    """Review of #647: list_sessions answers [] on ANY tmux non-zero exit. Pruning on that wiped the
+    saved map, and the next sweep unlinked the renamed seat's <root>.pipe; the seat then sat unbound."""
+    d = tmp_path / "sinks"; d.mkdir()
+    tmux = FileTmux([("gm-g6", "$5")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=lambda: set())
+    sweep.sweep()
+    tmux.sessions = [("gm", "$5")]                    # promoted: renamed to the root
+    sweep.sweep()
+    tmux.sessions = []                                # one failed listing
+    out = sweep.sweep()
+    assert out["pruned"] == [] and "__list__" in out["errors"]
+    tmux.sessions = [("gm", "$5")]                    # tmux answers again
+    sweep.sweep()
+    assert not sweep.is_unbound("gm")
+    assert _same_file(d / "gm.pipe", d / "gm-g6.pipe")
+    fresh = AttachSweep(tmux, sink_dir=str(d), writers=lambda: set())   # and the saved map survived
+    fresh.sweep()
+    assert not fresh.is_unbound("gm")
+    tmux.close()

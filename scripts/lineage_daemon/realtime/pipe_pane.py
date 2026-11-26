@@ -241,6 +241,11 @@ class AttachSweep:
             current = dict(self._tmux.list_sessions())
         except Exception as e:                      # a lister failure must not wedge the beat
             return {"attached": [], "errors": {"__list__": str(e)}, "pruned": []}
+        if not current:
+            # list_sessions answers [] on ANY tmux non-zero exit, not only "no server": pruning on it
+            # would wipe the saved pane->sink map (and the next sweep would unlink each renamed seat's
+            # <root>.pipe). With truly no server there is nothing to attach either, so skip the pass.
+            return {"attached": [], "errors": {"__list__": "empty session listing"}, "pruned": []}
         if self._sinks is None:
             self._load()
         before = self._dump()
