@@ -82,3 +82,9 @@
 - #645: card apr_f7e96424_50102779 (cc83b28, 19/19 green, MERGE-OK). Follow-up: a long merged turn keeps its head (consider keeping the tail).
 - #644: BLOCK fixed in 8ba9370 (thread_readable mirrors _thread_refusal; role-based feed; "earlier" grouping; fullmatch). Re-review running. Then merge #645 into #644 and re-point its base to main after #638 merges, then CI, then the card.
 - Shaw's new due dates (gm msg_c6dacdfa): 25-turn own-thread opening live 23:00 Tulum tonight; latency plan 08:00 11-26; #634/#635 card 10:00 11-26.
+
+## 00:35Z 11-26 (gen row 2013, promoted 23:59Z)
+- #645 review fixes folded: head 652c59b (tail kept on a merged turn, role+name fold, 120 s MERGE_GAP_S, phrase count, 2 new contract cases). 10/10 sabotages red. Re-review asked (msg_8e4be0f9); card apr_f7e96424 noted HOLD.
+- #638 review fixes folded: head 94e76a7 (second read sized budget*25/turns cap 4000, keep-first guard, Opening.info budget/reread/source/short, report skipped + chat_error, omitted count, Local labels, floor tests offline). 6/6 sabotages red; 249 passed. PR body has the vendor-data section. Re-review asked (msg_408e602e); card apr_fe545d12 noted HOLD.
+- #644: merged #638's head in (0f1981a, LAND_CHAIN=257c15a4e1,700a51dc96 to pass the git guard): one _with_floor(read->(text,source)) serves opening/opening_thread/opening_calls. 266 passed. #645 NOT merged into #644 yet (wait for its MERGE-OK).
+- Leftover from the old session: a `while pgrep ... services/arturo` waiter (pid 3406272) loops on memory-shadow-dev's pytest; not mine to kill.
