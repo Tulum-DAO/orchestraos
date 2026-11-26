@@ -93,9 +93,32 @@ def _read_deriver_snapshot():
         return None
 
 
+# KILL FILE (operator order 2026-09-19; re-raised 2026-11-25 when every working seat read IDLE in the agent rail):
+# while <data dir>/state/DERIVER_STATUS_DISABLED exists, the telemetry deriver is never THIS module's verdict:
+# get_agent_status (what the gateway's /agents, the menu bridge and every other importer of this file report) is
+# decided by the screen + hook detector, and the deriver's fresh row, if any, rides along as information
+# (deriver_state, deriver_age_s, deriver_status_disabled), never as `state` or `confidence`. It does not reach
+# the other path the deriver takes to a screen: the API's status stream re-broadcasts telemetryd's status.json
+# and the dashboard lays that over /api/agents rows (dashboard liveStatusOverlay); that is the dashboard's own
+# switch. Why a file and not an env var: the gateway and the menu bridge import this module and run for days; a
+# file is honoured per CALL by every importer at once, with no restart. Why at all: the deriver reads a rotated
+# root's lane late (minutes after a swap) and flaps stalled/idle on long tool calls, and its verdict is trusted
+# whenever status.json is under DERIVER_FRESH_S old, so one wrong row makes a working seat read idle.
+# The path follows this module's ORCH_DIR (the data dir as it was resolved at import: ORCH_DIR, else
+# orchestra_cli.settings.data_dir(), which reads ORCHESTRA_DIR); under the supervisor both name one directory.
+def deriver_status_kill_file() -> str:
+    return os.path.join(ORCH_DIR, "state", "DERIVER_STATUS_DISABLED")
+
+
+def deriver_status_disabled() -> bool:
+    """True while the kill file exists. Checked per call, never cached (see deriver_status_kill_file)."""
+    return os.path.exists(deriver_status_kill_file())
+
+
 def _deriver_lookup(session, now):
     """Return (mapped_state, deriver_state, age_s) if a FRESH deriver status
-    exists for this session, else None (=> TTL fallback)."""
+    exists for this session, else None (=> TTL fallback). Does NOT look at the kill
+    file: get_agent_status decides whether the answer may become the status."""
     snap = _read_deriver_snapshot()
     if not snap:
         return None
@@ -1906,6 +1929,11 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
     # (leg e rollback). Sits AFTER the proc 'stopped' short-circuit so kernel
     # truth still wins for a dead proc (secondary #2).
     dv = _deriver_lookup(session, now) if deriver else None
+    deriver_info = None
+    if dv is not None and deriver_status_disabled():
+        # The kill file: the deriver's row is information, never the verdict (deriver_status_kill_file).
+        deriver_info = {'deriver_state': dv[1], 'deriver_age_s': dv[2], 'deriver_status_disabled': True}
+        dv = None
     if dv is not None:
         mapped, dstate, age_s = dv
         # BUNDLE PRECONDITION: the deriver owns STATUS, but the menu-bridge,
@@ -1951,6 +1979,7 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
             'activity': 'Could not capture tmux output',
             'process': proc, 'screen': {}, 'is_noise': [],
             'confidence': 'process', 'state_age_s': None,
+            **(deriver_info or {}),           # the deriver's row still rides along as information
         }
 
     screen = parse_status(raw, runtime=proc.get('runtime'))
@@ -2076,6 +2105,8 @@ def get_agent_status(session: str, deriver: bool = True) -> dict:
     # above) can never leak a chip. Fail-closed: absent unless a real idle ghost.
     if state == 'idle' and screen.get('composer_ghost'):
         out['composer_ghost'] = screen['composer_ghost']   # additive, nullable
+    if deriver_info:
+        out.update(deriver_info)    # the deriver's row as information only (deriver_status_kill_file)
     return out
 
 
