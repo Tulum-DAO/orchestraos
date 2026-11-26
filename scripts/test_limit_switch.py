@@ -660,7 +660,8 @@ def test_f2_weekly_preference_never_moves_to_a_login_with_a_live_credits_episode
 
 def test_f2_our_own_switch_is_not_read_as_a_hand_switch_back():
     d = Fake(usage={"strategysimple": _reading(97.0), "default": _reading(20.0)})
-    st = {"first_trigger": {f"poll|strategysimple|5-hour|{RESET}": NOW - 600}, "last_switch": NOW - 120}
+    st = {"first_trigger": {f"poll|strategysimple|5-hour|{RESET}": NOW - 600}, "last_switch": NOW - 120,
+          "last_to": "strategysimple"}
     d.last_switch_row = lambda: (NOW - 120, "strategysimple")                  # the log row of OUR switch
     d.last_switch = lambda: NOW - 900
     res, log, _ = _tick({}, d, st)
@@ -674,3 +675,34 @@ def test_f4_a_weekly_reading_taken_before_its_reset_does_not_warn_after_it():
     for i in range(3):
         _tick({}, d, st, active="default", now=NOW + 120 * i)
     assert not [m for m in d.mails if "weekly" in m[2].lower() and "%" in m[2]]
+
+
+# --- codex re-review at 3e38672 --------------------------------------------------------------------------
+
+def test_r2_a_hand_switch_back_60s_after_ours_is_still_a_hand_switch():
+    # we moved strategysimple -> default (last_to default); the operator put strategysimple back 60 s later
+    d = Fake(usage={"strategysimple": _reading(97.0), "default": _reading(20.0)})
+    st = {"first_trigger": {f"poll|strategysimple|5-hour|{RESET}": NOW - 600}, "last_switch": NOW - 120,
+          "last_to": "default"}
+    d.last_switch_row = lambda: (NOW - 60, "strategysimple")
+    d.last_switch = lambda: NOW - 60
+    res, log, _ = _tick({}, d, st)
+    assert res == "held" and d.switched == []
+    assert any(r.get("reason") == "switched back by hand" for r in log)
+
+
+def test_r2_a_window_trigger_never_moves_to_a_login_whose_credits_are_out():
+    d = FableFake(usage={"default": _u(96.0, 40.0), "strategysimple": _u(5.0, 30.0)})
+    res, log, _ = _tick(_credits_ep(account="strategysimple"), d, active="default")
+    assert res == "refused" and d.switched == []
+    assert any("strategysimple" in r.get("reason", "") and "limit" in r.get("reason", "") for r in log
+               if r["kind"] == "switch_refused")
+
+
+def test_r2_every_switch_records_where_it_went():
+    d = FableFake()
+    _, _, st = _tick(_credits_ep(), d, active="default")
+    assert st["last_to"] == "strategysimple"
+    d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    _, _, st = _tick({}, d, active="default")
+    assert st["last_to"] == "strategysimple"

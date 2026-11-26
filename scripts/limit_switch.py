@@ -403,7 +403,7 @@ def _prefer_weekly(active, now, log, deps, state, save, stamp, episodes=None):
         deps.mail("gm", "high", f"weekly-preference switch FAILED: {active} -> {target}",
                   f"{why}\nThe switch returned {json.dumps(res)[:400]}. It retries after an hour.\n")
         return "failed"
-    state["last_switch"] = now
+    state["last_switch"], state["last_to"] = now, target
     if save:
         save(state)
     undo = f"python3 {_account_switch_cmd()} --shared {active}"
@@ -495,7 +495,10 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         del first[k]
     if hasattr(deps, "last_switch_row"):
         ts, to = deps.last_switch_row()
-        ours = abs(ts - float(state.get("last_switch") or 0)) <= OWN_SWITCH_SLACK_S
+        # our own switch's log row: same destination, written within the slack of our switch. A hand
+        # switch back goes to the OTHER login, so it never matches however soon it comes
+        ours = (to == state.get("last_to")
+                and abs(ts - float(state.get("last_switch") or 0)) <= OWN_SWITCH_SLACK_S)
         if to == active and ts > first[key] and not ours:
             # someone moved the fleet TO this login by hand after it was already hot: their choice stands
             once(f"override|{key}", {"kind": "switch_held", "key": key, "reason": "switched back by hand"},
@@ -510,6 +513,10 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
             continue
         if acct in parked:
             reasons.append(f"{acct} parked until {LE.reset_label(parked[acct])} (no switching back)")
+            continue
+        if _login_limited(episodes, acct, now):
+            # its own live limit episode (a credits cap shows in no usage reading): never a target
+            reasons.append(f"{acct}: has a live limit episode of its own")
             continue
         if ep["window"] == "credits":
             ok, why = _credits_headroom(deps.usage(acct), now, episodes, acct, ep.get("model"))
@@ -563,7 +570,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
              ("high", f"auto-switch FAILED: {active} -> {target}",
               f"{line}\nThe switch to {target} returned {json.dumps(res)[:400]}.\n"))
         return "failed"
-    state["last_switch"] = now
+    state["last_switch"], state["last_to"] = now, target
     parked[active] = _park_until(ep, now)
     if save:
         save(state)
