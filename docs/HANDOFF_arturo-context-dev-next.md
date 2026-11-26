@@ -88,3 +88,8 @@
 - #638 review fixes folded: head 94e76a7 (second read sized budget*25/turns cap 4000, keep-first guard, Opening.info budget/reread/source/short, report skipped + chat_error, omitted count, Local labels, floor tests offline). 6/6 sabotages red; 249 passed. PR body has the vendor-data section. Re-review asked (msg_408e602e); card apr_fe545d12 noted HOLD.
 - #644: merged #638's head in (0f1981a, LAND_CHAIN=257c15a4e1,700a51dc96 to pass the git guard): one _with_floor(read->(text,source)) serves opening/opening_thread/opening_calls. 266 passed. #645 NOT merged into #644 yet (wait for its MERGE-OK).
 - Leftover from the old session: a `while pgrep ... services/arturo` waiter (pid 3406272) loops on memory-shadow-dev's pytest; not mine to kill.
+- Latency data so far (for the 08:00 plan). Greet = the journal's first Arturo phrase minus started_at (vc_client_*.json, conv_id = native report).
+  - Old tree, no opening, 25 tools: 1.85 / 2.54 / 2.61 s today; the 11-19 spread was 1.4-10.8 s.
+  - New native, 1387 tokens, 39 tools: one real call, 3.27 s (native-ef7dc1274bf1). No real call since the 23:01Z 2500 respawn.
+  - End of user speech -> first audio: p50 0.31-0.94 s, p90 1.0-1.6 s. Outliers of 9-17 s are tool turns.
+  - Tool result -> audio: 2-4 s typical, tail 18-42 s (old tree). These turns are the latency problem more than the greet.
