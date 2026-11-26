@@ -243,9 +243,11 @@ router.get('/:id/transcript/stream', (req: Request, res: Response) => {
 
   const entry = getTailer(agentId, limit);
   const tailer = entry.tailer;
+  // This connection's own window: the tailer is shared per seat, the limit is not (a detail panel opened while the
+  // chat streamed used to get the first subscriber's 40-item snapshots).
   const unsubscribe = tailer.subscribe((ev) => {
     send(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
-  }, lastEventId);
+  }, lastEventId, limit);
   const onGone = () => { send(': gone\n\n'); };
   entry.gone.add(onGone);
   const onLive = (v: LiveTextView) => {
@@ -334,7 +336,7 @@ export function handleSubagentStream(req: Request, res: Response): void {
   const mine = entry;
   const unsubscribe = mine.tailer.subscribe((ev) => {
     send(`event: ${ev.type}\nid: ${ev.id}\ndata: ${JSON.stringify(ev)}\n\n`);
-  }, lastEventId);
+  }, lastEventId, limit);
   const heartbeat = setInterval(() => { send(': ping\n\n'); }, HEARTBEAT_MS);
   heartbeat.unref?.();
   req.on('close', () => {
