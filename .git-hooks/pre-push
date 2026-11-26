@@ -6,9 +6,54 @@
 # Heavy scans share one machine-wide lock with any other gate that takes it
 # (ORCHESTRA_GATE_LOCK, default ${XDG_RUNTIME_DIR:-/tmp}/orchestra-heavy-gate.lock): a second run
 # prints who it is waiting for and queues instead of stacking on the CPU.
+#
+# Before the scan, every pushed commit's trailer addresses are checked (it runs even when
+# detect-secrets is missing): a Signed-off-by / Co-authored-by address must be the commit's own
+# author address or a noreply one. A hand-typed trailer once put a person's private address into a
+# public repo, and a sign-off that does not match the author also fails the DCO check. Addresses
+# listed in the LOCAL git config `orchestra.privateEmail` (never tracked) are refused anywhere in a
+# pushed commit's message.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+ZERO=0000000000000000000000000000000000000000
+refs="$(cat)"
+
+push_base() {     # $1 local sha, $2 remote sha -> the base of the pushed range, or "" when none is found
+  local base="$2"
+  if [ "$base" = "$ZERO" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+    # A new branch: compare with where it left the default branch.
+    base="$(git merge-base "$1" origin/HEAD 2>/dev/null || git merge-base "$1" origin/main 2>/dev/null || true)"
+  fi
+  printf '%s' "$base"
+}
+
+mapfile -t private < <(git config --get-all orchestra.privateEmail 2>/dev/null || true)
+bad=()
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ -z "${local_sha:-}" ] || [ "$local_sha" = "$ZERO" ] && continue
+  base="$(push_base "$local_sha" "$remote_sha")"
+  range="$local_sha"
+  [ -n "$base" ] && range="$base..$local_sha"
+  while IFS= read -r c; do
+    author="$(git log -1 --format=%ae "$c" | tr '[:upper:]' '[:lower:]')"
+    msg="$(git log -1 --format=%B "$c")"
+    while IFS= read -r addr; do
+      a="$(printf '%s' "$addr" | tr '[:upper:]' '[:lower:]')"
+      [ "$a" = "$author" ] && continue
+      case "$a" in *noreply*) continue ;; esac
+      bad+=("${c:0:8}: trailer address <$addr> is neither the author's <$author> nor a noreply address")
+    done < <(printf '%s\n' "$msg" | sed -nE 's/^(signed-off-by|co-authored-by):.*<([^>]+)>.*$/\2/Ip')
+    for p in "${private[@]+"${private[@]}"}"; do
+      [ -n "$p" ] && printf '%s' "$msg" | grep -qiF -- "$p" && bad+=("${c:0:8}: message carries a private address (orchestra.privateEmail)")
+    done
+  done < <(git rev-list "$range")
+done <<< "$refs"
+if [ "${#bad[@]}" -gt 0 ]; then
+  printf 'pre-push: %s\n' "${bad[@]}" >&2
+  echo "pre-push: blocking push. Sign with \`git commit -s\` (it uses your configured identity); amend the message to fix." >&2
+  exit 1
+fi
 # `orchestra init` pip-installs detect-secrets into <repo>/.venv, which is NOT on PATH in a
 # normal shell — prefer the venv copy, fall back to PATH, only then skip (loudly).
 HOOK=detect-secrets-hook
@@ -18,16 +63,12 @@ if ! command -v "$HOOK" >/dev/null 2>&1; then
   exit 0
 fi
 
-ZERO=0000000000000000000000000000000000000000
 full=0
 files=()
 while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ -z "${local_sha:-}" ] && continue                    # no refs on stdin
   [ "$local_sha" = "$ZERO" ] && continue                 # a branch deletion pushes no content
-  base="$remote_sha"
-  if [ "$base" = "$ZERO" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-    # A new branch: compare with where it left the default branch.
-    base="$(git merge-base "$local_sha" origin/HEAD 2>/dev/null || git merge-base "$local_sha" origin/main 2>/dev/null || true)"
-  fi
+  base="$(push_base "$local_sha" "$remote_sha")"
   if [ -z "$base" ]; then
     full=1
     continue
@@ -35,7 +76,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   while IFS= read -r f; do
     files+=("$f")
   done < <(git diff --name-only --diff-filter=ACMR "$base" "$local_sha")
-done
+done <<< "$refs"
 
 for f in "${files[@]+"${files[@]}"}"; do
   [ "$f" = ".secrets.baseline" ] && full=1
