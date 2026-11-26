@@ -74,16 +74,16 @@ def test_a_bad_thread_id_reads_nothing(tmp_path):
 def _owned(tmp_path, owner):
     db = tmp_path / "threads.db"
     st = thread_store.ThreadStore(db)
-    st.record_turn("web_abc123", "Shaw's private question", "Arturo's answer", principal=owner)
+    st.record_turn("web_abc123", "the owner's private question", "Arturo's answer", principal=owner)
     return db
 
 
 def test_only_fleet_or_the_threads_own_starter_may_read_it(tmp_path):
     # Claude review of #644 (blocking): the proxy's _thread_refusal rule, mirrored. A non-fleet caller reads only a
     # thread it started; anything else reads as if the thread did not exist (no opening, no feed, no journal fallback).
-    db = _owned(tmp_path, "owner:shaw")
+    db = _owned(tmp_path, "owner:ada")
     assert tc.thread_readable("web_abc123", "fleet", db) is True
-    assert tc.thread_readable("web_abc123", "owner:shaw", db) is True
+    assert tc.thread_readable("web_abc123", "owner:ada", db) is True
     assert tc.thread_readable("web_abc123", "owner:bob", db) is False
     assert tc.thread_readable("web_nobody", "owner:bob", db) is False          # unknown: fail closed for non-fleet
     assert tc.thread_readable("web_abc123", "owner:bob", tmp_path / "missing.db") is False

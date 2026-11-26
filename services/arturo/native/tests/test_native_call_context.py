@@ -256,7 +256,7 @@ def test_the_chat_feed_defaults_to_thinking_the_kind_measured_voiced(monkeypatch
 
 
 def test_the_opening_budget_defaults_to_25_stamped_turns(monkeypatch):
-    # Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across chat and calls, stamped; this
+    # The operator, 2026-11-25: a call opens with the last 20-25 turns across chat and calls, stamped; this
     # overrides the under-3 s greet bar. Measured on the real gm thread: 2000 -> 22 verbatim turns, 2500 -> 32.
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     assert call_context.budget_tokens() == call_context.DEFAULT_BUDGET_TOKENS == 2500
@@ -265,6 +265,16 @@ def test_the_opening_budget_defaults_to_25_stamped_turns(monkeypatch):
     assert call_context.budget_tokens() == 6000
     monkeypatch.setenv("ARTURO_NATIVE_CONTEXT_TOKENS", "junk")
     assert call_context.budget_tokens() == 2500
+
+
+def _clock(ticks):
+    """A fake monotonic for call_context only: the given ticks, then the last one forever (never StopIteration)."""
+    last = [0.0]
+
+    def now():
+        last[0] = next(ticks, last[0])
+        return last[0]
+    return now
 
 
 class _TwinRead(BaseException):
@@ -402,7 +412,7 @@ def test_the_page_thread_feed_is_by_role_and_by_access(tmp_path):
     from services.arturo import thread_store
     db = tmp_path / "threads.db"
     st = thread_store.ThreadStore(db)
-    st.record_turn("web_abc123", "first", "reply", principal="owner:shaw", ts=1764090000)
+    st.record_turn("web_abc123", "first", "reply", principal="owner:ada", ts=1764090000)
     feed = call_context.ThreadFeed("web_abc123", db=db, since=1764090005, tz="UTC", tz_label="UTC", operator="Arturo")
     st.append_message("web_abc123", "assistant", "Arturo typed reply", ts=1764090010)
     st.append_message("web_abc123", "user", "the operator typed", ts=1764090011)
@@ -417,7 +427,7 @@ def test_the_page_thread_feed_is_by_role_and_by_access(tmp_path):
 def test_a_page_thread_the_caller_may_not_read_opens_with_nothing(tmp_path, monkeypatch):
     from services.arturo import thread_store
     db = tmp_path / "threads.db"
-    thread_store.ThreadStore(db).record_turn("web_abc123", "Shaw's private question", "answer", principal="owner:shaw")
+    thread_store.ThreadStore(db).record_turn("web_abc123", "the owner's private question", "answer", principal="owner:ada")
     monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
     assert "private question" in call_context.opening_thread("web_abc123", principal="fleet")
     assert call_context.opening_thread("web_abc123", principal="owner:bob") == ""
@@ -432,7 +442,7 @@ def test_the_floor_re_read_is_skipped_when_nothing_older_exists_or_the_first_rea
     assert asked == [2500] and call_context.describe(out)["turns"] == 12
     asked.clear()
     clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.5])
-    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(call_context, "_now", _clock(clock))
     out = call_context.opening("gm", route=lambda a, b, **k: asked.append(b) or _opening(12, n_summ=3), load=_NO_TWIN)
     assert asked == [2500] and call_context.describe(out)["turns"] == 12
 
@@ -557,7 +567,7 @@ def test_the_page_thread_and_calls_openings_say_their_source(tmp_path, monkeypat
     assert call_context.opening_calls(load=lambda **k: _opening(3)).info["source"] == "calls"
     assert call_context.opening_calls(load=lambda **k: "").info["source"] == "none"
     db = tmp_path / "threads.db"
-    thread_store.ThreadStore(db).record_turn("web_abc123", "q", "a", principal="owner:shaw")
+    thread_store.ThreadStore(db).record_turn("web_abc123", "q", "a", principal="owner:ada")
     monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
     assert call_context.opening_thread("web_abc123", load=lambda *a, **k: _opening(3)).info["source"] == "thread"
     assert call_context.opening_thread("web_abc123", principal="owner:bob").info["source"] == "refused"
@@ -570,7 +580,7 @@ def test_the_second_read_is_route_only_and_bounded_by_the_deadline(monkeypatch):
     assert call_context.READ_DEADLINE_S < srv.OPENING_WAIT_S
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     clock = iter([0.0, 1.5])
-    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(call_context, "_now", _clock(clock))
     seen, first = [], _opening(12, n_summ=3)
 
     def route(agent, budget, timeout=None):
@@ -616,7 +626,7 @@ def test_a_page_thread_short_of_25_is_read_again_locally_and_cut_to_25(tmp_path,
     from services.arturo import thread_store
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     db = tmp_path / "threads.db"
-    thread_store.ThreadStore(db).record_turn("web_abc123", "q", "a", principal="owner:shaw")
+    thread_store.ThreadStore(db).record_turn("web_abc123", "q", "a", principal="owner:ada")
     monkeypatch.setattr(call_context.thread_context, "threads_db_path", lambda orch_dir=None: str(db))
     asked = []
 
@@ -650,6 +660,17 @@ def test_a_cut_without_a_recent_heading_keeps_the_text():
 def test_a_second_read_skipped_as_too_slow_says_so(monkeypatch):
     monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
     clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.1])
-    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(call_context, "_now", _clock(clock))
     out = call_context.opening("gm", route=lambda a, b, **k: _opening(12, n_summ=3), load=_NO_TWIN)
     assert out.info["reread"] is None and out.info["reread_result"] == "too_slow"
+
+
+def test_a_page_thread_that_could_not_be_read_is_named_and_an_uncut_keep_says_so(monkeypatch):
+    broken = _opening(2).replace("RECENT (verbatim):", "(thread web_abc123 could not be read: OperationalError)\n"
+                                 "RECENT (verbatim):")
+    assert call_context.describe(broken)["chat_error"] is True
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    no_recent = "\n".join(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} Local] chat Operator: line {i}" for i in range(30))
+    out = call_context.opening("gm", route=lambda a, b, **k: _opening(12, n_summ=3) if b == 2500 else no_recent,
+                               load=_NO_TWIN)
+    assert out == no_recent and out.info["reread_result"] == "kept_uncut"

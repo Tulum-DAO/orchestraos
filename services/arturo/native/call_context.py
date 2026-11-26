@@ -21,6 +21,7 @@ from pathlib import Path
 from services.arturo import thread_context
 
 log = logging.getLogger("arturo.native.call_context")
+_now = time.monotonic                          # the opening's clock (tests replace this, never time.monotonic)
 
 FLAG = "ARTURO_NATIVE_THREAD_CONTEXT"          # ON unless "0": the escape hatch
 FEED_KIND_ENV = "ARTURO_NATIVE_CHAT_FEED_KIND"  # thinking (default: voiced ~5 s after send, probe 2026-11-25
@@ -34,7 +35,7 @@ def enabled():
     return os.environ.get(FLAG, "1") != "0"
 
 
-# The opening's size on a native call. Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across
+# The opening's size on a native call. The operator, 2026-11-25: a call opens with the last 20-25 turns across
 # chat and calls, every one stamped, and that overrides the under-3 s greet bar. Measured on the real gm thread:
 # 1500 tokens -> 15 verbatim turns, 2000 -> 22, 2500 -> 32, 4000 -> 59 (greet: 1500 -> 2.44 s, 3000 -> 3.01 s).
 # When long chat replies leave the default short of MIN_TURNS, the opening is read once more at what MIN_TURNS cost
@@ -82,8 +83,11 @@ class Opening(str):
     """The opening text, and how it was read (`info`, for the call report):
       budget         the first read's token budget (0 when the flag is off)
       reread         the second read's budget, or None when there was no second read
-      reread_result  kept (more turns, cut to the newest MIN_TURNS) | not_more | failed | None
-      source         route | twin | none (nothing could be read) | off (flag off)
+      reread_result  kept (more turns, cut to the newest MIN_TURNS) | kept_uncut (more turns, but not in the contract's
+                     shape, so not cut) | not_more | failed | too_slow (wanted, but the first read took over 2 s) | None
+      source         route | twin (the agent's chat) | thread (a page thread) | calls (Arturo's calls) | refused (the
+                     caller may not read the page thread) | none (nothing could be read) | off (flag off; the server
+                     reports None then, as for a timeout or an error, with skipped saying which)
       short          still under MIN_TURNS verbatim turns"""
 
     def __new__(cls, text, info):
@@ -112,11 +116,11 @@ def _with_floor(read):
     READ_DEADLINE_S. It asks for what MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more
     turns, then cut to the newest MIN_TURNS. A junk setting is not an explicit one."""
     budget = budget_tokens()
-    t0 = time.monotonic()
+    t0 = _now()
     text, source = read(budget)
     turns = describe(text)["turns"]
     reread = result = None
-    elapsed = time.monotonic() - t0
+    elapsed = _now() - t0
     wanted = (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source in _SECOND_READ_SOURCES
               and turns < MIN_TURNS and "EARLIER (summarized):" in text)
     if wanted and elapsed > FLOOR_MAX_ELAPSED_S:
@@ -128,7 +132,9 @@ def _with_floor(read):
         if not more:
             result = "failed"
         elif more_turns > turns:
-            text, turns, result = _newest(more, MIN_TURNS), min(more_turns, MIN_TURNS), "kept"
+            cut = _newest(more, MIN_TURNS)
+            text, turns = cut, describe(cut)["turns"]
+            result = "kept" if cut != more or more_turns <= MIN_TURNS else "kept_uncut"
         else:
             result = "not_more"
     return Opening(text, {"budget": budget, "reread": reread, "reread_result": result, "source": source,
@@ -222,7 +228,7 @@ def _read(agent, budget, load=None, directory=None, route=None, timeout=None):
 _LINE_RE = re.compile(r"^\[(\S+Z) [^\]]*\] (chat|call (\S+)) ")
 _SUMMARY_RE = re.compile(r"^- \[[^\]]*\] call ([^,\s]+),")
 _OMITTED_RE = re.compile(r"^- \((\d+) older item\(s\) omitted\)$")
-_CHAT_ERROR_RE = re.compile(r"^\(\S+ chat could not be read: ")
+_CHAT_ERROR_RE = re.compile(r"^\((\S+ chat|thread \S+) could not be read: ")
 
 
 def describe(text):
