@@ -1429,3 +1429,75 @@ def test_review5_n14_speech_is_credited_per_20ms_window_not_per_chunk(tmp_path):
     sess.on_uplink(_clicks(5), now=6.0); sess.on_uplink(_clicks(5), now=6.1); sess.on_uplink(_clicks(3), now=6.2)
     feed(fx.input_transcript(" yes start it"))                                          # 0.26 s of real speech
     assert t.execute(sess.binding, "s2", "spawn_agent", json.dumps(SPAWN))["ok"]
+
+
+# ---- latency instrumentation (gm GO msg_be42d949: measure before any behaviour change) ---------------------------
+def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_result(tmp_path):
+    from services.arturo.native.session import NativeSession
+    from services.arturo.native import fixtures as fx
+    t, ex = _tools(tmp_path)
+    T = [0.0]
+    sess = NativeSession(_fleet(t), t, clock=lambda: T[0], speech_fn=lambda pcm: any(pcm), settle=None,
+                         turn_speech_fn=lambda pcm: False)
+
+    def feed(frames, at):
+        T[0] = at
+        for f in frames:
+            sess.on_server_frame(f[0])
+    feed([fx.started()], 10.0)
+    feed(fx.tool_turn("d1", "r1", [("c1", "list_agents", "{}")]), 11.0)
+    feed(fx.tool_turn("d2", "r2", [("c2", "knowledge", json.dumps({"query": "dream fix"}))]), 11.5)
+    feed(fx.speech(0.3), 13.0)
+    rows = {r["call_id"]: r for r in sess.report()["tool_timeline"]}
+    assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "requested_s": 1.0, "ready_s": 1.0,
+                          "result_s": 1.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
+    assert rows["c2"]["name"] == "knowledge" and rows["c2"]["result_s"] == 1.5
+    assert rows["c2"]["first_audio_s"] == 3.0 and rows["c2"]["next"] == "audio"
+
+
+def test_a_tool_with_no_result_yet_is_in_the_timeline_with_nulls(tmp_path):
+    from services.arturo.native.session import NativeSession
+    from services.arturo.native import fixtures as fx
+    t, ex = _tools(tmp_path)
+    sess = NativeSession(_fleet(t), t, clock=lambda: 5.0, speech_fn=lambda pcm: any(pcm), settle=None)
+    sess.on_server_frame(fx.started()[0])
+    sess.on_server_frame(fx.delegation_created("d1", "r1")[0])
+    sess.on_server_frame(fx.response_event("d1", fx.nested_function_call_done("c9", "list_agents", "{}"), "")[0])
+    (row,) = sess.report()["tool_timeline"]
+    assert row["name"] == "list_agents" and row["requested_s"] == 0.0
+    assert row["result_s"] is None and row["first_audio_s"] is None and row["next"] is None
+
+
+def test_the_first_call_since_process_start_is_cold_and_the_next_warm(tmp_path, monkeypatch, caplog):
+    # latency plan 2(a): the cutover's first call greeted at 4.95 s against 3.27 s later; the report must say which
+    import logging
+
+    async def one(c):
+        ws = await c.ws_connect("/native/ws", headers=HDRS)
+        await ws.send_str(json.dumps({"type": "start"}))
+        for _ in range(100):
+            if FakeProvider.instances and FakeProvider.instances[-1].sent:
+                break
+            await asyncio.sleep(0.02)
+        FakeProvider.instances[-1].push({"type": "session.started"})
+        await asyncio.sleep(0.2)
+        await ws.send_str(json.dumps({"type": "disconnect"}))
+        await ws.close()
+        await asyncio.sleep(0.2)
+
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        s.thread_loader = lambda agent: ""
+        c = await _client(s)
+        try:
+            await one(c)
+            FakeProvider.instances.clear()
+            await one(c)
+        finally:
+            await c.close()
+    with caplog.at_level(logging.INFO, logger="arturo-native"):
+        _run(go())
+    starts = [r.getMessage() for r in caplog.records if ": START " in r.getMessage()]
+    assert len(starts) == 2 and " start=cold" in starts[0] and " start=warm" in starts[1]
+    reps = sorted((tmp_path / "native" / "calls").glob("*.json"), key=lambda p: p.stat().st_mtime)
+    assert [json.loads(p.read_text())["start"] for p in reps] == ["cold", "warm"]

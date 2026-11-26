@@ -522,6 +522,9 @@ class NativeCall:
                 return False
         self.driver = Driver(self.session, self.transport, _Observer(self))
         self.t0 = time.monotonic()
+        # the first call since process start pays the provider's first connect (latency plan 2(a)): name it
+        self.start_kind = "cold" if self.server.starts == 0 else "warm"
+        self.server.starts += 1
         self.spend.start()
         opening, skipped = "", None
         if opening_fut is not None:
@@ -546,7 +549,7 @@ class NativeCall:
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
                  f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent} "
-                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']}")
+                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']} start={self.start_kind}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -863,7 +866,7 @@ class NativeCall:
         except Exception as e:  # noqa: BLE001 — never lose the report for a usage-store hiccup
             log.error(f"native {self.binding.conversation_id}: usage record failed: {e!r}")
         rep = self.session.report()
-        rep.update(reason=reason, spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
+        rep.update(start=getattr(self, "start_kind", None), reason=reason, spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
@@ -913,6 +916,7 @@ class NativeServer:
         self.usage_store = usage_store
         self._verify = verify
         self.thread_loader = call_context.opening                   # (agent) -> the thread above a call
+        self.starts = 0                                             # calls started since process start (cold|warm)
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
 
     def _spoken(self, conversation_id):
