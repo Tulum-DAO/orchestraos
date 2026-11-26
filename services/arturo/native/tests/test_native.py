@@ -404,7 +404,7 @@ def test_an_unverified_or_forwarded_caller_is_refused(tmp_path, monkeypatch, hdr
     _run(go())
 
 
-async def _call(c, script, settle="fast"):
+async def _call(c, script, settle="fast", start=None):
     """Open a call, run script(ws, provider), collect every message the client got."""
     got = []
     ws = await c.ws_connect("/native/ws", headers=HDRS)
@@ -413,7 +413,7 @@ async def _call(c, script, settle="fast"):
         async for m in ws:
             got.append(m.data if m.type.name == "BINARY" else json.loads(m.data))
     rt = asyncio.ensure_future(reader())
-    await ws.send_str(json.dumps({"type": "start", "settle": settle}))
+    await ws.send_str(json.dumps({"settle": settle, **(start or {"type": "start"})}))
     for _ in range(40):
         if FakeProvider.instances:
             break
@@ -547,6 +547,12 @@ def test_the_native_prompts_share_no_text_with_the_relays_f1_prompt():
             assert line not in p["live"] and line not in p["backend"]
     assert "say out loud which seat you will start" in p["live"]
     assert "READ_BACK_FIRST" in p["backend"]
+
+
+def test_the_live_prompt_says_gm_is_answered_in_its_own_time_and_never_still_on_it():
+    # gm on Shaw's 18:3x call: keep answering Shaw while a question to gm is out; never fill the air with "still on it"
+    live = native_config.prompts()["live"]
+    assert "say once that gm hasn't answered\nyet" in live and 'Never say "I\'m still on it".' in live
 
 
 def test_a_slow_tool_never_stalls_the_audio(tmp_path, monkeypatch):
@@ -1429,3 +1435,68 @@ def test_review5_n14_speech_is_credited_per_20ms_window_not_per_chunk(tmp_path):
     sess.on_uplink(_clicks(5), now=6.0); sess.on_uplink(_clicks(5), now=6.1); sess.on_uplink(_clicks(3), now=6.2)
     feed(fx.input_transcript(" yes start it"))                                          # 0.26 s of real speech
     assert t.execute(sess.binding, "s2", "spawn_agent", json.dumps(SPAWN))["ok"]
+
+
+def test_a_question_to_gm_never_holds_the_call_and_gms_answer_comes_in_as_a_note(tmp_path, monkeypatch):
+    # Shaw's 18:3x call, 2026-11-26: three gm_command calls each held the voice 25 s while the proxy polled gm's reply
+    ex = FakeExecutor(reply=lambda name, args: "gm says:\nIt is the backend's tool decision.", delay=3.0)
+    t = {}
+
+    async def script(ws, p):
+        p.push({"type": "session.started"})
+        p.push({"type": "session.input_transcript.delta", "delta": "ask the gm why it lags"})
+        p.push({"type": "session.delegation.created", "delegation": {"id": "d1"}})
+        p.push({"type": "response.event", "delegation_id": "d1", "event": {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "call_G", "name": "gm_command", "arguments": "{}"}}})
+        p.push({"type": "response.event", "delegation_id": "d1", "event": {
+            "type": "response.completed", "response": {"model": "gpt-6-luna",
+                                                       "usage": {"input_tokens": 10, "output_tokens": 2}}}})
+        t["asked"] = time.monotonic()
+        for _ in range(60):
+            if any(f["type"] == "response.item.create" for f in p.sent):
+                t["answered"] = time.monotonic()
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(3.5)                         # gm's reply lands (3 s) while the call is still up
+
+    async def go():
+        s = _server(tmp_path, monkeypatch, executor=ex)
+        c = await _client(s)
+        try:
+            return await _call(c, script)
+        finally:
+            await c.close()
+    got, p = _run(go())
+    outs = [f for f in p.sent if f["type"] == "response.item.create"]
+    assert len(outs) == 1 and json.loads(outs[0]["item"]["output"]) == srv.DETACHED
+    assert t["answered"] - t["asked"] < srv.DETACH_AFTER_S + 0.6, "the call waited on gm's reply"
+    notes = [json.dumps(f) for f in p.sent if f["type"] not in ("response.item.create", "session.start")]
+    assert any("It is the backend" in n and "gm" in n for n in notes), "gm's answer never reached the call"
+
+
+def test_a_tool_on_a_page_thread_call_is_tagged_with_that_thread(tmp_path, monkeypatch):
+    # Shaw's 18:3x call: its three questions to gm were tagged "thread gm chat", not the page's thread web_ypc88hel
+    ex = FakeExecutor(reply="seats: gm")
+
+    async def script(ws, p):
+        p.push({"type": "session.started"})
+        p.push({"type": "session.input_transcript.delta", "delta": "list my agents"})
+        p.push({"type": "session.delegation.created", "delegation": {"id": "d1"}})
+        p.push({"type": "response.event", "delegation_id": "d1", "event": {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "call_T", "name": "list_agents", "arguments": "{}"}}})
+        p.push({"type": "response.event", "delegation_id": "d1", "event": {
+            "type": "response.completed", "response": {"model": "gpt-6-luna",
+                                                       "usage": {"input_tokens": 10, "output_tokens": 2}}}})
+        await asyncio.sleep(1.0)
+
+    async def go():
+        s = _server(tmp_path, monkeypatch, executor=ex)
+        c = await _client(s)
+        try:
+            return await _call(c, script, start={"type": "start", "thread": "web_test1"})
+        finally:
+            await c.close()
+    _run(go())
+    assert ex.call_seen["thread_id"] == "web_test1"
