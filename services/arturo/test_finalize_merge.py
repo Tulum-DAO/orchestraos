@@ -112,3 +112,32 @@ def test_summarize_counts_turns_and_tools():
     ]
     s = fm.summarize(merged)
     assert "2 turns" in s and "1 tool runs" in s and "the answer" in s
+
+
+def _native_ledger(tmp_path):
+    from services.arturo.native.tool_ledger import ToolLedger
+    led = ToolLedger(tmp_path, clock=iter([100.0, 101.0, 150.0, 151.0]).__next__)
+    for cid, name, conv in (("c1", "gm_command", "native-a"), ("c2", "list_agents", "native-a")):
+        led.run_once_external(cid, conv, "fleet", name, {"prompt": "why the lag"} if name == "gm_command" else {},
+                              lambda: ({"ok": True, "result": "done"}, None))
+    led.run_once_external("c9", "native-b", "fleet", "list_agents", {}, lambda: ({"ok": True, "result": "x"}, None))
+    return tmp_path / "tool_ledger.sqlite3"
+
+
+def test_a_native_calls_tool_runs_come_from_its_ledger(tmp_path):
+    # Shaw's 18:3x call: three gm_command runs, yet the summary said "0 tool runs" (the native writes no journal of
+    # its own, so finalize had no tool turns to fold in)
+    turns = fm.native_tool_turns("native-a", _native_ledger(tmp_path))
+    assert [(t["role"], t["tool"], t["source"]) for t in turns] == [("tool", "gm_command", "native"),
+                                                                    ("tool", "list_agents", "native")]
+    assert turns[0]["input"] == {"prompt": "why the lag"} and turns[0]["ts"] < turns[1]["ts"]
+    merged = fm.merge_timeline([{"role": "user", "text": "hi", "ts": 99.0}], turns, [])
+    assert fm.summarize(merged).startswith("Voice call: 1 turns, 2 tool runs.")
+
+
+def test_no_native_tool_turns_for_another_call_a_relay_call_or_no_ledger(tmp_path):
+    led = _native_ledger(tmp_path)
+    assert fm.native_tool_turns("native-zzz", led) == []
+    assert fm.native_tool_turns("vc_relay_1", led) == []
+    assert fm.native_tool_turns("", led) == []
+    assert fm.native_tool_turns("native-a", tmp_path / "missing.sqlite3") == []

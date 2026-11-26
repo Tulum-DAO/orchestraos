@@ -130,3 +130,33 @@ def summarize(merged_turns):
     last_arturo = next((t.get("text", "") for t in reversed(merged_turns)
                         if t.get("role") == "arturo"), "")
     return f"Voice call: {n_turns} turns, {n_tools} tool runs.\n{last_arturo}"
+
+
+def native_tool_turns(conv_id, ledger_path):
+    """A native call's tool runs as journal tool turns, read from the native tool ledger (tool_calls, by
+    conversation_id). The native server writes no journal of its own, so finalize had no tool turns to fold in and the
+    summary said "0 tool runs" on a call with three questions to gm (2026-11-26). Read-only; [] for any other call,
+    a missing ledger or a read error."""
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+    if not conv_id or not str(conv_id).startswith("native-") or not _Path(ledger_path).exists():
+        return []
+    try:
+        con = _sqlite3.connect(f"file:{ledger_path}?mode=ro", uri=True, timeout=2)
+        try:
+            rows = con.execute("SELECT tool_call_id, name, args_json, created FROM tool_calls "
+                               "WHERE conversation_id = ? ORDER BY created", (conv_id,)).fetchall()
+        finally:
+            con.close()
+    except _sqlite3.Error:
+        return []
+    out = []
+    for call_id, name, args_json, created in rows:
+        try:
+            args = _json.loads(args_json or "{}")
+        except ValueError:
+            args = {}
+        out.append({"role": "tool", "tool": name, "input": args if isinstance(args, dict) else {},
+                    "result": "dispatched", "status": "done", "ts": float(created), "call_id": call_id,
+                    "source": "native"})
+    return out

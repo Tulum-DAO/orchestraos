@@ -99,6 +99,7 @@ VOICE_API = "http://127.0.0.1:5051"
 # ARTURO INSTANCE — namespaced write roots (never clobber the live :5052 proxy's files).
 ARTURO_PORT = int(os.environ.get("ORCHESTRA_ARTURO_PORT", "5071"))
 ARTURO_STATE = ORCHESTRA_DIR / "state" / "arturo"
+NATIVE_TOOL_LEDGER = ARTURO_STATE / "native" / "tool_ledger.sqlite3"   # the native server's (native/server.py __main__)
 ARTURO_LOGS = ORCHESTRA_DIR / "logs" / "arturo"
 
 # --- §2 per-call transcript journal wiring (spec §2 / agent-state-truth §7 seam) ---
@@ -837,6 +838,10 @@ def finalize_from_client(client_call_id="", conv_id=""):
         if server_id:
             server_d = {c: d for c, d in candidates}.get(server_id, {})
             server_turns = server_d.get("turns", [])
+        if not any(t.get("role") == "tool" for t in server_turns):
+            # a native call writes no server journal: its tool runs are in the native tool ledger (2026-11-26: "0 tool
+            # runs" on a call with three questions to gm)
+            server_turns = list(server_turns) + _fm.native_tool_turns(conv, NATIVE_TOOL_LEDGER)
         # merge: client spine + server tools + surface events, ts-ordered
         merged = _fm.merge_timeline(client.get("turns", []), server_turns, surface_events)
         summary = _endcall.sanitize_summary(_fm.summarize(merged))
