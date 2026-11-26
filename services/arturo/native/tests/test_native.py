@@ -406,7 +406,7 @@ def test_an_unverified_or_forwarded_caller_is_refused(tmp_path, monkeypatch, hdr
     _run(go())
 
 
-async def _call(c, script, settle="fast"):
+async def _call(c, script, settle="fast", start=None):
     """Open a call, run script(ws, provider), collect every message the client got."""
     got = []
     ws = await c.ws_connect("/native/ws", headers=HDRS)
@@ -415,7 +415,7 @@ async def _call(c, script, settle="fast"):
         async for m in ws:
             got.append(m.data if m.type.name == "BINARY" else json.loads(m.data))
     rt = asyncio.ensure_future(reader())
-    await ws.send_str(json.dumps({"type": "start", "settle": settle}))
+    await ws.send_str(json.dumps({"settle": settle, **(start or {"type": "start"})}))
     for _ in range(40):
         if FakeProvider.instances:
             break
@@ -1639,3 +1639,30 @@ def test_a_question_to_gm_never_holds_the_call_and_gms_answer_comes_in_as_a_note
     assert t["answered"] - t["asked"] < srv.DETACH_AFTER_S + 0.6, "the call waited on gm's reply"
     notes = [json.dumps(f) for f in p.sent if f["type"] not in ("response.item.create", "session.start")]
     assert any("It is the backend" in n and "gm" in n for n in notes), "gm's answer never reached the call"
+
+
+def test_a_tool_on_a_page_thread_call_is_tagged_with_that_thread(tmp_path, monkeypatch):
+    # Shaw's 18:3x call: its three questions to gm were tagged "thread gm chat", not the page's thread web_ypc88hel
+    ex = FakeExecutor(reply="seats: gm")
+
+    async def script(ws, p):
+        p.push({"type": "session.started"})
+        p.push({"type": "session.input_transcript.delta", "delta": "list my agents"})
+        p.push({"type": "session.delegation.created", "delegation": {"id": "d1"}})
+        p.push({"type": "response.event", "delegation_id": "d1", "event": {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "call_T", "name": "list_agents", "arguments": "{}"}}})
+        p.push({"type": "response.event", "delegation_id": "d1", "event": {
+            "type": "response.completed", "response": {"model": "gpt-6-luna",
+                                                       "usage": {"input_tokens": 10, "output_tokens": 2}}}})
+        await asyncio.sleep(1.0)
+
+    async def go():
+        s = _server(tmp_path, monkeypatch, executor=ex)
+        c = await _client(s)
+        try:
+            return await _call(c, script, start={"type": "start", "thread": "web_test1"})
+        finally:
+            await c.close()
+    _run(go())
+    assert ex.call_seen["thread_id"] == "web_test1"

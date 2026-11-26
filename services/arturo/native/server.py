@@ -1005,8 +1005,14 @@ class NativeServer:
         return call.session.spoken_turn if call else ""
 
     def _thread_of(self, conversation_id):
+        """The thread a call's tools tag their messages with (gm_command's subject): the page's own thread, else the
+        named agent's chat, else none (the 18:3x call tagged its gm questions "gm chat" on a page-thread call)."""
         call = self.calls.get(conversation_id)
-        return f"{call.chat_agent} chat" if call else ""
+        if call is None:
+            return ""
+        if getattr(call, "page_thread", None):
+            return call.page_thread
+        return f"{call.chat_agent} chat" if getattr(call, "chat_named", False) else ""
 
     def _user_words(self, conversation_id):
         call = self.calls.get(conversation_id)
