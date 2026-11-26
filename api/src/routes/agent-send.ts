@@ -100,6 +100,9 @@ export interface SendBody {
   /** The page the person is on as they send (pageContextLine). It reaches the agent with this turn, never as
    *  their words: the transcript reader strips it from the user's bubble. */
   page_context?: { path?: unknown; title?: unknown };
+  /** The person's "now": Escape first when the seat is mid-turn and the last look is safe (the gateway decides
+   *  whether this caller may interrupt at all). */
+  interrupt?: boolean;
 }
 
 // The quiet page line: one tag at the end of the text the agent receives. One line, so a pane delivery is not turned
@@ -173,7 +176,29 @@ export interface GatewayInjectResult {
   attempts?: number;
   /** The gateway's plain words for a refusal (shown to the person as written), e.g. a /compact refused. */
   detail?: string;
+  /** The honest outcome of an accepted send. */
+  outcome?: SendOutcome;
+  /** Escape was sent and the words typed on the idle prompt that followed. */
+  interrupted?: boolean;
+  /** interrupt was asked for and there was no Escape, or the turn did not stop in time: the words went in as a
+   *  steer (or onto an idle prompt), and this says why. */
+  interrupt_failed?: string;
+  /** On a held or refused answer: Escape WAS sent but the words were not typed. */
+  escape_sent?: boolean;
+  /** With escape_sent: whether the turn was seen to stop within the wait. */
+  turn_stopped?: boolean;
 }
+
+/** What happened to an accepted send, as the gateway said it. */
+export type SendOutcome = 'delivered-now' | 'delivered-steer' | 'interrupted' | 'held';
+export const SEND_OUTCOMES: readonly SendOutcome[] = ['delivered-now', 'delivered-steer', 'interrupted', 'held'];
+export const asOutcome = (v: unknown): SendOutcome | undefined => {
+  if (v === undefined || v === null || v === '') return undefined;
+  if ((SEND_OUTCOMES as readonly string[]).includes(String(v))) return v as SendOutcome;
+  // A word neither side knows (a newer gateway, a typo) is dropped, but never silently.
+  console.warn(`[agent-send] unknown gateway outcome dropped: ${JSON.stringify(v)}`);
+  return undefined;
+};
 
 export interface MsgStoreSendResult {
   sent: boolean;
@@ -188,7 +213,7 @@ export interface AgentSendDeps {
   resolveSession(agentId: string): string;
   /** Calls watch_gateway.py POST /agent-message. Never throws — network/auth
    * failures come back as {unreachable:true}. */
-  gatewayInject(session: string, text: string, force?: boolean): Promise<GatewayInjectResult>;
+  gatewayInject(session: string, text: string, force?: boolean, interrupt?: boolean): Promise<GatewayInjectResult>;
   /** Durable-first fallback: python3 msg_store.py send --body-file <tmp>. */
   msgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult>;
   /** A "voice"-mode call with this seat is live (voiceCallLive). Optional: absent = never. */
@@ -216,8 +241,8 @@ function realResolveSession(agentId: string): string {
  *  next boundary (a held_message row). The reaction wake passes hold:false: a busy pane answers 409 and NOTHING is
  *  stored (spec "Agent wake": no force, no store). `actor` is the X-Actor header. */
 export async function postAgentMessage(session: string, text: string,
-  opts: { force?: boolean; hold?: boolean; actor?: string } = {}): Promise<GatewayInjectResult> {
-  const { force = false, hold = true, actor = 'operator:web' } = opts;
+  opts: { force?: boolean; hold?: boolean; actor?: string; interrupt?: boolean } = {}): Promise<GatewayInjectResult> {
+  const { force = false, hold = true, actor = 'operator:web', interrupt = false } = opts;
   let token = '';
   try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token provisioned */ }
   if (!token) return { httpStatus: 0, ok: false, unreachable: true, error: 'gateway token unavailable' };
@@ -230,7 +255,10 @@ export async function postAgentMessage(session: string, text: string,
       // accepts:['held'] lets the gateway durable-hold the cases it must — a menu or
       // permission prompt on screen, or a pane that is not running — rather than 409-ing
       // them back to us. It no longer holds a plain mid-turn 'working' seat: that injects.
-      body: JSON.stringify({ session, text, ...(hold ? { accepts: ['held'] } : {}), ...(force ? { force: true } : {}) }),
+      // interrupt:true = the person's "now": the gateway sends Escape first when the seat is mid-turn and the last
+      // look is safe, then types; absent = today's queued steer. Only a person's surface may ask (the gateway checks).
+      body: JSON.stringify({ session, text, ...(hold ? { accepts: ['held'] } : {}), ...(force ? { force: true } : {}),
+                             ...(interrupt ? { interrupt: true } : {}) }),
       signal: AbortSignal.timeout(25000),
     });
     const body: any = await resp.json().catch(() => ({}));
@@ -250,6 +278,11 @@ export async function postAgentMessage(session: string, text: string,
       error: body.error,
       attempts: body.attempts,
       detail: typeof body.detail === 'string' ? body.detail : undefined,
+      outcome: asOutcome(body.outcome),
+      interrupted: body.interrupted === true ? true : undefined,
+      interrupt_failed: typeof body.interrupt_failed === 'string' ? body.interrupt_failed : undefined,
+      escape_sent: body.escape_sent === true ? true : undefined,
+      turn_stopped: body.escape_sent === true ? body.turn_stopped === true : undefined,
     };
   } catch (err: any) {
     const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -259,8 +292,8 @@ export async function postAgentMessage(session: string, text: string,
 
 /** The web send's gateway call: held accepted, force only when the person asked for it. Body unchanged from before
  *  postAgentMessage existed ({session, text, accepts} or {session, text, accepts, force:true}). */
-function realGatewayInject(session: string, text: string, force = false): Promise<GatewayInjectResult> {
-  return postAgentMessage(session, text, { force });
+function realGatewayInject(session: string, text: string, force = false, interrupt = false): Promise<GatewayInjectResult> {
+  return postAgentMessage(session, text, { force, interrupt });
 }
 
 async function realMsgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult> {
@@ -398,7 +431,11 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // force: the route's own contract (header: "a client can re-POST with force:true") was never
   // honoured. It was dropped here, so "Overwrite draft & send" got the same 409 forever (review of #198).
   // Only an explicit boolean true counts.
-  const gw = await deps.gatewayInject(session, deliveredText, body.force === true);
+  // interrupt: the person's "now" (body interrupt:true or ?interrupt=1). Only an explicit boolean true or the
+  // literal "1" counts; the gateway decides whether this caller may interrupt at all.
+  const qi = (req.query as any)?.interrupt;
+  const interrupt = body.interrupt === true || String((Array.isArray(qi) ? qi[0] : qi) ?? '').trim() === '1';
+  const gw = await deps.gatewayInject(session, deliveredText, body.force === true, interrupt);
 
   const shape = (state: SendState, extra: Record<string, unknown> = {}) =>
     capable ? { state, ...extra } : { ok: state === 'delivered' || state === 'queued' || state === 'held', ...extra };
@@ -408,11 +445,20 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     sent_text: messageText,
     ...(gw.chip_dodge_pointer ? { chip_dodge_pointer: gw.chip_dodge_pointer } : {}),
   };
+  // The honest outcome, as the gateway said it (delivered-now | delivered-steer | interrupted | held), and the
+  // interrupt facts when they apply. A client keys its bubble on `outcome`; `state` + `agent_state` stay for the
+  // clients that already read them.
+  const outcome = {
+    ...(gw.outcome ? { outcome: gw.outcome } : {}),
+    ...(gw.interrupted ? { interrupted: true } : {}),
+    ...(gw.interrupt_failed ? { interrupt_failed: gw.interrupt_failed } : {}),
+    ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
+  };
 
   // Delivered — the parser-confirmed submit landed. agent_state says whether the agent was
   // mid-turn (the CLI then holds it in its input queue until the turn ends), for the "queued" chip.
   if (gw.ok && gw.delivered) {
-    res.status(200).json(shape('delivered', { session, attempts: gw.attempts, agent_state: gw.state, ...pointer }));
+    res.status(200).json(shape('delivered', { session, attempts: gw.attempts, agent_state: gw.state, ...pointer, ...outcome }));
     return;
   }
 
@@ -422,16 +468,20 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // checks the transcript and says "delivered" or "couldn't confirm"; it never says "not sent".
   if ((gw.httpStatus === 502 && gw.reason === 'unverified_submit') || gw.timedOut) {
     const reason = gw.timedOut ? 'gateway_timeout' : 'unverified_submit';
+    // An Escape that went before the unconfirmed Enter is still a fact the person should see.
+    const esc = gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {};
     res.status(502).json(capable
-      ? { state: 'unknown', reason, ...pointer }
-      : { ok: false, delivery: 'unknown', reason, ...pointer });
+      ? { state: 'unknown', reason, ...pointer, ...esc }
+      : { ok: false, delivery: 'unknown', reason, ...pointer, ...esc });
     return;
   }
 
   // Gateway durable-held it (accepts:['held']). NOT a plain mid-turn seat any more — those
   // inject — but a pane that genuinely cannot take a keystroke right now.
   if (gw.ok && gw.held) {
-    res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working', ...pointer }));
+    res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working',
+                                         outcome: 'held', ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
+                                         ...pointer }));
     return;
   }
 
@@ -445,6 +495,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
       activity: gw.activity,
       composer_text: gw.composer_text,
       stranded: gw.stranded,
+      // An interrupt whose look after Escape found text: Escape went, nothing was typed.
+      ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
     };
     res.status(409).json({
       ...legacy,
@@ -492,6 +544,9 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   const state: SendState = isMenuOrPrompt ? 'held' : 'queued';
   res.status(200).json(shape(state, {
     message_id: write.id,
+    outcome: 'held',
+    // An interrupt refusal the gateway could not hold (a stranded chip after Escape): the Escape still went.
+    ...(gw.escape_sent ? { escape_sent: true, turn_stopped: gw.turn_stopped === true } : {}),
     sent_text: messageText,
     reason: isMenuOrPrompt
       ? 'agent pane is showing a menu/permission prompt'
