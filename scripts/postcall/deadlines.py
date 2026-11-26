@@ -28,6 +28,11 @@ _HOURS = re.compile(r"\b(?:in|within)\s+(?:the\s+next\s+)?(an?|\d+|(?:a\s+)?coup
                     r"\s+hours?\b(?!\s+and\b)")
 # Clock or duration words this parser does not read: the phrase stays unknown rather than half-read.
 _COMPOUND = re.compile(r"\b(?:half|quarter|past)\b")
+_NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+                     r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
+                     r"sixty|seventy|eighty|ninety)\b")
+_IN_DAYS = re.compile(r"\bin\s+\d+\s+days?\b")
+_WEEK_OR_TWO = re.compile(r"\bweek or two\b|\btwo weeks\b")
 _FILLER = frozenset("at by around about before until till say like approx approximately ish or so the latest"
                     .split())
 _PARTS = (("morning", 9, 0), ("noon", 12, 0), ("afternoon", 15, 0), ("end of day", 17, 0),
@@ -138,6 +143,19 @@ def _named_zone(p):
     return None, None
 
 
+def _unused_number(p, spans):
+    """A digit or number word outside every span the parser read: part of the phrase was not
+    understood, so any date from it would be a guess."""
+    rest = p
+    for a, b in spans:
+        rest = rest[:a] + " " * (b - a) + rest[b:]
+    return bool(_NUMBER.search(rest))
+
+
+def _date_spans(p):
+    return [m.span() for rx in (_MONTH_DAY, _IN_DAYS, _WEEK_OR_TWO) for m in rx.finditer(p)]
+
+
 def _season_clash(when, kind):
     return kind is not None and (kind == "dst") != bool(when.dst())
 
@@ -166,15 +184,25 @@ def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     if _COMPOUND.search(p):
         return Due(None, f"unknown ({phrase})")
     start = _parse_utc(anchor)
+    clocks = list(_CLOCK.finditer(p))
+    if len(clocks) > 1:        # "at 2pm or 4pm": alternatives, never the first one
+        return Due(None, f"unknown ({phrase})")
     hours = _hours_ahead(p)
     if hours is not None:      # "in the next couple of hours": from the call, exact
+        m = _HOURS.search(p)
+        rest = p[:m.start()] + " " + p[m.end():]
+        if _unused_number(p, [m.span()]) or re.search(r"\b(?:hours?|minutes?|mins?)\b", rest):
+            return Due(None, f"unknown ({phrase})")
         when = (start + dt.timedelta(hours=hours)).astimezone(ZoneInfo(tz))
         return Due(when.isoformat(timespec="seconds"), phrase)
     named, kind = _named_zone(p)
     zone = named or tz
     today = start.astimezone(ZoneInfo(zone)).date()
     day, default_hour = _date_of(p, today)
-    if day is None and default_hour == "unknown" and _CLOCK.search(p) and _clock_only(p) and not zone_assumed:
+    clock_spans = [c.span() for c in clocks]
+    if day is not None and _unused_number(p, _date_spans(p) + clock_spans):
+        return Due(None, f"unknown ({phrase})")
+    if day is None and default_hour == "unknown" and clocks and _clock_only(p) and not zone_assumed:
         # A clock time alone ("two PM EST") is its next occurrence after the call.
         hour, minute = _clock_of(p, 17)
         when, dst_adjusted = _localize(today, hour, minute, zone)

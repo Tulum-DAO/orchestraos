@@ -93,7 +93,8 @@ def test_a_truncated_or_garbled_feed_keeps_the_old_copy(tmp_path):
     for bad in ("BEGIN:VCALENDAR\r\n", "BEGIN:VCALENDARgarbage", "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\n",
                 "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VCALENDAR\r\n",
                 "BEGIN:VCALENDAR\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",          # never closed
-                good + "<html>sign in</html>\r\n"):                                  # junk after the end
+                good + "<html>sign in</html>\r\n",                                  # junk after the end
+                "BEGIN:VCALENDAR\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR\r\nEND:VCALENDAR\r\n"):  # two roots
         os.utime(out, (0, 0))
         assert calendar_fetch.refresh(url_file, out, opener=_opener(bad, []), now=1e9).startswith("error"), bad
         assert open(out, newline="").read() == good
@@ -120,3 +121,11 @@ def test_a_failed_replace_leaves_no_temp_file_and_the_old_copy(tmp_path, monkeyp
         calendar_fetch.refresh(url_file, out, opener=_opener(ICS.replace("2.0", "2.1"), []), now=1e9)
     assert open(out, newline="").read() == ICS
     assert [n for n in os.listdir(os.path.dirname(out)) if n.startswith(".shaw.ics.")] == []
+
+
+def test_a_folded_line_is_one_content_line(tmp_path):
+    """RFC 5545 folding: a line starting with a space continues the one before it."""
+    url_file, out = _paths(tmp_path)
+    folded = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDESCRIPTION:see\r\n END:VEVENT\r\n"
+              "END:VEVENT\r\nEND:VCALENDAR\r\n")
+    assert calendar_fetch.refresh(url_file, out, opener=_opener(folded, []), now=1e9) == "fetched"

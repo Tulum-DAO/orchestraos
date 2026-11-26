@@ -155,3 +155,22 @@ def test_the_next_occurrence_counts_the_second_fall_back_hour():
     # New York falls back at 06:00Z on 2027-11-07; 06:15Z is 01:15 EST, so 01:30 is 15 min away.
     d = due("at 1:30am", anchor="2027-11-07T06:15:00Z", tz="America/New_York")
     assert deadlines._parse_utc(d.due_ts).isoformat() == "2027-11-07T06:30:00+00:00"
+
+
+# --- codex gate round 2: every number and clock in the phrase must be used ------------------------
+
+@pytest.mark.parametrize("phrase", ["in 2 hours 30 minutes", "in 2 hours, and 20 minutes", "at 2pm or 4pm",
+                                    "between 2pm and 4pm", "tomorrow at two twenty-five pm", "friday 2 or 3pm",
+                                    "in an hour or two", "tomorrow, 10 or 11am"])
+def test_a_phrase_with_an_unused_number_or_a_second_clock_stays_unknown(phrase):
+    d = due(phrase, anchor="2026-11-24T18:00:00Z")
+    assert d.due_ts is None, d
+
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("by Friday", "2026-11-27T17:00:00-05:00"), ("Dec 3", "2026-12-03T17:00:00-05:00"),
+    ("in 3 days", "2026-11-27T17:00:00-05:00"), ("in a week or two", "2026-12-08T17:00:00-05:00"),
+    ("tomorrow at 10:30am", "2026-11-25T10:30:00-05:00"),
+])
+def test_numbers_the_parser_reads_are_still_used(phrase, expected):
+    assert due(phrase).due_ts == expected

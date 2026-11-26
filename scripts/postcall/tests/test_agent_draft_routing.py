@@ -77,3 +77,27 @@ def test_a_routed_dispatch_is_sent_once_and_reconciled_on_replay(tmp_path):
     pipeline.process(call, ledger=led, extractor=ex, effects=world)
     sent = [e for e in world.sent if e.kind == "dispatch"]
     assert len(sent) == 1 and sent[0].payload["route"] is True and sent[0].payload["seat"] == "gm"
+
+
+def test_a_routed_dispatch_accepted_outside_but_not_confirmed_is_reconciled_not_resent(tmp_path, monkeypatch):
+    path = str(tmp_path / "l.db")
+    led, world = ledger.Ledger(path), effects.Recorder()
+    call, ex = _calls.call([_calls.item(DECK, agent_takeable=True, agent_work="draft the pricing deck email")])
+    pipeline.process(call, ledger=led, extractor=ex, effects=world)
+    led.apply_answers(world.sent[0].effect_id, status="submitted", answers={2: {"option_n": 1, "final": True}})
+    real = ledger.Ledger._set_effect
+
+    def crash_on_confirm(self, effect_id, state, external_id=None):
+        if effect_id.startswith("dispatch:") and state == "confirmed":
+            raise SystemExit("crash after the send, before the confirm")
+        return real(self, effect_id, state, external_id)
+    monkeypatch.setattr(ledger.Ledger, "_set_effect", crash_on_confirm)
+    with pytest.raises(SystemExit):
+        led.run_pending(world)
+    monkeypatch.setattr(ledger.Ledger, "_set_effect", real)
+    assert len([e for e in world.sent if e.kind == "dispatch"]) == 1
+
+    ledger.Ledger(path).run_pending(world)                       # a fresh sweep after the crash
+    assert len([e for e in world.sent if e.kind == "dispatch"]) == 1
+    (d,) = [e for e in ledger.Ledger(path).effects() if e["kind"] == "dispatch"]
+    assert d["state"] == "confirmed" and d["external_id"]

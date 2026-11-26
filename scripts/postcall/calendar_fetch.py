@@ -29,10 +29,17 @@ def _urlopen(url, timeout):
 
 
 def _complete(body):
-    """A whole calendar: BEGIN/END:VCALENDAR as the first and last lines, components balanced, so a
-    truncated download never replaces a good copy."""
-    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
-    if len(lines) < 2 or lines[0] != "BEGIN:VCALENDAR" or lines[-1] != "END:VCALENDAR":
+    """A whole calendar: one VCALENDAR root as the first and last (unfolded) lines, components
+    balanced, so a truncated download never replaces a good copy."""
+    unfolded = []
+    for ln in body.splitlines():
+        if ln[:1] in (" ", "\t") and unfolded:      # RFC 5545 folding: a continuation of the line before
+            unfolded[-1] += ln[1:]
+        elif ln.strip():
+            unfolded.append(ln.strip())
+    lines = unfolded
+    if (len(lines) < 2 or lines[0] != "BEGIN:VCALENDAR" or lines[-1] != "END:VCALENDAR"
+            or lines.count("BEGIN:VCALENDAR") != 1):
         return False
     depth = []
     for ln in lines:
