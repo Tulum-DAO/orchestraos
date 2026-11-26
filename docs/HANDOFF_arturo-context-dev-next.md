@@ -21,7 +21,12 @@
   1. test_native.py around 1449: requested, ready and result all land at 1.0. Feed the call, the terminal and the release at three distinct times and assert each; assert ready_s is None in the no-result test.
   2. test_native.py around 1434: drop `msg_be42d949` from the comment.
   Non-blocking (your call): an offline first call counts as cold; no session.started gives raw monotonic values (return None); speech already under way at result time is never stamped; first_audio_s adds two rounded numbers; `start` beside `started`.
-  The bee255c commit (legs) hasn't been reviewed yet. Mail builder the new head for one delta review.
+  **UPDATE: bee255c reviewed, BLOCK(3), all test-only (builder msg_4b0f2254; the legs code is clean):**
+  1. ready_s, as above: three distinct times (settle= with a real quiet_s, or a tool that returns RUNNING first); assert each; ready_s None in the no-result test.
+  2. Remove BOTH msg ids from new test text: `msg_be42d949` (~:1434) and `msg_3a21b3e6` (~:1507).
+  3. The legs test (~:1538) passes even when all six legs are equal. Have transport_factory and thread_loader sleep ~0.05 s, assert each leg >= 0.04 s after the one before, and assert START carries connect_s=<provider_connected_s> start_s=<start_s>.
+  Non-blocking: first_transcript_s counts only Arturo's shown transcript (document it); legs.first_audio_s is provider arrival, not the send to the phone; two first_audio_s keys with different zeros; server.py ~:884 line is ~170 chars (wrap it).
+  Next head = one delta review; card after MERGE-OK + CI green by name.
 - Probe runner: /home/shaw/wt/arturo-context-dev/probe2.py (run from a worktree root). Knobs: PROBE_CALLS, PROBE_TOOLS, PROBE_SPENDING=1 (the live 39 tools, declare-only); a live run needs `live` + PROBE_LIVE_OK=1.
 
 ## 2. Open loops (in order)
