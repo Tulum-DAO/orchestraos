@@ -304,3 +304,71 @@ test('a prefix that ends in a reply whose tokens are still carried is not stitch
   assert.ok(after?.usage, 'the first drawn reply of the old chunk carries tokens');
   assert.equal(after.usage.input_tokens, 7777 + 10, 'the empty reply\'s tokens rode onto it, as in the whole-file parse');
 });
+
+test('a chunk never starts between two lines of one reply that differ in uuid but share a message id: usage is counted once', () => {
+  // Claude Code writes a streamed reply's content blocks as separate lines, each with its own uuid, all with the same
+  // message.id (and the same usage). A tail start, or a stitch join, between them would count the usage twice.
+  const { path, parser } = fresh();
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  lines.push(user('the two-line reply\'s question', 'u-two'));
+  lines.push(assistant('msg_two', 'first block', { input_tokens: 5000, output_tokens: 1 }, 'a-two-1'));
+  lines.push(assistant('msg_two', 'second block', { input_tokens: 5000, output_tokens: 1 }, 'a-two-2'));
+  for (let i = 0; i < 10; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const whole = oracle(path);
+  const usageOf = (items: readonly any[]) => items.filter((it: any) => it.uuid === 'a-two-1' || it.uuid === 'a-two-2').map((it: any) => it.usage ?? null);
+  // a tail start exactly on the second line: moved back to the first
+  const tail = cachedLogTail(path, parser, size - offsetOf(path, 'a-two-2'));
+  assert.ok(tail.start <= offsetOf(path, 'a-two-1'), 'the chunk starts at or before the first line of the reply');
+  assert.deepEqual(usageOf(tail.items), usageOf(whole));
+  // a stitch: an entry that starts at the second line (reached from the newer side) widened past the first
+  clearLogCache();
+  const late = cachedLogTail(path, parser, size - offsetOf(path, JSON.parse(lines[lines.length - 20]).uuid));
+  assert.ok(late.start > offsetOf(path, 'a-two-2'));
+  const widened = cachedLogTail(path, parser, size - offsetOf(path, 'u-two'));
+  assert.deepEqual(usageOf(widened.items), usageOf(whole), 'the join never splits the reply');
+  clearLogCache();
+  assert.deepEqual(bare(widened.items), bare(cachedLogTail(path, parser, size - offsetOf(path, 'u-two')).items));
+});
+
+test('the cursor-window memo is bounded: an aggregate byte budget and a count, least recently used out first', async () => {
+  const { logRangeMemoStats, RANGE_MEMO_MAX_FILES, RANGE_MEMO_MAX_TOTAL_BYTES } = await import('./transcript-log-cache.js');
+  clearLogCache();
+  const paths: string[] = [];
+  for (let i = 0; i < RANGE_MEMO_MAX_FILES + 5; i++) {
+    const p = join(dir, `range-${i}-${Date.now()}.jsonl`);
+    bigLog(p, 1);
+    paths.push(p);
+    logRange(p, logParser(false), 256 * 1024, 512 * 1024);
+    const s = logRangeMemoStats();
+    assert.ok(s.files <= RANGE_MEMO_MAX_FILES, `${s.files} files kept`);
+    assert.ok(s.bytes <= RANGE_MEMO_MAX_TOTAL_BYTES, `${s.bytes} bytes kept`);
+  }
+  assert.equal(logRangeMemoStats().files, RANGE_MEMO_MAX_FILES);
+  // the newest ones are the ones kept: the first file's window is read again from disk, the last file's is a hit
+  const read0 = logCacheBytesRead();
+  logRange(paths[paths.length - 1], logParser(false), 256 * 1024, 512 * 1024);
+  assert.ok(logCacheBytesRead() - read0 < 64 * 1024, 'the newest window is a hit (only the line-edge scans are read)');
+  const read1 = logCacheBytesRead();
+  logRange(paths[0], logParser(false), 256 * 1024, 512 * 1024);
+  assert.ok(logCacheBytesRead() - read1 > 200 * 1024, 'the oldest window was evicted and is read again');
+});
+
+test('an entry over the cache budget is never kept, from the tail path or a stitched widening', async () => {
+  const { logCacheBudgetForTests, logCacheStats } = await import('./transcript-log-cache.js');
+  const { path, parser } = fresh();
+  bigLog(path, 2);
+  logCacheBudgetForTests(1024 * 1024);
+  try {
+    cachedLogTail(path, parser, 1.5 * 1024 * 1024);
+    assert.equal(logCacheStats().bytes, 0, 'a 1.5 MB tail entry is not kept under a 1 MB budget');
+    cachedLogTail(path, parser, 256 * 1024);
+    assert.ok(logCacheStats().bytes > 0 && logCacheStats().bytes <= 1024 * 1024, 'a small tail entry is kept');
+    cachedLogTail(path, parser, 1.5 * 1024 * 1024);
+    assert.equal(logCacheStats().bytes, 0, 'the widened (stitched) entry over the budget is not kept either');
+  } finally {
+    logCacheBudgetForTests(null);
+  }
+});

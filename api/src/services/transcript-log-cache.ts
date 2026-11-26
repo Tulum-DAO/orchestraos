@@ -85,8 +85,13 @@ interface RangeEntry extends CachedLog {
   /** The grammar's state at `end` (an append continues from it), or null for a grammar read whole. */
   state: unknown | null;
 }
-const ranges = new Map<string, RangeEntry>();
-export const RANGE_MEMO_MAX_BYTES = 16 * 1024 * 1024;
+const ranges = new Map<string, RangeEntry>();   // insertion order = least recently used first
+export const RANGE_MEMO_MAX_BYTES = 16 * 1024 * 1024;          // one window
+export const RANGE_MEMO_MAX_TOTAL_BYTES = 64 * 1024 * 1024;    // every kept window together
+export const RANGE_MEMO_MAX_FILES = 16;
+let rangeBytes = 0;
+/** Tests: how many cursor windows are kept, and their source bytes together. */
+export function logRangeMemoStats(): { files: number; bytes: number } { return { files: ranges.size, bytes: rangeBytes }; }
 let bytes = 0;
 let parses = 0;        // every read that produced items (full or append)
 let fullParses = 0;
@@ -106,7 +111,13 @@ export function logCacheTailParses(): number { return tailParses; }
 /** How many file bytes the parses read in all. */
 export function logCacheBytesRead(): number { return bytesRead; }
 
-export function clearLogCache(): void { entries.clear(); ranges.clear(); bytes = 0; }
+export function clearLogCache(): void { entries.clear(); ranges.clear(); bytes = 0; rangeBytes = 0; }
+
+/** Tests: the entries' byte budget (LOG_CACHE_MAX_BYTES in production); null restores it. */
+export function logCacheBudgetForTests(n: number | null): void { budget = n ?? LOG_CACHE_MAX_BYTES; }
+/** Tests: what the entries hold. */
+export function logCacheStats(): { files: number; bytes: number } { return { files: entries.size, bytes }; }
+let budget = LOG_CACHE_MAX_BYTES;
 
 /** What an entry costs the budget: the bytes it parsed. */
 const cost = (e: Entry): number => e.size - e.start;
@@ -118,11 +129,13 @@ function drop(slot: string): void {
   bytes -= cost(e);
 }
 
+/** Keep an entry that fits the budget (one over it is handed back but never kept), evicting the least recently used. */
 function keep(slot: string, entry: Entry): void {
+  if (cost(entry) > budget) return;
   entries.set(slot, entry);
   bytes += cost(entry);
   for (const [k] of entries) {
-    if (bytes <= LOG_CACHE_MAX_BYTES && entries.size <= LOG_CACHE_MAX_FILES) break;
+    if (bytes <= budget && entries.size <= LOG_CACHE_MAX_FILES) break;
     if (k !== slot) drop(k);
   }
 }
@@ -160,8 +173,8 @@ function lineStartAt(path: string, pos: number): number {
   return 0;
 }
 
-/** The uuid of the JSON line starting at `off`, or null when that line is not one JSON value with a uuid. */
-function uuidOfLineAt(path: string, off: number, size: number): string | null {
+/** The uuid and message id of the JSON line starting at `off`, or null when that line is not one JSON value with a uuid. */
+function keysOfLineAt(path: string, off: number, size: number): { uuid: string; mid: string | null } | null {
   let end = off;
   let text = '';
   while (end < size) {
@@ -173,12 +186,20 @@ function uuidOfLineAt(path: string, off: number, size: number): string | null {
     if (!block.length) break;
   }
   try {
-    const u = JSON.parse(text)?.uuid;
-    return typeof u === 'string' && u ? u : null;
+    const o = JSON.parse(text);
+    const u = o?.uuid;
+    if (typeof u !== 'string' || !u) return null;
+    const m = o?.message?.id;
+    return { uuid: u, mid: typeof m === 'string' && m ? m : null };
   } catch {
     return null;
   }
 }
+
+/** Two lines of ONE record group: the same uuid (one entry's items), or the same message id (a streamed reply's
+ *  content blocks, one line each with its own uuid, whose usage is counted once across them). */
+const sameRecord = (a: { uuid: string; mid: string | null }, b: { uuid: string; mid: string | null } | null): boolean =>
+  !!b && (a.uuid === b.uuid || (!!a.mid && a.mid === b.mid));
 
 /** Items that came with a line index (`li`): stamp the line's byte offset from `base` and the item's index within
  *  the line, then drop `li`. Items without one are left as they are (a whole-file grammar). */
@@ -314,7 +335,6 @@ function read<S>(path: string, parser: LogParser<S>, want: number): Entry {
     // the grammar cannot be read from a chunk: the whole file, once
   }
   const entry = parseRange(path, st, 0, parser)!;
-  if (cost(entry) > LOG_CACHE_MAX_BYTES) return entry;
   keep(slot, entry);
   return entry;
 }
@@ -328,7 +348,7 @@ export function logRange<S>(path: string, parser: LogParser<S>, lo: number, hi: 
   const slot = `${parser.key}\n${path}`;
   const start = lo <= 0 ? 0 : chunkStartAt(path, Math.min(lo, st.size), st.size);
   const end = hi >= st.size ? st.size : lineEndAt(path, Math.max(hi, start), st.size);
-  if (start === 0 && end === st.size) { ranges.delete(slot); return { ...cachedLog(path, parser), end: st.size, eof: true }; }
+  if (start === 0 && end === st.size) { forget(slot); return { ...cachedLog(path, parser), end: st.size, eof: true }; }
   // The window read before, widened: only the lines outside it are parsed (above it on their own, when the join is
   // exact; below it through the grammar's state at its end).
   const had = ranges.get(slot);
@@ -339,7 +359,7 @@ export function logRange<S>(path: string, parser: LogParser<S>, lo: number, hi: 
   }
   const lines = rangeLines(path, start, end);
   const got = parser.full(lines);
-  if (got.state === null) { ranges.delete(slot); return { ...cachedLog(path, parser), end: st.size, eof: true }; }
+  if (got.state === null) { forget(slot); return { ...cachedLog(path, parser), end: st.size, eof: true }; }
   stampLines(got.items, lines, start);
   const items = parser.finish(got.items, got.state, start === 0);
   parses += 1;
@@ -384,21 +404,40 @@ function extended<S>(path: string, parser: LogParser<S>, had: RangeEntry, start:
   return { ...had, items, memo: new Map(), start, end, raw, state, eof: end >= size };
 }
 
+/** Keep the window as the slot's one memo, most recently used last; drop it if it is over the per-window cap, and
+ *  the least recently used memos while the count or the bytes together are over their caps. */
 function remember(slot: string, r: RangeEntry & { eof: boolean }): RangeEntry & { eof: boolean } {
-  if (r.end - r.start <= RANGE_MEMO_MAX_BYTES) ranges.set(slot, r); else ranges.delete(slot);
+  forget(slot);
+  if (r.end - r.start <= RANGE_MEMO_MAX_BYTES) {
+    ranges.set(slot, r);
+    rangeBytes += r.end - r.start;
+    for (const [k] of ranges) {
+      if (rangeBytes <= RANGE_MEMO_MAX_TOTAL_BYTES && ranges.size <= RANGE_MEMO_MAX_FILES) break;
+      if (k !== slot) forget(k);
+    }
+  }
   return r;
 }
 
-/** The start of a chunk that holds byte `pos`: the start of its line, moved back while the line before shares that
- *  line's uuid (one Claude reply's lines never straddle a chunk edge). */
+function forget(slot: string): void {
+  const had = ranges.get(slot);
+  if (!had) return;
+  ranges.delete(slot);
+  rangeBytes -= had.end - had.start;
+}
+
+/** The start of a chunk that holds byte `pos`: the start of its line, moved back while the line before belongs to
+ *  the same record group (sameRecord: one Claude reply's lines never straddle a chunk edge, by uuid or message id). */
 function chunkStartAt(path: string, pos: number, size: number): number {
   let start = lineStartAt(path, pos);
   if (start > 0) {
-    const u0 = uuidOfLineAt(path, start, size);
-    for (let guard = 0; u0 && start > 0 && guard < 64; guard++) {
+    let k = keysOfLineAt(path, start, size);
+    for (let guard = 0; k && start > 0 && guard < 64; guard++) {
       const prev = lineStartAt(path, start - 1);
-      if (uuidOfLineAt(path, prev, size) !== u0) break;
+      const pk = keysOfLineAt(path, prev, size);
+      if (!sameRecord(k, pk)) break;
       start = prev;
+      k = pk;
     }
   }
   return start;

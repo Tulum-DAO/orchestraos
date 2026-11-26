@@ -381,3 +381,98 @@ test('a log of 100 KiB lines: a page costs about the bytes of the page, not seve
   assert.equal(all[all.indexOf(first!.items[0].uuid) - 1], older!.items[older!.items.length - 1].uuid);
   assert.equal(logCacheFullParses(), full0, 'no whole-file parse');
 });
+
+test('a retired generation whose tail chunk shows nothing is widened, never skipped: its messages and the marker stay', () => {
+  // The retired log ends in 400 KB of sidechain rows (a subagent's lines: nothing the chat shows). The page just
+  // older than the current generation's first line must come from the retired log's visible messages, under one
+  // rotation marker, and has_older must be true while the retired log has more.
+  const p1 = join(projects, 'skip-g1.jsonl');
+  const p2 = join(projects, 'skip-g2.jsonl');
+  const l1: string[] = [];
+  for (let i = 0; i < 30; i++) l1.push(user(`s1-u${i}`, `retired question ${i} ${filler}`), reply(`s1-a${i}`, `retired answer ${i} ${filler}`));
+  for (let i = 0; i < 400; i++) l1.push(JSON.stringify({ type: 'user', uuid: `s1-side-${i}`, timestamp: T(++seq), isSidechain: true, message: { role: 'user', content: 'p'.repeat(1024) } }));
+  writeFileSync(p1, l1.join('\n') + '\n');
+  const l2 = [user('s2-u0', `current question 0 ${filler}`), reply('s2-a0', `current answer 0 ${filler}`), user('s2-u1', `current question 1 ${filler}`), reply('s2-a1', `current answer 1 ${filler}`)];
+  writeFileSync(p2, l2.join('\n') + '\n');
+  const segs = [
+    { session: 's1-session', generation: 1, promotedAt: null, file: () => p1 },
+    { session: 's2-session', generation: 2, promotedAt: '2026-11-25T02:00:00Z', file: () => p2 },
+  ];
+  const run = (want0: number, before: string | null, limit: number) => {
+    tailFirstForTests({ want0 }); clearLogCache();
+    const w = chatWindow('zz-skip', segs, limit, before);
+    tailFirstForTests({ want0: 256 * 1024 });
+    return w;
+  };
+  const oracleFirst = run(Number.POSITIVE_INFINITY, null, 10)!;
+  const first = run(64 * 1024, null, 10)!;
+  assert.deepEqual(first.items, oracleFirst.items, 'the first page (the current log is small: all of it, the marker, and the retired tail)');
+  const oracleOlder = run(Number.POSITIVE_INFINITY, first.oldest_id, 10)!;
+  const older = run(64 * 1024, first.oldest_id, 10)!;
+  assert.ok(oracleOlder.items.some((it: any) => String(it.uuid).startsWith('s1-')), 'precondition: the whole-file page reaches the retired messages');
+  assert.deepEqual(older.items, oracleOlder.items);
+  assert.equal(older.has_older, oracleOlder.has_older);
+});
+
+test('the consumed-turn mark survives the page-context strip: a dashboard send\'s real turns still end the search past both copies', () => {
+  // Dashboard sends carry a <page-context> tag; the real turns are rewritten (text stripped) after the dedupe marks
+  // them, so the mark must be carried, or the forward widen stops at the first real turn and the second copy stays.
+  const path = join(projects, 'queued-pair-ctx.jsonl');
+  const ctx = (n: number) => `question ${n} ${filler} <page-context>The person is looking at this page in the dashboard as they send this: /agents/zz. </page-context>`;
+  const lines = [
+    user('c-u0', ctx(0)), reply('c-a0', `answer 0 ${filler}`, true),
+    queued('c-q1', ctx(1)), toolResult('c-r0', 'c-a0'), queued('c-q2', ctx(2)),
+    reply('c-b0', 'before the long tool 0', true), bigToolResult('c-R0', 'c-b0'), reply('c-c0', `closing 0 ${filler}`),
+    user('c-u1', ctx(1)), reply('c-a1', `answer 1 ${filler}`, true), bigToolResult('c-R1', 'c-a1'), reply('c-c1', `closing 1 ${filler}`),
+    user('c-u2', ctx(2)), reply('c-a2', `answer 2 ${filler}`),
+    user('c-u3', ctx(3)), reply('c-a3', `answer 3 ${filler}`),
+  ];
+  writeFileSync(path, lines.join('\n') + '\n');
+  const segs = [{ session: 'c-session', generation: 1, promotedAt: null, file: () => path }];
+  const cursor = `c-session~@${offsetIn(path, 'c-b0')}~c-b0`;
+  tailFirstForTests({ want0: Number.POSITIVE_INFINITY }); clearLogCache();
+  const want = chatWindow('zz-queued-ctx', segs, 4, cursor)!;
+  tailFirstForTests({ want0: 4 * 1024 }); clearLogCache();
+  const got = chatWindow('zz-queued-ctx', segs, 4, cursor)!;
+  tailFirstForTests({ want0: 256 * 1024 });
+  assert.deepEqual(want.items.map((it: any) => it.uuid), ['c-u0', 'c-a0', 'c-a0', 'c-r0'], 'precondition: neither copy on the whole-file page');
+  assert.deepEqual(got.items, want.items);
+});
+
+test('a queued copy is deduped against a real turn AFTER it, never one before: a page reads the same as the whole file', () => {
+  // The same words were a real turn early in the log, then sent again mid-turn much later and never written as a
+  // real turn. The whole-file build must show the copy (it is a message of its own), and so must a chunk that does
+  // not reach the early turn.
+  const path = join(projects, 'queued-early.jsonl');
+  const lines = [user('e-u0', `again ${filler}`), reply('e-a0', `first answer ${filler}`)];
+  for (let i = 1; i < 60; i++) lines.push(user(`e-u${i}`, `question ${i} ${filler}`), reply(`e-a${i}`, `answer ${i} ${filler}`, i % 2 === 0));
+  lines.push(user('e-u60', `question 60 ${filler}`), reply('e-a60', `answer 60 ${filler}`, true), queued('e-q', `again ${filler}`), toolResult('e-r60', 'e-a60'), reply('e-c60', `closing 60 ${filler}`));
+  lines.push(user('e-u61', `question 61 ${filler}`), reply('e-a61', `answer 61 ${filler}`));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const segs = [{ session: 'e-session', generation: 1, promotedAt: null, file: () => path }];
+  tailFirstForTests({ want0: Number.POSITIVE_INFINITY }); clearLogCache();
+  const want = chatWindow('zz-queued-early', segs, 12, null)!;
+  tailFirstForTests({ want0: 8 * 1024 }); clearLogCache();
+  const got = chatWindow('zz-queued-early', segs, 12, null)!;
+  tailFirstForTests({ want0: 256 * 1024 });
+  assert.ok(want.items.some((it: any) => it.uuid === 'e-q'), 'precondition: the whole-file build shows the copy (no real turn after it)');
+  assert.deepEqual(got.items, want.items);
+});
+
+test('when the widening rounds run out the page is built from the whole file, never null', () => {
+  // A page whose chunk holds many tiny person turns above a long opener-less stretch: sized steps are tiny, and 64
+  // rounds do not reach the opener below. The build must fall back to the whole file instead of failing the page.
+  const path = join(projects, 'rounds.jsonl');
+  const lines = [user('r-u0', `the opener ${filler}`), reply('r-a0', 'ack', true)];
+  for (let i = 0; i < 60; i++) lines.push(toolResult(`r-t${i}`, 'r-a0', 'm'.repeat(8 * 1024)));
+  for (let i = 0; i < 400; i++) lines.push(user(`r-s${i}`, `s${i}`), reply(`r-b${i}`, `b${i}`));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const segs = [{ session: 'r-session', generation: 1, promotedAt: null, file: () => path }];
+  tailFirstForTests({ want0: Number.POSITIVE_INFINITY }); clearLogCache();
+  const want = chatWindow('zz-rounds', segs, 900, null);
+  tailFirstForTests({ want0: 512 }); clearLogCache();
+  const got = chatWindow('zz-rounds', segs, 900, null);
+  tailFirstForTests({ want0: 256 * 1024 });
+  assert.ok(want && got, 'both windows');
+  assert.deepEqual(got!.items, want!.items);
+});

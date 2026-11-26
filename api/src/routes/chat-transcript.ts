@@ -1110,9 +1110,19 @@ function* olderThan(views: Views, seg: number, at: number): Generator<Unit> {
     if (!h) { h = carriedOver(i, views); hiddenMemo.set(i, h); }
     return h;
   };
+  // A generation shows something when its view has an item the newer generations did not carry over. A PARTIAL view
+  // that shows nothing (a retired log ending in sidechain rows, or more seed than the chunk) is widened until it shows
+  // something or reaches the file's start: a chunk that happens to hold nothing is not an empty generation.
   const shows = (i: number) => {
-    const v = views.get(i);
-    return !!v && v.items.length > hidden(i).size;
+    for (let round = 0; round < 64; round++) {
+      const v = views.get(i);
+      if (!v) return false;
+      if (v.items.length > hidden(i).size) return true;
+      if (!isPartial(v)) return false;
+      hiddenMemo.delete(i);
+      views.reset(i, widened(views.ranges[i]));
+    }
+    return false;
   };
   let s = seg;
   let i = at;
@@ -1223,7 +1233,10 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
   const last = segs.length - 1;
   // Each round reads over the ranges so far; a round that ran out of chunk, or whose page has no turn opener below
   // it in its chunk, widens that generation's range and builds again. Ranges only widen, so this ends.
-  for (let round = 0; round < 64; round++) {
+  for (let round = 0; round <= 64; round++) {
+    // The rounds ran out (sized steps too small for the gap to the next opener): the last round reads every
+    // generation whole, which always ends.
+    if (round === 64) for (let i = 0; i <= last; i++) if (views.ranges[i] !== 'whole') views.reset(i, 'whole');
     let from = { seg: last, at: Number.POSITIVE_INFINITY };
     let cursorTs: string | null = null;
     if (before !== null) {
@@ -1570,24 +1583,31 @@ export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
  * harness's own content and position.
  */
 export function dedupeQueuedCommands(items: any[]): any[] {
-  const realUserText = new Set<string>();
-  const queuedText = new Set<string>();
-  for (const it of items) {
-    if (it.kind !== 'text' || it.role !== 'user') continue;
-    const t = (it.text || '').trim();
-    if (!t) continue;
-    if (it.queued || it.mid_turn) queuedText.add(t);
-    else realUserText.add(t);
-  }
-  if (!realUserText.size) return items;
+  // POSITIONAL: a copy is dropped for a real turn with its words written AFTER it (the harness writes the queued
+  // message as a real turn when the turn ends), never for one before it (the same words sent twice are two
+  // messages). So a chunk that holds the copy and what follows it decides the same as the whole file.
+  const isUser = (it: any) => it?.kind === 'text' && it.role === 'user';
+  const isCopy = (it: any) => isUser(it) && (it.queued || it.mid_turn);
+  const isReal = (it: any) => isUser(it) && !it.queued && !it.mid_turn;
+  const words = (it: any) => String(it.text || '').trim();
+  if (!items.some(isCopy)) return items;
   // The real turn a copy is dropped for is marked (not enumerable: never sent, never compared): a tail-first page
   // whose cursor is before the copy must read past that turn to the ones after it (chatWindow isDrainedOpener).
+  const pending = new Set<string>();
   for (const it of items) {
-    if (it.kind === 'text' && it.role === 'user' && !it.queued && !it.mid_turn && queuedText.has((it.text || '').trim())) {
+    if (isCopy(it)) { const t = words(it); if (t) pending.add(t); }
+    else if (isReal(it) && pending.has(words(it))) {
       Object.defineProperty(it, CONSUMED_QUEUED, { value: true, enumerable: false, configurable: true });
     }
   }
-  return items.filter((it) => !((it.queued || it.mid_turn) && it.kind === 'text' && realUserText.has((it.text || '').trim())));
+  const after = new Set<string>();
+  const drop = new Set<any>();
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (isReal(it)) { const t = words(it); if (t) after.add(t); }
+    else if (isCopy(it) && after.has(words(it))) drop.add(it);
+  }
+  return drop.size ? items.filter((it) => !drop.has(it)) : items;
 }
 
 // keepSidechain: a subagent's own log (<sid>/subagents/agent-<id>.jsonl) is sidechain on every row; its
@@ -2231,8 +2251,9 @@ export function logParser(antigravityHint: boolean, keepSidechain = false): LogP
       // `li` (which line) is the cache's to turn into line_off/line_part; a whole-array parse outside the cache drops it.
       const items = raw.map(({ li: _li, ...it }) => it);
       // Whole-file pass (Claude): a queued message the log later recorded as a real user turn must
-      // show ONCE, and the real turn is the one that wins.
-      return finishLogItems(state ? dedupeQueuedCommands(items) : items, atStart);
+      // show ONCE, and the real turn is the one that wins (dedupeQueuedCommands, inside finishLogItems after the
+      // text rewrites: the mark it leaves must sit on the item the page sees).
+      return finishLogItems(items, atStart, !!state);
     },
   };
 }
@@ -2247,7 +2268,7 @@ export function logItems(lines: string[], antigravityHint: boolean, keepSidechai
 
 /** The whole-array passes every grammar's raw items get, in order, then the audience/exchange tags. `atStart` false
  *  for a tail chunk: its first user text is not the log's first message (never the spawn brief by position). */
-function finishLogItems(items: any[], atStart = true): any[] {
+function finishLogItems(items: any[], atStart = true, dedupeQueued = false): any[] {
   // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
   // Kept as the turn's opener (audience/exchange tagging and the interrupted-turn merge need it), flagged, words only;
   // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
@@ -2258,13 +2279,16 @@ function finishLogItems(items: any[], atStart = true): any[] {
   // before (dashboard lib/transcript.ts afterReaction, view.ts withReactions).
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
     && hasReactionWake(it.text) ? { ...it, text: stripPageContext(it.text), reaction_wake: true } : it));
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
+    ? { ...it, text: stripPageContext(it.text) } : it));
+  // A queued copy against the real turn written after it (Claude): on the rewritten items, so the mark the dedupe
+  // leaves on that real turn (CONSUMED_QUEUED, not enumerable: a spread drops it) is on the item the page sees.
+  if (dedupeQueued) items = dedupeQueuedCommands(items);
   // The agent's answer to that wake when it is not a message (NO_REPLY, "(no reply needed)", one emoji): marked here,
   // dropped from what the chat is sent (finishWindow, the tailer after its refs). chatItemsFor keeps them marked: the
   // wake watcher (services/reaction-wake.ts) turns an emoji answer into a real reaction.
   items = markWakeReplies(items);
-  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
-    && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
-    ? { ...it, text: stripPageContext(it.text) } : it));
   // A call handed to the agent (lib/agentCalls.ts handoffMessage): the agent read the transcript, the chat shows the
   // call's card on this line, where the call ended.
   items = items.map((it) => {
