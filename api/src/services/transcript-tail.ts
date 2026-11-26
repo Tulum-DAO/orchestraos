@@ -39,6 +39,9 @@ import { stampRefs } from '../lib/messageRef.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
+let tailItemCap = TAIL_ITEM_CAP;
+/** Tests: a smaller cap, so a modest fixture shows the first read costing the cap's items, not the file. */
+export function tailerCapForTests(n: number | null): void { tailItemCap = n ?? TAIL_ITEM_CAP; }
 /** Beats in a row with no transcript and no tmux window before a tailer stops (about 30 s at the route's 1 s beat). */
 export const GONE_TICKS = 30;
 
@@ -172,12 +175,14 @@ export class TranscriptTailer {
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
     let env: ReturnType<typeof normalizeTranscriptFile>;
     try {
-      env = normalizeTranscriptFile(path, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, true, this.keepSidechain);
+      // Tail-first: the first read of a log is its last bytes, doubled until they hold the cap's items (chat-transcript.ts
+      // normalizeTranscriptFile); later ticks ride the kept chunk's appends. Never a whole-file parse of a big log per seat.
+      env = normalizeTranscriptFile(path, this.agentId, sid, tailItemCap, path.includes('antigravity-cli'), false, true, this.keepSidechain, true);
     } catch (err) {
       // Only the file being unreadable is an empty log (what readFileSync's catch gave before); a parser or store-rule
       // error is a bug and still propagates out of tick(), as it did.
       if (!isReadError(err)) throw err;
-      env = normalizeTranscript([], this.agentId, sid, TAIL_ITEM_CAP, false, false, null, true, this.keepSidechain);
+      env = normalizeTranscript([], this.agentId, sid, tailItemCap, false, false, null, true, this.keepSidechain);
     }
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }

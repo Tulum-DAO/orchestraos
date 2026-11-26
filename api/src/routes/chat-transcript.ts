@@ -2360,8 +2360,31 @@ export function normalizeTranscriptFile(
   includeQueued = false,
   keepWakeReplies = false,
   keepSidechain = false,
+  tailFirst = false,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
-  const log = cachedLog(path, logParser(antigravityHint, keepSidechain));
+  const parser = logParser(antigravityHint, keepSidechain);
+  if (!tailFirst) {
+    const log = cachedLog(path, parser);
+    return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+  }
+  // Tail-first (the SSE tailer's first read of a log): the last TAIL_WANT0 bytes, doubled until they hold `limit` shown
+  // items with a PERSON turn opener below the oldest of them (the same rule as the poll route's pages: the audience pass
+  // sees the turn the window starts in), or the whole file. Later ticks hit the kept chunk and ride its appends.
+  const ruleSession = keepSidechain ? null : sessionId;
+  const mark = warmupMarkFor(agentId, ruleSession).mark;
+  const rules = storeRules(ruleSession);
+  let want = TAIL_WANT0;
+  for (let round = 0; round < 64; round++) {
+    const log = cachedLogTail(path, parser, want);
+    if (log.start === 0) break;
+    const shown = applyStoreRules(dropWarmup(log.items, mark), rules);
+    const oldest = shown.length - limit;
+    let opened = false;
+    for (let k = oldest - 1; k >= 0 && !opened; k--) if (isPersonOpener(shown[k])) opened = true;
+    if (shown.length >= limit && opened) return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+    want *= 2;
+  }
+  const log = cachedLog(path, parser);
   return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
 }
 
@@ -2395,8 +2418,19 @@ function windowFromLog(
     session_id: sessionId,
     grammar_version: GRAMMAR_VERSION,
     // keepWakeReplies: the tailer stamps refs first (parts numbered as the poll route numbers them), then drops them.
-    ...finishWindow(all.slice(-limit), agentId, includeQueued, null, keepWakeReplies),
+    // The line fields are the cache's (what a byte cursor names): the window's items never carry them.
+    ...finishWindow(windowItems(all, limit).map((it) => (typeof it?.line_off === 'number' ? (({ line_off: _o, line_part: _p, ...rest }) => rest)(it) : it)),
+      agentId, includeQueued, null, keepWakeReplies),
   };
+}
+
+/** The newest `limit` items, extended back to the start of the oldest one's log line (an assistant's text and its tool
+ *  call share a uuid): a window never starts inside a line, so its refs are numbered from the line as the poll route's
+ *  pages number them (chatWindow), whatever the window's size. */
+function windowItems(all: readonly any[], limit: number): any[] {
+  let from = Math.max(0, all.length - limit);
+  while (from > 0 && all[from]?.uuid && all[from - 1]?.uuid === all[from].uuid) from--;
+  return all.slice(from);
 }
 
 /** The merges and tags every window gets once its log items are chosen. `olderPage` is set for a
