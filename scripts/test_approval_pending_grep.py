@@ -30,6 +30,10 @@ def env(tmp_path):
     e["OUTWARD_LEDGER_PATH"] = str(tmp_path / "outward-actions.db")
     e["NTFY_TOKEN_FILE"] = str(tmp_path / "NO_SUCH_TOKEN")
     e["WATCH_GATEWAY_URL"] = "http://127.0.0.1:9"
+    # hermetic: no operator sentinel from the real ~/runtime; arm exactly the columns the human-task cards
+    # need (block_task / blocks_what), as CI has none of the host's sentinels
+    e["HOME"] = str(tmp_path / "home")
+    e["APPROVAL_DDL_ARMED"] = "m20260825_human_task"
     # The CLI's interposer guard reads the caller's seat from TMUX_PANE; run from inside a seat, the fixture
     # cards (authored as other seats) would be REFUSED. Outside a pane the guard has no caller and allows.
     e.pop("TMUX_PANE", None)
