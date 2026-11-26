@@ -29,9 +29,9 @@
  * Testable with a manual tick() + injectable resolver (no timers inside);
  * the route (transcript-stream.ts) owns the interval + per-agent registry.
  */
-import { readFileSync, statSync } from 'fs';
+import { statSync } from 'fs';
 import {
-  normalizeTranscript, buildRenderItems, dropWakeReplies, GRAMMAR_VERSION,
+  normalizeTranscript, normalizeTranscriptFile, buildRenderItems, dropWakeReplies, GRAMMAR_VERSION,
   mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
 } from '../routes/chat-transcript.js';
 import { storeRules } from './conversation-store.js';
@@ -153,14 +153,19 @@ export class TranscriptTailer {
       return { rotated: false, grewFrom: null };
     }
 
-    let lines: string[] = [];
-    try { lines = readFileSync(path, 'utf-8').split('\n'); } catch { lines = []; }
-    // BOUNDED. This runs on a ~1 s poll, and codex rollouts reach 13-25 MB: normalizing an
-    // unbounded item list every tick is a self-inflicted load collapse (congruence
-    // DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
+    // Through the parsed-log cache (services/transcript-log-cache.ts): the file is parsed once, then on each tick
+    // that found it grown only the appended lines are read, with the Claude grammar's carried state. Before this,
+    // every tick that found a new line re-read and re-parsed the whole file (4 MB: seconds on a throttled box, on a
+    // ~1 s poll per live seat). An unreadable file is an empty log, as before.
+    // BOUNDED. Codex rollouts reach 13-25 MB: normalizing an unbounded item list every tick is a self-inflicted load
+    // collapse (congruence DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
-    const env = normalizeTranscript(
-      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, null, true, this.keepSidechain);
+    let env: ReturnType<typeof normalizeTranscriptFile>;
+    try {
+      env = normalizeTranscriptFile(path, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, true, this.keepSidechain);
+    } catch {
+      env = normalizeTranscript([], this.agentId, sid, TAIL_ITEM_CAP, false, false, null, true, this.keepSidechain);
+    }
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }
     env.items = mergeInterruptedTurns(env.items, turns);

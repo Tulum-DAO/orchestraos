@@ -291,6 +291,37 @@ export function queuedStateSig(agentId: string): string {
 }
 const sigStatements = new WeakMap<DB, { all: ReturnType<DB['prepare']>; open: ReturnType<DB['prepare']> }>();
 
+/** The B1 and B2 rows of one agent, as read under one state signature (queuedStateSig). B2's query is a LIKE over every
+ *  row addressed to the agent (17,000 rows, a 250 MB store: 0.2-1 s per read on a loaded box), and it ran on EVERY page
+ *  build, which is what made a first-page miss cost seconds whatever the log's size. The rows change only when the
+ *  store's state for the agent does, and the signature says when: the first-page cache already trusts it for the whole
+ *  page. B3 is not kept: it depends on the window's own items and its query is bounded (LIVE_LIMIT). */
+interface QueuedRows { sig: string; pending: any[]; batches: any[]; claimed: Set<string> }
+const queuedRows = new Map<string, QueuedRows>();
+let reads = 0;
+
+/** How many times the B1/B2 rows were read from the store (tests: a second build under the same state reads nothing). */
+export function queuedMergeReads(): number { return reads; }
+export function clearQueuedMergeCache(): void { queuedRows.clear(); }
+
+function rowsFor(db: DB, agentId: string): QueuedRows {
+  const sig = queuedStateSig(agentId);
+  const kept = sig ? queuedRows.get(agentId) : undefined;
+  if (kept && kept.sig === sig) return kept;
+  // One read snapshot for both lanes: a batch stamp or an ack landing between the two queries
+  // must not drop a row out of both B2 and B3 for a poll (B3 reads `claimed` from this snapshot).
+  let pending: any[] = [], batches: any[] = [];
+  const claimed = new Set<string>();
+  db.transaction(() => {
+    pending = b1QueuedTurns(db, agentId);
+    batches = b2Batches(db, agentId, claimed);
+  })();
+  reads += 1;
+  const fresh = { sig, pending, batches, claimed };
+  if (sig) queuedRows.set(agentId, fresh);
+  return fresh;
+}
+
 export function mergeQueuedItems(items: any[], agentId: string): any[] {
   if (!agentId) return items;
   const db = conn();
@@ -299,17 +330,13 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
   // on screen for an agent that has not started a turn yet, and dropping it would hide a
   // message the operator just sent. Only B2, which is history, is bounded.
   const floor = earliestTurnMs(items);
-  // One read snapshot for all three lanes: a batch stamp or an ack landing between two queries
-  // must not drop a row out of both B2 and B3 for a poll.
   let pending: any[] = [], batches: any[] = [], live: any[] = [];
   try {
-    db.transaction(() => {
-      pending = b1QueuedTurns(db, agentId);
-      const claimed = new Set<string>();
-      batches = boundQueuedBatches(b2Batches(db, agentId, claimed), floor);
-      // B3 needs the transcript's own evidence of injection, so it can never show a row early.
-      live = b3LiveCards(db, agentId, items, floor, claimed);
-    })();
+    const rows = rowsFor(db, agentId);
+    pending = rows.pending;
+    batches = boundQueuedBatches(rows.batches, floor);
+    // B3 needs the transcript's own evidence of injection, so it can never show a row early.
+    live = b3LiveCards(db, agentId, items, floor, rows.claimed);
   } catch {
     return items;
   }
