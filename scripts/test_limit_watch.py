@@ -318,6 +318,15 @@ def test_replay_11_26_the_fable_row_drops_the_seat_to_opus_and_keeps_the_login(t
         def sessions(self):
             return {"pm-nod": "pm-nod"}
 
+        def seat_model(self, session):
+            return "claude-fable-5-1[1m]"
+
+        def usage(self, account):
+            return None
+
+        def claude_seats(self):
+            return [("pm-nod", "pm-nod")]
+
         def switch_model(self, session, model):
             Drop.switched.append((session, model))
             return 200, {"ok": True, "switching": "switched"}

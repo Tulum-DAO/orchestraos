@@ -400,6 +400,8 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
         md = _read_json(md_path, {})
         try:
             MD.tick(rows, now, lambda row: _append(paths.log, row), drop_deps, md)
+            MD.tick_window(shared_holder(paths) or claude_account_at(paths, None), now,
+                           lambda row: _append(paths.log, row), drop_deps, md)
         except Exception as e:           # noqa: BLE001 — never takes the limit watcher down with it
             _append(paths.log, {"ts": stamp, "kind": "model_drop_error", "error": f"{type(e).__name__}: {e}"[:300]})
         MD.prune(md, rows, now)

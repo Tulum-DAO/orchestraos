@@ -26,6 +26,9 @@ class Fake:
     def sessions(self):
         return self._sessions
 
+    def seat_model(self, session):
+        return "claude-fable-5-1[1m]"
+
     def switch_model(self, session, model):
         self.switched.append((session, model))
         return self.answer(session) if callable(self.answer) else self.answer
@@ -169,3 +172,177 @@ def test_r1_the_client_list_is_read_after_the_switch_not_before():
     d.attached_sessions = lambda: (calls.append("clients"), {"gm"})[1]     # a person attached meanwhile
     _tick({"gm": _row()}, d)
     assert calls == ["switch", "clients"] and d.nudged == []
+
+
+# --- the weekly Fable window (usage_poll "weekly-fable"): proactive drop at 95%, return after its reset ------
+
+RESET = NOW + 4 * 86400
+OPUS, FABLE = "claude-opus-5-5[1m]", "claude-fable-5-1[1m]"
+
+
+def _usage(pct, as_of=NOW - 60, reset=RESET):
+    return {"as_of": as_of, "windows": {"5h": {"used_pct": 20.0}, "weekly": {"used_pct": 60.0},
+                                        "weekly-fable": {"used_pct": pct, "resets_at": reset}}}
+
+
+class WFake(Fake):
+    def __init__(self, *, usage=None, models=None, seats=(("gm", "gm"), ("pm-nod", "pm-nod"), ("dev", "dev")), **kw):
+        super().__init__(**kw)
+        self._usage, self._seats = usage, seats
+        self.models = dict(models if models is not None else {"gm": FABLE, "pm-nod": FABLE, "dev": OPUS})
+        self.last, self.pending = {}, {}
+        self._sessions = {r: s for r, s in seats}
+
+    def usage(self, account):
+        return self._usage
+
+    def claude_seats(self):
+        return list(self._seats)
+
+    def seat_model(self, session):
+        return self.models.get(session)
+
+    def seat_state(self, session):
+        if session not in self.models:
+            return None
+        return {"model": self.models[session], "last_switch": self.last.get(session),
+                "pending": self.pending.get(session)}
+
+    def person_switches(self, session, model):
+        self.models[session], self.last[session] = model, {"model": model, "by": "ios"}
+
+    def switch_model(self, session, model):
+        out = super().switch_model(session, model)
+        code = out[0] if not callable(self.answer) else 200
+        if code == 200:
+            self.models[session], self.last[session] = model, {"model": model, "by": "limit-watch"}
+        elif code == 202:
+            self.pending[session] = {"model": model}
+        return out
+
+
+def _win(d, state=None, now=NOW, active="strategysimple"):
+    log, state = [], ({} if state is None else state)
+    out = MD.tick_window(active, now, log.append, d, state)
+    return out, log, state
+
+
+def test_w1_at_95_percent_every_fable_seat_moves_to_opus_before_the_banner():
+    d = WFake(usage=_usage(95.0))
+    out, log, st = _win(d)
+    assert sorted(d.switched) == [("gm", OPUS), ("pm-nod", OPUS)]               # dev was on Opus already
+    assert sorted(out["dropped"]) == ["gm", "pm-nod"]
+    assert st["dropped"]["gm"] == {"from": FABLE, "session": "gm", "at": NOW, "resets_at": RESET}
+    assert d.nudged == [] and d.mails and "95%" in d.mails[-1][2]
+
+
+def test_w1_under_95_or_a_stale_reading_moves_nobody():
+    for u in (_usage(94.0), _usage(99.0, as_of=NOW - 31 * 60), None, {"as_of": NOW, "windows": {}}):
+        d = WFake(usage=u)
+        _win(d)
+        assert d.switched == []
+
+
+def test_w1_a_failed_proactive_switch_waits_10_minutes():
+    d = WFake(usage=_usage(97.0), answer=(0, {"error": "gateway unreachable"}))
+    _, _, st = _win(d)
+    n = len(d.switched)
+    _win(d, st, now=NOW + 120)
+    assert len(d.switched) == n
+    _win(d, st, now=NOW + 700)
+    assert len(d.switched) == 2 * n
+
+
+def test_w2_after_the_reset_a_dropped_seat_goes_back_to_its_fable_model():
+    d = WFake(usage=_usage(96.0))
+    _, _, st = _win(d)
+    d._usage = _usage(3.0, as_of=RESET + 120, reset=RESET + 7 * 86400)     # a reading taken after the reset
+    out, log, st = _win(d, st, now=RESET + 180)
+    assert sorted(out["returned"]) == ["gm", "pm-nod"]
+    assert d.models["gm"] == FABLE and st["dropped"] == {}
+    assert any("back on Fable" in m[2] for m in d.mails)
+
+
+def test_w2_no_return_before_the_reset_or_on_a_reading_older_than_it():
+    d = WFake(usage=_usage(96.0))
+    _, _, st = _win(d)
+    n = len(d.switched)
+    d._usage = _usage(40.0, as_of=NOW + 600)                               # another login, before the reset
+    _win(d, st, now=NOW + 700)
+    d._usage = _usage(40.0, as_of=RESET - 60)                              # a reading from before the reset
+    _win(d, st, now=RESET + 30)
+    assert len(d.switched) == n and set(st["dropped"]) == {"gm", "pm-nod"}
+
+
+def test_w2_a_seat_moved_by_hand_since_is_left_alone_and_forgotten():
+    d = WFake(usage=_usage(96.0))
+    _, _, st = _win(d)
+    d.person_switches("gm", "claude-opus-5[1m]")                           # a person picked another model
+    d._usage = _usage(3.0, as_of=RESET + 120)
+    _win(d, st, now=RESET + 180)
+    assert ("gm", FABLE) not in d.switched and "gm" not in st["dropped"]
+    assert ("pm-nod", FABLE) in d.switched
+
+
+def test_w2_a_banner_drop_learns_its_reset_from_the_first_reading_and_returns_after_it():
+    d = WFake(usage=None)
+    _, _, st = _tick({"gm": _row()}, d)                                    # banner leg, no reading yet
+    assert st["dropped"]["gm"]["from"] == FABLE and st["dropped"]["gm"]["resets_at"] is None
+    d._usage = _usage(100.0)
+    _win(d, st, now=NOW + 120)
+    assert st["dropped"]["gm"]["resets_at"] == RESET
+    d._usage = _usage(2.0, as_of=RESET + 60)
+    out, _, _ = _win(d, st, now=RESET + 90)
+    assert sorted(out["returned"]) == ["gm", "pm-nod"]                    # pm-nod was moved by the 100% reading
+
+
+def test_w2_a_drop_whose_prior_model_was_not_fable_never_returns():
+    d = WFake(usage=None)
+    d.models["gm"] = None                                                  # the gateway could not say
+    _, _, st = _tick({"gm": _row()}, d)
+    assert st["dropped"]["gm"]["from"] is None
+    d._usage = _usage(2.0, as_of=RESET + 60)
+    st["dropped"]["gm"]["resets_at"] = RESET
+    out, _, _ = _win(d, st, now=RESET + 90)
+    assert out["returned"] == []
+
+
+# --- codex gating review of #668 (311f889) ------------------------------------------------------------------
+
+def test_r1_a_person_who_moved_the_seat_and_then_picked_opus_again_is_never_undone():
+    d = WFake(usage=_usage(96.0))
+    _, _, st = _win(d)
+    d.person_switches("gm", "claude-sonnet-5-5")
+    d.person_switches("gm", OPUS)                                         # back on Opus, by the person
+    d._usage = _usage(3.0, as_of=RESET + 120)
+    _win(d, st, now=RESET + 180)
+    assert ("gm", FABLE) not in d.switched and "gm" not in st["dropped"]
+    assert ("pm-nod", FABLE) in d.switched
+
+
+def test_r2_a_deferred_drop_keeps_its_record_until_it_applies_and_an_unknown_model_keeps_it_too():
+    d = WFake(usage=_usage(96.0), answer=(202, {"ok": True, "status": "pending"}))
+    _, _, st = _win(d)
+    assert d.models["gm"] == FABLE and "gm" in st["dropped"]
+    d._usage = _usage(3.0, as_of=RESET + 120)
+    _win(d, st, now=RESET + 180)                                          # still waiting for its turn end
+    assert "gm" in st["dropped"]
+    d.models.pop("gm")                                                    # the gateway cannot say
+    _win(d, st, now=RESET + 300)
+    assert "gm" in st["dropped"]
+
+
+def test_r3_a_banner_drop_whose_first_reading_is_after_the_reset_returns_instead_of_waiting_a_week():
+    d = WFake(usage=None)
+    _, _, st = _tick({"gm": _row()}, d)
+    d._usage = _usage(2.0, as_of=NOW + 3600, reset=RESET + 7 * 86400)      # the window already reset
+    out, _, st = _win(d, st, now=NOW + 3660)
+    assert out["returned"] == ["gm"]
+
+
+def test_r3_a_low_first_reading_right_after_the_banner_is_not_taken_as_a_reset():
+    d = WFake(usage=None)
+    _, _, st = _tick({"gm": _row()}, d)
+    d._usage = _usage(2.0, as_of=NOW + 60)                                 # 1 min after: lag, not a reset
+    out, _, st = _win(d, st, now=NOW + 90)
+    assert out["returned"] == [] and st["dropped"]["gm"]["resets_at"] is None

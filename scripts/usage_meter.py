@@ -329,8 +329,14 @@ def api_rows(now: float, data_dir: Path, provider: str) -> list[dict]:
         for label in sorted(windows, key=_window_order):
             w = windows[label]
             if isinstance(label, str) and isinstance(w, dict) and _pct(w.get("used_pct")) is not None:
-                rows.append(_row(provider, label, _pct(w["used_pct"]), _ts(w.get("resets_at")), at,
-                                 f"{provider}-api", now, account=account))
+                row = _row(provider, label, _pct(w["used_pct"]), _ts(w.get("resets_at")), at,
+                           f"{provider}-api", now, account=account)
+                # a model's own weekly allowance (weekly-<model>, usage_poll) carries two more fields
+                if _pct(w.get("allowance_pct_of_weekly")) is not None:
+                    row["allowance_pct_of_weekly"] = _pct(w["allowance_pct_of_weekly"])
+                if isinstance(w.get("severity"), str) and w["severity"].isalpha() and len(w["severity"]) <= 16:
+                    row["severity"] = w["severity"]
+                rows.append(row)
     return rows
 
 
