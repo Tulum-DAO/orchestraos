@@ -200,66 +200,21 @@ def env_for_active(orchestra_dir: str) -> dict:
 
 # --- exhaustion text detection -----------------------------------------
 #
-# Claude Code pane text falls into three shapes we care about:
-#   1. "You've used 99% of your weekly limit"      -> NOT exhausted yet.
-#      Any "<N>% of your <weekly|daily|session> limit" phrasing is a
-#      progress readout, not a hard stop.
-#   2. "Usage limit reached" / "You've reached your usage limit" ->
-#      exhausted, no reset time given in-line.
-#   3. "weekly limit · resets Sep 20, 7am (America/New_York)" -> exhausted,
-#      with a parseable reset time. The presence of a "resets <date>,
-#      <time> (<tz>)" clause (once the percent-progress case above has
-#      been ruled out) itself signals the limit was hit — Claude Code only
-#      shows a reset countdown once a limit is reached.
-_NOT_EXHAUSTED_RE = re.compile(r"\b\d{1,3}%\s+of\s+your\s+(?:weekly|daily|session)\s+limit\b", re.I)
-_REACHED_RES = [
-    re.compile(r"usage limit reached", re.I),
-    re.compile(r"reached (?:your|the) usage limit", re.I),
-    re.compile(r"\blimit reached\b", re.I),
-]
-_RESETS_RE = re.compile(
-    r"resets\s+([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)",
-    re.I,
-)
-
-
+# limit_event.from_text is the ONE parser for limit banners (Claude, Codex, Grok); this wrapper
+# keeps the old (exhausted, reset_at_iso) contract for its callers (green_quota). Progress readouts
+# ("You've used 99% of your weekly limit · resets …") are not exhausted: Claude Code shows the reset
+# countdown BEFORE the limit is hit, and treating that as a hit would false-switch accounts. Their
+# reset clause is still returned so a caller can pre-plan.
 def detect_exhaustion_text(pane_text: str):
-    """Return (exhausted: bool, reset_at_iso: str|None).
-
-    reset_at is parsed UNCONDITIONALLY (a pre-limit status line like
-    "You've used 99% … · resets Sep 20, 7am" still carries a useful reset time);
-    a not-exhausted match ("NN% of your … limit", NN<100) only forces
-    exhausted=False — it never short-circuits the reset parse."""
-    not_exhausted = _NOT_EXHAUSTED_RE.search(pane_text) is not None
-    reached = (not not_exhausted) and any(r.search(pane_text) for r in _REACHED_RES)
-
-    reset_iso = None
-    m = _RESETS_RE.search(pane_text)
-    if m:
-        month_str, day_str, hour_str, min_str, ampm, tzname = m.groups()
-        try:
-            month = datetime.strptime(month_str[:3], "%b").month
-            day = int(day_str)
-            hour = int(hour_str)
-            minute = int(min_str) if min_str else 0
-            if ampm.lower() == "pm" and hour != 12:
-                hour += 12
-            if ampm.lower() == "am" and hour == 12:
-                hour = 0
-            tz = ZoneInfo(tzname.strip())
-            year = datetime.now(tz).year
-            dt = datetime(year, month, day, hour, minute, tzinfo=tz)
-            reset_iso = dt.isoformat()
-        except Exception:
-            reset_iso = None
-
-    # Exhaustion is decided ONLY by explicit "limit reached" phrasing. A bare
-    # "resets <date>" clause is NOT proof: Claude Code shows the reset countdown
-    # BEFORE the limit is hit (by effect: "You've used 99% of your weekly limit ·
-    # resets Sep 20, 7am (America/New_York)" appeared on a still-working pane).
-    # Treating it as exhausted would false-switch accounts. The clause is used
-    # only to supply reset_at, returned in either case so a caller can pre-plan.
-    return (reached, reset_iso)
+    """Return (exhausted: bool, reset_at_iso: str|None)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import limit_event
+    ev = limit_event.from_text(pane_text or "")
+    epoch = ev.reset_at if ev is not None and ev.reset_at else limit_event.parse_reset(pane_text or "")
+    reset_iso = datetime.fromtimestamp(epoch, ZoneInfo("UTC")).isoformat() if epoch else None
+    return (ev is not None, reset_iso)
 
 
 def main():
