@@ -427,3 +427,91 @@ def test_rr3_a_switch_to_the_login_before_it_got_hot_does_not_hold():
     d = _poll_fake(96.0)
     d.last_switch_row = lambda: (NOW - 7200, "strategysimple")   # it was picked hours before it got hot
     assert _tick({}, d)[0] == "switched"
+
+
+# --- weekly-aware preference + warnings (gm order msg_50aa10b0, 2026-11-26) --------------------
+
+WEEK_RESET = NOW + 4 * 86400
+
+
+def _u(five, week, as_of=NOW - 60):
+    return {"as_of": as_of, "windows": {"5h": {"used_pct": five, "resets_at": RESET},
+                                        "weekly": {"used_pct": week, "resets_at": WEEK_RESET}}}
+
+
+def test_weekly_prefers_the_login_with_the_lower_weekly_when_both_have_5h_headroom():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    res, log, st = _tick({}, d, active="default")
+    assert res == "preferred" and d.switched == ["strategysimple"]
+    row = [r for r in log if r["kind"] == "switch_done"][0]
+    assert row["reason"].startswith("weekly preference") and row["from"] == "default"
+    assert "default" not in st.get("parked", {})              # the old login is not out: never parked
+    assert d.nudged == []                                     # nobody is stuck on a banner
+    assert any("weekly" in m[2] and "Undo" in m[3] for m in d.mails if m[0] == "gm")
+
+
+def test_weekly_preference_needs_a_real_margin():
+    d = Fake(usage={"default": _u(38.0, 64.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, active="default")[0] is None and d.switched == []
+
+
+@pytest.mark.parametrize("other", [_u(85.0, 10.0), _u(5.0, 61.0, as_of=NOW - 3600), None])
+def test_weekly_preference_never_moves_to_a_login_without_a_fresh_5h_headroom(other):
+    d = Fake(usage={"default": _u(38.0, 72.0), **({"strategysimple": other} if other else {})})
+    assert _tick({}, d, active="default")[0] is None and d.switched == []
+
+
+def test_weekly_preference_never_when_the_active_login_lacks_5h_headroom_itself():
+    # 85% on the active 5-hour: the 95% trigger owns that case, the preference stays out of it
+    d = Fake(usage={"default": _u(85.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, active="default")[0] is None
+
+
+def test_weekly_preference_at_most_once_per_hour_any_switch_counts():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    st = {"last_switch": NOW - 1800}
+    assert _tick({}, d, st, active="default")[0] is None and d.switched == []
+    st = {"last_switch": NOW - 3601}
+    assert _tick({}, d, st, active="default")[0] == "preferred"
+
+
+def test_weekly_preference_holds_for_a_typing_human_and_a_parked_target():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)}, typing={"gm"})
+    res, log, _ = _tick({}, d, active="default")
+    assert res == "held" and d.switched == []
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, {"parked": {"strategysimple": NOW + 600}}, active="default")[0] is None
+
+
+def test_weekly_preference_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("LIMIT_SWITCH_PREFER_WEEKLY", "0")
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, active="default")[0] is None
+
+
+def test_weekly_warns_gm_once_per_login_per_week_at_70_then_85():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    st = {"last_switch": NOW - 60}                            # no preference switch in this test
+    _tick({}, d, st, active="default")
+    _tick({}, d, st, active="default", now=NOW + 120)
+    warn = [m for m in d.mails if "weekly" in m[2].lower() and "70%" in m[2]]
+    assert len(warn) == 1 and "default" in warn[0][2]
+    d._usage["default"] = _u(38.0, 86.0)
+    d._usage["strategysimple"] = _u(5.0, 71.0)
+    _tick({}, d, st, active="default", now=NOW + 240)
+    _tick({}, d, st, active="default", now=NOW + 360)
+    subj = sorted(m[2] for m in d.mails if "weekly" in m[2].lower() and "%" in m[2])
+    assert len(subj) == 3                                     # default 70, default 85, strategysimple 70
+    assert any("85%" in s and "default" in s for s in subj)
+    assert any("70%" in s and "strategysimple" in s for s in subj)
+
+
+def test_weekly_warning_comes_back_the_next_week():
+    d = Fake(usage={"default": _u(38.0, 72.0)})
+    st = {"last_switch": NOW - 60}
+    _tick({}, d, st, active="default")
+    LS.prune_told(st, {}, now=WEEK_RESET + 1)
+    d._usage["default"] = _u(38.0, 72.0, as_of=WEEK_RESET + 3000)
+    d._usage["default"]["windows"]["weekly"]["resets_at"] = WEEK_RESET + 7 * 86400
+    _tick({}, d, st, active="default", now=WEEK_RESET + 3060)
+    assert len([m for m in d.mails if "70%" in m[2]]) == 2

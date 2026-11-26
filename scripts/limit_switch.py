@@ -15,7 +15,12 @@ test (test_limit_switch.py):
      dir) and mailed to gm in one line carrying the undo command;
   5. afterwards every Claude seat whose pane shows a limit banner is nudged once, naming the
      window, its reset and the new login, so it resumes now rather than at the reset;
-  6. no headroom on the other login: refused, logged, and mailed to gm HIGH once per episode.
+  6. no headroom on the other login: refused, logged, and mailed to gm HIGH once per episode;
+  7. weekly-aware (operator order 2026-11-26): with no trigger, when both logins have 5-hour
+     headroom, the shared login moves to the one whose weekly use is at least 5 points LOWER, at
+     most once per hour counting every switch, with the same human-typing hold; the old login is not
+     parked (it is not out). LIMIT_SWITCH_PREFER_WEEKLY=0 turns this off;
+  8. gm is told once per login per week when its weekly use reaches 70%, and again at 85%.
 """
 from __future__ import annotations
 
@@ -38,6 +43,9 @@ USAGE_FRESH_S = 30 * 60
 NUDGE_BUDGET_S = 60           # all nudges of one run together; the cron run is killed at 300 s
 MAX_NUDGES = 25
 _PARK_FALLBACK = {"5-hour": 5 * 3600, "weekly": 7 * 86400}
+WEEKLY_WARN_PCT = (70.0, 85.0)  # gm told once per login per week at each (operator order 2026-11-26)
+PREFER_MARGIN_PCT = 5.0         # weekly preference: the other login must be this much lower
+PREFER_GAP_S = 3600             # ... and never more than one switch of any kind per hour
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _DIM = re.compile(r"\x1b\[2m.*?(?=\x1b\[|$)")
 
@@ -235,6 +243,97 @@ def _poll_reset(key):
         return None
 
 
+def _fresh_windows(u, now):
+    """(5-hour %, weekly %, weekly reset) of a reading no older than USAGE_FRESH_S, else None."""
+    if not u or now - float(u.get("as_of") or 0) > USAGE_FRESH_S:
+        return None
+    w = u.get("windows") or {}
+    five, week = (w.get("5h") or {}).get("used_pct"), (w.get("weekly") or {}).get("used_pct")
+    if five is None or week is None:
+        return None
+    return float(five), float(week), (w.get("weekly") or {}).get("resets_at")
+
+
+def _weekly_warnings(deps, now, told, log, stamp):
+    """gm hears once per login per week at each WEEKLY_WARN_PCT step (the tag lives until that week resets)."""
+    for acct in deps.enrolled():
+        fw = _fresh_windows(deps.usage(acct), now)
+        if fw is None:
+            continue
+        _, week, reset = fw
+        for pct in WEEKLY_WARN_PCT:
+            tag = f"weekly|{acct}|{pct:.0f}|{reset}"
+            if week < pct or tag in told:
+                continue
+            told[tag] = int(float(reset)) if reset else int(now + _PARK_FALLBACK["weekly"])
+            log({"ts": stamp, "kind": "weekly_warn", "account": acct, "weekly": week, "step": pct,
+                 "reset_at": reset})
+            deps.mail("gm", "high" if pct >= 85 else "medium",
+                      f"Claude weekly: {acct} at {week:.0f}% (past {pct:.0f}%)",
+                      f"The Claude login {acct} has used {week:.0f}% of its weekly window "
+                      f"({LE.reset_label(reset)}). Next step: "
+                      + ("85% warning." if pct < 85 else "the window runs out at 100%.") + "\n")
+
+
+def _prefer_weekly(active, now, log, deps, state, save, stamp):
+    """Rule 7. Returns "preferred" | "held" | "failed" | "noop" | None (nothing to do)."""
+    if os.environ.get("LIMIT_SWITCH_PREFER_WEEKLY", "1") == "0":
+        return None
+    me = _fresh_windows(deps.usage(active), now)
+    if me is None or me[0] >= HEADROOM_PCT:
+        return None
+    parked = state.get("parked") or {}
+    best = None
+    for acct in deps.enrolled():
+        if acct == active or acct in parked:
+            continue
+        fw = _fresh_windows(deps.usage(acct), now)
+        if fw is None or fw[0] >= HEADROOM_PCT or fw[1] >= HEADROOM_PCT:
+            continue
+        if me[1] - fw[1] >= PREFER_MARGIN_PCT and (best is None or fw[1] < best[1][1]):
+            best = (acct, fw)
+    if best is None:
+        return None
+    target, fw = best
+    last = max(float(state.get("last_switch") or 0), float(state.get("last_attempt") or 0),
+               float(deps.last_switch() if hasattr(deps, "last_switch") else 0))
+    if now - last < PREFER_GAP_S:
+        return None
+    why = f"weekly preference: {active} weekly {me[1]:.0f}% vs {target} {fw[1]:.0f}%, both under {HEADROOM_PCT:.0f}% 5-hour"
+    seats = deps.claude_seats()
+    attached = deps.attached_sessions() if hasattr(deps, "attached_sessions") else ()
+    if seats is None or attached is None:
+        log({"ts": stamp, "kind": "switch_held", "reason": "seat registry or tmux clients unreadable", "why": why})
+        return "held"
+    typing = [r for r in ((deps.human_typing(s, attached) if hasattr(deps, "attached_sessions")
+                           else deps.human_typing(s)) for _, s in seats) if r]
+    if typing:
+        log({"ts": stamp, "kind": "switch_held", "reason": "human mid-typing", "why": why, "detail": typing[:5]})
+        return "held"
+    state["last_attempt"] = now
+    if save:
+        save(state)
+    res = deps.switch(target)
+    if res.get("status") == "noop":
+        log({"ts": stamp, "kind": "switch_noop", "from": active, "to": target, "reason": why, "result": res})
+        return "noop"
+    if res.get("status") != "switched":
+        log({"ts": stamp, "kind": "switch_failed", "from": active, "to": target, "reason": why, "result": res})
+        deps.mail("gm", "high", f"weekly-preference switch FAILED: {active} -> {target}",
+                  f"{why}\nThe switch returned {json.dumps(res)[:400]}. It retries after an hour.\n")
+        return "failed"
+    state["last_switch"] = now
+    if save:
+        save(state)
+    undo = f"python3 {_account_switch_cmd()} --shared {active}"
+    log({"ts": stamp, "kind": "switch_done", "from": active, "to": target, "reason": why,
+         "followers": res.get("followers"), "seats": [r for r, _ in seats], "undo": undo})
+    deps.mail("gm", "medium", f"weekly preference: Claude login {active} -> {target}",
+              f"Moved the shared Claude login {active} -> {target} to spread the weekly window ({why}). "
+              f"{res.get('followers', len(seats))} seats follow. Undo: {undo}\n")
+    return "preferred"
+
+
 def tick(paths, episodes, active, now, log, deps, state, save=None):
     """One decision pass. `state` (dict, persisted by the caller) carries last_switch, last_attempt,
     parked, told. `save(state)`, when given, is called the moment a switch has happened, so a later
@@ -273,6 +372,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
                             "weekly": (ow.get("weekly") or {}).get("used_pct")}
     check = {"ts": stamp, "kind": "switch_check", "active": active, "active_fresh": fresh,
              "active_5h": a5, "active_weekly": aweek, "others": others}
+    _weekly_warnings(deps, now, told, log, stamp)
     key = ep = None
     hot = fresh and a5 is not None and (a5 >= SWITCH_AT_5H_PCT or (aweek is not None and aweek >= 100))
     if hot:
@@ -299,7 +399,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         check["decision"] = (f"no switch: {active} 5-hour {a5:.0f}% < {SWITCH_AT_5H_PCT:.0f}%"
                              if fresh and a5 is not None else "no switch: no fresh reading, no banner episode")
         log(check)
-        return None
+        return _prefer_weekly(active, now, log, deps, state, save, stamp)
     log(check)
     ev = LE.LimitEvent("claude", ep["window"], ep.get("reset_at"), ep.get("spend_capped", False),
                        account=active)

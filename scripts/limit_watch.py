@@ -18,6 +18,8 @@ With --mail it also sends:
     also forwarded to the fallback seat with the limited seat's baton path.
 5-hour hits are logged and shown on the seat row only (gm ruling).
 
+--codex-watch tracks whether Codex serves (codex_watch.py) and flips the reviewer rule both ways.
+
 --auto-switch arms the fleet-wide Claude login switch (limit_switch.py: trigger, human-typing
 hold, 10-minute gap, no switching back, one-line undo mail, nudge of banner-stuck seats, refusal
 mail when the other login has no headroom). Without it the log carries `switch_decision` lines
@@ -299,7 +301,8 @@ def switch_decision(paths, ev):
     return {"would_switch": bool(best), "from": ev.account, "to": best, "reason": why}
 
 
-def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None, switch_deps=None):
+def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None, switch_deps=None,
+             codex_watch=None):
     now = now or time.time()
     cursors = _read_json(paths.cursors, {})
     episodes = _read_json(paths.episodes, {})
@@ -377,6 +380,13 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
             _append(paths.log, {"ts": stamp, "kind": "switch_error", "error": f"{type(e).__name__}: {e}"[:300]})
         LS.prune_told(st, episodes, now)
         _write_json(st_path, st)
+
+    if codex_watch is not None:          # --codex-watch: who gates reviews (codex_watch.py); mails always on
+        import codex_watch as CW
+        try:
+            CW.tick(paths, events, now, codex_watch, lambda row: _append(paths.log, row))
+        except Exception as e:           # noqa: BLE001 — never takes the limit watcher down with it
+            _append(paths.log, {"ts": stamp, "kind": "codex_watch_error", "error": f"{type(e).__name__}: {e}"[:300]})
     return {"events": len(events), "limited_seats": sorted(rows)}
 
 
@@ -466,6 +476,9 @@ def main(argv=None):
                     help="read fresh files from their start instead of their end on first sight")
     ap.add_argument("--auto-switch", action="store_true",
                     help="ARM the fleet-wide Claude login switch (limit_switch.py; its mails always go to gm)")
+    ap.add_argument("--codex-watch", action="store_true",
+                    help="track whether Codex serves (codex_watch.py): writes state/codex-availability.json "
+                         "and mails the review seats + gm on a flip")
     a = ap.parse_args(argv)
     paths = Paths()
     deps = None
@@ -473,7 +486,7 @@ def main(argv=None):
         import limit_switch as LS
         deps = LS.LiveDeps(paths, send_mail)
     res = run_once(paths, mail_fn=send_mail if a.mail else None, start_at_end=not a.backfill,
-                   switch_deps=deps)
+                   switch_deps=deps, codex_watch=send_mail if a.codex_watch else None)
     print(json.dumps(res))
     return 0
 
