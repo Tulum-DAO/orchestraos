@@ -437,3 +437,81 @@ test('other refusals keep their durable-first fallback', async () => {
   assert.equal(calls.json.message_id, 'msg_q9');
   assert.equal(wrote, true);
 });
+
+
+// ── reply_to on the turn (reply threads P1, the API half) ───────────────────
+
+const REPLY = { uuid: 'abc-123', excerpt: 'The folded header could carry the count' };
+const PREFIXED = '[Replying to gm 21:42 Cancun: "The folded header could carry the count"] yes, and the time too';
+
+test('reply_to: kept at every 2xx with the words as sent and the message id when there is one', async () => {
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  // delivered: no message id
+  await handleAgentSend(deps({ recordReplyTo: keep }), req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  // gateway-held: the gateway's message id
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h1' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  // durable-first (gateway unreachable): the store's id
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 0, ok: false, unreachable: true, error: 'down' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  assert.equal(kept.length, 3);
+  for (const r of kept) {
+    assert.equal(r.agent, 'gm');
+    assert.equal(r.sent_text, PREFIXED, 'the words as sent, prefix included');
+    assert.deepEqual(r.reply_to, REPLY);
+    assert.ok(!Number.isNaN(Date.parse(r.ts)));
+  }
+  assert.equal('message_id' in kept[0], false);
+  assert.equal(kept[1].message_id, 'msg_h1');
+  assert.equal(kept[2].message_id, 'msg_test1');
+});
+
+test('reply_to: not kept on a refusal (409 composer text, 502 unknown, 404, 400)', async () => {
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working', composer_text: 'draft' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'unverified_submit' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(deps({ recordReplyTo: keep, agentExists: () => false }), req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(deps({ recordReplyTo: keep }), req({ body: { text: '', reply_to: REPLY } }), fakeRes().res);
+  assert.deepEqual(kept, []);
+});
+
+test('reply_to: never part of what the agent receives, and no second quote header is added', async () => {
+  const sent: string[] = [];
+  const d = deps({ recordReplyTo: () => {}, gatewayInject: async (_s, text) => { sent.push(text); return { httpStatus: 200, ok: true, delivered: true }; } });
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'plain words', reply_to: REPLY } }), fakeRes().res);
+  assert.equal(sent[0], PREFIXED);
+  assert.equal(sent[1], 'plain words', 'the server adds no header of its own');
+  for (const s of sent) assert.equal(s.includes('abc-123'), false, 'the uuid never reaches the agent');
+});
+
+test('reply_to: a bad uuid is dropped and the excerpt kept; no excerpt drops the field; a bad shape is ignored', async () => {
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  const d = deps({ recordReplyTo: keep });
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: { uuid: 'has space!', excerpt: 'q' } } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: { uuid: 'abc' } } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: 'abc' } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: PREFIXED } }), fakeRes().res);
+  assert.equal(kept.length, 1);
+  assert.deepEqual(kept[0].reply_to, { excerpt: 'q' });
+});
+
+test('reply_to: a store that throws never fails the send', async () => {
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps({ recordReplyTo: () => { throw new Error('disk full'); } }),
+    req({ body: { text: PREFIXED, reply_to: REPLY, client_caps: ['send-states'] } }), res);
+  assert.equal(calls.status, 200);
+  assert.equal(calls.json.state, 'delivered');
+});
+
+test('reply_to: without the dep nothing is kept and the send is unchanged', async () => {
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps(), req({ body: { text: PREFIXED, reply_to: REPLY } }), res);
+  assert.equal(calls.status, 200);
+  assert.equal(calls.json.sent_text, PREFIXED);
+});

@@ -22,6 +22,7 @@ export interface TextItem {
   role: 'user' | 'assistant';
   text: string;
   is_system?: boolean;
+  reply_to?: ReplyTo;
   queued?: boolean;
   mid_turn?: boolean;
   machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
@@ -71,6 +72,11 @@ export interface ToolResultItem {
   is_error?: boolean;
   ts?: string;
   uuid?: string;
+}
+
+export interface ReplyTo {
+  uuid?: string;
+  excerpt: string;
 }
 
 export interface ImageRef {

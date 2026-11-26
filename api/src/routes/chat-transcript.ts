@@ -40,6 +40,7 @@ import { principal } from '../lib/principal.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { findImagePaths, imagePathsInToolUse } from '../lib/imageRefs.js';
 import { defaultImageRefsFor, windowFor, type RefsFor } from '../lib/mediaStore.js';
+import { stampReplyTo } from '../lib/reply-to-store.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -2181,6 +2182,9 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
     windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
   windowed = stampImages(tagSynthetics(settleIngestedQueuedCommands(windowed)), agentId);
+  // reply_to (reply threads P1): the operator's message whose words are a recorded send carries the uuid and excerpt
+  // of the message it answered (lib/reply-to-store.ts). The SSE tailer stamps its own items the same way. Fail-open.
+  windowed = stampReplyTo(windowed, agentId);
   return { items: windowed, render_items: buildRenderItems(windowed) };
 }
 

@@ -40,6 +40,7 @@ This document writes that model down, and the router, message store and gateway 
   - send `/exit` or `/quit`
 - It presses Enter and only reports success when the box has cleared.
 - **No** cooldown, breathe window, presence hold or Stop-hook grace applies. Those exist to protect a person from mail; here the person *is* the sender.
+- **A reply names the message it answers.** A send may carry `reply_to: { uuid?, excerpt }` beside the words (the words already carry the client's one-line quote header, `[Replying to <sender> <HH:MM> <zone>: "<excerpt>"] <words>`; the server adds none). The API validates it (a uuid of the allowed shape, else dropped; an excerpt trimmed to 200 characters, else the field is dropped), never puts it in what the agent receives, and at a 2xx (delivered, held, stored) keeps `{agent, sent_text, reply_to, message_id, ts}` in `state/reply-to.db`. The transcript routes (the poll page, an older `?before=` page, the SSE snapshot and its appends) stamp `reply_to` onto the operator's text item whose words are that send (same agent, text equal to or starting with the sent text, within 24 h). The client jumps by `item.reply_to.uuid`; without the stamp it matches the quoted words.
 - If the agent is mid-turn and the client says it accepts a hold, the message is stored as a held row and the router delivers it at the next turn boundary, raw and at high priority.
 
 ## What a future agent needs to know
