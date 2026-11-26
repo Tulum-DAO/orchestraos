@@ -21,6 +21,7 @@ from pathlib import Path
 from services.arturo import thread_context
 
 log = logging.getLogger("arturo.native.call_context")
+_now = time.monotonic                          # the opening's clock (tests replace this, never time.monotonic)
 
 FLAG = "ARTURO_NATIVE_THREAD_CONTEXT"          # ON unless "0": the escape hatch
 FEED_KIND_ENV = "ARTURO_NATIVE_CHAT_FEED_KIND"  # thinking (default: voiced ~5 s after send, probe 2026-11-25
@@ -34,7 +35,7 @@ def enabled():
     return os.environ.get(FLAG, "1") != "0"
 
 
-# The opening's size on a native call. Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across
+# The opening's size on a native call. The operator, 2026-11-25: a call opens with the last 20-25 turns across
 # chat and calls, every one stamped, and that overrides the under-3 s greet bar. Measured on the real gm thread:
 # 1500 tokens -> 15 verbatim turns, 2000 -> 22, 2500 -> 32, 4000 -> 59 (greet: 1500 -> 2.44 s, 3000 -> 3.01 s).
 # When long chat replies leave the default short of MIN_TURNS, the opening is read once more at what MIN_TURNS cost
@@ -44,8 +45,7 @@ MIN_TURNS = 25
 FLOOR_BUDGET_TOKENS = 4000
 FLOOR_MAX_ELAPSED_S = 2.0   # a first read slower than this gets no second one (the server waits 6 s in all)
 READ_DEADLINE_S = 5.0       # both reads end by this, inside the server's OPENING_WAIT_S (6 s), so a slow second read
-#                             never costs the first; the second read gets what is left, from the route alone
-SECOND_READ_MIN_S = 0.5     # less time left than this: no second read
+#                             never costs the first; the second read gets what is left (3 s at least, after the 2 s gate)
 
 
 def budget_tokens():
@@ -83,8 +83,11 @@ class Opening(str):
     """The opening text, and how it was read (`info`, for the call report):
       budget         the first read's token budget (0 when the flag is off)
       reread         the second read's budget, or None when there was no second read
-      reread_result  kept (more turns, cut to the newest MIN_TURNS) | not_more | failed | None
-      source         route | twin | none (nothing could be read) | off (flag off)
+      reread_result  kept (more turns, cut to the newest MIN_TURNS) | kept_uncut (more turns, but not in the contract's
+                     shape, so not cut) | not_more | failed | too_slow (wanted, but the first read took over 2 s) | None
+      source         route | twin (the agent's chat) | thread (a page thread) | calls (Arturo's calls) | refused (the
+                     caller may not read the page thread) | none (nothing could be read) | off (flag off; the server
+                     reports None then, as for a timeout or an error, with skipped saying which)
       short          still under MIN_TURNS verbatim turns"""
 
     def __new__(cls, text, info):
@@ -102,31 +105,36 @@ def opening(agent, load=None, directory=None, route=None):
     return _with_floor(lambda budget, timeout=None: _read(agent, budget, load, directory, route, timeout))
 
 
+_SECOND_READ_SOURCES = ("route", "thread", "calls")   # not the twin: its transcript fetch would not fit the deadline
 _OFF = Opening("", {"budget": 0, "reread": None, "reread_result": None, "source": "off", "short": False})
 
 
 def _with_floor(read):
     """`read(budget, timeout=None)` -> (text, source); with a timeout it reads the route alone. The second read only
     when it can help and cannot cost the thread (Claude reviews of #638): something older exists to fetch (an EARLIER
-    block), the first came from the route quickly, and the second fits inside READ_DEADLINE_S. It asks for what
-    MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more turns, then cut to the newest
-    MIN_TURNS. A junk setting is not an explicit one."""
+    block), the first came quickly from the route or a local read (never the twin), and the second fits inside
+    READ_DEADLINE_S. It asks for what MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more
+    turns, then cut to the newest MIN_TURNS. A junk setting is not an explicit one."""
     budget = budget_tokens()
-    t0 = time.monotonic()
+    t0 = _now()
     text, source = read(budget)
     turns = describe(text)["turns"]
     reread = result = None
-    elapsed = time.monotonic() - t0
-    if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source == "route" and turns < MIN_TURNS
-            and "EARLIER (summarized):" in text and elapsed <= FLOOR_MAX_ELAPSED_S
-            and READ_DEADLINE_S - elapsed >= SECOND_READ_MIN_S):
+    elapsed = _now() - t0
+    wanted = (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source in _SECOND_READ_SOURCES
+              and turns < MIN_TURNS and "EARLIER (summarized):" in text)
+    if wanted and elapsed > FLOOR_MAX_ELAPSED_S:
+        result = "too_slow"
+    elif wanted:
         reread = min(FLOOR_BUDGET_TOKENS, math.ceil(budget * MIN_TURNS / max(turns, 1)))
         more, _ = read(reread, timeout=READ_DEADLINE_S - elapsed)
         more_turns = describe(more)["turns"]
         if not more:
             result = "failed"
         elif more_turns > turns:
-            text, turns, result = _newest(more, MIN_TURNS), min(more_turns, MIN_TURNS), "kept"
+            cut = _newest(more, MIN_TURNS)
+            text, turns = cut, describe(cut)["turns"]
+            result = "kept" if cut != more or more_turns <= MIN_TURNS else "kept_uncut"
         else:
             result = "not_more"
     return Opening(text, {"budget": budget, "reread": reread, "reread_result": result, "source": source,
@@ -134,15 +142,18 @@ def _with_floor(read):
 
 
 def _newest(text, keep):
-    """`text` with only its newest `keep` verbatim turns; the cut ones are counted at the end of EARLIER."""
+    """`text` with only its newest `keep` verbatim turns; the cut ones are counted at the end of EARLIER (made when the
+    text had none, the renderer's shape). A text without a RECENT heading is not the contract's: kept whole."""
     lines = text.splitlines()
     verbatim = [i for i, ln in enumerate(lines) if _LINE_RE.match(ln)]
     cut = verbatim[:max(0, len(verbatim) - keep)]
-    if not cut:
+    if not cut or "RECENT (verbatim):" not in lines:
         return text
     at = lines.index("RECENT (verbatim):")
     drop = set(cut)
     out = [ln for i, ln in enumerate(lines[:at]) if i not in drop]
+    if "EARLIER (summarized):" not in out:
+        out.append("EARLIER (summarized):")
     out.append(f"- ({len(cut)} older item(s) omitted)")
     out += [ln for i, ln in enumerate(lines[at:], start=at) if i not in drop]
     return "\n".join(out)
@@ -153,6 +164,44 @@ def _explicit_budget():
         return int(os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") or "") > 0
     except ValueError:
         return False
+
+
+def opening_thread(thread_id, load=None, principal="fleet"):
+    """A call placed from the standalone Arturo page: that page's own thread (threads.db), never another chat. The
+    operator, 2026-11-25 (gm msg_e7402cbb): "one unified conversation between text and call that this call is part
+    of"; gm's chat stays reachable through the conversations tool."""
+    if not enabled():
+        return _OFF
+    if not thread_context.thread_readable(thread_id, principal):
+        log.warning(f"native: thread {thread_id!r} is not readable by {principal!r}; the call opens without it")
+        return Opening("", {"budget": 0, "reread": None, "reread_result": None, "source": "refused",
+                            "short": False})
+
+    def read(budget, timeout=None):              # a local read: the deadline cannot be blown by it
+        try:
+            text = (load or thread_context.load_thread)(thread_id, calls_dir=calls_dir(), budget_tokens=budget)
+            return (text, "thread") if text and text.strip() else ("", "none")
+        except Exception as e:  # noqa: BLE001 — a call without its thread is still a call
+            log.warning(f"native: opening for thread {thread_id!r} failed: {e!r}")
+            return "", "none"
+    return _with_floor(read)
+
+
+def opening_calls(load=None):
+    """A call that names neither a page thread nor an agent (an older dashboard): Arturo's own recent calls, no chat,
+    so no other seat's conversation is read out as if it were the operator's."""
+    if not enabled():
+        return _OFF
+
+    def read(budget, timeout=None):              # a local read: the deadline cannot be blown by it
+        try:
+            text = (load or thread_context.load)(chat_agent="arturo", call_owner=None, calls_dir=calls_dir(),
+                                                 fetch=lambda a, n: [], budget_tokens=budget)
+            return (text, "calls") if text and text.strip() else ("", "none")
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"native: opening from Arturo's calls failed: {e!r}")
+            return "", "none"
+    return _with_floor(read)
 
 
 def _read(agent, budget, load=None, directory=None, route=None, timeout=None):
@@ -179,7 +228,7 @@ def _read(agent, budget, load=None, directory=None, route=None, timeout=None):
 _LINE_RE = re.compile(r"^\[(\S+Z) [^\]]*\] (chat|call (\S+)) ")
 _SUMMARY_RE = re.compile(r"^- \[[^\]]*\] call ([^,\s]+),")
 _OMITTED_RE = re.compile(r"^- \((\d+) older item\(s\) omitted\)$")
-_CHAT_ERROR_RE = re.compile(r"^\(\S+ chat could not be read: ")
+_CHAT_ERROR_RE = re.compile(r"^\((\S+ chat|thread \S+) could not be read: ")
 
 
 def describe(text):
@@ -242,6 +291,44 @@ class ChatFeed:
         self.cursor = max(l.at for l in lines)
         notes = []
         for ln in sorted(lines, key=lambda l: l.at):
+            notes.extend(thread_context.live_notes(ln, self.tz, self.tz_label))
+        notes = notes[: self.left]
+        self.left -= len(notes)
+        return notes
+
+
+class ThreadFeed:
+    """New TYPED operator turns of the page's own thread (threads.db) since the call started, as stamped notes. The
+    call's own spoken lines and Arturo's replies are not news to the call."""
+
+    def __init__(self, thread_id, db=None, since=None, tz=None, tz_label=None, operator=None, max_notes=FEED_MAX_NOTES,
+                 principal="fleet"):
+        self.thread_id = thread_id
+        self.principal = principal
+        self.db = db or thread_context.threads_db_path()
+        self.cursor = time.time() if since is None else since
+        if tz is None or tz_label is None:
+            tz, tz_label = thread_context.shaw_tz()
+        self.tz, self.tz_label = tz, tz_label
+        self.operator = operator or thread_context.operator_name()
+        self.left = max_notes
+
+    def poll(self):
+        if self.left <= 0:
+            return []
+        if not thread_context.thread_readable(self.thread_id, self.principal, self.db):
+            return []
+        try:
+            entries = thread_context.thread_entries(self.thread_id, self.db, operator_label=self.operator)
+        except Exception as e:  # noqa: BLE001 — next poll tries again
+            log.info(f"native: thread feed for {self.thread_id!r} unreadable: {e!r}")
+            return []
+        new = [l for role, l in entries if role == "user" and l.channel == "chat" and l.at > self.cursor]
+        if not new:
+            return []
+        self.cursor = max(l.at for l in new)
+        notes = []
+        for ln in sorted(new, key=lambda l: l.at):
             notes.extend(thread_context.live_notes(ln, self.tz, self.tz_label))
         notes = notes[: self.left]
         self.left -= len(notes)
