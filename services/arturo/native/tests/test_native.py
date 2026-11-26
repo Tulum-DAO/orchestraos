@@ -551,6 +551,23 @@ def test_the_native_prompts_share_no_text_with_the_relays_f1_prompt():
     assert "READ_BACK_FIRST" in p["backend"]
 
 
+def test_the_live_prompt_says_the_opening_is_its_own_conversation_and_decisions_are_cards():
+    # proving call 2026-11-26: the page thread opened with 41 turns, yet Arturo said it had no past chats (the prompt
+    # told it never to answer "messages" from memory), then doubted the "hello" it found because its own typed reply
+    # came after it; the typed reply also offered an approval as a choice in prose
+    from services.arturo import thread_context as tc
+    live = native_config.prompts()["live"]
+    assert "The PAST CONTEXT block below is your own conversation with Shaw" in live
+    assert tc.PAST_OPEN.startswith("PAST CONTEXT")                   # the name the rule points at
+    assert "never say you can't see or don't\nhave your past chats" in live
+    assert "an Arturo line after it is your own reply" in live
+    assert "a decision goes on a card for him" in live
+    frame = native_config.session_start_frame([], context="[2026-11-25T22:20:01Z] chat Shaw: hello")
+    text = json.dumps(frame)
+    assert text.index("your own conversation with Shaw") < text.index("PAST CONTEXT: background only")
+    assert live.strip().split("\n\n")[-1].startswith("START:")    # the greet still fires (START stays last)
+
+
 def test_a_slow_tool_never_stalls_the_audio(tmp_path, monkeypatch):
     """spawn_agent can take up to 120 s. Tool calls ran inside the event loop that moves the audio, so one slow tool
     froze every call (GPT-Live heard nothing, Shaw heard nothing). Audio must keep flowing while a tool runs, and the
