@@ -78,6 +78,24 @@ const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;
  */
 const MISS_TTL_MS = 60_000;
 const MAX_RESOLVED = 2000;
+/**
+ * Full resolves allowed per RESOLVE_WINDOW_MS. Most live session entries carry no cwd, so after an API
+ * restart every seat needs the resolver once: unbounded, the first list poll would block for seconds.
+ * Seats over the budget read unknown (never working) and resolve on a later poll.
+ */
+const RESOLVE_BUDGET = Number(process.env.ORCHESTRA_TRANSCRIPT_RESOLVE_BUDGET || 8);
+const RESOLVE_WINDOW_MS = 1_000;
+let budgetWindowAt = 0;
+let budgetUsed = 0;
+let resolveCalls = 0;
+
+function takeResolveBudget(): boolean {
+  const now = Date.now();
+  if (now - budgetWindowAt >= RESOLVE_WINDOW_MS) { budgetWindowAt = now; budgetUsed = 0; }
+  if (budgetUsed >= RESOLVE_BUDGET) return false;
+  budgetUsed += 1;
+  return true;
+}
 const resolvedCache = new Map<string, { path: string | null; at: number }>();
 
 function remember(key: string, path: string | null): void {
@@ -113,6 +131,8 @@ function transcriptPath(agentId: string, entry: SessionEntry): string | null {
   // 2. Otherwise the chat route's full resolver (other runtimes, moved cwds), accepted only when the
   // session it found IS the seat's recorded one.
   if (path === null) {
+    if (!takeResolveBudget()) return null;   // not cached: this seat resolves on a later poll
+    resolveCalls += 1;
     try {
       const r = resolveTranscriptPath(agentId);
       path = r.path && r.sid === sid ? r.path : null;
@@ -136,7 +156,9 @@ export function transcriptAgeMs(agentId: string): number | null {
   try {
     return Date.now() - statSync(cp).mtimeMs;
   } catch {
-    return null;                 // stale path — say nothing rather than guess
+    // stale path: say nothing rather than guess, and forget it so the next poll resolves afresh
+    if (typeof entry.session_id === 'string') resolvedCache.delete(`${agentId}:${entry.session_id}`);
+    return null;
   }
 }
 
@@ -147,3 +169,5 @@ export function isTranscriptActive(agentId: string): boolean {
 }
 
 export const WORK_WINDOW_MS_FOR_TEST = WORK_WINDOW_MS;
+export const RESOLVE_BUDGET_FOR_TEST = RESOLVE_BUDGET;
+export function resolveCallsForTest(): number { return resolveCalls; }
