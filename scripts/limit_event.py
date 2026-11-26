@@ -95,7 +95,7 @@ def _local_tz(host_tz):
 def _reset_epoch(m, tz, now: datetime) -> int | None:
     """Turn a matched WHEN (+ zone) into epoch seconds: the first such moment after `now`."""
     try:
-        hour = int(m.group("h")) % 12 + (12 if m.group("ap").lower() == "pm" else 0)
+        hour = int(m.group("h")) % 12 + (12 if m.group("ap")[:1].lower() == "p" else 0)
         minute = int(m.group("m") or 0)
         local_now = now.astimezone(tz)
         if m.group("mon"):

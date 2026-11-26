@@ -43,8 +43,9 @@ _DIM = re.compile(r"\x1b\[2m.*?(?=\x1b\[|$)")
 
 
 def _account_switch_cmd():
-    return os.environ.get("ORCHESTRA_ACCOUNT_SWITCH") or os.path.expanduser(
-        "~/scripts/agent-orchestra/scripts/account_switch.py")
+    """The account switch CLI: $ORCHESTRA_ACCOUNT_SWITCH (the install sets it), else the sibling copy."""
+    return os.environ.get("ORCHESTRA_ACCOUNT_SWITCH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "account_switch.py")
 
 
 def _nudge_cmd():
