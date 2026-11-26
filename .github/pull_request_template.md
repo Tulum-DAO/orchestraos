@@ -21,6 +21,7 @@
 
 - [ ] Every commit is signed off (`git commit -s`, DCO)
 - [ ] Per-package tests green locally (`make test`), api typecheck, dashboard build
+- [ ] Landing gate (docs/LANDING_GATE.md): every CI job green BY NAME on the merged head (an empty or in-progress rollup is a red), an independent verdict at that head, head-matched merge
 - [ ] No operator literals or credentials (paths, hostnames, chat ids, keys) added
 - [ ] Code paths resolve from the checkout; only data goes under `ORCHESTRA_DIR`
 - [ ] Docs updated if behavior or the install path changed

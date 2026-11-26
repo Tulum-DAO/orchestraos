@@ -73,8 +73,23 @@ test('a base that is not a canonical root is not evidence of a rotation', () => 
   );
 });
 
-test('a row that is alive is never flagged, whatever its status says', () => {
-  assert.equal(supersededBy({ ...leftover, alive: true, index }), null);
+// ---- alive rows: protected only while nothing else answers for the root ----------------------
+// Measured 2026-11-25: gm-gen139, avatar-dev-gen8 and orchestra-builder-gen118 were parked and retired at a
+// swap, their panes still running for minutes, and /api/agents listed them as live ids with their own
+// context percentages beside the roots' real heads.
+test('an alive leftover whose root has a DIFFERENT live head is flagged: its successor answers for the root', () => {
+  assert.equal(supersededBy({ ...leftover, alive: true, index }), 'devex-review');      // head is devex-review
+  assert.equal(supersededBy({ id: 'orchestraos-builder-gen3', defStatus: 'parked', alive: true, index }), 'orchestraos-builder');
+});
+
+test("an alive row that IS its root's live head is never flagged", () => {
+  assert.equal(supersededBy({ id: 'orchestraos-builder-g4', defStatus: 'parked', alive: true, index }), null);
+});
+
+test('an alive leftover of a root with NO live head is kept: never hide the only agent answering', () => {
+  const idx = buildCanonicalIndex({ 'devex-review': { root: 'devex-review', tmux_session: '' } } as any)!;
+  assert.equal(supersededBy({ ...leftover, alive: true, index: idx }), null);
+  assert.equal(supersededBy({ ...leftover, alive: false, index: idx }), 'devex-review');   // not alive: the plain rule
 });
 
 test('only the registry definition status counts, and only parked', () => {
@@ -110,4 +125,6 @@ test('the index carries both the roots and the canonical session names', () => {
   // The DB-union step at agents.ts:96 overwrites a canonical root's tmux_session with the
   // canonical live head, so the rule must compare against THESE values, never the row's own.
   assert.ok(!index.roots.has('orchestraos-builder-g4'));
+  assert.equal(index.heads.get('orchestraos-builder'), 'orchestraos-builder-g4');
+  assert.equal(index.heads.get('gm'), 'gm');
 });

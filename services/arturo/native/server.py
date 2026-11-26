@@ -56,6 +56,8 @@ CONTEXT_DEVICES = {"iphone", "ipad", "quest", "watch", "mac"}
 CONTEXT_ENABLED = os.environ.get("ARTURO_NATIVE_CONTEXT", "0") == "1"
 CONTEXT_MIN_GAP_S = 2.0
 CONTEXT_MAX_SENDS = 10
+_OPENING_UNREAD = {"budget": None, "reread": None, "reread_result": None, "source": None, "short": None,
+                   "skipped": None}   # source None: the loader never answered (skipped says why)
 OPENING_WAIT_S = 6.0          # the thread above the call loads while the provider connects; never holds a call longer
 # Arturo used from inside another app (the finance tracker's widget; services/arturo/host_page.py): its page is sent as
 # its own appends, capped separately (a page and a filter change each resend it), plus one finances snapshot a call.
@@ -303,6 +305,7 @@ class NativeCall:
         # The thread above this call and the chat that arrives during it (call_context; Shaw 2026-11-25).
         self.chat_agent = call_context.default_chat_agent()
         self.opening_tokens = 0
+        self.opening_info = {**call_context.describe(""), **_OPENING_UNREAD}
         self.chat_feed = None
         self._feed_future = None
         self._feed_next = 0.0
@@ -520,13 +523,18 @@ class NativeCall:
         self.driver = Driver(self.session, self.transport, _Observer(self))
         self.t0 = time.monotonic()
         self.spend.start()
-        opening = ""
+        opening, skipped = "", None
         if opening_fut is not None:
             try:
-                opening = await asyncio.wait_for(asyncio.shield(opening_fut), OPENING_WAIT_S) or ""
+                opening = await asyncio.wait_for(asyncio.shield(opening_fut), OPENING_WAIT_S)
+                opening = "" if opening is None else opening   # an empty Opening keeps its info (never `or ""`)
             except Exception as e:  # noqa: BLE001 — timeout or a loader error: the call starts without its thread
+                skipped = "timeout" if isinstance(e, asyncio.TimeoutError) else "error"
                 log.warning(f"native {self.binding.conversation_id}: opening context skipped: {e!r}")
         self.opening_tokens = call_context.thread_context.estimate_tokens(opening)
+        # how it was read, so a skipped opening never looks like an empty thread (Claude review of #638)
+        self.opening_info = {**call_context.describe(opening), **_OPENING_UNREAD,
+                             **(getattr(opening, "info", None) or {}), "skipped": skipped}
         self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding), context=opening))
         if threaded:
             try:
@@ -538,7 +546,7 @@ class NativeCall:
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
                  f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent} "
-                 f"opening_tokens={self.opening_tokens}")
+                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -860,7 +868,8 @@ class NativeCall:
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
                    cadence=self.cadence_report(),
-                   thread={"chat": self.chat_agent, "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent})
+                   thread={"chat": self.chat_agent, "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent,
+                           **self.opening_info})
         try:
             self.server.write_report(self.binding.conversation_id, rep)
         except Exception as e:  # noqa: BLE001 — release capacity even if disk reporting fails

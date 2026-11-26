@@ -87,13 +87,13 @@ def test_merged_thread_is_time_ordered_with_a_stamp_on_every_line(tmp_path):
     chat = tc.chat_lines([chat_item("user", "typed before", T0), chat_item("assistant", "typed after", T0 + 20)],
                          agent_label="gm", operator_label="Shaw")
     text = tc.render(chat + tc.call_lines(tmp_path, owner=None, operator_label="Shaw"), budget_tokens=2000, tz="America/Cancun",
-                     tz_label="Tulum")
+                     tz_label="Local")
     order = [text.index(s) for s in ("typed before", "call line", "call reply", "typed after")]
     assert order == sorted(order)
     body = [ln for ln in text.splitlines() if ln.startswith("[")]
     assert len(body) == 4
-    # ISO UTC and Shaw-local on every line: 17:00Z is 12:00 Tulum
-    assert body[0].startswith("[2025-11-25T17:00:00Z 12:00 Tulum] chat Shaw:")
+    # ISO UTC and Shaw-local on every line: 17:00Z is 12:00 Local
+    assert body[0].startswith("[2025-11-25T17:00:00Z 12:00 Local] chat Shaw:")
     assert "call vc_a Arturo:" in text
 
 
@@ -220,3 +220,77 @@ def test_the_opening_is_fenced_as_past_context_that_is_over(tmp_path):
                     tz="UTC", tz_label="UTC")
     assert empty.startswith(tc.PAST_OPEN) and empty.endswith(tc.PAST_CLOSE)
     assert "NEW call" in tc.PAST_CLOSE and "nobody has spoken" in tc.PAST_CLOSE
+
+
+def test_a_turn_is_an_exchange_consecutive_phrases_of_one_speaker_in_one_call_merge():
+    # The operator asked for "the last 20 or 25 turns": 25 phrases spanned 12 minutes, 25 exchanges let them reference
+    # "earlier". The merged turn keeps the first phrase's stamp; chat lines never merge.
+    L = tc.Line
+    lines = [L(T0, "Ada", "I didn't ask about", "call", "vc_a"), L(T0 + 1, "Ada", "that", "call", "vc_a"),
+             L(T0 + 2, "Arturo", "You didn't.", "call", "vc_a"), L(T0 + 3, "Arturo", "Sorry.", "call", "vc_a"),
+             L(T0 + 4, "Ada", "next call", "call", "vc_b"), L(T0 + 5, "Ada", "typed", "chat"),
+             L(T0 + 6, "Ada", "typed again", "chat")]
+    out = tc.render(lines, budget_tokens=2000, tz="UTC", tz_label="UTC")
+    body = out.split("RECENT (verbatim):\n")[1].splitlines()
+    assert body == ["[2025-11-25T17:00:00Z 17:00 UTC] call vc_a Ada: I didn't ask about that",
+                    "[2025-11-25T17:00:02Z 17:00 UTC] call vc_a Arturo: You didn't. Sorry.",
+                    "[2025-11-25T17:00:04Z 17:00 UTC] call vc_b Ada: next call",
+                    "[2025-11-25T17:00:05Z 17:00 UTC] chat Ada: typed",
+                    "[2025-11-25T17:00:06Z 17:00 UTC] chat Ada: typed again"]
+
+
+def _call(tmp_path, turns, call_id="vc_a", started=T0):
+    (tmp_path / f"{call_id}.json").write_text(json.dumps({"call_id": call_id, "started_at": started, "turns": turns}))
+
+
+def _recent(out):
+    return [ln for ln in out.split("RECENT (verbatim):\n")[1].splitlines() if not ln.startswith("END OF PAST CONTEXT")]
+
+
+def test_a_merged_turn_over_the_line_cap_keeps_its_tail_not_its_head():
+    # Two 700-character replies were each shown whole before the merge; cut at the head, the turn lost the end of what
+    # was said. The newest words are the ones a caller refers back to.
+    L = tc.Line
+    a, b = "a" * 699 + "A", "b" * 699 + "Z"
+    out = tc.render([L(T0, "Arturo", a, "call", "vc_a", role="agent"), L(T0 + 1, "Arturo", b, "call", "vc_a", role="agent")],
+                    budget_tokens=4000, tz="UTC", tz_label="UTC")
+    turn = _recent(out)[0]
+    words = turn.split("Arturo: ", 1)[1]
+    assert len(words) == tc.LINE_MAX_CHARS and words.startswith("…") and words.endswith("b" * 690 + "Z")
+    one = tc.render([L(T0, "Arturo", "x" * 1300 + "END", "call", "vc_a", role="agent")], budget_tokens=4000, tz="UTC",
+                    tz_label="UTC")
+    assert _recent(one)[0].endswith("x…")                               # a single phrase is cut as before: its head
+
+
+def test_one_speaker_last_in_a_call_and_first_in_the_next_are_two_turns(tmp_path):
+    _call(tmp_path, [{"role": "assistant", "text": "bye", "ts": T0}, {"role": "user", "text": "ok bye", "ts": T0 + 1}])
+    _call(tmp_path, [{"role": "user", "text": "hi again", "ts": T0 + 2}], call_id="vc_b", started=T0 + 2)
+    out = tc.load(chat_agent=None, call_owner=None, calls_dir=tmp_path, fetch=lambda a, n: [], budget_tokens=2000,
+                  tz="UTC", tz_label="UTC", operator_label="Ada")
+    body = _recent(out)
+    assert body[-2].endswith("call vc_a Ada: ok bye") and body[-1].endswith("call vc_b Ada: hi again")
+
+
+def test_the_operator_and_the_agent_never_fold_together_even_under_one_name(tmp_path):
+    _call(tmp_path, [{"role": "user", "text": "are you there", "ts": T0}, {"role": "assistant", "text": "I am", "ts": T0 + 1}])
+    out = tc.load(chat_agent=None, call_owner=None, calls_dir=tmp_path, fetch=lambda a, n: [], budget_tokens=2000,
+                  tz="UTC", tz_label="UTC", operator_label="Arturo")
+    assert [ln.split("] ", 1)[1] for ln in _recent(out)] == ["call vc_a Arturo: are you there", "call vc_a Arturo: I am"]
+
+
+def test_phrases_more_than_the_gap_apart_are_separate_turns():
+    L = tc.Line
+    g = tc.MERGE_GAP_S
+    out = tc.render([L(T0, "Ada", "one", "call", "vc_a", role="user"), L(T0 + g, "Ada", "two", "call", "vc_a", role="user"),
+                     L(T0 + 2 * g + 1, "Ada", "three", "call", "vc_a", role="user")], budget_tokens=2000, tz="UTC",
+                    tz_label="UTC")
+    assert [ln.split(": ", 1)[1] for ln in _recent(out)] == ["one two", "three"]
+
+
+def test_a_summarized_call_counts_its_phrases_not_its_merged_turns():
+    L = tc.Line
+    old = [L(T0 + i, "Ada", f"p{i} " + "w" * 300, "call", "vc_old", role="user") for i in range(3)]
+    new = [L(T0 + 100 + i, "Ada" if i % 2 else "Arturo", "n" * 1100, "call", "vc_new", role="user" if i % 2 else "agent")
+           for i in range(6)]
+    out = tc.render(old + new, budget_tokens=900, tz="UTC", tz_label="UTC")
+    assert "call vc_old, 3 phrase(s) not shown" in out

@@ -10,7 +10,9 @@ your own messages ... you can't even remember the last call"; one surface, text 
 Neither ever raises into a call: an unreadable source is an empty opening or no notes.
 """
 import logging
+import math
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -32,9 +34,18 @@ def enabled():
     return os.environ.get(FLAG, "1") != "0"
 
 
-# The opening's size on a native call: the largest budget whose greet lands under 3 s (live calibration 2026-11-25,
-# fenced thread, socket open -> first word: 6000 -> 4.3 s, 3000 -> 3.01 s, 1500 -> 2.44 s). The rest is behind tools.
-DEFAULT_BUDGET_TOKENS = 1500
+# The opening's size on a native call. Shaw 2026-11-25 (gm msg_3a7542b2): a call opens with the last 20-25 turns across
+# chat and calls, every one stamped, and that overrides the under-3 s greet bar. Measured on the real gm thread:
+# 1500 tokens -> 15 verbatim turns, 2000 -> 22, 2500 -> 32, 4000 -> 59 (greet: 1500 -> 2.44 s, 3000 -> 3.01 s).
+# When long chat replies leave the default short of MIN_TURNS, the opening is read once more at what MIN_TURNS cost
+# at the first read's rate, capped at FLOOR_BUDGET_TOKENS (never the whole floor: ~59 turns on the gm thread).
+DEFAULT_BUDGET_TOKENS = 2500
+MIN_TURNS = 25
+FLOOR_BUDGET_TOKENS = 4000
+FLOOR_MAX_ELAPSED_S = 2.0   # a first read slower than this gets no second one (the server waits 6 s in all)
+READ_DEADLINE_S = 5.0       # both reads end by this, inside the server's OPENING_WAIT_S (6 s), so a slow second read
+#                             never costs the first; the second read gets what is left, from the route alone
+SECOND_READ_MIN_S = 0.5     # less time left than this: no second read
 
 
 def budget_tokens():
@@ -68,23 +79,139 @@ def fetch_route(agent, budget, timeout=4.0):
         return resp.read().decode("utf-8")
 
 
+class Opening(str):
+    """The opening text, and how it was read (`info`, for the call report):
+      budget         the first read's token budget (0 when the flag is off)
+      reread         the second read's budget, or None when there was no second read
+      reread_result  kept (more turns, cut to the newest MIN_TURNS) | not_more | failed | None
+      source         route | twin | none (nothing could be read) | off (flag off)
+      short          still under MIN_TURNS verbatim turns"""
+
+    def __new__(cls, text, info):
+        self = super().__new__(cls, text)
+        self.info = info
+        return self
+
+
 def opening(agent, load=None, directory=None, route=None):
-    """The opening context text, or "" (flag off, or nothing could be read): the API route first, the twin if the
-    API cannot answer."""
+    """The opening context (an Opening; "" when the flag is off or nothing could be read): the API route first, the
+    twin if the API cannot answer. Short of MIN_TURNS at the default size, it is read once more, sized to reach
+    MIN_TURNS (an explicit ARTURO_NATIVE_CONTEXT_TOKENS is taken as meant)."""
     if not enabled():
-        return ""
+        return _OFF
+    return _with_floor(lambda budget, timeout=None: _read(agent, budget, load, directory, route, timeout))
+
+
+_OFF = Opening("", {"budget": 0, "reread": None, "reread_result": None, "source": "off", "short": False})
+
+
+def _with_floor(read):
+    """`read(budget, timeout=None)` -> (text, source); with a timeout it reads the route alone. The second read only
+    when it can help and cannot cost the thread (Claude reviews of #638): something older exists to fetch (an EARLIER
+    block), the first came from the route quickly, and the second fits inside READ_DEADLINE_S. It asks for what
+    MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more turns, then cut to the newest
+    MIN_TURNS. A junk setting is not an explicit one."""
+    budget = budget_tokens()
+    t0 = time.monotonic()
+    text, source = read(budget)
+    turns = describe(text)["turns"]
+    reread = result = None
+    elapsed = time.monotonic() - t0
+    if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source == "route" and turns < MIN_TURNS
+            and "EARLIER (summarized):" in text and elapsed <= FLOOR_MAX_ELAPSED_S
+            and READ_DEADLINE_S - elapsed >= SECOND_READ_MIN_S):
+        reread = min(FLOOR_BUDGET_TOKENS, math.ceil(budget * MIN_TURNS / max(turns, 1)))
+        more, _ = read(reread, timeout=READ_DEADLINE_S - elapsed)
+        more_turns = describe(more)["turns"]
+        if not more:
+            result = "failed"
+        elif more_turns > turns:
+            text, turns, result = _newest(more, MIN_TURNS), min(more_turns, MIN_TURNS), "kept"
+        else:
+            result = "not_more"
+    return Opening(text, {"budget": budget, "reread": reread, "reread_result": result, "source": source,
+                          "short": turns < MIN_TURNS})
+
+
+def _newest(text, keep):
+    """`text` with only its newest `keep` verbatim turns; the cut ones are counted at the end of EARLIER."""
+    lines = text.splitlines()
+    verbatim = [i for i, ln in enumerate(lines) if _LINE_RE.match(ln)]
+    cut = verbatim[:max(0, len(verbatim) - keep)]
+    if not cut:
+        return text
+    at = lines.index("RECENT (verbatim):")
+    drop = set(cut)
+    out = [ln for i, ln in enumerate(lines[:at]) if i not in drop]
+    out.append(f"- ({len(cut)} older item(s) omitted)")
+    out += [ln for i, ln in enumerate(lines[at:], start=at) if i not in drop]
+    return "\n".join(out)
+
+
+def _explicit_budget():
     try:
-        text = (route or fetch_route)(agent, budget_tokens())
+        return int(os.environ.get("ARTURO_NATIVE_CONTEXT_TOKENS") or "") > 0
+    except ValueError:
+        return False
+
+
+def _read(agent, budget, load=None, directory=None, route=None, timeout=None):
+    """(text, source): source is "route", "twin", or "none" when neither could be read. With a timeout (the second
+    read) only the route is asked, within it: the twin's own transcript fetch and file reads would not fit."""
+    try:
+        text = (route or fetch_route)(agent, budget, timeout=4.0 if timeout is None else timeout)
         if text and text.strip():
-            return text
+            return text, "route"
     except Exception as e:  # noqa: BLE001 — the twin reads the same sources
         log.info(f"native: call-context route for {agent!r} unavailable ({e!r}); using the twin")
+    if timeout is not None:
+        return "", "none"
     try:
-        return (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
-                                             budget_tokens=budget_tokens())
+        text = (load or thread_context.load)(chat_agent=agent, call_owner=None, calls_dir=directory or calls_dir(),
+                                             budget_tokens=budget)
+        return (text, "twin") if text and text.strip() else ("", "none")
     except Exception as e:  # noqa: BLE001 — a call without its thread is still a call
         log.warning(f"native: opening context for {agent!r} failed: {e!r}")
-        return ""
+        return "", "none"
+
+
+# a verbatim line: "[<UTC>Z <local> <label>] chat|call <id> <who>: <words>"; a summary: "- [<stamp>] call <id>, ..."
+_LINE_RE = re.compile(r"^\[(\S+Z) [^\]]*\] (chat|call (\S+)) ")
+_SUMMARY_RE = re.compile(r"^- \[[^\]]*\] call ([^,\s]+),")
+_OMITTED_RE = re.compile(r"^- \((\d+) older item\(s\) omitted\)$")
+_CHAT_ERROR_RE = re.compile(r"^\(\S+ chat could not be read: ")
+
+
+def describe(text):
+    """What an opening carried, for the call report (so "he could not recall X" is answerable from the file): the
+    verbatim turns, the summarized items, the first/last verbatim stamp (UTC), chat vs call lines, the call ids."""
+    turns, summarized, chat_n, call_n, calls, chat_error = [], 0, 0, 0, set(), False
+    for line in (text or "").splitlines():
+        m = _OMITTED_RE.match(line)
+        if m:
+            summarized += int(m.group(1))
+            continue
+        if _CHAT_ERROR_RE.match(line):
+            chat_error = True
+            continue
+        if line.startswith("- ["):
+            summarized += 1
+            m = _SUMMARY_RE.match(line)
+            if m:
+                calls.add(m.group(1))
+            continue
+        m = _LINE_RE.match(line)
+        if not m:
+            continue
+        turns.append(m.group(1))
+        if m.group(2) == "chat":
+            chat_n += 1
+        else:
+            call_n += 1
+            calls.add(m.group(3))
+    return {"turns": len(turns), "summarized": summarized, "first": turns[0] if turns else None,
+            "last": turns[-1] if turns else None, "chat_lines": chat_n, "call_lines": call_n, "calls": sorted(calls),
+            "chat_error": chat_error}
 
 
 class ChatFeed:

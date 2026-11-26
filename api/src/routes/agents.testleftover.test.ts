@@ -50,10 +50,20 @@ test('a parked -gN row that is itself a canonical root is kept', () => {
   assert.equal(hidden('dev-demo-g3'), false);
 });
 
-test('an alive leftover is kept, parked or retired', () => {
-  assert.equal(hidden('dev-demo-gen2', true), false);
-  assert.equal(hidden('dev-demo-gen1', true), false);
-  assert.equal(hidden('qa-demo-gen1', true), false);
+test('an alive leftover is hidden once its root has a different live head, parked or retired', () => {
+  // dev-demo's head is dev-demo, qa-demo's is qa-demo: the still-running predecessor panes are ghosts.
+  assert.equal(hidden('dev-demo-gen2', true), true);
+  assert.equal(hidden('dev-demo-gen1', true), true);
+  assert.equal(hidden('qa-demo-gen1', true), true);
+});
+
+test('an alive leftover is kept while its root has no other live head (or there is no canonical table)', () => {
+  const noHead = buildCanonicalIndex({ 'dev-demo': { root: 'dev-demo', tmux_session: '' }, 'qa-demo': { root: 'qa-demo', tmux_session: '' } });
+  assert.equal(hidden('dev-demo-gen2', true, noHead), false);
+  assert.equal(hidden('dev-demo-gen1', true, noHead), false);
+  assert.equal(hidden('dev-demo-gen1', true, null), false);          // no canonical table: the registry alone never hides an alive row
+  const own = buildCanonicalIndex({ 'dev-demo': { root: 'dev-demo', tmux_session: 'dev-demo-gen1' } });
+  assert.equal(hidden('dev-demo-gen1', true, own), false);           // the row IS the live head
 });
 
 test("a retired row that is a root's live head is kept", () => {

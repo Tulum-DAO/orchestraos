@@ -17,7 +17,7 @@
 import { Router, type Request } from 'express';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { readCanonicalPending, canonicalAnswer, answerPeer, answerRefusalStatus, type CanonicalRow } from './_canonical-approvals.js';
+import { readCanonicalPendingCached, canonicalAnswer, answerPeer, answerRefusalStatus, type CanonicalRow } from './_canonical-approvals.js';
 import { gateMenuRowsForClient } from './unified-approvals.js';
 
 const router = Router();
@@ -54,10 +54,10 @@ function canonicalToLegacy(r: CanonicalRow) {
   };
 }
 
-router.get('/', (req: Request, res) => {
+router.get('/', async (req: Request, res) => {
   // W5: gate BEFORE normalizing — a multipart && !walk_complete row never
   // reaches the client raw (see gateMenuRowsForClient in unified-approvals.ts).
-  const canonical = gateMenuRowsForClient(readCanonicalPending(), req);
+  const canonical = gateMenuRowsForClient(await readCanonicalPendingCached(), req);
   const canonicalKeys = new Set<string>();
   for (const r of canonical) {
     canonicalKeys.add(r.id);
