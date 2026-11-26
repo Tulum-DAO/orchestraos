@@ -238,3 +238,33 @@ def test_make_fact_and_ingest_store_the_state_lowercased(tmp_path, monkeypatch):
     con = sqlite3.connect(db)
     assert sorted(r[0] for r in con.execute("SELECT state FROM facts")) == ["archived", "unverified"]
     con.close()
+
+
+def test_lifecycle_writes_read_the_state_without_case(tmp_path, monkeypatch):
+    """update_state accepts a state in any case and stores it lowercased; mark_superseded demotes an
+    active fact whatever the case of its stored state, and still leaves every other state alone."""
+    import bus
+    redactor = tmp_path / "redact.py"
+    redactor.write_text("def scrub_fact_text(t):\n    return t\n")
+    monkeypatch.setenv("REDACT_SECRETS_PATH", str(redactor))
+    kw = dict(ts="2026-11-25T10:00:00Z", kind="fact", actor="operator", provenance={"source_kind": "t"})
+    db = str(tmp_path / "facts.db")
+    a, b, c, new = (facts_schema.make_fact(text=t, **kw) for t in ("a", "b", "c", "new"))
+    bus.ingest(db, [a, b, c, new], source_kind="t", last_source_event_ts=None)
+    con = sqlite3.connect(db)
+    con.execute("UPDATE facts SET state=' Active ' WHERE fact_id=?", (a["fact_id"],))   # an old row, written raw
+    con.execute("UPDATE facts SET state='Resolved' WHERE fact_id=?", (b["fact_id"],))
+    con.commit()
+
+    bus.update_state(db, c["fact_id"], " Archived ")
+    bus.mark_superseded(db, a["fact_id"], new["fact_id"])
+    bus.mark_superseded(db, b["fact_id"], new["fact_id"])
+    with pytest.raises(ValueError):
+        bus.update_state(db, c["fact_id"], "gone")
+
+    got = dict(con.execute("SELECT fact_id, state FROM facts"))
+    by = dict(con.execute("SELECT fact_id, superseded_by FROM facts"))
+    con.close()
+    assert got[c["fact_id"]] == "archived"
+    assert got[a["fact_id"]] == "superseded" and by[a["fact_id"]] == new["fact_id"]
+    assert got[b["fact_id"]] == "Resolved" and by[b["fact_id"]] is None

@@ -242,13 +242,13 @@ def ingest_meta(db_path: str = DEFAULT_DB) -> dict:
 def update_state(db_path: str, fact_id: str, state: str,
                  lock_timeout_s: float = 30.0) -> None:
     """Append-safe lifecycle change: flips state only, never deletes."""
-    if state not in STATES:
+    if state_key(state) not in STATES:
         raise ValueError(f"invalid state {state!r}; must be one of {sorted(STATES)}")
     with bus_lock(db_path, timeout_s=lock_timeout_s):
         con = _connect(db_path)
         try:
             con.execute("UPDATE facts SET state=? WHERE fact_id=?",
-                        (state, fact_id))
+                        (state_key(state), fact_id))
             con.commit()
         finally:
             con.close()
@@ -263,10 +263,11 @@ def mark_superseded(db_path: str, old_fact_id: str, new_fact_id: str,
         try:
             con.executescript(_SCHEMA)
             _migrate(con)
-            con.execute(
-                "UPDATE facts SET state='superseded', superseded_by=? "
-                "WHERE fact_id=? AND state='active'",
-                (new_fact_id, old_fact_id))
+            row = con.execute("SELECT state FROM facts WHERE fact_id=?", (old_fact_id,)).fetchone()
+            if row is not None and state_key(row[0]) == "active":    # an old row may carry 'Active' or padding
+                con.execute(
+                    "UPDATE facts SET state='superseded', superseded_by=? WHERE fact_id=?",
+                    (new_fact_id, old_fact_id))
             con.commit()
         finally:
             con.close()
