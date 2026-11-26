@@ -1,4 +1,4 @@
-"""E1 — typed-fact schema for the brain fact bus (spec §2.1).
+"""Typed-fact schema for the brain fact bus.
 
 One normalized shape for every miner's output:
   {fact_id, ts, kind, text, actor, confidence, entities, lanes[],
@@ -34,14 +34,14 @@ EXPIRY_CLASSES = {"standard", "durable", "ephemeral"}
 _REQUIRED = ("fact_id", "ts", "kind", "text", "actor", "confidence",
              "entities", "lanes", "provenance", "state", "expiry_class")
 
-# --- volatility tier heuristic (spec REVISION 2, fork D -> D3) ---------------
+# --- volatility tier heuristic -----------------------------------------------
 # expiry_class IS the volatility tier: durable=immutable(no decay),
 # standard=slow, ephemeral=fluid. Deterministic kind(+provenance)->tier map,
 # so the 23k backfill is free, reproducible, and RED-first testable (no LLM,
 # no RNG). LLM override is reserved for genuinely-ambiguous cases at distill
 # time only; the backfill NEVER consults it.
 #
-# SAFETY ASYMMETRY (build-gate #2, review): a fluid fact
+# SAFETY ASYMMETRY: a fluid fact
 # mis-tagged durable pollutes recall ~forever, while a durable fact mis-tagged
 # slow merely decays a little too fast. So uncertainty ALWAYS defaults to
 # 'standard' (slow) — we NEVER default to durable/immutable on a guess.
@@ -68,7 +68,7 @@ def classify_expiry_class(kind: str, provenance: dict | None = None) -> str:
     return _SLOW_DEFAULT                    # unknown kind -> slow (never durable)
 
 
-# --- write-side noise filter (spec R2-4) -------------------------------------
+# --- write-side noise filter -------------------------------------------------
 # Distiller prompt-echoes / tool banners captured verbatim as kind='fact' — NOT
 # knowledge. Mirrors facts_recall._NOISE_PREFIXES (read-side mask) so pocket/voice
 # distillation can't amplify them: dropped at WRITE time here, masked read-side
