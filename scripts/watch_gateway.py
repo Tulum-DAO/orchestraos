@@ -4557,9 +4557,11 @@ def _verified_inject_locked(session, text, force=False, idle_only=False, strict_
     typed: the seat reads them at once instead of at its next tool boundary. Never on a menu, a permission
     prompt or typed text (the same holds refuse first). A turn that does not stop in time is steered as
     today and the answer says so (interrupt_failed). The default send never sends Escape. Escape goes ONLY when
-    the screen, read right then, draws the CLI's spinner above the input box (_screen_turn_above_composer): a
-    stale detector or quoted "esc to interrupt" never earns one (the words then go onto the idle prompt, outcome
-    delivered-now). Under force with text in the composer there is no Escape either (it would discard the draft).
+    one fresh look at the screen draws the CLI's spinner above the input box (_turn_above_composer): with
+    nothing on screen that reads as a turn (a stale detector) the words go onto the idle prompt (outcome
+    delivered-now); with something that reads as a turn but no spinner above the input box (a quoted hint) no
+    Escape and the conservative delivered-steer. Under force with text in the composer there is no Escape either
+    (it would discard the draft); without force, text found at that look refuses the send.
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
     composer's async paste ingest -> instruction sits unsubmitted. Sequence:
@@ -4912,22 +4914,24 @@ MID_TURN_HOOK_WAITING_TTL_S = 900
 RATING_DISMISS_WAIT_S = 0.5                 # after "0" to a rating prompt, before the pre-inject capture
 ENTER_CHECK_WAIT_S = (2.5, 2.0)             # after Enter, first and later attempts (the submit witness)
 CLEAR_WAIT_S = 0.5                          # after C-u, before the composer is read back
-LOCK_OVERHEAD_S = 0.5                       # the dozen captures, two detector reads and the journal I/O
+LOCK_OVERHEAD_S = 0.75                      # ~20 tmux forks under the lock (measured 14 ms each on the dev box, 2026-11-25:
+#                                             ~0.3 s), two detector reads and the journal I/O; the rest is margin. A single
+#                                             tmux call that hangs to its own 5 s timeout blows the budget whatever this says.
 SUBMIT_WITNESS_S = ENTER_CHECK_WAIT_S[0] + ENTER_CHECK_WAIT_S[1] + CLEAR_WAIT_S
 
 #: How long a person's interrupt waits for the composer after Escape, and how often it looks. The wait runs
 #: under the pane lock AND the per-session send lock, so its cap is DERIVED from the lock budget: PANE_LOCK_WAIT_S
 #: minus everything else a send sleeps under the lock (above, plus the ingest wait) and the overhead. Over that, a
 #: concurrent sender (the router, a second person) times out as busy. With the defaults (8 s lock, 1 s ingest) the
-#: cap is 1.0 s. The wait has a 0.25 s floor so an interrupt can still be asked for: with PANE_LOCK_WAIT_S below
-#: about 7.25 s that floor is over the budget, and a concurrent sender may see busy during an interrupt. The
+#: cap is 0.75 s. The wait has a 0.25 s floor so an interrupt can still be asked for: with PANE_LOCK_WAIT_S below
+#: about 7.0 s that floor is over the budget, and a concurrent sender may see busy during an interrupt. The
 #: Escape-to-composer latency has NOT been measured; a value too short shows up as interrupt_failed, never as a
 #: wrong keystroke. A bad value falls back to the default instead of stopping the boot.
 INTERRUPT_WAIT_MAX_S = max(0.25, PANE_LOCK_WAIT_S - (RATING_DISMISS_WAIT_S + INJECT_INGEST_WAIT_S + SUBMIT_WITNESS_S)
                            - LOCK_OVERHEAD_S)
 
 
-def _interrupt_wait_s(raw, default=1.0):
+def _interrupt_wait_s(raw, default=0.75):
     try:
         v = float(raw)
     except (TypeError, ValueError):
@@ -4937,7 +4941,7 @@ def _interrupt_wait_s(raw, default=1.0):
     return min(INTERRUPT_WAIT_MAX_S, max(0.25, v))
 
 
-INTERRUPT_WAIT_S = _interrupt_wait_s(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "1.0"))
+INTERRUPT_WAIT_S = _interrupt_wait_s(os.environ.get("WATCH_GATEWAY_INTERRUPT_WAIT", "0.75"))
 INTERRUPT_POLL_S = 0.25
 
 
@@ -4964,15 +4968,6 @@ def _interrupt_turn(session):
                 pass
             return True, True
     return True, False
-
-
-def _screen_turn_above_composer(session):
-    """The interrupt's own gate: Escape goes only when the CLI's spinner is drawn right above the input box on
-    the screen as it is NOW. The detector's word can be stale (a hook left at working while the prompt is idle)
-    and the whole-screen heuristic (_pane_shows_active_turn) reads quoted "esc to interrupt" as a turn; Escape
-    into an idle prompt is exactly what handle_agent_interrupt refuses. An unreadable screen is not a turn."""
-    scr = _strip_ansi(_capture_pane(session, lines=0) or "")
-    return bool(scr) and _turn_above_composer(scr)
 
 
 def _mid_turn_recheck(session, force=False, raw=None):
@@ -7410,6 +7405,11 @@ async def handle_agent_message(request):
                           "state": "held_for_boundary", "message_id": msg_id},
                          status=200)
         return _json({"ok": False, "busy": True, **info}, status=409)
+    if not ok and info.get("reason") == "unverified_submit" and info.get("escape_sent"):
+        # Whatever happens to the words next (held, returned, 502), the Escape that went is on record with its caller.
+        log.info(f"AGENT-MESSAGE person -> {session}: submit unverified after an Escape "
+                 f"(turn_stopped={bool(info.get('turn_stopped'))}, cleared={bool(info.get('cleared'))}) "
+                 f"{_caller_desc(request)}")
     if not ok and info.get("reason") == "unverified_submit" and info.get("cleared"):
         # Our words were cleared out of the composer unsubmitted (gm msg_2291dee3): never drop them.
         # A "held"-capable client gets them delivered at the next boundary; any other client gets
@@ -7427,9 +7427,6 @@ async def handle_agent_message(request):
             except Exception as e:  # noqa: BLE001 — the durable write only; text_returned still goes back
                 info = {**info, "hold_failed": str(e)}
         return _json({"ok": False, "delivered": False, **info}, status=502)
-    if not ok and info.get("reason") == "unverified_submit" and info.get("escape_sent"):
-        log.info(f"AGENT-MESSAGE person -> {session}: submit unverified after an Escape "
-                 f"(turn_stopped={bool(info.get('turn_stopped'))}) {_caller_desc(request)}")
     if ok:
         await _record_operator_message(request, session, text)
         # The honest outcome (what the person's surface shows): typed on an idle prompt, typed into a running turn
@@ -7555,14 +7552,23 @@ async def handle_agent_interrupt(request):
             # stale by now. Look again under the lock, the way the send path does: Escape goes when the screen
             # shows a turn anywhere (the anchored spinner, or the whole-screen read: a layout the anchored read
             # misses must still be stoppable); only a screen with NOTHING that reads as a turn gets no Escape.
-            scr = _strip_ansi(_capture_pane(session, lines=0) or "")
-            if scr and not _turn_above_composer(scr) and not _pane_shows_active_turn(scr):
-                return None
+            raw = _capture_pane(session, lines=0, ansi=True)
+            scr = _strip_ansi(raw or "")
+            if not scr:
+                return None                                   # an unreadable screen is not a turn: no blind Escape
+            if not _turn_above_composer(scr):
+                if not _pane_shows_active_turn(scr):
+                    return None                               # nothing reads as a turn: no Escape onto an idle prompt
+                if _typed_on_prompt_line(raw) or "":
+                    return None                               # only the whole screen reads a turn AND a draft sits in
+                                                              # the box: Escape on a draft was not measured; keep it
             return _tmux("send-keys", "-t", _st(session), "Escape")
     r = await _asyncio.get_event_loop().run_in_executor(None, _esc)
     if r is None:
         return _json({"ok": False, "error": "not mid-turn",
-                      "detail": "no running turn on the screen when the stop button reached the pane"}, status=409)
+                      "detail": "no running turn on the screen when the stop button reached the pane (or the screen "
+                                "could not be read, or only the whole-screen read saw a turn and the input box holds "
+                                "text)"}, status=409)
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
     # and the detector reports "Active turn" for up to HOOK_WORKING_TTL_S

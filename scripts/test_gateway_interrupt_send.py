@@ -227,7 +227,7 @@ def test_a_headless_seat_has_no_pane_to_interrupt_and_says_so(monkeypatch):
 @pytest.mark.parametrize("raw,want", [("abc", "cap"), (None, "cap"), ("nan", "cap"), ("99", "cap"), ("3", "cap"), ("0.01", 0.25), ("0.5", 0.5)])
 def test_the_wait_env_var_never_stops_the_boot_and_stays_within_the_lock_budget(raw, want):
     cap = G.INTERRUPT_WAIT_MAX_S
-    assert G._interrupt_wait_s(raw) == (min(cap, 1.0) if want == "cap" else min(cap, want))
+    assert G._interrupt_wait_s(raw) == (min(cap, 0.75) if want == "cap" else min(cap, want))
     # the cap is DERIVED from the lock budget: every sleep a send spends under the lock is in the sum, by name
     spent = G.RATING_DISMISS_WAIT_S + G.INJECT_INGEST_WAIT_S + G.SUBMIT_WITNESS_S + G.LOCK_OVERHEAD_S
     assert cap == max(0.25, G.PANE_LOCK_WAIT_S - spent)
@@ -235,14 +235,18 @@ def test_the_wait_env_var_never_stops_the_boot_and_stays_within_the_lock_budget(
         assert cap + spent <= G.PANE_LOCK_WAIT_S
 
 
-def test_the_sleeps_under_the_lock_are_the_named_constants():
-    """A literal sleep that is not in the budget sum would let an interrupt send outlive PANE_LOCK_WAIT_S."""
+def test_the_sleeps_under_the_lock_are_exactly_the_names_in_the_budget_sum():
+    """Every `_time.sleep(<arg>)` inside _verified_inject_locked must be one of the names the budget sums, and every
+    summed name must be slept: a literal, or a NEW named sleep not in the sum, would let an interrupt send outlive
+    PANE_LOCK_WAIT_S."""
     import inspect, re
     src = inspect.getsource(G._verified_inject_locked)
-    literal = [m.group(0) for m in re.finditer(r"_time\.sleep\(\s*[\d.]+", src)]
-    assert literal == [], f"literal sleeps under the lock, not in the budget: {literal}"
+    args = set(re.findall(r"_time\.sleep\(([^)]*)\)", src))
+    summed = {"RATING_DISMISS_WAIT_S", "INJECT_INGEST_WAIT_S", "CLEAR_WAIT_S",
+              "ENTER_CHECK_WAIT_S[0] if attempt == 1 else ENTER_CHECK_WAIT_S[1]"}
+    assert args == summed, f"sleeps under the lock {args} != the budget's names {summed}"
     assert G.SUBMIT_WITNESS_S == sum(G.ENTER_CHECK_WAIT_S) + G.CLEAR_WAIT_S
-    assert "ENTER_CHECK_WAIT_S" in src and "CLEAR_WAIT_S" in src and "RATING_DISMISS_WAIT_S" in src
+    assert G.INTERRUPT_WAIT_MAX_S == 0.75 or G.PANE_LOCK_WAIT_S != 8.0 or G.INJECT_INGEST_WAIT_S != 1.0
 
 
 def test_interrupt_on_an_idle_pane_never_sends_escape(monkeypatch):
@@ -438,12 +442,18 @@ def test_the_stop_button_presses_escape_under_the_send_lock(box, monkeypatch):
     assert det.marked == ["seat"]
 
 
+QUOTED_DRAFT_PANE = "the log line said: esc to interrupt\nmore output\n❯ my own half-typed draft\n"
+
+
 @pytest.mark.parametrize("screen,escapes", [
     (IDLE_PANE, False),          # nothing on screen reads as a turn: no Escape onto an idle prompt
     (TODO_IDLE, False),
+    ("", False),                 # the capture failed: an unreadable screen is not a turn, no blind Escape
+    (QUOTED_DRAFT_PANE, False),  # only the whole screen reads a turn AND a draft sits in the box: Escape on a draft was not measured
     (QUOTED_PANE, True),         # something reads as a turn, the anchored read sees no spinner: the stop button still works
     (TODO_PANE, True),           # the anchored spinner
-], ids=["idle", "todo-idle", "whole-screen-turn", "anchored-spinner"])
+    (DRAFT_PANE, True),          # the anchored spinner with a draft: the CLI's own stop (Escape ends the step, the draft stays)
+], ids=["idle", "todo-idle", "unreadable", "whole-screen-turn-with-draft", "whole-screen-turn", "anchored-spinner", "anchored-spinner-with-draft"])
 def test_the_stop_button_looks_again_under_the_lock_with_the_send_paths_three_way_read(box, monkeypatch, screen, escapes):
     # the detector still says working (the read before the lock wait); under the lock the screen decides
     t = _Tmux([screen])
@@ -463,12 +473,15 @@ def test_the_stop_button_looks_again_under_the_lock_with_the_send_paths_three_wa
         assert ("Escape",) not in _keys(t) and det.marked == []
 
 
-def test_a_cleared_unverified_submit_after_an_escape_keeps_the_escape_facts(box, monkeypatch):
+def test_a_cleared_unverified_submit_after_an_escape_keeps_the_escape_facts(box, monkeypatch, caplog):
     monkeypatch.setattr(G, "verified_inject", _refuse({"reason": "unverified_submit", "state": "working", "cleared": True,
                                                        "text_returned": "hi", "escape_sent": True, "turn_stopped": True}))
-    status, body = _post(box, {**PHONE, "interrupt": True})
+    with caplog.at_level(logging.INFO, logger=G.log.name):
+        status, body = _post(box, {**PHONE, "interrupt": True})
     assert status == 200 and body["held"] is True and body["cleared"] is True and body["outcome"] == "held", body
     assert body["escape_sent"] is True and body["turn_stopped"] is True
+    lines = [r.getMessage() for r in caplog.records if "submit unverified after an Escape" in r.getMessage()]
+    assert len(lines) == 1 and "cleared=True" in lines[0] and ("ua=" in lines[0] or "OrchestraUltra" in lines[0]), lines
     monkeypatch.setattr(G, "verified_inject", _refuse({"reason": "unverified_submit", "state": "working", "cleared": True,
                                                        "text_returned": "hi"}))
     status, body = _post(box, {**PHONE, "interrupt": True})
