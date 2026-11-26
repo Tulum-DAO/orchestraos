@@ -162,6 +162,7 @@ def login_label(home) -> str:
 
 def _probe_once(codex, home, now, runner) -> Reading:
     env = probe_env()
+    env.pop("CODEX_HOME", None)          # the default login is ~/.codex, never a home this process inherited
     if home:
         env["CODEX_HOME"] = home
     with tempfile.TemporaryDirectory(prefix="codex-watch-") as cwd:
@@ -182,13 +183,16 @@ def run_probe(now=None, homes=None, runner=None) -> Reading:
     first = _probe_once(codex, None, now, runner)
     if first.status != "out":
         return first
+    unread = None
     for home in (alt_homes() if homes is None else homes):
         r = _probe_once(codex, home, now, runner)
         if r.status == "ok":
             return Reading("ok", None, None, "probe",
                            f"ok via {login_label(home)}; default login {_window_words(first)}: {first.evidence}"[:240],
                            codex_home=home)
-    return first
+        if r.status == "unknown" and unread is None:
+            unread = Reading("unknown", None, None, "probe", f"{login_label(home)}: {r.evidence}"[:200])
+    return unread or first               # OUT only when every login answered OUT
 
 
 # --- 2. decide -----------------------------------------------------------------------------------

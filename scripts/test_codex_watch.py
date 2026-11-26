@@ -413,3 +413,21 @@ def test_s3_while_serving_via_another_login_the_default_logins_limits_change_not
         CW.decide(st, [CW.Reading("out", "credits", None, "probe", "out")], NOW + 10 + i, box.mail,
                   availability_path=ap, log=lambda r: None)
     assert st["status"] == "out" and st["codex_home"] is None
+
+
+# --- codex gating review of #671 ----------------------------------------------------------------
+
+def test_r1_a_parked_login_that_cannot_be_read_is_unknown_never_the_defaults_out(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    run = _Runner({None: (1, "", OUT_CREDITS_EXEC), alt: (124, "", "timed out")})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert r.status == "unknown" and "two@example.com" in r.evidence
+
+
+def test_r2_the_default_probe_never_inherits_a_parked_codex_home(tmp_path, monkeypatch):
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    monkeypatch.setenv("CODEX_HOME", alt)
+    run = _Runner({None: (1, "", OUT_CREDITS_EXEC), alt: (0, OK_REPLY, "")})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert run.homes == [None, alt] and r.codex_home == alt
