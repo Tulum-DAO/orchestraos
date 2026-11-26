@@ -3,11 +3,13 @@
 Moved here unchanged from the voice facts recall, which is facts-only on this tree. The recall service calls it
 next to the FACTS block. Read-only: every connection is mode=ro with query_only.
 """
+import itertools
 import json
 import os
 
-from services.arturo.facts_recall import (K, MAX_CHARS, SNIPPET_CHARS, UNSOURCED_FLAG, _connect_ro, served,
-                                         sourced_first, sourced_window, unsourced)
+from services.arturo.facts_recall import (K, MAX_CHARS, SNIPPET_CHARS, UNSERVED_STATES, UNSOURCED_FLAG,
+                                         UNSOURCED_STATE, _connect_ro, served, sourced_first, sourced_window,
+                                         unsourced)
 
 
 def _statement_state(meta):
@@ -22,6 +24,65 @@ def _statement_state(meta):
 
 def _statement_served(meta):
     return served(_statement_state(meta))
+
+
+def _window_class(state, is_wal, meta):
+    """A statement's place in a window: None when it is never served (copied from a superseded or archived fact, or
+    a wal row with no anchor), else whether it is unsourced."""
+    if not served(state) or (is_wal and not _wal_anchored(meta)):
+        return None
+    return unsourced(state)
+
+
+# The same reads in SQL, so SQLite skips the rows a window will not keep. Python still decides every row it is
+# handed; the SQL only has to keep every row Python would keep. Metadata SQLite may read differently from json.loads
+# (a repeated key, NaN or Infinity, an escape) is always handed to Python.
+_META_JSON = "(typeof(metadata) = 'text' AND json_valid(metadata))"
+_META_STATE = f"COALESCE(CASE WHEN {_META_JSON} THEN json_extract(metadata, '$.state') END, '')"
+_META_ANCHORED = (f"({_META_JSON} AND json_type(metadata, '$.anchor') = 'object'"
+                  " AND COALESCE(json_type(metadata, '$.anchor.seq'), 'null') != 'null')")
+_META_ODD = ("(instr(metadata, '\\') > 0 OR instr(metadata, 'NaN') > 0 OR instr(metadata, 'Infinity') > 0"
+             " OR metadata GLOB '*\"state\"*\"state\"*' OR metadata GLOB '*\"anchor\"*\"anchor\"*'"
+             " OR metadata GLOB '*\"seq\"*\"seq\"*')")
+_meta_odd = None
+
+
+def _meta_odd_sql(con):
+    """_META_ODD, or every row when this SQLite's json_valid accepts text json.loads rejects."""
+    global _meta_odd
+    if _meta_odd is None:
+        lax = con.execute("SELECT json_valid('{a: 1}') OR json_valid(char(65279) || '{}')").fetchone()[0]
+        _meta_odd = "1" if lax else _META_ODD
+    return _meta_odd
+
+
+def _servable_sql(con, wal, sourced_only=False):
+    """SQL for the statements a window may keep: served, anchored when a wal row, and sourced when asked."""
+    out = ",".join(f"'{s}'" for s in UNSERVED_STATES + ((UNSOURCED_STATE,) if sourced_only else ()))
+    anchored = _META_ANCHORED if wal else f"(source_type IS NOT 'wal' OR {_META_ANCHORED})"
+    return f"({_meta_odd_sql(con)} OR ({_META_STATE} NOT IN ({out}) AND {anchored}))"
+
+
+def _statement_window(con, select, where, params, limit, wal_only):
+    """The window of the newest `limit` servable statements, sourced ones first, each row as (row, state): an
+    iterator over its sourced rows, newest first, read only as far as the caller reads it, and the list of the
+    unverified rows among the newest `limit`. `select` reads metadata last and, unless every row is a wal row,
+    source_type second. SQLite skips the rows the window will not keep; each row it hands back is checked here, and
+    one never served is skipped. When the newest `limit` rows hold no unverified row, or are every row there is, the
+    sourced rows are read from them; otherwise from a second query that SQLite filters to sourced rows."""
+    def rows(sourced_only):
+        cur = con.execute(f"{select} WHERE {where} AND {_servable_sql(con, wal_only, sourced_only)}"
+                          f" ORDER BY ts DESC", params)
+        for r in cur:
+            state = _statement_state(r[-1])
+            u = _window_class(state, wal_only or r[1] == "wal", r[-1])
+            if u is not None and not (sourced_only and u):
+                yield r, state
+    head = list(itertools.islice(rows(False), max(0, limit)))
+    uns = [rs for rs in head if unsourced(rs[1])]
+    if not uns or len(head) < limit:
+        return iter([rs for rs in head if not unsourced(rs[1])]), uns
+    return itertools.islice(rows(True), limit), uns
 
 
 def _derived_ids(derived):
@@ -149,40 +210,49 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f" ORDER BY confidence DESC, last_updated DESC",
             params)
         # the window holds k*2 beliefs, sourced ones first, read in confidence order until k*2 are in: an unsourced
-        # belief never pushes a sourced one out of it. A dropped belief (None) holds its place, as under a plain LIMIT.
-        window = sourced_window((_belief_entry(con, r) for r in beliefs), k * 2,
-                                lambda e: e is not None and e["unsourced"])
-        out = [e for e in window if e is not None]
-        # every fetched belief is a candidate, so one dropped is backfilled; sourced ones are picked first
-        out = sourced_first(out)[:k]
+        # belief never pushes a sourced one out of it. A dropped belief (None) is skipped and takes no place in it.
+        out = sourced_window((_belief_entry(con, r) for r in beliefs), k * 2,
+                             lambda e: None if e is None else e["unsourced"])
+        # every fetched belief is a candidate, so one dropped is backfilled; the window is sourced first, so the cut
+        # at k takes sourced ones first
+        out = out[:k]
         n_sourced = sum(1 for e in out if not e["unsourced"])
         # fluid: recent ephemeral statements, newest-wins per subject-key
         s_like = " OR ".join(["content LIKE ?"] * len(keywords))
         s_params = [f"%{kw}%" for kw in keywords]
-        rows = con.execute(
-            f"SELECT statement_id, source_type, ts, content, metadata FROM statements"
-            f" WHERE ({s_like}) AND metadata LIKE '%ephemeral%'"
-            f" AND metadata NOT LIKE '%\"noise\": true%'"
-            f" ORDER BY ts DESC", s_params)
-        # the newest `fluid_limit` statements, sourced ones first: newer unverified ones never push a sourced one out.
-        # Each row is read with its state, parsed once.
-        rows = sourced_window(((r, _statement_state(r[4])) for r in rows), fluid_limit, lambda rs: unsourced(rs[1]))
+        # the newest `fluid_limit` servable statements, sourced ones first: newer unverified ones never push a
+        # sourced one out. Each row is read with its state, parsed once. A row copied from a superseded or archived
+        # fact, or an unanchored wal row, is never served, so it is skipped and takes no place in the window.
+        src_rows, uns_rows = _statement_window(
+            con, "SELECT statement_id, source_type, ts, content, metadata FROM statements",
+            f"({s_like}) AND metadata LIKE '%ephemeral%' AND metadata NOT LIKE '%\"noise\": true%'",
+            s_params, fluid_limit, False)
+        # the fluid slots are counted against sourced beliefs only, and filled with sourced statements first
+        slots = max(0, k - n_sourced) + 2
         newest = {}
-        for (sid, stype, ts, content, meta), state in rows:   # sourced, then unsourced, each ts DESC: first seen wins
-            if not served(state):
-                continue                                  # copied from a superseded or archived fact
-            if stype == "wal" and not _wal_anchored(meta):
-                continue                                  # an unanchored wal row is not recallable
+
+        def _fluid(row, state):
+            sid, stype, ts, content, meta = row
             sp = _sp(content)
             key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
-            entry = {"kind": "fluid", "tier": "ephemeral", "text": content,
-                     "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0,
-                     "unsourced": unsourced(state)}
-            # newest SOURCED statement wins its subject; the newest unsourced one only when there is no sourced one
-            if key not in newest or (newest[key]["unsourced"] and not entry["unsourced"]):
-                newest[key] = entry
-        # the fluid slots are counted against sourced beliefs only, and filled with sourced statements first
-        out.extend(sourced_first(list(newest.values()))[: max(0, k - n_sourced) + 2])
+            newest.setdefault(key, {"kind": "fluid", "tier": "ephemeral", "text": content,
+                                    "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0,
+                                    "unsourced": unsourced(state)})
+        # the window's sourced rows, then its unverified ones, each ts DESC: the first seen wins its subject, so the
+        # newest SOURCED statement wins it and an unsourced one wins only a subject with no sourced one. Reading
+        # stops once every slot has a subject: no later row can change what is served.
+        n_src = 0
+        for row, state in src_rows:
+            n_src += 1
+            _fluid(row, state)
+            if len(newest) >= slots:
+                break
+        else:
+            for row, state in uns_rows[: fluid_limit - n_src]:     # what the sourced rows left of the window
+                if len(newest) >= slots:
+                    break
+                _fluid(row, state)
+        out.extend(list(newest.values())[:slots])       # sourced subjects were seen first, so they come first
         out = sourced_first(out)
         # The WAL->semantic drain's wal pass. The fluid pass above reads ONLY
         # ephemeral rows; the drain writes `standard` (a commit is not ephemeral), so without
@@ -197,32 +267,20 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         # matching anchored wal rows are guaranteed a place INSIDE the k+2 total by trimming
         # the tail of what is already there (the lowest-ranked belief/fluid entries), never by
         # exceeding it. No match => nothing reserved, nothing trimmed.
-        w_rows = con.execute(
-            f"SELECT statement_id, ts, content, metadata FROM statements"
-            f" WHERE source_type='wal' AND ({s_like})"
-            f" ORDER BY ts DESC", s_params)
-        # the same window rule: sourced wal rows first, so newer unverified ones never take a sourced row's reservation
-        w_rows = sourced_window(((r, _statement_state(r[3])) for r in w_rows), fluid_limit,
-                                lambda rs: unsourced(rs[1]))
-        wal_entries, wal_unsourced = [], []
-        for (sid, ts, content, meta), state in w_rows:
-            is_unsourced = unsourced(state)
-            if len(wal_entries) >= WAL_RESERVE and len(wal_unsourced) >= WAL_RESERVE:
-                break
-            if len(wal_unsourced if is_unsourced else wal_entries) >= WAL_RESERVE:
-                continue                                  # its reservation is full
-            if not served(state):
-                continue
-            if not _wal_anchored(meta):
-                continue                                  # unanchored is not recallable
-            try:
-                m = _json.loads(meta) if isinstance(meta, str) else (meta or {})
-            except (ValueError, TypeError):
-                m = {}
-            e = {"kind": "wal", "tier": m.get("expiry_class", "standard"),
-                 "text": content, "ts": ts, "cite": f"per wal {str(ts)[:10]}",
-                 "conf": m.get("confidence", 0.5), "unsourced": is_unsourced}
-            (wal_unsourced if is_unsourced else wal_entries).append(e)
+        # the same window rule: sourced wal rows first, so newer unverified ones never take a sourced row's
+        # reservation. Only the first WAL_RESERVE of each are used: the sourced ones newest first, and the unverified
+        # ones among the newest `fluid_limit`, which only ever take the tail after every sourced entry.
+        src_rows, uns_rows = _statement_window(con, "SELECT statement_id, ts, content, metadata FROM statements",
+                                               f"source_type='wal' AND ({s_like})", s_params, fluid_limit, True)
+
+        def _wal_entry(row, state):
+            sid, ts, content, meta = row
+            m = _json.loads(meta)                         # anchored, so a JSON object
+            return {"kind": "wal", "tier": m.get("expiry_class", "standard"),
+                    "text": content, "ts": ts, "cite": f"per wal {str(ts)[:10]}",
+                    "conf": m.get("confidence", 0.5), "unsourced": unsourced(state)}
+        wal_entries = [_wal_entry(*rs) for rs in itertools.islice(src_rows, WAL_RESERVE)]
+        wal_unsourced = [_wal_entry(*rs) for rs in uns_rows[:WAL_RESERVE]]
         if wal_entries:
             # only sourced wal rows are reserved a slot; `out` is sourced first, so its unsourced tail goes first
             out = out[: max(0, (k + 2) - len(wal_entries))] + wal_entries

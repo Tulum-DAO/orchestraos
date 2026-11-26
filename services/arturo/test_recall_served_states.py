@@ -223,7 +223,7 @@ def test_the_location_pin_never_puts_an_unsourced_fact_above_a_sourced_one(tmp_p
     assert core._LOCATION_Q.search(q)
     assert not any(p["unsourced"] for p in core.open_slot_facts(db, "shaw.location"))
     assert _check(rc._query_facts(fr.extract_keywords(q), 20, q)) == SERVED
-    # cut at k, the unsourced entries go first
+    # cut at k: the unsourced entries are the first to go
     short = rc._query_facts(fr.extract_keywords(q), 3, q)
     assert len(short) == 3 and not any(f["unsourced"] for f in short), short
 
@@ -332,6 +332,25 @@ def test_worldview_belief_citation(tmp_path):
                          ("b_unserved", "zinnia c", 0.7, '["s_mid", "s_new", "s_old", "s_gone"]')])
     got = {e["text"]: e["cite"] for e in wv.query_worldview(db, ["zinnia"], k=5)}
     assert got == {"zinnia a": "per slack 2026-11-18", "zinnia b": "", "zinnia c": "per voice 2026-11-21"}
+
+
+def test_worldview_belief_citation_ties_and_unverified_statements(tmp_path):
+    """The last derived-from statement is cited when it is servable, unverified included; when it is unserved, the
+    newest servable one is, unverified included, and on a tie the later one in derived-from order."""
+    st = [("s_t1", "slack", "2026-11-21T00:00:00Z", "x", _plain("active")),
+          ("s_t2", "voice", "2026-11-21T00:00:00Z", "x", _plain("active")),
+          ("s_gone", "dream-facts", "2026-11-24T00:00:00Z", "x", _plain("archived")),
+          ("s_old", "slack", "2026-11-18T00:00:00Z", "x", _plain("active")),
+          ("s_unv", "email", "2026-11-17T00:00:00Z", "x", _plain("unverified")),
+          ("s_unv2", "voice", "2026-11-23T00:00:00Z", "x", _plain("unverified")),
+          ("s_gone2", "dream-facts", "2026-11-24T00:00:00Z", "x", _plain("superseded"))]
+    db = _wv_db(tmp_path / "f.db", statements=st,
+                beliefs=[("b_tie", "zinnia a", 0.9, '["s_t1", "s_t2", "s_gone"]'),
+                         ("b_last_unv", "zinnia b", 0.8, '["s_old", "s_unv"]'),
+                         ("b_newest_unv", "zinnia c", 0.7, '["s_unv2", "s_old", "s_gone2"]')])
+    got = {e["text"]: (e["cite"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)}
+    assert got == {"zinnia a": ("per voice 2026-11-21", False), "zinnia b": ("per email 2026-11-17", False),
+                   "zinnia c": ("per voice 2026-11-23", False)}
 
 
 def test_worldview_an_unsourced_belief_does_not_take_a_fluid_slot(tmp_path):
@@ -543,3 +562,229 @@ def test_worldview_an_unverified_wal_row_is_still_served_when_both_sourced_reser
     got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=5)
     assert [(e["text"], e["unsourced"]) for e in got] == [("zinnia wal s1", False), ("zinnia wal s2", False),
                                                           ("zinnia wal unverified", True)]
+
+
+# --- rows that are never served hold no place in a window --------------------------------------------------------
+
+def _answer_block(db, tmp_path, q="zinnia status today"):
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    return [(e["text"], e["unsourced"]) for e in rc.answer(q, vector=False)["blocks"]["worldview"]]
+
+
+def test_worldview_fluid_window_skips_superseded_statements(tmp_path):
+    """The fluid window holds 100 statements; 100 superseded ones are never served, so they take none of its places."""
+    st = [(f"s_x{i:03d}", "dream-facts", _minutes(i), f"zinnia old{i} is up", _eph("superseded")) for i in range(100)]
+    st += [("s_u", "dream-facts", "2026-11-25T00:00:00Z", "zinnia new is up", _eph("unverified"))]
+    db = _wv_db(tmp_path / "f.db", statements=st)
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)] == [
+        ("zinnia new is up", True)]
+    assert _answer_block(db, tmp_path) == [("zinnia new is up", True)]
+
+
+@pytest.mark.parametrize("old", ["superseded", "unanchored"])
+def test_worldview_wal_window_skips_rows_it_never_serves(tmp_path, old):
+    """The wal window holds 100 rows; 100 superseded anchored rows, or 100 active rows with no anchor, are never
+    served, so they take none of its places."""
+    meta = _wal("superseded") if old == "superseded" else {"expiry_class": "standard", "state": "active"}
+    st = [(f"w_x{i:03d}", "wal", _minutes(i), f"zinnia wal old{i}", meta) for i in range(100)]
+    st += [("w_u", "wal", "2026-11-25T00:00:00Z", "zinnia wal new", _wal("unverified"))]
+    db = _wv_db(tmp_path / "f.db", statements=st)
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=5)] == [("zinnia wal new", True)]
+    assert _answer_block(db, tmp_path) == [("zinnia wal new", True)]
+
+
+def test_worldview_belief_window_skips_dropped_beliefs(tmp_path):
+    """k=2 fetches four beliefs; four that rest only on superseded statements are dropped, so they take none of its
+    places and the unverified belief is served, flagged."""
+    st = [("s_u", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("unverified"))]
+    st += [(f"s_x{i}", "dream-facts", "2026-11-20T00:00:00Z", "x", _plain("superseded")) for i in range(4)]
+    bl = [("b_u", "zinnia unverified belief", 0.99, '["s_u"]')]
+    bl += [(f"b_x{i}", f"zinnia gone belief {i}", 0.9 - i * 0.01, json.dumps([f"s_x{i}"])) for i in range(4)]
+    db = _wv_db(tmp_path / "f.db", statements=st, beliefs=bl)
+    assert [(e["text"], e["unsourced"]) for e in wv.query_worldview(db, ["zinnia"], k=2)] == [
+        ("zinnia unverified belief", True)]
+    rc = core.Recall(facts_db=db, sm_db=str(tmp_path / "absent-sm.db"), embedder=False, sweep_enabled=False)
+    block = rc.answer("zinnia status today", k=2, vector=False)["blocks"]["worldview"]
+    assert [(e["text"], e["unsourced"]) for e in block] == [("zinnia unverified belief", True)]
+
+
+# --- SQLite does the scanning: a window brings only the rows it may keep into Python ------------------------------
+
+class _CountingCursor:
+    def __init__(self, cur, counter):
+        self._cur, self._counter = cur, counter
+
+    def __iter__(self):
+        for r in self._cur:
+            self._counter[0] += 1
+            yield r
+
+    def fetchall(self):
+        rows = self._cur.fetchall()
+        self._counter[0] += len(rows)
+        return rows
+
+    def fetchone(self):
+        r = self._cur.fetchone()
+        self._counter[0] += r is not None
+        return r
+
+
+class _CountingConnection:
+    def __init__(self, con, counter):
+        self._con, self._counter = con, counter
+
+    def execute(self, *a):
+        return _CountingCursor(self._con.execute(*a), self._counter)
+
+    def __getattr__(self, name):
+        return getattr(self._con, name)
+
+
+@pytest.fixture()
+def rows_read(monkeypatch):
+    """How many rows the read paths pull out of SQLite into Python."""
+    counter = [0]
+    real = fr._connect_ro
+    monkeypatch.setattr(fr, "_connect_ro", lambda p: _CountingConnection(real(p), counter))
+    monkeypatch.setattr(wv, "_connect_ro", fr._connect_ro)
+    return counter
+
+
+def test_facts_windows_read_a_bounded_number_of_rows_when_most_are_unverified(tmp_path, rows_read):
+    """2000 newer unverified rows over 300 older sourced ones: each window reads at most its size twice."""
+    rows = [(f"u{i:04d}", f"2026-11-24T{i // 120:02d}:{i // 2 % 60:02d}:{i % 2:02d}Z", "standard", "unverified")
+            for i in range(2000)]
+    rows += [(f"s{i:03d}", f"2026-11-2{i % 3}T00:00:{i % 60:02d}Z", "standard", "active") for i in range(300)]
+    db = _window_db(tmp_path / "f.db", rows)
+    got = fr.query_facts(db, ["marigold"], k=5)
+    assert len(got) == 5 and not any(f["unsourced"] for f in got)
+    assert rows_read[0] <= 2 * fr.CANDIDATE_LIMIT + 2 * fr.DURABLE_LIMIT, rows_read[0]
+    rows_read[0] = 0
+    got = fr.recent_facts(24 * 30, k=5, dbpath=db, now=datetime(2026, 11, 25, tzinfo=timezone.utc))
+    assert len(got) == 5 and not any(f["unsourced"] for f in got)
+    assert rows_read[0] <= 2 * 100, rows_read[0]
+
+
+@pytest.mark.parametrize("n_unverified", [2000, 1000])
+def test_worldview_windows_read_a_bounded_number_of_rows_when_most_are_unserved_or_unverified(tmp_path, rows_read,
+                                                                                              n_unverified):
+    """Newer than 150 sourced fluid and 150 sourced wal rows: 2000 rows of each kind, all unverified, or 1000
+    unverified, 500 superseded and 500 unanchored. Each window reads at most its size twice."""
+    st = []
+    for kind, meta in (("fluid", _eph), ("wal", _wal)):
+        stype = "wal" if kind == "wal" else "dream-facts"
+        for i in range(2000):
+            m = meta("unverified" if i < n_unverified else "superseded" if i < 1500 else "active")
+            if i >= max(n_unverified, 1500):
+                m = {k: v for k, v in m.items() if k != "anchor"}
+                stype_i = "wal"
+            else:
+                stype_i = stype
+            st.append((f"{kind}_x{i:04d}", stype_i, f"2026-11-24T{i // 120:02d}:{i // 2 % 60:02d}:{i % 2:02d}Z",
+                       f"zinnia {kind} x{i} is up", m))
+        st += [(f"{kind}_s{i:03d}", stype, f"2026-11-2{i % 3}T00:00:{i % 60:02d}Z", f"zinnia {kind} s{i} is up",
+                meta("active")) for i in range(150)]
+    db = _wv_db(tmp_path / "f.db", statements=st)
+    got = wv.query_worldview(db, ["zinnia"], k=5)
+    assert rows_read[0] <= 4 * 100, rows_read[0]
+    assert len(got) == 7 and not any(e["unsourced"] for e in got)
+    assert {e["kind"] for e in got} == {"fluid", "wal"}
+
+
+# --- a statement's state and anchor are read from its metadata the same way however that metadata is written -------
+
+_METAS = [
+    None, "", "not json ephemeral", '["ephemeral"]', '"ephemeral"', "5",
+    '{"expiry_class": "ephemeral", "state": "superseded"}',
+    '{"expiry_class": "ephemeral", "state": "unverified"}',
+    '{"expiry_class": "ephemeral", "state": null}',
+    '{"expiry_class": "ephemeral", "state": 0}',
+    '{"expiry_class": "ephemeral", "state": ["superseded"]}',
+    '{"expiry_class": "ephemeral", "state": "superseded", "state": "active"}',
+    '{"expiry_class": "ephemeral", "state": "active", "state": "unverified"}',
+    '{"expiry_class": "ephemeral", "state": "superseded", "x": NaN}',
+    '{"expiry_class": "ephemeral", "state": "unverified", "x": -Infinity}',
+    '{"expiry_class": "ephemeral", "st\\u0061te": "archived"}',
+    '{"expiry_class": "ephemeral", "state": "unverifi\\u0065d"}',
+    "{'expiry_class': 'ephemeral', 'state': 'superseded'}",
+    '{expiry_class: "ephemeral", state: "superseded", anchor: {seq: 1}}',
+    b'{"expiry_class": "ephemeral", "state": "superseded", "anchor": {"seq": 1}}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": 1}}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": 0}, "state": "unverified"}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": false}}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": null}}',
+    '{"expiry_class": "ephemeral", "anchor": {}}',
+    '{"expiry_class": "ephemeral", "anchor": [1]}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": 1}, "anchor": {}}',
+    '{"expiry_class": "ephemeral", "anchor": {}, "anchor": {"seq": 1}}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": 1, "seq": null}}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": NaN}}',
+    '{"expiry_class": "ephemeral", "anchor": {"seq": 1}, "x": Infinity}',
+    '{"expiry_class": "standard", "anchor": {"seq": 1}, "state": "unverified"}',
+    '{"expiry_class": "standard", "anchor": {"seq": 1}, "state": "archived"}',
+]
+
+
+@pytest.mark.parametrize("lax", [False, True], ids=["sql", "python"])
+@pytest.mark.parametrize("meta", _METAS, ids=range(len(_METAS)))
+def test_worldview_reads_statement_metadata_as_the_python_rule_does(tmp_path, monkeypatch, meta, lax):
+    """Malformed, non-object, duplicate-key and non-standard metadata: a statement is served, flagged and anchored
+    exactly as _statement_state and _wal_anchored read it, whether SQLite skips rows first or, on a SQLite whose
+    json_valid is lax, every row is decided in Python."""
+    if lax:
+        monkeypatch.setattr(wv, "_meta_odd", "1")
+    db = _wv_db(tmp_path / "f.db")
+    con = sqlite3.connect(db)
+    for sid, stype, content in (("s", "dream-facts", "zinnia plain is up"), ("w", "wal", "zinnia wal is up")):
+        con.execute("INSERT INTO statements VALUES (?,?,?,?,?,?,?,?)",
+                    (sid, stype, "{}", "shaw", "2026-11-24T00:00:00Z", "t", content, meta))
+    con.commit()
+    con.close()
+    state = wv._statement_state(meta)
+    ok, uns, anchored = fr.served(state), fr.unsourced(state), wv._wal_anchored(meta)
+    eph = isinstance(meta, str) and "ephemeral" in meta        # the fluid pass's LIKE never matches a blob
+    want = set()
+    if ok and eph:
+        want.add(("fluid", "zinnia plain is up", uns))
+    if ok and eph and anchored:
+        want.add(("fluid", "zinnia wal is up", uns))
+    if ok and anchored:
+        want.add(("wal", "zinnia wal is up", uns))
+    got = wv.query_worldview(db, ["zinnia"], k=5)
+    assert {(e["kind"], e["text"], e["unsourced"]) for e in got} == want
+    assert len(got) == len(want)
+
+
+@pytest.mark.parametrize("pattern", ["sparse", "dense", "burst", "tail", "mixed"])
+def test_facts_window_is_the_sourced_window_of_the_whole_scan(tmp_path, pattern):
+    """Whichever way the sourced rows are read (the ts index or one sequential pass), the window is what the
+    sourced-first rule makes of every row, newest first."""
+    import random
+    rnd = random.Random(pattern)
+    n = 1200
+
+    def state(i):
+        if pattern == "sparse":
+            return "active" if rnd.random() < 0.05 else "unverified"
+        if pattern == "dense":
+            return "unverified" if rnd.random() < 0.2 else rnd.choice(["active", "resolved", ""])
+        if pattern == "burst":                            # the newest rows unverified, the older ones sourced
+            return "unverified" if i >= n - 300 else "active"
+        if pattern == "tail":                             # the newest rows sourced, the older ones unverified
+            return "active" if i >= n - 150 else "unverified"
+        return rnd.choice(["active", "unverified", "superseded", "archived", "expired"])
+    rows = [(f"r{i:04d}", f"2026-11-{1 + i // 60:02d}T{i % 60:02d}:00:00Z", rnd.choice(["standard", "durable"]),
+             state(i)) for i in range(n)]
+    db = _window_db(tmp_path / "f.db", rows)
+    con = fr._connect_ro(db)
+    try:
+        for where in (fr.SERVED_SQL, f"{fr.SERVED_SQL} AND expiry_class IN ('durable')"):
+            for limit in (1, 7, 100, 250):
+                select = "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts"
+                want = fr.sourced_window(con.execute(f"{select} WHERE {where} ORDER BY ts DESC"), limit)
+                for sequential in (True, False):
+                    got = fr._facts_window(con, select, where, [], limit, sequential=sequential)
+                    assert [r["fact_id"] for r in got] == [r["fact_id"] for r in want], (where, limit, sequential)
+    finally:
+        con.close()
