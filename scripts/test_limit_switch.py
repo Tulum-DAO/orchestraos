@@ -735,3 +735,13 @@ def test_the_check_row_carries_the_weekly_fable_reading_of_both_logins():
     _, log, _ = _tick({}, FableFake(usage=u), active="default")
     row = [r for r in log if r["kind"] == "switch_check"][0]
     assert row["active_weekly_fable"] == 86.0 and row["others"]["strategysimple"]["weekly-fable"] == 12.0
+
+
+def test_a_stale_other_login_is_logged_unknown_and_never_headroom():
+    u = {"default": _reading(97.0), "strategysimple": _reading(5.0, age=3 * 3600)}   # token expired: no new reading
+    d = Fake(usage=u)
+    res, log, _ = _tick({}, d, active="default")
+    row = [r for r in log if r["kind"] == "switch_check"][0]
+    assert row["others"]["strategysimple"]["fresh"] is False
+    assert res == "refused" and d.switched == []
+    assert any("older than 30 min" in r.get("reason", "") for r in log if r["kind"] == "switch_refused")

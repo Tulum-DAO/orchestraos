@@ -45,6 +45,7 @@ FABLE = re.compile(r"fable", re.I)
 FRESH_S = 2 * 3600           # a credits row with no newer sighting than this is not acted on
 PROACTIVE_PCT = 95.0         # the weekly-fable reading that moves Fable seats before the banner
 USAGE_FRESH_S = 30 * 60      # an older usage reading is no reading
+LEARN_AFTER_S = 600          # a banner drop's first reading under 95% this long after it = the window has reset
 RETRY_S = 600
 MAX_TRIES = 3
 NUDGE = ("[limit-watch] This seat hit its Fable limit, so it now runs on Opus 5.5. "
@@ -122,11 +123,18 @@ class LiveDeps:
         """(status, body) of PUT /agent-model."""
         return self._gateway("PUT", "/agent-model", {"session": session, "model": model})
 
-    def seat_model(self, session):
-        """The model the gateway says this seat is on now (GET /agent-model), or None."""
+    def seat_state(self, session):
+        """GET /agent-model: {"model", "last_switch", "pending"} for this seat, or None when the gateway cannot say."""
         from urllib.parse import quote
         status, body = self._gateway("GET", f"/agent-model?session={quote(session)}")
-        return body.get("model") if status == 200 and isinstance(body.get("model"), str) else None
+        if status != 200 or not isinstance(body.get("model"), str):
+            return None
+        return {"model": body["model"], "last_switch": body.get("last_switch"), "pending": body.get("pending")}
+
+    def seat_model(self, session):
+        """The model the gateway says this seat is on now, or None."""
+        st = self.seat_state(session)
+        return st["model"] if st else None
 
     def usage(self, account):
         import limit_switch as LS
@@ -225,9 +233,15 @@ def tick_window(active, now, log, deps, state):
         return out
     used, resets, as_of = r
     dropped = state.setdefault("dropped", {})
-    for d in dropped.values():               # a banner drop learns its window's reset from the first reading after it
+    for d in dropped.values():
+        # a banner drop with no reading at the time learns its window's reset from the first reading after it.
+        # At 95% or more that reading is still the exhausted window. Under 95%, taken 10 min or more after the
+        # drop, the window has already reset (the reading never sees the old reset): eligible now. Sooner: wait.
         if d.get("resets_at") is None and resets is not None:
-            d["resets_at"] = resets
+            if used >= PROACTIVE_PCT:
+                d["resets_at"] = resets
+            elif as_of >= float(d.get("at") or 0) + LEARN_AFTER_S:
+                d["resets_at"] = float(d.get("at") or 0)
     if used >= PROACTIVE_PCT:
         seats = deps.claude_seats()
         if seats is None:
@@ -270,10 +284,19 @@ def tick_window(active, now, log, deps, state):
                 log({"ts": stamp, "kind": "model_return_held", "reason": "seat registry unreadable"})
                 return out
         session = sessions.get(seat)
-        current = deps.seat_model(session) if session else None
-        if current != TARGET:
-            # moved by hand since, rotated onto another model, or gone: theirs stands, forget it
-            log({"ts": stamp, "kind": "model_return_skipped", "seat": seat, "session": session, "current": current})
+        st = deps.seat_state(session) if session else None
+        if session and st is None:
+            continue                         # the gateway cannot say now: keep the record, try next run
+        current = (st or {}).get("model")
+        last = (st or {}).get("last_switch") or {}
+        pending = (st or {}).get("pending") or {}
+        if current != TARGET and pending.get("model") == TARGET:
+            continue                         # our drop is still waiting for the seat's turn to end
+        if current != TARGET or not (last.get("by") == ACTOR.split(":", 1)[1] and last.get("model") == TARGET):
+            # moved by a person (or anything else) since our drop, rotated onto another model, or gone:
+            # theirs stands, forget it
+            log({"ts": stamp, "kind": "model_return_skipped", "seat": seat, "session": session, "current": current,
+                 "last_by": last.get("by")})
             del dropped[seat]
             continue
         d["return_last"] = now

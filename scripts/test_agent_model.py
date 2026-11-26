@@ -930,6 +930,11 @@ def test_w_proactive_drop_refused_under_95_or_on_a_stale_reading(gw, fable, tmp_
     assert gw["live"] == []
 
 
+def _ours(by="limit-watch", model=OPUS1M):
+    from scripts import agent_model_pending as AMP
+    AMP.note_switched(AMP.state_path(G.ORCH_DIR), "dev", model, by)
+
+
 def _back(monkeypatch, current=OPUS1M):
     monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", current))
     return _drop(model=FABLE)
@@ -939,6 +944,7 @@ def test_w_return_to_the_recorded_fable_model_after_the_reset(gw, fable, tmp_pat
     reset = _t.time() - 600
     _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
     _reading(tmp_path, 3.0, as_of=_t.time() - 60, reset=reset + 7 * 86400)
+    _ours()
     r = _back(monkeypatch)
     assert r.status == 200 and gw["live"] == [FABLE]
 
@@ -953,6 +959,7 @@ def test_w_return_refusals(gw, fable, tmp_path, monkeypatch):
         ({"from": FABLE, "resets_at": reset}, (3.0, reset - 60), OPUS1M, "not_reset"),        # read before the reset
         ({"from": FABLE, "resets_at": _t.time() + 600}, (3.0, _t.time() - 60), OPUS1M, "not_reset"),
     ]
+    _ours()
     for rec, (pct, as_of), current, reason in cases:
         _dropped(tmp_path, rec) if rec else _dropped(tmp_path, {})
         _reading(tmp_path, pct, as_of=as_of)
@@ -972,7 +979,25 @@ def test_w_the_return_is_rechecked_under_the_lock(gw, fable, tmp_path, monkeypat
     reset = _t.time() - 600
     _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
     _reading(tmp_path, 3.0)
+    _ours()
     reads = iter([("dev", {}, "claude", OPUS1M), ("dev", {}, "claude", "claude-opus-5[1m]")])
     monkeypatch.setattr(G, "_seat_for_session", lambda s: next(reads))
     r = _drop(model=FABLE)
     assert r.status == 409 and _body(r)["reason"] == "not_dropped" and gw["live"] == []
+
+
+
+def test_r1_a_person_switch_after_the_drop_blocks_the_return(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
+    _reading(tmp_path, 3.0)
+    _ours(by="ios", model=OPUS1M)                                          # the person picked Opus again
+    r = _back(monkeypatch)
+    assert r.status == 409 and _body(r)["reason"] == "moved_since" and gw["live"] == []
+
+
+def test_r1_every_immediate_switch_records_who_made_it(gw, fable):
+    from scripts import agent_model_pending as AMP
+    assert _drop().status == 200
+    assert AMP.last(AMP.state_path(G.ORCH_DIR), "dev") == {**AMP.last(AMP.state_path(G.ORCH_DIR), "dev"),
+                                                          "model": OPUS1M, "by": "limit-watch", "outcome": "switched"}

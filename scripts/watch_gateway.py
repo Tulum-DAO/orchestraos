@@ -7537,7 +7537,7 @@ async def handle_agent_model(request):
         extra = await loop.run_in_executor(None, _read)
         return _json({"ok": True, "session": session, **desc, **extra})
 
-    fable_drop = _fable_drop(request, root, current, model)
+    fable_drop = _fable_drop(request, root, current, model, session)
     if isinstance(fable_drop, tuple):
         return _json(fable_drop[1], status=fable_drop[0])
     if not fable_drop and not _is_person_surface(request):
@@ -7558,7 +7558,7 @@ async def handle_agent_model(request):
     try:
         status, body = await loop.run_in_executor(
             None, lambda: _put_model(session, model, catalog, by, effort,
-                                     revalidate=_fable_revalidate(model) if fable_drop else None))
+                                     revalidate=_fable_revalidate(model, session) if fable_drop else None))
     except AMP.StateUnreadable as e:
         log.error(f"agent-model: {e}")
         return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
@@ -7576,7 +7576,7 @@ FABLE_PROACTIVE_PCT = 95.0       # scripts/model_drop.py PROACTIVE_PCT
 FABLE_READING_FRESH_S = 30 * 60
 
 
-def _fable_drop(request, root, current, model):
+def _fable_drop(request, root, current, model, session=None):
     """The one automation allowed to switch a model (operator, 2026-11-26): limit_watch moving a seat
     that shows the Fable limit to Opus 5.5 (scripts/model_drop.py). False: not that caller, the
     person rule applies. True: allowed. (status, body): that caller, refused. Checked here, never
@@ -7589,15 +7589,16 @@ def _fable_drop(request, root, current, model):
     if model == FABLE_DROP_TARGET:
         return _fable_drop_refusal(root, current) or True
     if re.fullmatch(r"claude-fable-[a-z0-9.-]+(\[1m\])?", model or ""):
-        return _fable_return_refusal(root, current, model=model) or True
+        return _fable_return_refusal(root, current, model=model, session=session) or True
     return 403, {"ok": False, "error": f"limit-watch may only switch a seat to {FABLE_DROP_TARGET} or back to its Fable model"}
 
 
-def _fable_revalidate(model):
+def _fable_revalidate(model, session):
     """_put_model's `revalidate` for a limit-watch switch: the same checks, on the fresh read under the lock."""
     if model == FABLE_DROP_TARGET:
         return _fable_drop_refusal
-    return lambda root, current, waiting=None: _fable_return_refusal(root, current, waiting, model=model)
+    return lambda root, current, waiting=None: _fable_return_refusal(root, current, waiting, model=model,
+                                                                      session=session)
 
 
 def _shared_fable_reading():
@@ -7630,7 +7631,7 @@ def _person_pick_waiting(waiting, target):
     return None
 
 
-def _fable_return_refusal(root, current, waiting=None, *, model):
+def _fable_return_refusal(root, current, waiting=None, *, model, session=None):
     """None when limit-watch may switch this seat BACK to `model`, else (409, body): the seat is on Opus 5.5
     now, the watcher's record (state/limit_watch/model-drop.json) says it moved this seat off exactly that
     model, and a fresh reading taken after the recorded reset shows the weekly Fable window under 95%."""
@@ -7640,6 +7641,11 @@ def _fable_return_refusal(root, current, waiting=None, *, model):
     rec = drops.get(re.sub(r"-g(?:en)?\d+$", "", str(root or ""))) if isinstance(drops, dict) else None
     if not (isinstance(rec, dict) and rec.get("from") == model and isinstance(rec.get("resets_at"), (int, float))):
         return 409, {"ok": False, "error": "no drop from that model on record for this seat", "reason": "no_drop"}
+    from scripts import agent_model_pending as AMP
+    last = AMP.last(AMP.state_path(ORCH_DIR), session) if session else None
+    if not (isinstance(last, dict) and last.get("by") == FABLE_DROP_ACTOR[1] and last.get("model") == FABLE_DROP_TARGET):
+        # a person (or anything else) switched this seat after the drop: theirs stands, never undone
+        return 409, {"ok": False, "error": "the seat's last model switch was not the Fable drop", "reason": "moved_since"}
     import time as _time
     r = _shared_fable_reading()
     if r is None or r[0] >= FABLE_PROACTIVE_PCT or r[2] < float(rec["resets_at"]) or _time.time() < float(rec["resets_at"]):
@@ -7806,6 +7812,11 @@ def _put_model(session, model, catalog, by, effort=None, revalidate=None):
             log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by {model} ({by})")
         status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by,
                                          effort=effort)
+        if status == 200 and body.get("ok") and model != current:
+            try:
+                AMP.note_switched(pend_file, session, model, by)
+            except Exception as e:  # noqa: BLE001 — the switch happened; only its record of who made it is missing
+                log.warning(f"agent-model: last-switch record failed for {session}: {e!r}")
         if (desc["how"] == "live" and status == 409 and sids
                 and body.get("state") in MID_TURN_STATES | STALLED_STATES):
             if body.get("model_switched"):
