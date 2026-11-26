@@ -29,9 +29,11 @@ _CMT_COLUMNS = (("owner", "TEXT"), ("counterpart", "TEXT"), ("action_type", "TEX
                 ("deliverable", "TEXT"), ("recurring", "INTEGER NOT NULL DEFAULT 0"), ("trust", "TEXT"),
                 ("text", "TEXT"), ("due_ts", "TEXT"), ("due_source", "TEXT"), ("task_due_ts", "TEXT"),
                 ("first_call", "TEXT"), ("first_call_date", "TEXT"), ("linked_cmt", "TEXT"),
-                ("closed_at", "TEXT"), ("due_pending_patch", "INTEGER"))
+                ("closed_at", "TEXT"), ("due_pending_patch", "INTEGER"), ("quote", "TEXT"))
 _META = ("owner", "counterpart", "action_type", "operation", "deliverable", "recurring", "trust", "text",
-         "due_ts", "due_source", "task_due_ts", "first_call", "first_call_date")
+         "due_ts", "due_source", "task_due_ts", "first_call", "first_call_date", "quote")
+# The content hash a call's current-revision card was planned at (card_revision compares against it).
+_CALL_COLUMNS = (("card_hash", "TEXT"),)
 # Per-effect failure bookkeeping (run_pending), added to rows from before it existed.
 _EFFECT_COLUMNS = (("attempts", "INTEGER NOT NULL DEFAULT 0"), ("last_error", "TEXT"), ("rerouted", "TEXT"))
 MAX_EFFECT_ATTEMPTS = 5
@@ -51,7 +53,8 @@ class Ledger:
         self._failed_this_run = set()   # one Ledger per sweep: a failed effect is retried next sweep
         with self._conn() as c:
             c.executescript(_SCHEMA)
-            for table, columns in (("commitments", _CMT_COLUMNS), ("effects", _EFFECT_COLUMNS)):
+            for table, columns in (("commitments", _CMT_COLUMNS), ("effects", _EFFECT_COLUMNS),
+                                   ("calls", _CALL_COLUMNS)):
                 have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
                 for name, decl in columns:
                     if name not in have:
@@ -68,10 +71,13 @@ class Ledger:
             c.execute(
                 "INSERT INTO calls(call_id, content_hash, status, attempts, last_error, created_at, updated_at) "
                 "VALUES(?,?,?,?,?,?,?) ON CONFLICT(call_id) DO UPDATE SET "
-                "status=CASE WHEN excluded.status='failed_retry' AND calls.attempts + 1 >= ? "
+                # attempts count per transcript: a new content hash starts a fresh budget
+                "status=CASE WHEN excluded.status='failed_retry' AND (CASE WHEN excluded.content_hash IS NOT "
+                "calls.content_hash AND excluded.content_hash IS NOT NULL THEN 0 ELSE calls.attempts END) + 1 >= ? "
                 "THEN 'failed_final' ELSE excluded.status END, "
+                "attempts=(CASE WHEN excluded.content_hash IS NOT calls.content_hash AND excluded.content_hash "
+                "IS NOT NULL THEN 0 ELSE calls.attempts END) + (excluded.status='failed_retry'), "
                 "content_hash=COALESCE(excluded.content_hash, calls.content_hash), "
-                "attempts=calls.attempts + (excluded.status='failed_retry'), "
                 "last_error=excluded.last_error, updated_at=excluded.updated_at",
                 (call_id, content_hash, status, int(status == "failed_retry"), error, now, now, MAX_CALL_ATTEMPTS))
 
@@ -81,9 +87,12 @@ class Ledger:
 
     def card_revision(self, call_id, content_hash):
         """The revision a card for this content goes under (design §1 "Revisions"): the call's current
-        one, bumped once when the content changed after a card was planned at it."""
+        one, bumped once when the content changed after a card was planned at it. It compares with the
+        hash the card was planned at, never the call's last-seen hash: a failed attempt stores that one
+        first, and comparing with it would re-use the old revision's card id (review round 2, B1)."""
         with self._conn() as c:
-            row = c.execute("SELECT revision, content_hash FROM calls WHERE call_id=?", (call_id,)).fetchone()
+            row = c.execute("SELECT revision, COALESCE(card_hash, content_hash) FROM calls WHERE call_id=?",
+                            (call_id,)).fetchone()
             if row is None:
                 return 0
             rev, old_hash = row
@@ -122,21 +131,47 @@ class Ledger:
             c.execute(sql, args)
 
     def plan_card(self, effect, *, call_id, frozen, meta=None):
-        """The card intent, its frozen options and a commitment row per item: one transaction.
-        meta[key] is the item's linking identity (design §5), stored on its commitment row."""
+        self.plan_cards([(effect, frozen)], call_id=call_id, meta=meta)
+
+    def plan_cards(self, pages, *, call_id, meta=None, content_hash=None):
+        """Every page of one card revision: its intent, frozen options and a commitment row per item,
+        all in one transaction, so a crash between pages never leaves a half-planned card. meta[key]
+        is the item's linking identity (design §5), stored on its commitment row."""
         meta = meta or {}
         with self._conn() as c:
-            if c.execute("SELECT 1 FROM card_items WHERE card_id=? LIMIT 1", (effect.effect_id,)).fetchone():
-                raise ValueError(f"{effect.effect_id} already has items; a card's frozen items never change")
-            self.plan(effect, call_id=call_id, conn=c)
-            for f in frozen:
-                c.execute("INSERT OR IGNORE INTO card_items VALUES (?,?,?,?,?,?,?)",
-                          (effect.effect_id, f["q_n"], f["key"], json.dumps(f["options"]), f["suggested_n"],
-                           int(bool(f.get("flagged"))), json.dumps(f.get("item"))))
-                m = meta.get(f["key"]) or {}
-                c.execute(f"INSERT OR IGNORE INTO commitments(key, cmt, state, {', '.join(_META)}) "
-                          f"VALUES (?,?, 'asked', {', '.join('?' * len(_META))})",
-                          (f["key"], "cmt_" + secrets.token_hex(6), *[_meta_value(m, k) for k in _META]))
+            for effect, frozen in pages:
+                self._plan_page(c, effect, call_id, frozen, meta)
+            if content_hash is not None:   # the call row may not exist yet on a first ingest
+                now = _now()
+                c.execute("INSERT INTO calls(call_id, content_hash, card_hash, status, created_at, updated_at) "
+                          "VALUES(?,?,?, 'carding', ?,?) ON CONFLICT(call_id) DO UPDATE SET "
+                          "card_hash=excluded.card_hash", (call_id, content_hash, content_hash, now, now))
+
+    def due_of(self, cmt):
+        with self._conn() as c:
+            row = c.execute("SELECT due_ts FROM commitments WHERE cmt=?", (cmt,)).fetchone()
+        return row[0] if row else None
+
+    def occurrences(self, call_id):
+        """This call's earlier occurrences (asked or linked), for re-extraction (design §5)."""
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            return [dict(r) for r in c.execute(
+                "SELECT key, owner, action_type, operation, deliverable, quote, text, first_call_date, "
+                "COALESCE(linked_cmt, cmt) AS cmt FROM commitments WHERE first_call=? ORDER BY rowid", (call_id,))]
+
+    def _plan_page(self, c, effect, call_id, frozen, meta):
+        if c.execute("SELECT 1 FROM card_items WHERE card_id=? LIMIT 1", (effect.effect_id,)).fetchone():
+            raise ValueError(f"{effect.effect_id} already has items; a card's frozen items never change")
+        self.plan(effect, call_id=call_id, conn=c)
+        for f in frozen:
+            c.execute("INSERT OR IGNORE INTO card_items VALUES (?,?,?,?,?,?,?)",
+                      (effect.effect_id, f["q_n"], f["key"], json.dumps(f["options"]), f["suggested_n"],
+                       int(bool(f.get("flagged"))), json.dumps(f.get("item"))))
+            m = meta.get(f["key"]) or {}
+            c.execute(f"INSERT OR IGNORE INTO commitments(key, cmt, state, {', '.join(_META)}) "
+                      f"VALUES (?,?, 'asked', {', '.join('?' * len(_META))})",
+                      (f["key"], "cmt_" + secrets.token_hex(6), *[_meta_value(m, k) for k in _META]))
 
     # --- cross-call linking (design §5) ------------------------------------------------------------
 

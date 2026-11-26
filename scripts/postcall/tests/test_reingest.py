@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from postcall import effects, ledger, pipeline
+from postcall import effects, extract, ledger, pipeline
 from postcall.effects import Effect
 
 from . import _calls
@@ -78,3 +78,58 @@ def test_plan_card_refuses_to_add_items_to_a_card_that_has_items(led):
     with pytest.raises(ValueError, match="already has items"):
         led.plan_card(Effect("card:x:r0:p1", "card", {}), call_id="x", frozen=[f1, f2])
     assert _card_items(led, "card:x:r0:p1") == [(2, "k1")]
+
+
+def _failing(_c, existing=None):
+    return extract.Extraction(ok=False, raw=None, error="claude exited 1")
+
+
+def _bad_label(items):
+    def ex(_c, existing=None):
+        return extract.Extraction(ok=True, raw={"shaw_label": "SPEAKER_01", "shaw_label_evidence": "This is Shaw.",
+                                                "items": list(items)})
+    return ex
+
+
+@pytest.mark.parametrize("fail", ["extractor", "attribution"])
+def test_a_reingest_that_fails_once_still_cards_its_new_items_at_the_next_revision(led, fail):
+    """Review round 2, B1: a failure path stores the new hash; the retry must still bump the revision."""
+    world = effects.Recorder()
+    call1, ex1 = _calls.call(FIRST, content_hash="h1")
+    assert pipeline.process(call1, ledger=led, extractor=ex1, effects=world).status == "carded"
+
+    extra = _calls.item(CONTRACT, deliverable="signed contract", timeframe="by Monday")
+    call2, ex2 = _calls.call(FIRST + [extra], content_hash="h2")
+    broken = _failing if fail == "extractor" else _bad_label(FIRST + [extra])
+    assert pipeline.process(call2, ledger=led, extractor=broken, effects=world).status == "failed_retry"
+
+    assert pipeline.process(call2, ledger=led, extractor=ex2, effects=world).status == "carded"
+    cards = [e for e in world.sent if e.kind == "card"]
+    assert [e.effect_id for e in cards] == ["card:pocket:c1:r0:p1", "card:pocket:c1:r1:p1"]
+    assert [f["item"]["quote"] for f in cards[1].payload["frozen"]] == [CONTRACT]
+
+
+def test_a_crash_between_pages_never_leaves_a_half_planned_card(led, monkeypatch):
+    """All pages of one card revision are planned in one transaction, so a retry is never refused."""
+    world = effects.Recorder()
+    items = [_calls.item(f"I will send you report number {n} with the figures by Friday.",
+                         deliverable=f"report {n}") for n in range(1, 22)]
+    call1, ex1 = _calls.call(items, content_hash="h1")
+    real = ledger.Ledger.plan
+    planned = []
+
+    def plan(self, effect, **kw):
+        if effect.kind == "card":
+            planned.append(effect.effect_id)
+            if effect.effect_id.endswith(":p2"):
+                raise RuntimeError("crash between pages")
+        return real(self, effect, **kw)
+
+    monkeypatch.setattr(ledger.Ledger, "plan", plan)
+    with pytest.raises(RuntimeError):
+        pipeline.process(call1, ledger=led, extractor=ex1, effects=world)
+    monkeypatch.setattr(ledger.Ledger, "plan", real)
+    assert [e for e in led.effects() if e["kind"] == "card"] == []
+    assert pipeline.process(call1, ledger=led, extractor=ex1, effects=world).status == "carded"
+    assert sorted(e.effect_id for e in world.sent if e.kind == "card") == ["card:pocket:c1:r0:p1",
+                                                                          "card:pocket:c1:r0:p2"]

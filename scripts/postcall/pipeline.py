@@ -1,5 +1,5 @@
 """process(call): floor -> extract -> ground -> card (design §1-§4)."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import datetime as dt
 import hashlib
@@ -39,7 +39,9 @@ def process(call, *, ledger, extractor, effects):
         ledger.set_call_status(call.call_id, "skipped_floor", content_hash=call.content_hash, error=reason)
         return Result("skipped_floor", reason=reason)
 
-    extraction = extractor(call)
+    # A re-extraction is told what the call already produced, so it can say what it restates (design §5).
+    existing = ledger.occurrences(call.call_id) if prior else []
+    extraction = extractor(call, existing=_for_prompt(existing)) if existing else extractor(call)
     if not extraction.ok:
         ledger.set_call_status(call.call_id, "failed_retry", content_hash=call.content_hash,
                                error=extraction.error or "extractor failed")
@@ -60,8 +62,9 @@ def process(call, *, ledger, extractor, effects):
     items = participants.apply_trust(items, roster)
 
     all_items = _card_items(call, items, sources.shaw_location(), roster=roster, events=events)
-    # Only items never asked before (design §1 "Revisions"): a re-ingest never re-asks or re-links one.
-    fresh = [(it, ci) for it, ci in zip(items, all_items) if not ledger.known(ci.key)]
+    # Only items never asked before (design §1 "Revisions"): a re-ingest never re-asks or re-links one,
+    # and an item that may restate an earlier occurrence of this call is asked with ⚠ (design §5).
+    fresh = _reconcile(ledger, call, list(zip(items, all_items)), existing)
     if not fresh:
         status = "carded" if ledger.has_card(call.call_id) else (
             prior["status"] if prior and prior["status"] in _DONE else "no_card")
@@ -78,11 +81,13 @@ def process(call, *, ledger, extractor, effects):
     pages = card.build(title=call.title, items=card_items, **_card_context(call, all_items, roster))
     extra = "".join([f"\nAlready tracked, due date moved: {dupes['due_moved']}" if dupes["due_moved"] else "",
                      f"\nAlready done/dropped: {dupes['already_closed']}" if dupes["already_closed"] else ""])
+    planned = []
     for n, page in enumerate(pages, 1):
         payload = {"title": page.title, "summary": page.summary + extra, "questions": page.questions,
                    "frozen": page.frozen, "decide_by": page.decide_by}
-        ledger.plan_card(Effect(effect_id=f"card:{call.call_id}:r{revision}:p{n}", kind="card", payload=payload),
-                         call_id=call.call_id, frozen=page.frozen, meta=meta)
+        planned.append((Effect(effect_id=f"card:{call.call_id}:r{revision}:p{n}", kind="card", payload=payload),
+                        page.frozen))
+    ledger.plan_cards(planned, call_id=call.call_id, meta=meta, content_hash=call.content_hash)
     ledger.set_call_status(call.call_id, "carded", content_hash=call.content_hash)
     ledger.run_pending(effects)
     return Result("carded", items=items, dupes=dupes)
@@ -146,11 +151,84 @@ def collect_replies(ledger, msg_db):
     return recorded
 
 
+def _for_prompt(existing):
+    return [{"occ": o["key"], "owner": o["owner"], "action": o["text"], "quote": o["quote"]} for o in existing]
+
+
+def _overlaps(a, b):
+    return bool(a and b) and a[0] < b[1] and b[0] < a[1]
+
+
+def _same_fields(item, old):
+    f = item.fields
+    return (item.owner == old["owner"]
+            and (f.get("action_type") or "").strip().lower() == (old["action_type"] or "")
+            and (f.get("operation") or "").strip().lower() == (old["operation"] or "")
+            and dedupe.norm(f.get("deliverable")) == (old["deliverable"] or ""))
+
+
+def _claim(item):
+    occ = item.fields.get("same_as_occ")
+    return occ if isinstance(occ, str) else None
+
+
+def _likeliest(item, overlapping, restated):
+    """The overlapping occurrence this item most likely restates: not one this extraction already
+    restated exactly, then the most equal fields (deliverable first)."""
+    f = item.fields
+    mine = (dedupe.norm(f.get("deliverable")), (f.get("operation") or "").strip().lower(),
+            (f.get("action_type") or "").strip().lower())
+
+    def score(x):
+        return (x["key"] not in restated, x["deliverable"] == mine[0], x["operation"] == mine[1],
+                x["action_type"] == mine[2])
+    return max(overlapping, key=score, default=None)
+
+
+def _reconcile(ledger, call, pairs, existing):
+    """The (item, card item) pairs still to ask, after re-extraction reconciliation (design §5 steps 1-3).
+
+    1. Each earlier occurrence's quote text is relocated in the new transcript (no raw offsets).
+    2. `same_as_occ` is accepted only with equal owner / action_type / operation / deliverable, an
+       overlapping span (or equal quote) and a one-to-one claim; it is then recorded, never asked.
+    3. A failed claim, or the same owner on an overlapping span, is asked with ⚠ and `Same as`.
+    Nothing is merged on a guess."""
+    old = {o["key"]: {**o, "span": extract.locate_quote(o["quote"], call.transcript) if o["quote"] else None}
+           for o in existing}
+    claimed = [_claim(it) for it, _ in pairs]
+    claims = {}
+    for n, (_, ci) in enumerate(pairs):
+        for occ in {claimed[n], ci.key} & old.keys():
+            claims.setdefault(occ, set()).add(n)
+    restated = {ci.key for _, ci in pairs if ci.key in old}
+    out = []
+    for n, (it, ci) in enumerate(pairs):
+        if ledger.known(ci.key):
+            continue
+        o = old.get(claimed[n])
+        if (o and claims[o["key"]] == {n} and _same_fields(it, o)
+                and (_overlaps(it.span, o["span"]) or dedupe.norm(it.quote) == dedupe.norm(o["quote"]))):
+            ident = dedupe.identity(it, ci, call)
+            ledger.link(ci.key, o["cmt"], call_id=call.call_id, meta=ident)
+            if ident["due_ts"] and ident["due_ts"] != ledger.due_of(o["cmt"]):
+                ledger.record_due_change(o["cmt"], ident["due_ts"], ident["due_source"], call.call_id,
+                                         ident["task_due_ts"])
+            continue
+        target = o or _likeliest(it, [x for x in old.values() if x["owner"] == it.owner
+                                      and _overlaps(it.span, x["span"])], restated)
+        if target:
+            ci = replace(ci, uncertain_match={"cmt": target["cmt"], "text": target["text"],
+                                              "date": target["first_call_date"]})
+        out.append((it, ci))
+    return out
+
+
 def _source_key(call, quote, fields=None):
-    """Occurrence identity (design §5): the call, the normalized quote and what was committed to, so
-    two commitments inside one quote (different deliverable / action_type / operation) stay two."""
+    """Occurrence identity (design §5): the call, who committed, the normalized quote and what was
+    committed to, so two commitments inside one quote (different deliverable / action_type /
+    operation) stay two."""
     f = fields or {}
-    parts = [call.call_id, extract._normalized_with_map(quote)[0],
+    parts = [call.call_id, (f.get("owner") or "").strip().lower(), extract._normalized_with_map(quote)[0],
              extract._normalized_with_map(f.get("deliverable") or "")[0],
              (f.get("action_type") or "").strip().lower(), (f.get("operation") or "").strip().lower()]
     return "src_" + hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]

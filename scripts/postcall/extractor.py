@@ -53,7 +53,7 @@ If there are none, return {{"shaw_label":"...","shaw_label_evidence":"...","item
 """
 
 _EXISTING_HEADER = """
-ALREADY-KNOWN OCCURRENCES from earlier extractions of related calls. If an item you return \
+ALREADY-KNOWN OCCURRENCES from earlier extractions of THIS call. If an item you return \
 restates one of these, add "same_as_occ":"<its occ>" to that item; otherwise omit same_as_occ.
 """
 
@@ -156,6 +156,6 @@ def run(call, *, runner=None, existing=None, claude_bin=None, model=None, timeou
     return Extraction(ok=True, raw=parsed)
 
 
-def default_extractor(call):
+def default_extractor(call, existing=None):
     """Pipeline hook: the production extractor with its defaults."""
-    return run(call)
+    return run(call, existing=existing)

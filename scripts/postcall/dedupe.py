@@ -31,7 +31,7 @@ def identity(item, card_item, call):
             "due_ts": card_item.due.due_ts, "due_source": card_item.due.due_source,
             # the task's own date is derived: a chase item is chased, not due (design §5)
             "task_due_ts": card_item.chase_date if item.owner == "participant" else card_item.due.due_ts,
-            "first_call": call.call_id, "first_call_date": call.created_at[:10]}
+            "first_call": call.call_id, "first_call_date": call.created_at[:10], "quote": item.quote}
 
 
 def auto_linkable(old, new):
@@ -47,6 +47,10 @@ def link(ledger, call, items, card_items):
     for item, ci in zip(items, card_items):
         ident = identity(item, ci, call)
         meta[ci.key] = ident
+        if ci.uncertain_match:      # may restate this call's own earlier occurrence: Shaw decides
+            keep.append(ci)
+            counts["uncertain"] += 1
+            continue
         if not ident["deliverable"] or ident["counterpart"] in ("", "unidentified"):
             keep.append(ci)
             continue

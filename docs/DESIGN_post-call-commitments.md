@@ -349,6 +349,8 @@ Precedence, first hit wins; `due_source` names the rule.
   5. gm writes `MODE=live`, which creates the live ledger and sets `live_start_ts`.
   6. *(reschedule patching only)* orchestraos-builder's guarded `update_fields` has landed; gm queued it as LOW. Until then `POSTCALL_RESCHEDULE_PATCH` stays off and that one path is reported, not applied (§5).
   7. Service identity: `--from` moves from `postcall-dev` to a runtime=service identity (spawn_adopt), which changes `<AUTHOR>` in recovery.
+  8. *(phase-2 review round 3)* Every ledger starts empty at this schema. The occurrence key gained the owner, and commitments gained `quote` and calls `card_hash`; a ledger written before that would re-card every item of a re-ingested call with no ⚠. No shadow or live ledger exists yet, so this holds by construction. If one is ever created before this lands, it is deleted, not migrated.
+- **Known spec gap (review round 3).** If a re-transcription changes an old quote's words so it can't be relocated, and the model makes no `same_as_occ` claim, §5 step 4 treats the item as new, with no ⚠. Accepted for now: a re-ingest needs a changed transcript and the extractor is shown the old occurrences. Revisit if the shadow ledger shows a duplicate.
   **No generated post-call card reaches Shaw before step 5.** The only Shaw-facing card before then is the deliberate step-4 validation card that gm files.
 
 ## 8. Files and owners

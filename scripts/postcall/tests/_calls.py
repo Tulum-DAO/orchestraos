@@ -26,7 +26,7 @@ def call(items, *, call_id="pocket:c1", content_hash="h1", when="2026-11-24T19:0
                      category="call-external", diarized=True, ingested=True, transcript=transcript,
                      content_hash=content_hash)
     raw = {"shaw_label": "SPEAKER_00", "shaw_label_evidence": "This is Shaw.", "items": list(items)}
-    return c, (lambda _c: extract.Extraction(ok=True, raw=raw))
+    return c, (lambda _c, existing=None: extract.Extraction(ok=True, raw=raw))
 
 
 def verified(monkeypatch):
