@@ -23,6 +23,9 @@ def _live(request, monkeypatch, *clis):
     request.node.postcall_allow_argv = [[sys.executable, c] for c in clis]
     monkeypatch.setenv("POSTCALL_APPROVAL_CLI", APPROVAL_CLI)
     monkeypatch.setenv("POSTCALL_MSG_CLI", MSG_CLI)
+    # The scratch DB gets the human-task columns the live DB has. Armed by env, never by the
+    # operator's home sentinel, so CI (no sentinel) and this box run the same schema.
+    monkeypatch.setenv("APPROVAL_DDL_ARMED", "m20260825_human_task")
     return effects.adapter_for("live")
 
 

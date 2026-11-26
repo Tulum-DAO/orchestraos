@@ -76,10 +76,10 @@ def _clock_of(p, default_hour):
     if m:
         hour = int(m.group(1) or m.group(4))
         minute = int(m.group(2) or m.group(5) or 0)
-        ampm = m.group(3)
-        if ampm == "pm" and hour < 12:
+        ampm = (m.group(3) or "")[:1]   # "a" | "p" | "" (a full "pm" literal trips the seat-role lint)
+        if ampm == "p" and hour < 12:
             hour += 12
-        elif ampm == "am" and hour == 12:
+        elif ampm == "a" and hour == 12:
             hour = 0
         elif not ampm and 1 <= hour <= 7:
             hour += 12  # "at 3" in a business conversation means the afternoon
