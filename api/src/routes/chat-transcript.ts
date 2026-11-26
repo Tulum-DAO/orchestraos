@@ -939,14 +939,17 @@ interface SegmentView {
 
 // ---- Tail-first pages ---------------------------------------------------------------------------
 // A page costs the bytes of the page: the newest page reads the last TAIL_WANT0 bytes of the log (a line start at or
-// under it), an older page reads a window around its cursor, and either is widened (doubled) until it holds the page
-// AND a PERSON turn opener older than the page's oldest item (the audience pass carries the person's exchange across
-// the machine turns after it, and only a person turn makes the newest reply fold) AND, for a cursor page, a person
-// opener newer than the cursor (the turn the cursor is in ends there: its closing reply, and the real user turn a
-// queued copy before the cursor is deduped against). So the whole-array passes (audience, queued dedupe, wake replies)
-// see the same turns the whole-file build does. The cache keeps the newest page's chunk and grows it by appends; a
-// cursor page's window is read once. Never on the whole file unless the file is that small (or has no person turn), a
-// cursor is in an old form, or the grammar cannot be read from a chunk.
+// under it), an older page reads a window around its cursor, and either is widened until it holds the page AND a
+// PERSON turn opener older than the page's oldest item (the audience pass carries the person's exchange across the
+// machine turns after it, and only a person turn makes the newest reply fold) AND, for a cursor page, a person opener
+// newer than the cursor that is a real turn and not the real turn of a queued copy (isDrainedOpener: the turn the
+// cursor is in ends there, with its closing reply, and every queued copy before the cursor has its real turn, written
+// after it, inside the window to be deduped against). So the whole-array passes (audience, queued dedupe, wake
+// replies) see the same turns the whole-file build does. A widening is sized from the lines read so far (bytesFor:
+// the rest of the page, or one more opener's worth) and the cache parses only the lines it adds, so a log of 100 KiB
+// lines costs about the bytes of its page too. The cache keeps the newest page's chunk and grows it by appends or by
+// widening; a cursor page's window is kept once and grown either way. Never on the whole file unless the file is that
+// small (or has no person turn), a cursor is in an old form, or the grammar cannot be read from a chunk.
 let TAIL_WANT0 = 256 * 1024;
 /** Bytes read past a cursor's line: the turn after it, so a queued copy and the real turn that landed after it meet. */
 const TAIL_LOOKAHEAD = 64 * 1024;
@@ -960,11 +963,26 @@ type Range = { want: number } | { lo: number; hi: number } | 'whole';
 
 const isPartial = (v: SegmentView | null | undefined): boolean => !!v && v.start > 0;
 
-/** The same range reaching twice as far back (never past the file's start). */
-function widened(r: Range): Range {
+/** The same range reaching further back (never past the file's start): by `need` more bytes (at least TAIL_WANT0)
+ *  when the caller can size the rest of its page from the lines it has seen, else twice as far. The cache parses
+ *  only the lines a widening adds (transcript-log-cache.ts prefixed/extended), so a small step costs its own bytes. */
+function widened(r: Range, need = 0): Range {
   if (r === 'whole') return r;
-  if ('want' in r) return { want: Number.isFinite(r.want) ? r.want * 2 : r.want };
-  return { lo: Math.max(0, r.lo - Math.max(r.hi - r.lo, TAIL_WANT0)), hi: r.hi };
+  if ('want' in r) {
+    if (!Number.isFinite(r.want)) return r;
+    return { want: need > 0 ? r.want + Math.max(need, TAIL_WANT0) : r.want * 2 };
+  }
+  const back = need > 0 ? Math.max(need, TAIL_WANT0) : Math.max(r.hi - r.lo, TAIL_WANT0);
+  return { lo: Math.max(0, r.lo - back), hi: r.hi };
+}
+
+/** The bytes a view still needs for `missing` more of what it holds `have` of (items, or person openers), from the
+ *  bytes per one in the view, and a quarter over. 0 when there is nothing to size from (the caller doubles). */
+function bytesFor(r: Range, have: number, missing: number): number {
+  if (r === 'whole' || have <= 0 || missing <= 0) return 0;
+  const bytes = 'want' in r ? r.want : r.hi - r.lo;
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  return Math.ceil((bytes / have) * missing * 1.25);
 }
 
 /** A middle range reaching twice as far forward. */
@@ -977,6 +995,14 @@ const isUserText = (it: any): boolean => it?.kind === 'text' && it.role === 'use
 const isTurnOpener = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !it.mid_turn;
 /** A turn the operator opened (lib/audience.ts): what the audience pass anchors an exchange on. */
 const isPersonOpener = (it: any): boolean => isTurnOpener(it) && openerKind(it) === 'person';
+/** On a real user turn: a queued copy of it was dropped (dedupeQueuedCommands). Not enumerable, so no copy or
+ *  comparison of the item carries it. */
+const CONSUMED_QUEUED = Symbol('consumedQueued');
+/** A person opener past which the queue the operator filled mid-turn is drained: a real turn (not a queued copy,
+ *  which the real turn written after it dedupes), and not one such real turn (CONSUMED_QUEUED: more may follow it,
+ *  one per copy). The harness writes every queued message as a real turn before any message typed after them, so the
+ *  first opener that is neither ends the turn a cursor is in, with every copy before the cursor matched. */
+const isDrainedOpener = (it: any): boolean => isPersonOpener(it) && !it.queued && it[CONSUMED_QUEUED] !== true;
 
 function segmentView(agentId: string, seg: Segment, range: Range = 'whole'): SegmentView | null {
   const path = seg.file();
@@ -1208,10 +1234,12 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
       cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
       // The turn the cursor is in must end inside the window (a person opener after the cursor, or the file's end):
       // its closing reply is the last assistant text of the turn, and a queued copy before the cursor is deduped
-      // against the real turn written after it.
+      // against the real turn written after it. A copy after the cursor is not that opener, and neither is the real
+      // turn of a copy (isDrainedOpener): two copies with the page break between them would otherwise leave the
+      // older one on the page (its real turn past the window) while the newer one closed the search.
       if (v && at.at >= 0 && !v.eof) {
         let closed = false;
-        for (let k = at.at + 1; k < v.items.length && !closed; k++) if (isPersonOpener(v.items[k])) closed = true;
+        for (let k = at.at + 1; k < v.items.length && !closed; k++) if (isDrainedOpener(v.items[k])) closed = true;
         if (!closed) {
           views.reset(at.seg, widenedForward(views.ranges[at.seg]));
           continue;
@@ -1230,8 +1258,11 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
     }
     const stopSeg = units.length ? units[units.length - 1].seg : from.seg;
     if (done && isPartial(views.get(stopSeg))) {
-      // The chunk ran out before the page was full: what is older is in the same file, below it.
-      views.reset(stopSeg, widened(views.ranges[stopSeg]));
+      // The chunk ran out before the page was full: what is older is in the same file, below it. Sized from the
+      // lines read so far: the rest of the page, one more line, and a quarter over.
+      const r = views.ranges[stopSeg];
+      const need = bytesFor(r, views.get(stopSeg)?.items.length ?? 0, limit - units.length + 2);
+      views.reset(stopSeg, widened(r, need));
       continue;
     }
     let hasOlder = false;
@@ -1272,7 +1303,10 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
         let opened = false;
         for (let k = oldest.at - 1; k >= 0 && !opened; k--) if (isPersonOpener(v!.items[k])) opened = true;
         if (!opened) {
-          views.reset(oldest.seg, widened(views.ranges[oldest.seg]));
+          // Sized by the person openers the chunk holds: about one more opener's worth of lines (or doubled).
+          const r = views.ranges[oldest.seg];
+          const need = bytesFor(r, v!.items.filter(isPersonOpener).length, 1);
+          views.reset(oldest.seg, widened(r, need));
           continue;
         }
       }
@@ -1537,13 +1571,22 @@ export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
  */
 export function dedupeQueuedCommands(items: any[]): any[] {
   const realUserText = new Set<string>();
+  const queuedText = new Set<string>();
   for (const it of items) {
-    if (it.kind === 'text' && it.role === 'user' && !it.queued && !it.mid_turn) {
-      const t = (it.text || '').trim();
-      if (t) realUserText.add(t);
-    }
+    if (it.kind !== 'text' || it.role !== 'user') continue;
+    const t = (it.text || '').trim();
+    if (!t) continue;
+    if (it.queued || it.mid_turn) queuedText.add(t);
+    else realUserText.add(t);
   }
   if (!realUserText.size) return items;
+  // The real turn a copy is dropped for is marked (not enumerable: never sent, never compared): a tail-first page
+  // whose cursor is before the copy must read past that turn to the ones after it (chatWindow isDrainedOpener).
+  for (const it of items) {
+    if (it.kind === 'text' && it.role === 'user' && !it.queued && !it.mid_turn && queuedText.has((it.text || '').trim())) {
+      Object.defineProperty(it, CONSUMED_QUEUED, { value: true, enumerable: false, configurable: true });
+    }
+  }
   return items.filter((it) => !((it.queued || it.mid_turn) && it.kind === 'text' && realUserText.has((it.text || '').trim())));
 }
 
@@ -2178,6 +2221,9 @@ export function logParser(antigravityHint: boolean, keepSidechain = false): LogP
     append(lines, state) {
       return { items: parseClaudeLines(lines, keepSidechain, state), state };
     },
+    // Nothing waits to ride on a later item: the lines after this point parse the same from a fresh state (counted ids
+    // never span a chunk edge: a reply's lines are kept together, services/transcript-log-cache.ts chunkStartAt).
+    clean: (state) => !state.waiting && !state.carried,
     finish(raw, state, atStart) {
       // On COPIES of the raw items: the whole-array passes (tagAudience above all) stamp audience/exchange in place and
       // never clear them, and `raw` is kept by the cache for the next append. Tagging raw itself left a reply with the

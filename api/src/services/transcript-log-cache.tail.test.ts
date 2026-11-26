@@ -18,7 +18,7 @@ process.env.HOME = join(dir, 'home');
 if (!process.env.ORCHESTRA_CONFIG) {
   process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
 }
-const { cachedLog, cachedLogTail, clearLogCache, logCacheParses, logCacheFullParses, logCacheAppends, logCacheBytesRead } =
+const { cachedLog, cachedLogTail, logRange, clearLogCache, logCacheParses, logCacheFullParses, logCacheAppends, logCacheBytesRead } =
   await import('./transcript-log-cache.js');
 const { logParser, logItems } = await import('../routes/chat-transcript.js');
 
@@ -228,4 +228,79 @@ test('payloads with escaped newlines and a code block: chunk starts land on reco
     assert.equal(uuidAtOffset(path, got.start), got.items[0].uuid, `want ${want}: the start is a record edge`);
     assertTailEqualsOracle(path, got);
   }
+});
+
+/** The byte offset of the line whose uuid is `uuid`. */
+function offsetOf(path: string, uuid: string): number {
+  let off = 0;
+  for (const line of readFileSync(path, 'utf-8').split('\n')) {
+    if (line && JSON.parse(line).uuid === uuid) return off;
+    off += Buffer.byteLength(line, 'utf8') + 1;
+  }
+  throw new Error(`no line ${uuid}`);
+}
+
+test('a widened tail read parses only the lines above the entry it has: the bytes read grow by the prefix, the items equal a fresh read', () => {
+  const { path, parser } = fresh();
+  bigLog(path, 2);
+  const small = cachedLogTail(path, parser, 128 * 1024);
+  const read0 = logCacheBytesRead();
+  const big = cachedLogTail(path, parser, 512 * 1024);
+  const grew = logCacheBytesRead() - read0;
+  assert.ok(big.start < small.start);
+  assert.ok(grew < (small.start - big.start) + 64 * 1024, `widening read ${grew} bytes for a ${small.start - big.start}-byte prefix`);
+  clearLogCache();
+  const freshBig = cachedLogTail(path, parser, 512 * 1024);
+  assert.equal(freshBig.start, big.start);
+  assert.deepEqual(big.items, freshBig.items);
+});
+
+test('a cursor window extends either way from the window read before: back by the prefix, forward by the suffix, items equal a fresh read', () => {
+  const { path, parser } = fresh();
+  bigLog(path, 2);
+  const mid = Math.floor((2 * 1024 * 1024) / 2);
+  const first = logRange(path, parser, mid - 64 * 1024, mid + 64 * 1024);
+  const read0 = logCacheBytesRead();
+  const back = logRange(path, parser, mid - 256 * 1024, mid + 64 * 1024);
+  const grewBack = logCacheBytesRead() - read0;
+  assert.ok(back.start < first.start && back.end === first.end);
+  assert.ok(grewBack < (first.start - back.start) + 64 * 1024, `widening back read ${grewBack} bytes for a ${first.start - back.start}-byte prefix`);
+  const read1 = logCacheBytesRead();
+  const fwd = logRange(path, parser, mid - 256 * 1024, mid + 320 * 1024);
+  const grewFwd = logCacheBytesRead() - read1;
+  assert.ok(fwd.start === back.start && fwd.end > back.end);
+  assert.ok(grewFwd < (fwd.end - back.end) + 64 * 1024, `widening forward read ${grewFwd} bytes for a ${fwd.end - back.end}-byte suffix`);
+  clearLogCache();
+  const freshFwd = logRange(path, parser, mid - 256 * 1024, mid + 320 * 1024);
+  assert.equal(freshFwd.start, fwd.start);
+  assert.equal(freshFwd.end, fwd.end);
+  assert.deepEqual(fwd.items, freshFwd.items);
+});
+
+test('a prefix that ends in a reply whose tokens are still carried is not stitched: the widened read equals a fresh one', () => {
+  // The reply just above the old chunk's start drew nothing (empty content): its tokens go on the next drawn item,
+  // which is the old chunk's first. A stitched parse would lose them; the cache re-parses instead.
+  const { path, parser } = fresh();
+  const lines: string[] = [];
+  for (let i = 0; i < 40; i++) {
+    lines.push(user(`question ${i} ${'x'.repeat(1500)}`));
+    lines.push(assistant(`msg_${i}`, `answer ${i} ${'x'.repeat(1500)}`, { input_tokens: 1000 + i, output_tokens: 50 }));
+  }
+  lines.push(JSON.stringify({ type: 'assistant', uuid: 'a-empty', timestamp: T(++seq),
+    message: { id: 'msg_empty', role: 'assistant', content: [], usage: { input_tokens: 7777, output_tokens: 1 } } }));
+  lines.push(user('after the empty reply', 'u-after'));
+  lines.push(assistant('msg_after', 'the answer after', { input_tokens: 10, output_tokens: 10 }, 'a-after'));
+  for (let i = 0; i < 10; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const small = cachedLogTail(path, parser, size - offsetOf(path, 'u-after'));
+  assert.equal(small.start, offsetOf(path, 'u-after'), 'the chunk starts at the line after the empty reply');
+  const big = cachedLogTail(path, parser, size - offsetOf(path, 'u-30'.replace('u-30', JSON.parse(lines[60]).uuid)));
+  clearLogCache();
+  const freshBig = cachedLogTail(path, parser, size - offsetOf(path, JSON.parse(lines[60]).uuid));
+  assert.equal(big.start, freshBig.start);
+  assert.deepEqual(big.items, freshBig.items);
+  const after = big.items.find((it: any) => it.uuid === 'a-after');
+  assert.ok(after?.usage, 'the first drawn reply of the old chunk carries tokens');
+  assert.equal(after.usage.input_tokens, 7777 + 10, 'the empty reply\'s tokens rode onto it, as in the whole-file parse');
 });
