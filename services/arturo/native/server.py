@@ -881,7 +881,8 @@ class NativeCall:
         rep = self.session.report()
         legs = {k: self.legs.get(k) for k in ("start_frame_s", "provider_connected_s", "start_s", "session_started_s",
                                               "first_transcript_s", "first_audio_s")}
-        rep.update(start=getattr(self, "start_kind", None), legs=legs, reason=reason, spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
+        rep.update(start=getattr(self, "start_kind", None), legs=legs, reason=reason,
+                   spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,

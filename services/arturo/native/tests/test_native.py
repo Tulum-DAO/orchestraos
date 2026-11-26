@@ -1431,13 +1431,16 @@ def test_review5_n14_speech_is_credited_per_20ms_window_not_per_chunk(tmp_path):
     assert t.execute(sess.binding, "s2", "spawn_agent", json.dumps(SPAWN))["ok"]
 
 
-# ---- latency instrumentation (gm GO msg_be42d949: measure before any behaviour change) ---------------------------
+# ---- latency instrumentation (measure before any behaviour change) ----------------------------------------------
 def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_result(tmp_path):
     from services.arturo.native.session import NativeSession
     from services.arturo.native import fixtures as fx
     t, ex = _tools(tmp_path)
     T = [0.0]
-    sess = NativeSession(_fleet(t), t, clock=lambda: T[0], speech_fn=lambda pcm: any(pcm), settle=None,
+    # a real settle: the call is requested at 1.0, its delegation completes at 1.4 while the caller spoke 0.6 s ago
+    # (held), and the tick at 2.0 sends the result, so requested, ready and result are three different times
+    sess = NativeSession(_fleet(t), t, clock=lambda: T[0], speech_fn=lambda pcm: any(pcm),
+                         settle=native_config.Settle(quiet_s=1.0, speak_or_s=1.0, hold_max_s=8.0),
                          turn_speech_fn=lambda pcm: False)
 
     def feed(frames, at):
@@ -1445,13 +1448,19 @@ def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_r
         for f in frames:
             sess.on_server_frame(f[0])
     feed([fx.started()], 10.0)
-    feed(fx.tool_turn("d1", "r1", [("c1", "list_agents", "{}")]), 11.0)
-    feed(fx.tool_turn("d2", "r2", [("c2", "knowledge", json.dumps({"query": "dream fix"}))]), 11.5)
+    feed([fx.input_transcript(" what are my agents doing")], 10.8)
+    c1 = fx.tool_turn("d1", "r1", [("c1", "list_agents", "{}")])
+    feed(c1[:-1], 11.0)
+    feed(c1[-1:], 11.4)
+    assert sess.report()["tool_timeline"][0]["result_s"] is None      # still held at 1.4
+    T[0] = 12.0
+    assert sess.tick()
+    feed(fx.tool_turn("d2", "r2", [("c2", "knowledge", json.dumps({"query": "dream fix"}))]), 12.5)
     feed(fx.speech(0.3), 13.0)
     rows = {r["call_id"]: r for r in sess.report()["tool_timeline"]}
-    assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "requested_s": 1.0, "ready_s": 1.0,
-                          "result_s": 1.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
-    assert rows["c2"]["name"] == "knowledge" and rows["c2"]["result_s"] == 1.5
+    assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "requested_s": 1.0, "ready_s": 1.4,
+                          "result_s": 2.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
+    assert rows["c2"]["name"] == "knowledge" and rows["c2"]["result_s"] == 2.5
     assert rows["c2"]["first_audio_s"] == 3.0 and rows["c2"]["next"] == "audio"
 
 
@@ -1465,7 +1474,8 @@ def test_a_tool_with_no_result_yet_is_in_the_timeline_with_nulls(tmp_path):
     sess.on_server_frame(fx.response_event("d1", fx.nested_function_call_done("c9", "list_agents", "{}"), "")[0])
     (row,) = sess.report()["tool_timeline"]
     assert row["name"] == "list_agents" and row["requested_s"] == 0.0
-    assert row["result_s"] is None and row["first_audio_s"] is None and row["next"] is None
+    assert row["ready_s"] is None and row["result_s"] is None and row["first_audio_s"] is None
+    assert row["next"] is None
 
 
 def test_the_first_call_since_process_start_is_cold_and_the_next_warm(tmp_path, monkeypatch, caplog):
@@ -1504,14 +1514,24 @@ def test_the_first_call_since_process_start_is_cold_and_the_next_warm(tmp_path, 
 
 
 def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, monkeypatch, caplog):
-    # latency leg timing (gm msg_3a21b3e6): on a real call START came 1.37 s after the API dialled and the first
-    # words 3.27 s after the client saw "state"; nothing on the native side split those legs
+    # latency leg timing: on a real call START came 1.37 s after the API dialled and the first words 3.27 s after
+    # the client saw "state"; nothing on the native side split those legs. Each leg here takes a known time, so a
+    # mark copied from its neighbour, or two marks swapped, goes red.
     import base64
     import logging
 
+    def slow_provider():
+        time.sleep(0.05)
+        return FakeProvider()
+
+    def slow_thread(agent):
+        time.sleep(0.12)                             # runs beside the connect: START waits ~0.07 s after it
+        return ""
+
     async def go():
         s = _server(tmp_path, monkeypatch)
-        s.thread_loader = lambda agent: ""
+        s.transport_factory = slow_provider
+        s.thread_loader = slow_thread
         c = await _client(s)
         try:
             ws = await c.ws_connect("/native/ws", headers=HDRS)
@@ -1521,6 +1541,7 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
                     break
                 await asyncio.sleep(0.02)
             p = FakeProvider.instances[-1]
+            await asyncio.sleep(0.1)
             p.push({"type": "session.started"})
             await asyncio.sleep(0.1)
             p.push({"type": "session.output_transcript.delta", "delta": "Hey"})
@@ -1539,6 +1560,8 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
     order = ["start_frame_s", "provider_connected_s", "start_s", "session_started_s", "first_transcript_s",
              "first_audio_s"]
     assert all(legs[k] is not None for k in order), legs
-    assert [legs[k] for k in order] == sorted(legs[k] for k in order)
+    assert legs["provider_connected_s"] - legs["start_frame_s"] >= 0.04, legs
+    for before, after in zip(order[1:], order[2:]):
+        assert legs[after] - legs[before] >= 0.04, (before, after, legs)
     start = next(r.getMessage() for r in caplog.records if ": START " in r.getMessage())
-    assert " connect_s=" in start
+    assert f" connect_s={legs['provider_connected_s']} start_s={legs['start_s']}" in start
