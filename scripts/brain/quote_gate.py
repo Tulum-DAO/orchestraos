@@ -19,17 +19,58 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 
 OPERATOR = "shaw"
 FLAG = "QUOTE_GATE_LABEL"
 
 # "Shaw said / prefers / decided ..." in a fact's text. A fact whose actor is the operator is attributed by actor.
-_VERBS = (r"said|says|stated|told|tells|asked|asks|wants|wanted|prefers|preferred|decided|decides|chose|chooses|"
-          r"insists|insisted|likes|liked|dislikes|hates|loves|approved|approves|rejected|rejects|agreed|agrees|"
-          r"requested|requests|instructed|directed|ruled|confirmed|confirms|believes|thinks|feels|expects|"
-          r"mentioned|noted|explained|emphasized|stressed|plans|planned|intends|committed|promised")
-ATTRIBUTION_RE = re.compile(r"\bShaw(?:\s+Cole)?(?:'s)?\s+(?:also\s+|clearly\s+|explicitly\s+|has\s+|had\s+|"
-                            r"would\s+|does\s+not\s+|doesn't\s+|strongly\s+)?(?:" + _VERBS + r")\b", re.IGNORECASE)
+# Each verb as base | 3rd person | past or participle | -ing. A base form counts only after an auxiliary
+# ("doesn't want", "would like"), so an instruction about the operator ("let Shaw decide") is not a claim.
+_VERB_FORMS = (
+    ("say", "says", "said", "saying"), ("state", "states", "stated", "stating"), ("tell", "tells", "told", "telling"),
+    ("ask", "asks", "asked", "asking"), ("want", "wants", "wanted", "wanting"),
+    ("prefer", "prefers", "preferred", "preferring"), ("decide", "decides", "decided", "deciding"),
+    ("choose", "chooses", "chose|chosen", "choosing"), ("insist", "insists", "insisted", "insisting"),
+    ("like", "likes", "liked", "liking"), ("dislike", "dislikes", "disliked", "disliking"),
+    ("hate", "hates", "hated", "hating"), ("love", "loves", "loved", "loving"),
+    ("approve", "approves", "approved", "approving"), ("reject", "rejects", "rejected", "rejecting"),
+    ("agree", "agrees", "agreed", "agreeing"), ("request", "requests", "requested", "requesting"),
+    ("instruct", "instructs", "instructed", "instructing"), ("direct", "directs", "directed", "directing"),
+    ("rule", "", "ruled", "ruling"), ("confirm", "confirms", "confirmed", "confirming"),
+    ("believe", "believes", "believed", "believing"), ("think", "thinks", "thought", "thinking"),
+    ("feel", "feels", "felt", "feeling"), ("expect", "expects", "expected", "expecting"),
+    ("mention", "mentions", "mentioned", "mentioning"), ("note", "", "noted", "noting"),
+    ("explain", "explains", "explained", "explaining"), ("emphasize", "emphasizes", "emphasized", "emphasizing"),
+    ("stress", "stresses", "stressed", "stressing"), ("plan", "plans", "planned", "planning"),
+    ("intend", "intends", "intended", "intending"), ("commit", "commits", "committed", "committing"),
+    ("promise", "promises", "promised", "promising"), ("need", "needs", "needed", "needing"),
+    ("wish", "wishes", "wished", "wishing"), ("demand", "demands", "demanded", "demanding"),
+)
+
+
+def _alt(i):
+    return "|".join(f[i] for f in _VERB_FORMS if f[i])
+
+
+_ADV = (r"(?:(?:also|clearly|explicitly|strongly|really|always|never|just|still|now|actually|specifically|"
+        r"repeatedly|definitely|often|usually|apparently|reportedly|personally|originally|then|not)\s+)*")
+_AUX = r"(?:(?:do|does|did|would|will)(?:\s+not|n't|n’t)?|won't|won’t)"
+_HAVE = r"(?:has|had|have)(?:\s+not|n't|n’t)?"
+_BE = r"(?:is|was|are|has\s+been|had\s+been)(?:\s+not|n't|n’t)?"
+_NOUNS = (r"preference|preferences|decision|decisions|request|requests|instruction|instructions|wish|wishes|view|"
+          r"views|opinion|position|choice|stance|words|ask|requirement|requirements|demand")
+_NAME = r"\bShaw(?:\s+Cole)?"
+ATTRIBUTION_RE = re.compile(
+    rf"{_NAME}(?:['’]s)?\s+{_ADV}(?:"
+    rf"(?:{_alt(1)}|{_alt(2)}|{_alt(3)})"                     # Shaw says / said / saying
+    rf"|{_AUX}\s+{_ADV}(?:{_alt(0)})"                        # Shaw doesn't want, would like
+    rf"|{_HAVE}\s+{_ADV}(?:{_alt(2)})"                       # Shaw has told
+    rf"|{_BE}\s+{_ADV}(?:{_alt(3)})"                         # Shaw is asking
+    rf")\b"
+    rf"|{_NAME}['’]s\s+(?:own\s+|stated\s+|standing\s+)?(?:{_NOUNS})\b"   # Shaw's preference is
+    rf"|\b(?:according\s+to|per)\s+Shaw\b",                   # According to Shaw, ...
+    re.IGNORECASE)
 
 
 def enabled() -> bool:
@@ -37,7 +78,8 @@ def enabled() -> bool:
 
 
 def attributed(fact: dict) -> bool:
-    return _lower(fact.get("actor")) == OPERATOR or bool(ATTRIBUTION_RE.search(str(fact.get("text") or "")))
+    text = unicodedata.normalize("NFKC", str(fact.get("text") or ""))
+    return _lower(fact.get("actor")) == OPERATOR or bool(ATTRIBUTION_RE.search(text))
 
 
 def _lower(s) -> str:

@@ -233,3 +233,45 @@ def test_a_gate_error_labels_that_fact_and_spares_the_rest(world, tmp_path, monk
     for k in ("voice_shaw", "voice_system_claim"):
         assert prov[k]["quote_gate"] == {"status": "unverified", "reason": "gate error"}
     assert prov["typed"]["quote_gate"]["status"] == "verified"
+
+
+ATTRIBUTED = [
+    "Shaw doesn't want dark mode on the dashboard",
+    "Shaw does not like long calls",
+    "Shaw would like a weekly summary",
+    "Shaw's preference is dark mode",
+    "According to Shaw, the beta ships on friday",
+    "Shaw really wants the beta out this week",
+    "Shaw needs the report by noon",
+    "a note of Shaw saying the beta can wait",
+    "Shaw states the beta can wait",
+    "Shaw never wants a call before nine",
+    "Shaw has told the team to ship on friday",
+    "Shaw is asking for a shorter summary",
+    "Shaw didn't approve the second draft",
+    "Shaw’s preference is dark mode",
+    "SHAW SAID ship it",
+    "Per Shaw, the launch moves to monday",
+    "Shaw Cole wants the beta out",
+]
+NOT_ATTRIBUTED = [
+    "Dana said the beta can wait",
+    "Shawn said the beta can wait",
+    "Bradshaw said the beta can wait",
+    "send the report to Shaw",
+    "remind Shaw about the call on friday",
+    "the agent told Shaw the deploy is done",
+    "Shaw was told the beta slipped",
+    "Shaw's team said the beta can wait",
+    "let Shaw decide on the venue",
+]
+
+
+@pytest.mark.parametrize("text", ATTRIBUTED)
+def test_text_attributing_words_or_a_preference_to_the_operator_is_attributed(text):
+    assert quote_gate.attributed({"actor": "pocket", "text": text})
+
+
+@pytest.mark.parametrize("text", NOT_ATTRIBUTED)
+def test_another_name_or_a_mention_as_object_is_not_attributed(text):
+    assert not quote_gate.attributed({"actor": "pocket", "text": text})
