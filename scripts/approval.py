@@ -1111,7 +1111,7 @@ def main(argv=None):
         # large JSON blob; a seat that free-text-greps it can miss the card it wants among many
         # hits, conclude there is none, and ask the operator AGAIN. One line per hit is the point:
         # the answer has to be readable without scrolling. The default JSON output is unchanged.
-        if (args.grep or args.mine) and not args.json:
+        if args.grep or args.mine:
             # EVERY pending kind: the approvals feed already carries approval / menu / human_task
             # rows; pending questionnaires live in their own store and join here as search-only rows.
             hits = list(out)
@@ -1132,6 +1132,9 @@ def main(argv=None):
                         if needle in " ".join(str(r.get(k) or "")
                                               for k in ("id", "from_agent", "question", "summary", "feature",
                                                         "block_task", "blocks_what")).lower()]
+            if args.json:                    # the filtered hits, as JSON (never the whole feed)
+                print(json.dumps(hits, default=str))
+                return 0
             for r in hits:
                 # collapse whitespace so a multi-line question stays ONE line; NOT truncated:
                 # truncating can hide the very phrase the caller searched for.

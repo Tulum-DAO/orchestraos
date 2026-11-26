@@ -204,3 +204,11 @@ def test_no_match_line_names_what_was_searched(env, queue):
                        capture_output=True, text=True, env=env, cwd=HERE, timeout=90)
     for word in ("approval", "menu", "human_task", "questionnaire", "id"):
         assert word in p.stderr, f"the no-match line must say it searched {word!r}: {p.stderr!r}"
+
+
+def test_grep_with_json_prints_only_the_matching_cards_as_json(env, queue):
+    """Re-review of #642: --json with --grep printed the WHOLE feed, so `| jq length` counted every card
+    and a seat concluded the operator had already been asked."""
+    rows = json.loads(_pending(env, "--grep", "retreat", "--json"))
+    assert [r["id"] for r in rows] == [queue["unrelated"]]
+    assert json.loads(_pending(env, "--grep", "no-such-thing-anywhere", "--json")) == []
