@@ -25,6 +25,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:                      # its sibling modules import flat, also when loaded by file path
     sys.path.append(_HERE)
 from facts_schema import STATES, classify_expiry_class, is_noise_text, validate_fact  # noqa: E402
+import quote_gate  # noqa: E402
 
 # The redactor sits next to this file. REDACT_SECRETS_PATH overrides it.
 _LIVE_REDACTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "redact_secrets.py")
@@ -159,6 +160,8 @@ def ingest(db_path: str, facts: list, *, source_kind: str,
         if errs:
             raise ValueError(f"refusing ingest, invalid fact "
                              f"{f.get('fact_id')!r}: " + "; ".join(errs))
+    if quote_gate.enabled():                     # label only: may set state='unverified', never drops a fact
+        facts = quote_gate.label(facts)
     scrub = _scrubber()                          # before the lock: no redactor, no write
     inserted = 0
     with bus_lock(db_path, timeout_s=lock_timeout_s):
