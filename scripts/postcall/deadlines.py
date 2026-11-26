@@ -15,6 +15,35 @@ _MONTH_DAY = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-
 _DAY_ONLY = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)\b|\b(first|second|third|fourth|fifth|tenth|fifteenth|"
                        r"twentieth|thirtieth)\b")
 _CLOCK = re.compile(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\bat\s+(\d{1,2})(?::(\d{2}))?\b")
+_NUMBERS = {w: str(n) for n, w in enumerate(
+    "one two three four five six seven eight nine ten eleven twelve".split(), 1)}
+_SPELLED = re.compile(r"\b(" + "|".join(_NUMBERS) + r")(?=\s*(?:am|pm|o'?clock)\b)")
+# "at nine" is a clock only when it reads as one: at the end, or before a clock or part-of-day word.
+_AT_SPELLED = re.compile(r"\b(at\s+)(" + "|".join(_NUMBERS) + r")\b(?=\s*(?:$|[,.;]|o'?clock\b|am\b|pm\b|"
+                         r"in the\b|at night\b|tonight\b|tomorrow\b|today\b|this\b|morning\b|afternoon\b|"
+                         r"evening\b|night\b|sharp\b))")
+_OCLOCK = re.compile(r"\b(\d{1,2})\s*o'?clock\b")
+# A zone named in the phrase wins over Shaw's zone ("two PM EST"): (region, standard, daylight, name).
+# A standard/daylight abbreviation that disagrees with the season is ambiguous, never guessed.
+# Two-letter forms are left out on purpose.
+_ZONES = (("America/New_York", "est", "edt", "eastern"), ("America/Chicago", "cst", "cdt", "central"),
+          ("America/Denver", "mst", "mdt", "mountain"), ("America/Los_Angeles", "pst", "pdt", "pacific"))
+_HOURS = re.compile(r"\b(?:in|within)\s+(?:the\s+next\s+)?(an?|\d+|(?:a\s+)?couple(?:\s+of)?|(?:a\s+)?few)"
+                    r"\s+hours?\b(?!\s+and\b)")
+# Clock or duration words this parser does not read: the phrase stays unknown rather than half-read.
+# One zone grammar for reading AND for consuming: "<abbr|name> [standard|daylight] [time]".
+_ZONE_TAIL = r"(?:\s+(standard|daylight))?(?:\s+time)?"
+_DAYPART = re.compile(r"\bin the (?:morning|afternoon|evening)\b|\bat night\b")
+MAX_RELATIVE_HOURS = 72
+_COMPOUND = re.compile(r"\b(?:half|quarter|past)\b")
+_NUMBER = re.compile(r"\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+                     r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
+                     r"sixty|seventy|eighty|ninety)\b")
+_IN_DAYS = re.compile(r"\bin\s+\d+\s+days?\b")
+_WEEK_OR_TWO = re.compile(r"\bweek or two\b|\btwo weeks\b")
+# Words that add nothing. Never "or": an alternative is never resolved to its first half.
+_FILLER = frozenset("at by around about before until till say like approx approximately ish the latest".split())
+_DAYWORD = re.compile(r"\b(?:morning|afternoon|evening|night|tonight)\b")
 _PARTS = (("morning", 9, 0), ("noon", 12, 0), ("afternoon", 15, 0), ("end of day", 17, 0),
           ("eod", 17, 0), ("evening", 21, 0), ("tonight", 21, 0))
 
@@ -81,6 +110,10 @@ def _clock_of(p, default_hour):
             hour += 12
         elif ampm == "a" and hour == 12:
             hour = 0
+        elif not ampm and re.search(r"\bmorning\b", p):
+            hour = 0 if hour == 12 else hour
+        elif not ampm and re.search(r"\b(?:afternoon|evening|night|tonight)\b", p) and hour < 12:
+            hour += 12
         elif not ampm and 1 <= hour <= 7:
             hour += 12  # "at 3" in a business conversation means the afternoon
         return hour, minute
@@ -108,17 +141,123 @@ def _localize(day, hour, minute, tz):
     return wall, False
 
 
+def _normalized(phrase):
+    p = phrase.lower().replace("p.m.", "pm").replace("a.m.", "am")
+    p = _SPELLED.sub(lambda m: _NUMBERS[m.group(1)], p)
+    p = _AT_SPELLED.sub(lambda m: m.group(1) + _NUMBERS[m.group(2)], p)
+    return _OCLOCK.sub(lambda m: f"at {m.group(1)}", p)
+
+
+def _named_zone(p):
+    """(region tz, "std" | "dst" | None) for the ONE zone named in the phrase, (None, None) for none,
+    or ("", None) when two are named ("EST or PST"): alternatives are never resolved."""
+    found = []
+    for tz, std, dst, name in _ZONES:
+        for m in re.finditer(rf"\b({std}|{dst}|{name}){_ZONE_TAIL}\b", p):
+            kind = {std: "std", dst: "dst"}.get(m.group(1)) or {"standard": "std", "daylight": "dst"}.get(m.group(2))
+            found.append((tz, kind))
+    if len(found) > 1:
+        return "", None
+    return found[0] if found else (None, None)
+
+
+def _unused_number(p, spans):
+    """A digit or number word outside every span the parser read: part of the phrase was not
+    understood, so any date from it would be a guess."""
+    rest = p
+    for a, b in spans:
+        rest = rest[:a] + " " * (b - a) + rest[b:]
+    return bool(_NUMBER.search(rest))
+
+
+def _date_spans(p):
+    return [m.span() for rx in (_MONTH_DAY, _IN_DAYS, _WEEK_OR_TWO) for m in rx.finditer(p)]
+
+
+def _season_clash(when, kind):
+    return kind is not None and (kind == "dst") != bool(when.dst())
+
+
+def _clock_only(p):
+    """True when the phrase is nothing but a clock time (plus a zone and filler words)."""
+    rest = _CLOCK.sub(" ", p)
+    for _, std, dst, name in _ZONES:
+        rest = re.sub(rf"\b(?:{std}|{dst}|{name}){_ZONE_TAIL}\b", " ", rest)
+    rest = _DAYPART.sub(" ", rest)
+    return all(w in _FILLER for w in re.findall(r"[a-z0-9']+", rest))
+
+
+def _hours_ahead(p):
+    m = _HOURS.search(p)
+    if not m:
+        return None
+    n = m.group(1).replace("a ", "").strip()
+    hours = 1 if n in ("a", "an") else 2 if n.startswith("couple") else 3 if n == "few" else int(n)
+    return hours if hours <= MAX_RELATIVE_HOURS else None
+
+
 def resolve(timeframe, anchor, tz, *, zone_assumed=None):
     phrase = (timeframe or "").strip()
     if not phrase:
         return Due(None, "none stated")
-    p = phrase.lower()
-    today = _parse_utc(anchor).astimezone(ZoneInfo(tz)).date()
+    p = _normalized(phrase)
+    if _COMPOUND.search(p):
+        return Due(None, f"unknown ({phrase})")
+    start = _parse_utc(anchor)
+    clocks = list(_CLOCK.finditer(p))
+    if len(clocks) > 1:        # "at 2pm or 4pm": alternatives, never the first one
+        return Due(None, f"unknown ({phrase})")
+    if clocks:     # an impossible clock ("at 25", "9:99am", "13pm") is not a time
+        c = clocks[0]
+        h, mi = int(c.group(1) or c.group(4)), int(c.group(2) or c.group(5) or 0)
+        if mi > 59 or h > 23 or (c.group(3) and not 1 <= h <= 12):
+            return Due(None, f"unknown ({phrase})")
+    if len(_DAYWORD.findall(p)) > 1:     # "in the morning or in the evening"
+        return Due(None, f"unknown ({phrase})")
+    if clocks and not clocks[0].group(3):
+        bare = int(clocks[0].group(1) or clocks[0].group(4))
+        night = re.search(r"\b(?:night|tonight)\b", p)
+        # 12 with any part-of-day word, or 1-5 "at night", could be either side of midnight: never guessed.
+        if (bare == 12 and (night or re.search(r"\b(?:evening|morning)\b", p))) or (night and 1 <= bare <= 5):
+            return Due(None, f"ambiguous: {phrase} (around midnight: which day?)")
+    hours = _hours_ahead(p)
+    if hours is not None:      # "in the next couple of hours": from the call, exact
+        m = _HOURS.search(p)
+        rest = p[:m.start()] + " " + p[m.end():]
+        if not all(w in _FILLER for w in re.findall(r"[a-z0-9']+", rest)):   # the whole phrase, or nothing
+            return Due(None, f"unknown ({phrase})")
+        when = (start + dt.timedelta(hours=hours)).astimezone(ZoneInfo(tz))
+        return Due(when.isoformat(timespec="seconds"), phrase)
+    named, kind = _named_zone(p)
+    if named == "":
+        return Due(None, f"ambiguous: {phrase} (two zones named)")
+    zone = named or tz
+    today = start.astimezone(ZoneInfo(zone)).date()
     day, default_hour = _date_of(p, today)
+    clock_spans = [c.span() for c in clocks]
+    if day is not None and _unused_number(p, _date_spans(p) + clock_spans):
+        return Due(None, f"unknown ({phrase})")
+    if day is None and default_hour == "unknown" and clocks and _clock_only(p) and not zone_assumed:
+        # A clock time alone ("two PM EST") is its next occurrence after the call.
+        hour, minute = _clock_of(p, 17)
+        when, dst_adjusted = _localize(today, hour, minute, zone)
+        if when <= start:
+            second = when.replace(fold=1)          # the repeated hour on a fall-back day comes first
+            if second.utcoffset() != when.utcoffset() and second > start:
+                when = second
+            else:
+                when, dst_adjusted = _localize(today + dt.timedelta(days=1), hour, minute, zone)
+        if _season_clash(when, kind):
+            return Due(None, f"ambiguous: {phrase} (zone abbreviation disagrees with the season)")
+        return Due(when.astimezone(ZoneInfo(tz)).isoformat(timespec="seconds"),
+                   phrase + (" (DST-adjusted)" if dst_adjusted else ""))
     if day is None:
         return Due(None, f"{default_hour}: {phrase}" if default_hour == "ambiguous" else f"unknown ({phrase})")
     hour, minute = (17, 0) if zone_assumed else _clock_of(p, default_hour)
-    when, dst_adjusted = _localize(day, hour, minute, tz)
+    when, dst_adjusted = _localize(day, hour, minute, zone)
+    if _season_clash(when, kind):
+        return Due(None, f"ambiguous: {phrase} (zone abbreviation disagrees with the season)")
+    when = when.astimezone(ZoneInfo(tz))
     source = phrase
     if zone_assumed:
         source += f" (zone assumed: {zone_assumed})"

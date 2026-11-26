@@ -337,7 +337,8 @@ class Ledger:
                 self.plan(Effect(f"task:{cmt}", "task", {**base, **action}), call_id=None, conn=c)
             elif action["action"] == "assign":
                 self.plan(Effect(f"dispatch:{cmt}", "dispatch", {**base, "seat": action["seat"],
-                                                                  "agent_work": action["agent_work"]}),
+                                                                  "agent_work": action["agent_work"],
+                                                                  **({"route": True} if action.get("route") else {})}),
                           call_id=None, conn=c)
         return True
 

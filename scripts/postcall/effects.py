@@ -233,15 +233,18 @@ class Live:
         """The approved agent work, to the frozen seat, tagged with its dispatch id (design §6)."""
         p, it = effect.payload, effect.payload["item"]
         lost = p.get("rerouted_from")
-        body = "\n".join(([f"Seat {lost} is not live in the registry: please pick a seat and route this work."]
-                          if lost else []) + [
+        routing = ([f"Seat {lost} is not live in the registry: please pick a seat and route this work."] if lost
+                   else ["No client seat resolved for this work: please pick a seat and route it; sending stays "
+                         "with Shaw."] if p.get("route") else [])
+        body = "\n".join(routing + [
             f"Approved by Shaw on card {p['decision_src']} (check: approval.py get <card id>).",
             f"Work: {p['agent_work']}", f"For: {it['text']} · with {it['counterpart']} · due {it.get('due_source')}",
             f'Quote: "{it["quote"]}" ({it["citation"]})',
             "Scope: drafts, research or internal artefacts only; never send anything as Shaw.",
             f"Idempotency key: {effect.effect_id}. If you already have it, reply with the existing result.",
             "Later due changes arrive as duenote:<cmt>:s<seq>; apply only a higher seq. Reply to: postcall-dev."])
-        subject = f"seat {lost} not live, please route: {p['agent_work']}" if lost else p["agent_work"]
+        subject = (f"seat {lost} not live, please route: {p['agent_work']}" if lost
+                   else f"please route: {p['agent_work']}" if p.get("route") else p["agent_work"])
         return self._message(effect, p["seat"], "task", subject, body)
 
     def _send_duenote(self, effect):

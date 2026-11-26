@@ -33,6 +33,7 @@ class CardItem:
     agent_work: str | None = None
     chase_date: str | None = None
     uncertain_match: dict | None = None
+    route: bool = False      # no client seat resolved: the seat (gm) routes the draft
 
 
 @dataclass
@@ -62,9 +63,16 @@ def _options(it, tz, label):
     if it.owner == "participant":
         opts = [(f"Track it: chase {it.counterpart} on {_local(it.chase_date, tz, label)}",
                  {"action": "track", "chase_date": it.chase_date})]
-        if it.seat:
+        if it.seat and it.route:
+            opts.append((f"Assign to {it.seat} to route: draft a follow-up nudge for me to send",
+                         {"action": "assign", "seat": it.seat, "agent_work": "draft a follow-up nudge", "route": True}))
+        elif it.seat:
             opts.append((f"Assign to {it.seat}: draft a follow-up nudge for me to send",
                          {"action": "assign", "seat": it.seat, "agent_work": "draft a follow-up nudge"}))
+    elif it.seat and it.agent_work and it.route:
+        opts = [(f"Assign to {it.seat} to route: {it.agent_work} (you send it)",
+                 {"action": "assign", "seat": it.seat, "agent_work": it.agent_work, "route": True}),
+                ("Take it myself", {"action": "take"})]
     elif it.seat and it.agent_work:
         opts = [(f"Assign to {it.seat}: {it.agent_work}",
                  {"action": "assign", "seat": it.seat, "agent_work": it.agent_work}),
@@ -92,7 +100,7 @@ def _order(items):
     return sorted(items, key=k)
 
 
-def build(*, title, items, tz, tz_label, call_start, call_end, participants):
+def build(*, title, items, tz, tz_label, call_start, call_end, participants, now=None):
     if not items:
         raise ValueError("refusing to build a post-call card with no items")
     ordered = _order(items)
@@ -104,6 +112,10 @@ def build(*, title, items, tz, tz_label, call_start, call_end, participants):
     else:
         decide = dt.datetime.fromisoformat(call_end.replace("Z", "+00:00")) + dt.timedelta(hours=24)
         cost = "the items above go untracked"
+    if now is not None:     # a backlog or replayed call: never a Decide-by in the past (gm msg_feff515d)
+        at = dt.datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+        if decide < at:
+            decide = at + dt.timedelta(hours=24)
     start = dt.datetime.fromisoformat(call_start.replace("Z", "+00:00"))
     minutes = round((dt.datetime.fromisoformat(call_end.replace("Z", "+00:00")) - start).total_seconds() / 60)
     chunks = [ordered[i:i + PAGE_ITEMS] for i in range(0, len(ordered), PAGE_ITEMS)]
