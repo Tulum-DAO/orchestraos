@@ -275,3 +275,20 @@ def test_text_attributing_words_or_a_preference_to_the_operator_is_attributed(te
 @pytest.mark.parametrize("text", NOT_ATTRIBUTED)
 def test_another_name_or_a_mention_as_object_is_not_attributed(text):
     assert not quote_gate.attributed({"actor": "pocket", "text": text})
+
+
+def _voice_at(path, source_id, text, actor="shaw"):
+    return make_fact(ts=TS, kind="fact", text=text, actor=actor,
+                     provenance={"source_kind": "voice", "source_id": source_id, "path": str(path),
+                                 "channel": "voice", "direction": None})
+
+
+def test_a_voice_fact_must_be_the_cited_turn_word_for_word(world, tmp_path, monkeypatch):
+    """The cited row is the operator's, but it says something else: the fact is a paraphrase, not a quote."""
+    monkeypatch.setenv("QUOTE_GATE_LABEL", "1")
+    world["paraphrase"] = _voice_at(tmp_path / "conversation.jsonl", "voice:2026-11-25T11:00:00Z",
+                                    "Shaw wants it quieter")
+    _, states, prov = _ingest(tmp_path, world)
+    assert states["paraphrase"] == "unverified"
+    assert prov["paraphrase"]["quote_gate"]["reason"] == "conversation row text differs from the fact"
+    assert states["voice_shaw"] == "active"
