@@ -1,0 +1,287 @@
+"""Orphaned browser-plugin Chrome: a live parent is spared, a dead parent is reaped, Chrome outside
+the plugin's profile root is never touched.
+
+Unit cases run classify() on a fake process table. The by-effect cases start real processes named
+`chrome` and run scripts/chrome-reaper.sh itself, with the profile root and log in a temp dir and an
+age limit no real browser can reach, so nothing outside the test is eligible.
+"""
+import json
+import os
+import subprocess
+import sys
+import textwrap
+import time
+
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+import chrome_orphans as co  # noqa: E402
+
+ROOT = "/r/browser-profiles"
+MCP = (1000, "node", ["node", "/x/superpowers-chrome/1.6.1/mcp/dist/index.js"])
+
+
+def _chrome(ppid, profile=ROOT + "/seat", extra=()):
+    return (ppid, "chrome", ["/snap/chromium/chrome", f"--user-data-dir={profile}", "--headless=new", *extra])
+
+
+def _verdicts(procs, adopters=()):
+    return {pid: v for pid, _prof, v, _why in co.classify(procs, [ROOT], adopters)}
+
+
+def test_a_chrome_with_its_live_plugin_mcp_parent_is_spared():
+    assert _verdicts({50: MCP, 51: _chrome(50)}) == {51: "spared"}
+
+
+def test_a_chrome_whose_parent_is_gone_is_an_orphan():
+    assert _verdicts({51: _chrome(50)}) == {51: "orphan"}
+
+
+def test_a_chrome_reparented_to_pid_1_is_an_orphan():
+    assert _verdicts({51: _chrome(1)}) == {51: "orphan"}
+
+
+def test_a_chrome_reparented_to_systemd_user_is_an_orphan():
+    procs = {900: (1, "systemd", ["/usr/lib/systemd/systemd", "--user"]), 51: _chrome(900)}
+    assert _verdicts(procs) == {51: "orphan"}
+
+
+def test_a_chrome_with_any_other_live_parent_is_spared():
+    procs = {70: (1, "bash", ["bash"]), 51: _chrome(70)}
+    assert _verdicts(procs) == {51: "spared"}
+
+
+def test_chrome_outside_the_plugin_root_is_never_reported():
+    procs = {51: _chrome(1, profile="/home/u/.config/chromium"), 52: (1, "chrome", ["chrome", "--headless"])}
+    assert _verdicts(procs) == {}
+
+
+def test_renderers_and_helpers_are_not_main_processes():
+    assert _verdicts({51: _chrome(1, extra=("--type=renderer",))}) == {}
+
+
+def test_both_spellings_of_the_root_match(tmp_path):
+    real = tmp_path / "real-profiles"
+    (real / "seat").mkdir(parents=True)
+    link = tmp_path / "browser-profiles"
+    link.symlink_to(real)
+    procs = {51: _chrome(1, profile=str(real / "seat")), 52: _chrome(1, profile=str(link / "seat"))}
+    rows = co.classify(procs, [os.path.realpath(str(link))])
+    assert sorted(p for p, _, v, _ in rows if v == "orphan") == [51, 52]
+
+
+def test_a_live_parent_plugin_chrome_and_its_children_are_protected_from_the_age_rule():
+    procs = {50: MCP, 51: _chrome(50), 52: (51, "chrome", ["chrome", "--type=renderer"]),
+             53: (52, "chrome", ["chrome", "--type=gpu-process"]),
+             61: _chrome(1, profile=ROOT + "/gone"), 62: (61, "chrome", ["chrome", "--type=renderer"]),
+             71: (1, "chrome", ["chrome", "--headless", "--user-data-dir=/home/u/other"])}
+    assert co.protected(procs, [ROOT]) == {51, 52, 53}
+
+
+def test_a_plugin_chrome_under_another_live_parent_keeps_the_age_rule():
+    # not orphan-reaped (its parent is alive) but NOT protected: an MCP that died behind a surviving
+    # wrapper must not leak its browser forever
+    procs = {70: (1, "sh", ["sh", "-c", "chrome ...; :"]), 51: _chrome(70)}
+    assert _verdicts(procs) == {51: "spared"} and co.protected(procs, [ROOT]) == set()
+
+
+def test_an_mcp_behind_a_wrapper_still_protects_its_chrome():
+    procs = {50: MCP, 60: (50, "sh", ["sh", "-c", "chrome"]), 51: _chrome(60)}
+    assert co.protected(procs, [ROOT]) == {51}
+
+
+@pytest.mark.parametrize("profile", [ROOT + "/a\n4242\tx", ROOT + "/a\tb", "browser-profiles/seat", "~/x"])
+def test_a_profile_with_control_characters_or_not_absolute_is_never_reported(profile):
+    assert co.classify({51: _chrome(1, profile=profile)}, [ROOT]) == []
+
+
+def _fake_proc(root, pid, comm, start, ppid=1, state="S", argv=("chrome",)):
+    d = root / str(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    # fields 3..22 after the comm: state ppid pgrp session tty tpgid flags minflt cminflt majflt
+    # cmajflt utime stime cutime cstime priority nice threads itrealvalue starttime
+    rest = [state, str(ppid)] + ["0"] * 17 + [str(start)]
+    (d / "stat").write_text(f"{pid} ({comm}) " + " ".join(rest) + " 0 0\n")
+    (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+
+
+def test_a_reused_browser_pid_is_spared_at_signal_time(tmp_path):
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 51, "chrome", start=1000)        # the orphan as listed
+    _fake_proc(proc, 52, "chrome", start=2000)        # pid 52 was listed at 1500, then reused
+    _fake_proc(proc, 53, "chrome", start=3000, state="Z")
+    _fake_proc(proc, 54, "bash", start=4000)
+    plan = ["51:1000", "52:1500", "53:3000", "54:4000", "55:5000", "x:1", "56"]
+    assert co.still_same(plan, str(proc)) == [51]
+    env = {**os.environ, "CHROME_REAPER_PROC": str(proc)}
+    r = subprocess.run([sys.executable, os.path.join(HERE, "chrome_orphans.py"), "--still", *plan],
+                       env=env, capture_output=True, text=True)
+    assert r.stdout.split() == ["51"]
+
+
+def test_the_kill_plan_carries_start_times_for_the_orphan_and_its_subtree(tmp_path):
+    proc = tmp_path / "proc"
+    _fake_proc(proc, 51, "chrome", start=1000, ppid=1, argv=("chrome", f"--user-data-dir={ROOT}/seat"))
+    _fake_proc(proc, 52, "chrome", start=1001, ppid=51, argv=("chrome", "--type=renderer"))
+    _fake_proc(proc, 53, "chrome", start=1002, ppid=52, argv=("chrome", "--type=gpu-process"))
+    _fake_proc(proc, 60, "node", start=900, ppid=1, argv=MCP[2])
+    _fake_proc(proc, 61, "chrome", start=1100, ppid=60, argv=("chrome", f"--user-data-dir={ROOT}/live"))
+    rows = co.kill_plan(co.read_procs(str(proc)), [ROOT], proc=str(proc))
+    assert rows[0][:3] == ("O", 51, 1000)
+    assert sorted(r[:3] for r in rows[1:]) == [("T", 52, 1001), ("T", 53, 1002)]
+
+
+# ───────── by effect: real processes, the real script ─────────
+
+REAPER = os.path.join(HERE, "chrome-reaper.sh")
+
+# Runs as its own process: becomes a child subreaper, starts fake browsers whose launcher exits at
+# once (so they are reparented to the driver, which stands in for pid 1 / systemd --user), runs the
+# reaper, and reports which pids are still alive.
+DRIVER = textwrap.dedent(r'''
+    import ctypes, json, os, subprocess, sys, time
+    ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)          # PR_SET_CHILD_SUBREAPER
+    fake, root, other, log = sys.argv[1:5]
+    QUIET = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+
+    def orphaned(profile):
+        r, w = os.pipe()
+        if os.fork() == 0:                            # launcher: start the browser, report, exit
+            os.close(r)
+            p = subprocess.Popen([fake, f"--user-data-dir={profile}"], start_new_session=True, **QUIET)
+            os.write(w, str(p.pid).encode()); os._exit(0)
+        os.close(w); pid = int(os.read(r, 32)); os.close(r)
+        os.wait()                                     # the launcher is gone: the browser is ours now
+        return pid
+
+    plugin = orphaned(os.path.join(root, "seat-a"))
+    outside = orphaned(other)
+    # its parent is a live shell (the trailing ":" stops sh from exec-ing it), not the adopter
+    live_sh = subprocess.Popen(["sh", "-c", f'"{fake}" --user-data-dir="{os.path.join(root, "seat-b")}"; :'],
+                               start_new_session=True, **QUIET)
+    time.sleep(0.3)
+    live_pid = int(subprocess.run(["pgrep", "-P", str(live_sh.pid)], capture_output=True,
+                                  text=True).stdout.split()[0])
+    time.sleep(0.3)
+    env = {**os.environ, "CHROME_REAPER_PROFILE_ROOTS": root, "CHROME_REAPER_LOG": log,
+           "CHROME_REAPER_ADOPTERS": str(os.getpid())}
+    subprocess.run(["bash", sys.argv[5], "999999999"], env=env, check=True)
+
+    def alive(pid):
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                return fh.read().split(")")[-1].split()[0] != "Z"
+        except OSError:
+            return False
+
+    out = {"plugin_orphan": alive(plugin), "outside_root": alive(outside), "live_parent": alive(live_pid)}
+    for pid in (plugin, outside, live_sh.pid):           # each browser leads its own process group
+        try: os.killpg(pid, 9)
+        except OSError: pass
+    print(json.dumps(out))
+''')
+
+
+@pytest.fixture
+def fake_chrome(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "chrome"                          # comm of a shebang script = its file name
+    fake.write_text("#!/bin/sh\nsleep 300\n")
+    fake.chmod(0o755)
+    return fake
+
+
+def test_the_reaper_ends_only_the_orphaned_plugin_chrome(tmp_path, fake_chrome):
+    root = tmp_path / "browser-profiles"
+    root.mkdir()
+    log = tmp_path / "reaper.log"
+    r = subprocess.run([sys.executable, "-c", DRIVER, str(fake_chrome), str(root),
+                        str(tmp_path / "elsewhere"), str(log), REAPER],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    alive = json.loads(r.stdout.strip().splitlines()[-1])
+    # the orphan's own child here is `sleep` (not chrome-family), so the reaper leaves it; the driver's
+    # killpg cleans it up. A real Chrome's children are all chrome-family.
+    assert alive == {"plugin_orphan": False, "outside_root": True, "live_parent": True}
+    lines = [l for l in log.read_text().splitlines() if "ORPHAN" in l]
+    assert len(lines) == 1 and "seat-a" in lines[0] and "why=reparented to adopter" in lines[0]
+
+
+def test_list_mode_kills_nothing_and_shows_the_verdict(tmp_path, fake_chrome):
+    root = tmp_path / "browser-profiles"
+    root.mkdir()
+    p = subprocess.Popen([str(fake_chrome), f"--user-data-dir={root / 'seat'}"], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(0.3)
+        env = {**os.environ, "CHROME_REAPER_PROFILE_ROOTS": str(root),
+               "CHROME_REAPER_LOG": str(tmp_path / "reaper.log")}
+        r = subprocess.run(["bash", REAPER, "--list", "999999999"], env=env, capture_output=True,
+                           text=True, timeout=30)
+        assert f"spared\t{p.pid}\t" in r.stdout
+        assert p.poll() is None
+        assert not (tmp_path / "reaper.log").exists()
+    finally:
+        os.killpg(p.pid, 9)
+        p.wait()
+
+
+def _headless(fake_dir, name="chrome"):
+    """A fake browser that the AGE rule can see: comm chrome, --headless in its arguments."""
+    p = fake_dir / name
+    p.write_text("#!/bin/sh\nsleep 300\n")
+    p.chmod(0o755)
+    return p
+
+
+def test_the_age_rule_spares_a_live_parent_plugin_chrome_and_still_reaps_the_rest(tmp_path, fake_chrome):
+    root = tmp_path / "browser-profiles"
+    root.mkdir()
+    q = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "start_new_session": True}
+    # plugin Chrome under a live fake plugin MCP (comm node, argv naming the MCP entry), with a child
+    mcp = fake_chrome.parent / "node"
+    mcp.write_text(f'#!/bin/sh\n"{fake_chrome}" --headless=new --user-data-dir="{root / "seat"}"\n:\n')
+    mcp.chmod(0o755)
+    plugin = subprocess.Popen([str(mcp), "/x/superpowers-chrome/1.6.1/mcp/dist/index.js"], **q)
+    # a headless Chrome outside the plugin root, also with a live parent
+    other = subprocess.Popen(["sh", "-c", f'"{fake_chrome}" --headless=new --user-data-dir="{tmp_path / "x"}"; :'], **q)
+    try:
+        time.sleep(2.2)                               # both now older than the 1 s limit below
+        kids = {}
+        for name, holder in (("plugin", plugin), ("other", other)):
+            br = int(subprocess.run(["pgrep", "-P", str(holder.pid)], capture_output=True, text=True).stdout.split()[0])
+            kid = int(subprocess.run(["pgrep", "-P", str(br)], capture_output=True, text=True).stdout.split()[0])
+            kids[name] = (br, kid)
+        allow = " ".join(str(p) for pair in kids.values() for p in pair)
+        env = {**os.environ, "CHROME_REAPER_PROFILE_ROOTS": str(root), "CHROME_REAPER_LOG": str(tmp_path / "log"),
+               "CHROME_REAPER_PIDS_ALLOW": allow}   # nothing outside this test is eligible
+        subprocess.run(["bash", REAPER, "1"], env=env, check=True, timeout=60)
+        alive = {n: [os.path.exists(f"/proc/{p}") and open(f"/proc/{p}/stat").read().split(")")[-1].split()[0] != "Z"
+                     for p in pair] for n, pair in kids.items()}
+        # the plugin browser and its child survive both sweeps; the other browser is reaped (a real
+        # Chrome's children are named chrome and go in the straggler sweep; this fake's child is sleep)
+        assert alive["plugin"] == [True, True] and alive["other"][0] is False
+    finally:
+        for h in (plugin, other):
+            try:
+                os.killpg(h.pid, 9)
+            except OSError:
+                pass
+            h.wait()
+
+
+def test_a_failing_classifier_is_logged_and_kills_nothing(tmp_path):
+    log = tmp_path / "log"
+    env = {**os.environ, "CHROME_REAPER_PROC": str(tmp_path / "no-proc"), "CHROME_REAPER_LOG": str(log),
+           "CHROME_REAPER_PIDS_ALLOW": "999999999"}
+    subprocess.run(["bash", REAPER, "1"], env=env, check=True, timeout=30)
+    text = log.read_text()
+    assert "WARN orphan list unavailable" in text and "WARN live-parent plugin Chrome list unavailable" in text
+    assert "ORPHAN" not in text and "SIGTERM" not in text
