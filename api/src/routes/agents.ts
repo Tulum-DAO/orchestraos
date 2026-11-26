@@ -14,7 +14,7 @@ import { logInteraction } from '../services/learning.js';
 import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession, getGenerationCounts, getGenerations } from '../services/identity-store-reader.js';
-import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
+import { buildCanonicalIndex, supersededBy, rootHasAnotherHead, type CanonicalIndex } from '../services/rotation-leftovers.js';
 import { hierarchyFieldsFor } from './agentHierarchy.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered, baseAgentId } from './agents-identity.js';
 import { loadConfig, dataDir } from '../lib/config.js';
@@ -95,10 +95,12 @@ export function isGenerationLeftover(args: {
 }): boolean {
   const { id, def, defs, alive, index } = args;
   if (String(def?.status || '') !== 'retired') return false;
-  if (alive) return false;
   if (index && (index.roots.has(id) || index.sessions.has(id))) return false;
-  if (def.test === true) return true;
   const rootId = typeof def.lineage_root === 'string' ? def.lineage_root : '';
+  // An alive retired generation stays listed only while nothing else answers for its root: once the
+  // root has a different canonical live head, the still-running predecessor pane is a leftover.
+  if (alive && !(index && rootHasAnotherHead(id, rootId || null, index))) return false;
+  if (def.test === true) return true;
   const root = rootId && rootId !== id ? defs[rootId] : undefined;
   return !!root && root !== def;
 }

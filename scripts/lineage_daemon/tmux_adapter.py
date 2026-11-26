@@ -45,6 +45,18 @@ class Tmux:
                 pairs.append((parts[0], parts[1]))
         return pairs
 
+    def server_id(self):
+        """"<pid>:<start_time>" of the running tmux server, or None (no server / unparsable).
+        Session-ids ($N) are only unique within one server's life; the attach sweep keys
+        its persisted pane->sink map by this so a new server never inherits it."""
+        rc, out = self._run(["tmux", "list-sessions", "-F", "#{pid} #{start_time}"])
+        if rc != 0:
+            return None
+        parts = (out.splitlines() or [""])[0].split()
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            return None
+        return f"{parts[0]}:{parts[1]}"
+
     def pane_map(self):
         """{session_name: (pane_id, pane_pid)} for window 0 / pane 0 of every live
         session, in ONE `tmux list-panes -a` subprocess (the batched per-slow-tick

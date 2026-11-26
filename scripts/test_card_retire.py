@@ -1,8 +1,8 @@
 """Card RETIRE verb (operator ruling 2026-10-10 via gm msg_c16b5264; design approved gm msg_3f3a4d05).
 
 An author (or its current generation) or gm may mark a PENDING card "no longer needed". It leaves the
-pending feed, stays in history with who/why/what replaced it, sends nothing and resumes nothing. Menus are
-never retired (menu-bridge resolves them from the pane). Storage = gated migration m20261010_card_retire:
+pending feed, stays in history with who/why/what replaced it, sends nothing and resumes nothing. Live menus
+are never retired (menu-bridge resolves them from the pane); gone ones are (test_card_retire_menu_gone.py). Storage = gated migration m20261010_card_retire:
 until the operator's arm is present the verb REFUSES rather than half-writing.
 
 Hermetic: tmp tasks.db with a tmp registry beside it; HOME is a tmp dir so the live ~/runtime sentinel
@@ -147,8 +147,10 @@ def test_only_a_pending_card_can_be_retired(store, db, terminal):
     assert store.get(rid)["status"] == terminal
 
 
-def test_a_menu_card_is_never_retired(store):
-    rid = _card(store, kind="menu")
+def test_a_live_menu_card_is_never_retired(store):
+    # A menu whose posing generation is current is menu-bridge's; a GONE menu retires:
+    # scripts/test_card_retire_menu_gone.py.
+    rid = _card(store, author="builder-g6", kind="menu")
     ok, why = store.retire(rid, "gm", "menu")
     assert not ok and "menu" in why
     assert store.get(rid)["status"] == "pending"

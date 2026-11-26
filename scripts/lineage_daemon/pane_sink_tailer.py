@@ -7,6 +7,12 @@ next write lands at offset 0 (no sparse file / stale offset). drop-oldest caps t
 returned chunk (the newest `capacity` bytes survive) — a real-time overlay is
 intentionally lossy; the WAL is the durable lane. read_all() NEVER raises (a
 missing/broken sink is just an empty read — fail-soft, never wedges the tick).
+
+It opens the sink BY NAME on every read (no cached fd), so when the attach sweep rebinds
+`<name>.pipe` to a renamed pane's live sink (an atomic symlink swap) the very next read
+follows it. On that inode change it reopens FROM THE END: the new file's undrained backlog
+is dropped once (truncated, returns b"") instead of replayed as a fresh burst, then new
+bytes read normally. The first read of a tailer has no previous inode and reads normally.
 """
 import os
 
@@ -17,6 +23,7 @@ class PaneSinkTailer:
     def __init__(self, path, capacity=DEFAULT_CAPACITY):
         self._path = path
         self._cap = int(capacity)
+        self._ident = None            # (st_dev, st_ino) the last read drained
 
     def read_all(self):
         try:
@@ -26,6 +33,11 @@ class PaneSinkTailer:
         try:
             st = os.fstat(fd)
             if not (st.st_mode & 0o170000) == 0o100000:   # only a regular file
+                return b""
+            ident, prev = (st.st_dev, st.st_ino), self._ident
+            self._ident = ident
+            if prev is not None and ident != prev:
+                os.ftruncate(fd, 0)   # rebound to another file: reopen from the end
                 return b""
             data = b""
             while True:

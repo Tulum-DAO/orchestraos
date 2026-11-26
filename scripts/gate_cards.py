@@ -145,8 +145,8 @@ def file_card(store, hold_id: str, *, agent: str, hits, resolved, role_names=Non
 def retire_card(store, rid: str, reason: str, *, by: str = "gate") -> bool:
     """A pending gate card nobody needs to answer any more (its hold was released or withdrawn): pending ->
     'retired' with who/why when the retire columns exist, else 'resolved_elsewhere'. ApprovalStore.retire refuses
-    every kind='menu' row (the menu bridge owns those), so the gate retires its own cards here, scoped to
-    origin='gate'."""
+    every safety-gate card (only a person answers one) and every kind='menu' row whose menu is still live, so the
+    gate retires its own cards here, scoped to origin='gate'."""
     if not rid:
         return False
     c = store._conn()

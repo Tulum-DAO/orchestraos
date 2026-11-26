@@ -97,6 +97,14 @@ def write_facts(data):
     return p
 
 
+def write_unified(data, age=0):
+    p = data / "state" / "unified-conversation.jsonl"
+    p.write_text(json.dumps({"channel": "dashboard", "role": "operator", "content": "ship the dream fix"}) + "\n")
+    _age(p, age)
+    return p
+
+
+UNIFIED_HEAD = "\nRECENT CROSS-CHANNEL (the operator said these on other interfaces):"
 PROFILE_HEAD = "\nLEARNED FROM CONVERSATIONS (implicit memory):"
 TELEGRAM_HEAD = "\nRECENT TELEGRAM MESSAGES (you sent these or the system sent these to the operator):"
 RULES_HEAD = "\nLEARNED RULES (from past interactions — follow these):"
@@ -131,7 +139,8 @@ def test_as_of_suffix_only_when_stale(tmp_path):
 
 def test_windows_are_what_the_audit_asked_for():
     assert SH.TELEGRAM_MAX_AGE == 6 * H and SH.LEARNING_MAX_AGE == 7 * D and SH.PROFILE_MAX_AGE == 30 * D
-    assert [n for n, *_ in SH.SOURCES] == ["profile", "telegram", "learning", "facts"]
+    assert SH.UNIFIED_MAX_AGE == 6 * H
+    assert [n for n, *_ in SH.SOURCES] == ["profile", "telegram", "unified", "learning", "facts"]
 
 
 def test_doctor_rows_one_per_source(data):
@@ -185,6 +194,7 @@ def test_all_fresh_is_byte_identical_to_base(mod, data, monkeypatch):
 @pytest.mark.parametrize("writer,head,window", [
     (write_profile, PROFILE_HEAD, SH.PROFILE_MAX_AGE),
     (write_telegram, TELEGRAM_HEAD, SH.TELEGRAM_MAX_AGE),
+    (write_unified, UNIFIED_HEAD, SH.UNIFIED_MAX_AGE),
 ])
 def test_skipped_sources_each_status(mod, data, writer, head, window):
     assert head not in mod.build_context(calling_channel="text")                    # missing
@@ -354,3 +364,13 @@ def test_proxy_survives_a_source_health_that_raises_at_import(data, monkeypatch)
     assert mod._source_health.__doc__.startswith("The pre-gate")
     write_telegram(data)
     assert TELEGRAM_HEAD in mod.build_context(calling_channel="text")
+
+
+def test_a_four_day_old_cross_channel_log_is_not_injected_as_recent(mod, data):
+    # the shared unified log's last writer stopped 2026-11-22; every relay call still read its tail as "RECENT"
+    p = write_unified(data, age=4 * D)
+    ctx = mod.build_context(calling_channel="text")
+    assert UNIFIED_HEAD not in ctx and "ship the dream fix" not in ctx
+    _age(p, 60)
+    ctx = mod.build_context(calling_channel="text")
+    assert UNIFIED_HEAD in ctx and "  [dashboard:operator] ship the dream fix" in ctx

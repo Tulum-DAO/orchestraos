@@ -62,6 +62,32 @@ class CodexWalAdapter:
         self._store = store
         self._lineage_root = lineage_root
         self._generation = generation
+        self._line_ts = 0.0
+
+    def _dated(self, ts, source_path):
+        """gm msg_396a37f3 (4)G: never write ts=0. A line with no timestamp of its own (claude
+        last-prompt / mode / permission-mode / ai-title / atis-latch, unparseable lines) takes
+        the last real ts seen in the same file: no later than the truth, so max(ts) readers
+        are unchanged. 0.0 only before this adapter has seen any dated line in that file."""
+        last = self.__dict__.setdefault("_last_ts", {})
+        if ts:
+            last[source_path] = ts
+            return ts
+        return last.get(source_path, 0.0)
+
+    def _stamp_looked(self, source_path, off):
+        """Record that this pass LOOKED at source_path and had nothing to consume.
+
+        gm's ranked item 3: `set_cursor` — the ONLY writer of wal_cursors.updated —
+        lives inside tail's try/finally, so every early return above it stamped
+        NOTHING and `updated` could not tell "looked, nothing new" from "never
+        looked" (the orchestra-builder 4.3h stall was invisible to it for exactly
+        this reason, and bg_wal_census's own docstring asserts the stronger
+        reading). The source EXISTS and was read here, so insert-or-update is
+        truthful; the offset is written UNCHANGED, so this is never a consumption.
+        """
+        self._store.set_cursor(source_path, self._lineage_root, last_off=off,
+                               last_seq=self._store.max_seq())
 
     def tail(self, source_path):
         """Consume new complete lines from source_path; return #events appended.
@@ -76,12 +102,17 @@ class CodexWalAdapter:
                 fh.seek(start)
                 chunk = fh.read()
         except FileNotFoundError:
+            # LOOKED, found no source. Touch an existing cursor only — never mint one
+            # (store.touch_cursor); a vanished source must not look like a live one.
+            self._store.touch_cursor(source_path)
             return 0
         if not chunk:
+            self._stamp_looked(source_path, start)
             return 0
 
         last_nl = chunk.rfind(b"\n")
         if last_nl == -1:
+            self._stamp_looked(source_path, start)
             return 0
         consumable = chunk[:last_nl + 1]
 
@@ -116,6 +147,7 @@ class CodexWalAdapter:
         return appended
 
     def _emit_line(self, text_bytes, source_path, line_start, sid_box):
+        self._line_ts = 0.0
         try:
             obj = json.loads(text_bytes)
         except ValueError:
@@ -123,6 +155,9 @@ class CodexWalAdapter:
                          text_bytes, sid="?", ts=0.0)
             return 1
 
+        # Every codex line carries its own top-level timestamp; the emitters below pass ts=0.0
+        # and _append dates the row from this line (gm (4)G: codex WALs were undated).
+        self._line_ts = _parse_ts(obj.get("timestamp")) if isinstance(obj, dict) else 0.0
         integrity = hashlib.sha256(text_bytes).hexdigest()
         typ = obj.get("type")
         payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
@@ -201,7 +236,8 @@ class CodexWalAdapter:
         if integrity is None and raw_bytes is not None:
             integrity = hashlib.sha256(raw_bytes).hexdigest()
         self._store.append(
-            ts=ts, lineage_root=self._lineage_root, generation=self._generation,
+            ts=self._dated(ts or self._line_ts, source_path), lineage_root=self._lineage_root,
+            generation=self._generation,
             sid=sid, runtime=self.runtime, kind=kind, summary=summary,
             body_ref=body_ref or f"{source_path}:{source_off}",
             source_path=source_path, source_off=source_off, integrity=integrity)

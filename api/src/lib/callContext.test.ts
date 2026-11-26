@@ -61,3 +61,19 @@ test('the opening is fenced as past context that is over, the boundary last (liv
     assert.equal(lines[lines.length - 1], PAST_CLOSE);
   }
 });
+
+test('a turn is an exchange: consecutive phrases of one speaker in one call merge, first stamp kept', async () => {
+  const { render } = await import('./callContext.js');
+  const T = 1764090000;
+  const L = (at: number, who: string, text: string, channel: 'chat' | 'call', call_id = '') => ({ at, who, text, channel, call_id });
+  const out = render([L(T, 'Ada', "I didn't ask about", 'call', 'vc_a'), L(T + 1, 'Ada', 'that', 'call', 'vc_a'),
+    L(T + 2, 'Arturo', "You didn't.", 'call', 'vc_a'), L(T + 3, 'Arturo', 'Sorry.', 'call', 'vc_a'),
+    L(T + 4, 'Ada', 'next call', 'call', 'vc_b'), L(T + 5, 'Ada', 'typed', 'chat'), L(T + 6, 'Ada', 'typed again', 'chat')],
+  2000, 'UTC', 'UTC');
+  assert.deepEqual(out.split('RECENT (verbatim):\n')[1].split('\n'), [
+    "[2025-11-25T17:00:00Z 17:00 UTC] call vc_a Ada: I didn't ask about that",
+    "[2025-11-25T17:00:02Z 17:00 UTC] call vc_a Arturo: You didn't. Sorry.",
+    '[2025-11-25T17:00:04Z 17:00 UTC] call vc_b Ada: next call',
+    '[2025-11-25T17:00:05Z 17:00 UTC] chat Ada: typed',
+    '[2025-11-25T17:00:06Z 17:00 UTC] chat Ada: typed again']);
+});

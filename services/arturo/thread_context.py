@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover — py<3.9
 DEFAULT_BUDGET_TOKENS = 6000      # opening context; GPT-Live's start frame has no stated cap, appends do (500)
 APPEND_MAX_TOKENS = 500           # native protocol.APPEND_MAX_TOKENS
 LINE_MAX_CHARS = 1200             # one very long chat reply must not eat the whole budget
+MERGE_GAP_S = 120                 # one speaker's phrases further apart than this in a call are separate turns
 SUMMARY_SHARE = 0.2               # of the budget, for the EARLIER block
 # The opening is fenced as history that is over (live probes 2026-11-25: unfenced, the thread ended on verbatim call
 # dialogue and Arturo never greeted, native-90a7e00cd3d1; thread off, he greeted at 1.5 s, native-8f4a14b348a8).
@@ -53,6 +54,8 @@ class Line:
     text: str
     channel: str                  # "chat" | "call"
     call_id: str = ""
+    role: str = ""                # "user" | "agent": who spoke, by role, so a name clash never folds two speakers
+    phrases: int = 1              # call phrases folded into this turn (merge_phrases)
 
 
 def estimate_tokens(text: str) -> int:
@@ -123,9 +126,11 @@ def _redact(text: str) -> str:
     return _SECRET_RE.sub(lambda m: (m.group(1) + "[redacted]") if m.group(1) else (m.group(2) + "[redacted]"), text)
 
 
-def _clip(text: str, n: int) -> str:
+def _clip(text: str, n: int, tail: bool = False) -> str:
     text = " ".join(_redact(str(text or "")).split())
-    return text if len(text) <= n else text[: n - 1] + "…"
+    if len(text) <= n:
+        return text
+    return "…" + text[len(text) - (n - 1):] if tail else text[: n - 1] + "…"
 
 
 # --- sources --------------------------------------------------------------------------------------------------------
@@ -171,7 +176,7 @@ def _journal_files(calls_dir, now: float) -> list:
 
 
 def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, assistant_label: Optional[str] = None,
-               operator_label: str = "Operator", now: Optional[float] = None) -> list:
+               operator_label: str = "Operator", now: Optional[float] = None, thread_id: Optional[str] = None) -> list:
     """Every spoken phrase of the owner's calls. owner None = Arturo's own calls (journals with no `agent`), else the
     calls placed with that agent. A file still marked live counts (the previous call may finalize seconds after the
     next starts); `exclude` is the call now starting."""
@@ -189,7 +194,10 @@ def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, a
         if exclude and cid == exclude:
             continue
         agent = doc["agent"] if isinstance(doc.get("agent"), str) and doc["agent"] else None
-        if agent != (owner or None):                                   # only a named agent owns a call
+        if thread_id is not None:
+            if doc.get("thread_id") != thread_id:                      # the calls slotted into that page's thread
+                continue
+        elif agent != (owner or None):                                 # only a named agent owns a call
             continue
         start = _epoch(doc.get("started_at"))
         for t in doc.get("turns") or []:
@@ -206,7 +214,7 @@ def call_lines(calls_dir, owner: Optional[str], exclude: Optional[str] = None, a
             if at is None:
                 continue
             out.append(Line(at=at, who=operator_label if role == "user" else label, text=text, channel="call",
-                            call_id=cid))
+                            call_id=cid, role="user" if role == "user" else "agent"))
     return out
 
 
@@ -232,7 +240,9 @@ def _where(line: Line) -> str:
 
 
 def format_line(line: Line, tz: str, tz_label: str) -> str:
-    return f"{stamp(line.at, tz, tz_label)} {_where(line)} {line.who}: {_clip(line.text, LINE_MAX_CHARS)}"
+    # a merged turn over the cap keeps its tail: the newest words are the ones a caller refers back to
+    return (f"{stamp(line.at, tz, tz_label)} {_where(line)} {line.who}: "
+            f"{_clip(line.text, LINE_MAX_CHARS, tail=line.phrases > 1)}")
 
 
 def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> list:
@@ -247,7 +257,7 @@ def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> lis
     out = []
     for key, lines in groups:
         first = lines[0]
-        n = len(lines)
+        n = sum(l.phrases for l in lines)
         if key == "chat":
             gist = _clip(" / ".join(f"{l.who}: {l.text}" for l in lines[-2:]), SUMMARY_ITEM_CHARS)
             out.append(f"- {stamp(first.at, tz, tz_label)} chat, {n} message(s) not shown; last: {gist}")
@@ -258,13 +268,30 @@ def _summaries(dropped: list, tz: str, tz_label: str, call_summary: dict) -> lis
     return out
 
 
+def merge_phrases(lines: list) -> list:
+    """A turn is an exchange: consecutive phrases by the same speaker (same role and name) in the same call become one
+    turn, stamped at its first phrase, while each phrase follows the one before within MERGE_GAP_S. Chat lines never
+    merge. `lines` in time order."""
+    out, last_at = [], None
+    for ln in lines:
+        prev = out[-1] if out else None
+        if (prev is not None and ln.channel == "call" and prev.channel == "call" and ln.call_id == prev.call_id
+                and ln.role == prev.role and ln.who == prev.who and ln.at - last_at <= MERGE_GAP_S):
+            out[-1] = Line(at=prev.at, who=prev.who, text=f"{prev.text} {ln.text}", channel="call",
+                           call_id=prev.call_id, role=prev.role, phrases=prev.phrases + 1)
+        else:
+            out.append(ln)
+        last_at = ln.at
+    return out
+
+
 def render(lines: list, budget_tokens: int = DEFAULT_BUDGET_TOKENS, tz: str = "UTC", tz_label: str = "UTC",
            title: str = "THREAD", call_summary: Optional[dict] = None) -> str:
     head = (f"{title}: everything above this call, oldest first. Every line is [UTC time, {tz_label} time] then "
             "chat or call <id>, who, and the words. Newest lines are verbatim; older ones are summarized.")
     if not lines:
         return f"{head}\n(no earlier chat or calls in this thread)"
-    lines = sorted(lines, key=lambda l: l.at)
+    lines = merge_phrases(sorted(lines, key=lambda l: l.at))
     summary_cap = max(40, int(budget_tokens * SUMMARY_SHARE))
     room = budget_tokens - estimate_tokens(head) - summary_cap
     kept = []
@@ -367,4 +394,106 @@ def load(chat_agent: str, call_owner: Optional[str], calls_dir, exclude: Optiona
     lines += call_lines(calls_dir, owner=call_owner, exclude=exclude, assistant_label=assistant_label,
                         operator_label=operator_label)
     text = render(lines, budget_tokens=budget_tokens, tz=tz, tz_label=tz_label)
+    return "\n".join([PAST_OPEN, text] + notes + [PAST_CLOSE])
+
+
+# --- the standalone Arturo page's own thread (the operator 2026-11-25, gm msg_e7402cbb) ------------------------------
+# A call placed from that page opens with ITS thread: the typed turns and the earlier calls of the web_ thread it is
+# slotted into (the proxy's threads.db, thread_store), never gm's chat. Same stamps, same fence as load().
+THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")          # thread_store / call_threads
+_PAGE_TAG_RE = re.compile(r"^\[Context:[^\]]*\]\s*")
+THREAD_ROWS_MAX = 400
+
+
+def threads_db_path(orch_dir: Optional[str] = None):
+    root = orch_dir or os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/.orchestra")
+    return os.path.join(root, "state", "arturo", "threads.db")
+
+
+def thread_readable(thread_id: str, principal: Optional[str], db=None) -> bool:
+    """The proxy's _thread_refusal rule (Claude review of #644): "fleet" reads any thread; any other caller reads only
+    a thread it started (thread_store started_by); unknown or unreadable = no, for a non-fleet caller."""
+    if not isinstance(thread_id, str) or not THREAD_ID_RE.fullmatch(thread_id):
+        return False
+    if principal == "fleet":
+        return True
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{db or threads_db_path()}?mode=ro", uri=True, timeout=2)
+        try:
+            row = conn.execute("SELECT started_by FROM threads WHERE id=?", (thread_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — cannot tell: not theirs
+        return False
+    return row is not None and row[0] == (principal or "anonymous")
+
+
+def thread_entries(thread_id: str, db, operator_label: str = "Operator", assistant_label: str = "Arturo") -> list:
+    """(role, Line) for the thread's turns, oldest first. A typed turn is "chat"; a spoken one is "call <id>", the id
+    taken from the call's end marker that follows it. Spoken lines still open when a typed turn arrives belong to a
+    call that ended without its marker ("earlier"); at the end of the thread they are the call still open ("live").
+    The end marker and the hidden page tag are not words anyone said. Read-only; raises if the store cannot be read.
+    A bad id reads nothing and never opens the store."""
+    if not isinstance(thread_id, str) or not THREAD_ID_RE.fullmatch(thread_id):
+        return []
+    import sqlite3
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+    try:
+        rows = conn.execute("SELECT role, content, ts, mode, meta FROM turns WHERE thread_id=? ORDER BY seq DESC "
+                            "LIMIT ?", (thread_id, THREAD_ROWS_MAX)).fetchall()
+    finally:
+        conn.close()
+    out, pending = [], []
+    for role, content, ts, mode, meta in reversed(rows):
+        try:
+            m = json.loads(meta) if meta else {}
+        except ValueError:
+            m = {}
+        if isinstance(m, dict) and m.get("kind") == "call_end":
+            cid = m.get("call_id") if isinstance(m.get("call_id"), str) else "call"
+            for line in pending:
+                line.call_id = cid
+            pending = []
+            continue
+        text = _PAGE_TAG_RE.sub("", content or "").strip() if role == "user" else (content or "").strip()
+        at = _epoch(ts)
+        if not text or at is None or role not in ("user", "assistant"):
+            continue
+        who = operator_label if role == "user" else assistant_label
+        if mode == "voice":
+            line = Line(at=at, who=who, text=text, channel="call", call_id="live",
+                        role="user" if role == "user" else "agent")
+            pending.append(line)
+        else:
+            for p in pending:
+                p.call_id = "earlier"
+            pending = []
+            line = Line(at=at, who=who, text=text, channel="chat", call_id="")
+        out.append((role, line))
+    return out
+
+
+def thread_lines(thread_id: str, db, operator_label: str = "Operator", assistant_label: str = "Arturo") -> list:
+    """thread_entries without the roles."""
+    return [line for _, line in thread_entries(thread_id, db, operator_label, assistant_label)]
+
+
+def load_thread(thread_id: str, db=None, calls_dir=None, exclude: Optional[str] = None,
+                budget_tokens: int = DEFAULT_BUDGET_TOKENS, tz: Optional[str] = None, tz_label: Optional[str] = None,
+                operator_label: Optional[str] = None) -> str:
+    """The opening for a call placed from the standalone Arturo page: that page's thread, fenced like load(). If the
+    thread store cannot be read, the voice-call journals that name the thread stand in, with a note."""
+    if tz is None or tz_label is None:
+        tz, tz_label = shaw_tz()
+    operator_label = operator_label or operator_name()
+    notes = []
+    try:
+        lines = thread_lines(thread_id, db or threads_db_path(), operator_label=operator_label)
+    except Exception as e:  # noqa: BLE001 — the journals that name the thread still come through
+        notes.append(f"(thread {thread_id} could not be read: {type(e).__name__})")
+        lines = call_lines(calls_dir, owner=None, exclude=exclude, operator_label=operator_label,
+                           thread_id=thread_id) if calls_dir else []
+    lines = [l for l in lines if not (exclude and l.call_id == exclude)]
+    text = render(lines, budget_tokens=budget_tokens, tz=tz, tz_label=tz_label, title=f"THREAD {thread_id}")
     return "\n".join([PAST_OPEN, text] + notes + [PAST_CLOSE])

@@ -1,7 +1,8 @@
 # Contributing to OrchestraOS
 
 Thanks for building the harness with us. This page is the whole process; the merge rule
-at the bottom is what a reviewer actually checks.
+at the bottom is what a reviewer actually checks, and [docs/LANDING_GATE.md](docs/LANDING_GATE.md) is
+the exact gate a PR passes on its way onto `main`.
 
 ## Before you start
 
@@ -68,7 +69,8 @@ A PR is merged when all of the following hold on the merged tree:
 4. **Proven by effect** section filled in, and the reviewer could reproduce it from the PR.
 5. No new default that points at a private machine, and no credential in any shipped file.
 
-Reviewers merge with a merge commit that repeats the tally and scan counts.
+Reviewers squash-merge, pinned to the exact reviewed head (`gh pr merge <n> --squash --match-head-commit <sha>`),
+and the landing note repeats the tally by job name and the scan counts: [docs/LANDING_GATE.md](docs/LANDING_GATE.md).
 
 ## Running the checks locally
 

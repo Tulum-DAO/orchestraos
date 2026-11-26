@@ -63,7 +63,8 @@ GATED_MIGRATIONS: list = [
     # gate, NOT migrate-on-restart). Two additive-nullable columns; legacy rows
     # carry NULL after the ALTER. Stamped at the ONE core (record_answer);
     # provenance-only, NEVER branched on for authorization.
-    #   answer_surface  web|phone|watch|gateway|agent_cli|unknown — where answered
+    #   answer_surface  web|chat|phone|watch|quest|gateway|agent_cli|unknown — where answered
+    #                   (or dismissed: mark_discarded stamps the same columns)
     #   answered_by     the principal: 'operator' | '<agent_id>' (self-authored gates)
     {"id": "m20260825_answer_attribution",
      "columns": [("answer_surface", "TEXT"), ("answered_by", "TEXT")]},
@@ -129,11 +130,14 @@ def _cols(c, table):
     return {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
-def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None):
+def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None, read_pane=None,
+                has_session=None):
     """THE one RETIRE transition, shared by ApprovalStore and QuestionnaireStore (same tasks.db).
-    pending -> 'retired' with who/why/what-replaced-it; the row stays and goes to history. Never a
-    kind='menu' row (menu-bridge resolves those from the pane). Sends nothing and resumes nothing:
-    it is not an answer. Returns (ok, reason); a refusal always says why."""
+    pending -> 'retired' with who/why/what-replaced-it; the row stays and goes to history. A
+    kind='menu' row only when its menu is GONE (see menu_gone): a live menu is menu-bridge's to
+    resolve from the pane. A safety-gate card (permission card / grant proposal) is never retired:
+    only a person answers it. Sends nothing and resumes nothing: it is not an answer.
+    Returns (ok, reason); a refusal always says why."""
     reason = (reason or "").strip()
     if not reason:
         return False, "a reason is required: say in plain words why the card is no longer needed"
@@ -142,18 +146,26 @@ def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None)
                        f"the operator arms via ~/runtime/APPROVAL_DDL_ARMED_{RETIRE_MIGRATION})")
     text_col = "question" if table == "approval_requests" else "title"
     kind_sql = "COALESCE(kind,'')" if table == "approval_requests" else "''"
-    row = c.execute(f"SELECT from_agent, status, {kind_sql} AS kind, summary, {text_col} AS text "
+    extra = ", origin, op_key, created_at, menu" if table == "approval_requests" else ""
+    row = c.execute(f"SELECT from_agent, status, {kind_sql} AS kind, summary, {text_col} AS text{extra} "
                     f"FROM {table} WHERE id=?", [rid]).fetchone()
     if not row:
         return False, f"no card {rid}"
-    if row["kind"] == "menu":
-        return False, f"{rid} is kind='menu': menu-bridge owns it and resolves it from the pane"
     if row["status"] != "pending":
         return False, f"{rid} is {row['status']}, not pending: only a pending card can be retired"
     import seat_identity
     ok, why = seat_identity.may_retire(reg, caller, row["from_agent"])
     if not ok:
         return False, why
+    menu_note = ""
+    if row["kind"] == "menu":
+        if is_gate_row(dict(row)):
+            return False, f"{rid} is a safety-gate card: only a person answers it, it is never retired"
+        gone, basis = menu_gone(row, reg, read_pane, has_session)
+        if not gone:
+            return False, (f"{rid} is kind='menu' and its menu is still live ({basis}): menu-bridge "
+                           f"owns it and resolves it from the pane")
+        menu_note = f" [menu gone, pane retired: {basis}]"
     if superseded_by:
         if superseded_by == rid:
             return False, "a card cannot supersede itself"
@@ -165,17 +177,218 @@ def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None)
             return False, f"--superseded-by {superseded_by}: no such card"
     stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = f"\n\n— RETIRED {stamp} by {caller}: {reason}" + (
-        f" (superseded by {superseded_by})" if superseded_by else "")
+        f" (superseded by {superseded_by})" if superseded_by else "") + menu_note
     res = c.execute(
         f"UPDATE {table} SET status='retired', retired_at=?, retired_by=?, retire_reason=?, "
         f"superseded_by=?, summary=COALESCE(summary, {text_col}, '') || ? "
-        f"WHERE id=? AND status='pending' AND {kind_sql}<>'menu'",
-        [stamp, caller, reason, superseded_by or None, line, rid])
+        f"WHERE id=? AND status='pending' AND {kind_sql}=?",
+        [stamp, caller, reason, superseded_by or None, line, rid, row["kind"]])
     c.commit()
     if res.rowcount != 1:
         now = c.execute(f"SELECT status FROM {table} WHERE id=?", [rid]).fetchone()
         return False, f"{rid} changed under us (now {now['status'] if now else 'gone'}): not retired"
     return True, None
+
+
+def reopen_card(c, rid, caller, reason, reg, now_iso=None, ledger_has_card=None):
+    """THE one RE-OPEN transition: undo a retire done IN ERROR. retired -> pending on
+    approval_requests, the retire columns cleared, one history line appended
+    ("— RE-OPENED <stamp> by <caller>: <reason>"); the RETIRED line above it stays, so the history
+    shows both. gm only (bare or current generation). Sends nothing and resumes nothing: notified_at
+    is untouched, so no notifier fires again. Never re-opens a safety-gate card (the gate retires its
+    own cards when a grant covers them), a card another card superseded (the winner is the live
+    question), or a card the outward-action ledger already settled (an approve would then do
+    nothing). ledger_has_card(rid) -> True | False | None (None = cannot tell = refuse).
+    Returns (ok, reason)."""
+    reason = (reason or "").strip()
+    if not reason:
+        return False, "a reason is required: say why the retire was wrong"
+    import seat_identity
+    try:
+        ok = seat_identity._is_current(reg, caller, seat_identity.STEWARD)
+    except sqlite3.Error:
+        ok = False
+    if not ok:
+        return False, f"only gm may re-open a retired card ({caller} is not gm)"
+    if not set(RETIRE_COLS) <= _cols(c, "approval_requests"):
+        return False, f"DDL not armed: {RETIRE_MIGRATION}"
+    row = c.execute("SELECT status, origin, menu, superseded_by FROM approval_requests WHERE id=?",
+                    [rid]).fetchone()
+    if not row:
+        return False, f"no card {rid}"
+    if row["status"] != "retired":
+        return False, f"{rid} is {row['status']}, not retired: only a retired card can be re-opened"
+    if is_gate_row(dict(row)):
+        return False, f"{rid} is a safety-gate card: the gate settled it; it is never re-opened"
+    if row["superseded_by"]:
+        return False, (f"{rid} was superseded by {row['superseded_by']}: that card is the live question; "
+                       f"re-open would ask it twice")
+    held = ledger_has_card(rid) if ledger_has_card else False
+    if held is None:
+        return False, f"{rid}: the outward-action ledger cannot be read, so re-open is refused"
+    if held:
+        return False, (f"{rid} has an outward-action ledger row (settled when it was retired): an approve "
+                       f"would do nothing; file a new card instead")
+    stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"\n\n— RE-OPENED {stamp} by {caller}: {reason}"
+    res = c.execute(
+        "UPDATE approval_requests SET status='pending', retired_at=NULL, retired_by=NULL, retire_reason=NULL, "
+        "superseded_by=NULL, summary=COALESCE(summary, question, '') || ? WHERE id=? AND status='retired'",
+        [line, rid])
+    c.commit()
+    if res.rowcount != 1:
+        return False, f"{rid} changed under us: not re-opened"
+    return True, None
+
+
+def _iso(ts):
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def menu_gone(row, reg, read_pane=None, has_session=None):
+    """(gone, basis) for a PENDING kind='menu' card. Gone only on POSITIVE evidence; anything
+    unreadable counts as live.
+      - DEAD SEAT, either row type, when the generation check cannot prove it: no canonical row for
+        the root (or canonical status 'retired' or 'parked') AND has_session says no tmux session
+        exists under the author, the root, any `<root>-gN` or the canonical session name. A menu is
+        pane state of a process: with no pane anywhere it is gone, even for a parked seat (a resumed
+        seat boots without it). An online or provisional seat still refuses. Without has_session
+        this rule is off.
+      - BRIDGE row (origin='menu_bridge', op_key 'menu:<session>:...'): the owner pane is READ
+        (capture only). Session not in tmux -> gone. A menu on screen, or a failed read -> live.
+        Pane up with no menu -> gone only if the generation that posed it has retired.
+      - CLI-minted row: there is no pane menu, so the question is the posing generation alone:
+        a named author generation (`<root>-gN`) with retired_at set, or a bare-root author whose
+        CURRENT canonical generation was promoted after the card was created."""
+    op_key = row["op_key"] or ""
+    if row["origin"] == "menu_bridge" and op_key.startswith("menu:") and op_key.count(":") >= 2:
+        session = op_key.split(":", 2)[1]
+        seen = read_pane(session) if read_pane else "error:no pane reader"
+        if seen == "no-session":
+            return True, f"{session} not in tmux"
+        if seen != "none":
+            return False, ("menu still on screen in " + session) if seen == "menu" else \
+                f"could not read {session}'s pane ({seen})"
+        gone, basis = _posing_generation_retired(reg, row["from_agent"], row["created_at"], has_session)
+        return gone, (f"no menu on screen in {session}; {basis}" if gone else basis)
+    return _posing_generation_retired(reg, row["from_agent"], row["created_at"], has_session)
+
+
+def _posing_generation_retired(reg, author, created_at, has_session=None, menu=True):
+    """(gone, basis) from the registry alone. Called for kind='menu' cards only: a rotation ends a
+    menu (pane state), but it never answers an approval or a human task."""
+    import seat_identity
+    c = seat_identity._conn(reg)
+    if c is None:
+        return False, "no registry to check the posing generation"
+    try:
+        root, gen = seat_identity.resolve(reg, author or "")
+        if gen is not None:
+            r = c.execute("SELECT retired_at FROM generations WHERE root=? AND generation=?",
+                          (root, gen)).fetchone()
+            if r and r[0]:
+                return True, f"{author} retired {r[0]}"
+            return False, f"{author} is not retired"
+        r = c.execute("SELECT g.promoted_at FROM canonical k JOIN generations g ON g.id = k.generation_id "
+                      "WHERE k.root=?", (root,)).fetchone()
+        m = seat_identity._GEN.match(author or "")     # an unregistered `<root>-gN` still names its root
+        dead_root = m["root"] if m else root
+        canon = c.execute("SELECT tmux_session, status FROM canonical WHERE root=?", (dead_root,)).fetchone()
+        gens = [n for (n,) in c.execute("SELECT generation FROM generations WHERE root=?", (dead_root,))]
+    except sqlite3.Error as e:
+        return False, f"registry unreadable ({type(e).__name__})"
+    finally:
+        c.close()
+    promoted, made = _iso(r[0]) if r else None, _iso(created_at)
+    if promoted and made and made < promoted:
+        return True, f"posed {created_at} by an earlier {root} generation (current promoted {r[0]})"
+    dead, why = _seat_is_dead(author, dead_root, canon, gens, has_session,
+                              gone_states=("retired", "parked") if menu else ("retired",))
+    if dead:
+        return True, why
+    return False, f"posed by {root}'s current generation (or unprovable)"
+
+
+def _seat_is_dead(author, root, canon, gens, has_session, gone_states=("retired",)):
+    """(dead, basis): no canonical row (or canonical status in gone_states) AND no tmux session under
+    any name the seat could have had. has_session(name) -> True | False | None (None = could not
+    tell = live)."""
+    if has_session is None:
+        return False, ""
+    if canon and canon[1] not in gone_states:
+        return False, ""
+    names = {author, root, *(f"{root}-g{n}" for n in gens)}
+    if canon and canon[0]:
+        names.add(canon[0])
+    for name in sorted(n for n in names if n):
+        if has_session(name) is not False:
+            return False, ""
+    state = "no canonical row" if not canon else f"canonical {canon[1]}"
+    return True, f"posing seat {root} is gone: {state}, no tmux session ({', '.join(sorted(n for n in names if n))})"
+
+
+def close_menu_card(c, rid, caller, reason, reg, read_pane, now_iso=None):
+    """THE one CLOSE-MENU transition. A PENDING kind='menu' row whose question was answered another
+    way -> status 'resolved_elsewhere' (the status the menu reconciler already writes; every client
+    tolerates it) with who/why appended to the summary. Only the author, its current generation,
+    or gm (seat_identity.may_retire). A safety-gate card is refused: only a person answers it.
+    Two kinds of evidence, never mixed:
+      - BRIDGE row (origin='menu_bridge', op_key 'menu:<session>:...'): the owner pane is READ
+        (read_pane(session) -> 'menu' | 'none' | 'no-session' | 'error'); a menu still on
+        screen, or a failed read, refuses. Note: "answered in pane".
+      - CLI-minted row (no bridge origin): there is no pane menu, so a blank screen proves
+        nothing; the pane is NOT read and a --reason stating the actual basis is required.
+    Never sends keys or injects: read_pane only captures. Sends nothing, resumes nothing.
+    Returns (ok, reason, note)."""
+    reason = (reason or "").strip()
+    row = c.execute("SELECT from_agent, status, COALESCE(kind,'') AS kind, origin, op_key, menu "
+                    "FROM approval_requests WHERE id=?", [rid]).fetchone()
+    if not row:
+        return False, f"no card {rid}", None
+    if row["kind"] != "menu":
+        return False, f"{rid} is kind='{row['kind']}', not a menu card: use retire", None
+    if row["status"] != "pending":
+        return False, f"{rid} is {row['status']}, not pending", None
+    if is_gate_row(dict(row)):
+        return False, f"{rid} is a safety-gate card: only a person answers it, nothing closed", None
+    import seat_identity
+    ok, why = seat_identity.may_retire(reg, caller, row["from_agent"])
+    if not ok:
+        return False, why, None
+    stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    op_key = row["op_key"] or ""
+    bridge = row["origin"] == "menu_bridge" and op_key.startswith("menu:") and op_key.count(":") >= 2
+    if bridge:
+        session = op_key.split(":", 2)[1]
+        seen = read_pane(session)
+        if seen == "menu":
+            return False, f"a menu is still on screen in {session}: answer it there, nothing closed", None
+        if seen not in ("none", "no-session"):
+            return False, f"could not read {session}'s pane ({seen}): nothing closed", None
+        basis = ("no menu on screen" if seen == "none" else f"{session} not in tmux")
+        note = f"answered in pane ({basis}, checked {stamp})" + (f": {reason}" if reason else "")
+    else:
+        if not reason:
+            return False, ("a CLI-minted menu card has no pane menu to check: --reason must state "
+                           "the actual basis (e.g. 'the operator ruled X in session')"), None
+        note = f"closed: {reason} (CLI-minted menu card; no pane read)"
+    line = f"\n\n— CLOSED {stamp} by {caller}: {note}"
+    res = c.execute(
+        "UPDATE approval_requests SET status='resolved_elsewhere', "
+        "summary=COALESCE(summary, question, '') || ? "
+        "WHERE id=? AND status='pending' AND kind='menu'", [line, rid])
+    if res.rowcount != 1:
+        c.rollback()
+        return False, f"{rid} changed under us: not closed", None
+    for t in ("menu_bridge_absence", "menu_bridge_capheld"):
+        if op_key and c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [t]).fetchone():
+            c.execute(f"DELETE FROM {t} WHERE op_key=?", [op_key])
+    c.commit()
+    return True, None, note
 
 
 def export_retired(row):
@@ -249,6 +462,16 @@ def _ledger_answer_hook(rid, answer, option_n=None, answer_text=None):
     except Exception as e:  # noqa: BLE001 — the ledger is a view of the answer, never a gate on it
         print(f"[approval_schema] outward ledger hook for {rid} failed ({type(e).__name__}): {e}",
               file=sys.stderr)
+
+
+def dismiss_line(now, surface=None, by=None, reason=None):
+    """The ONE history line a dismiss with where/who/why leaves: "— DISMISSED <utc> via <surface> by <who>: <reason>".
+    mark_discarded appends it to the summary; the gateway hands the same string to approval_resume.deliver_discarded
+    for the author's notice, so the mail never has to find it in the summary (an older card's line, carried along by
+    a re-raise that copied the summary, must never read as this dismiss's)."""
+    who = f" by {by}" if by else ""
+    where = f" via {surface}" if surface else ""
+    return f"— DISMISSED {now[:19]}Z{where}{who}" + (f": {reason}" if reason else "")
 
 
 class ApprovalStore:
@@ -468,13 +691,19 @@ class ApprovalStore:
     # the done-brief JSON (§3.4). Coerced dict/list -> JSON exactly like create() (:190).
     _PATCHABLE = ("feature", "block_task", "blocks_what", "summary", "evidence")
 
-    def update_fields(self, rid, **fields):
+    def update_fields(self, rid, *, caller=None, **fields):
         """General in-place patch (contract DEC-1789349623024244 / msg_410c3454):
         update ONLY the given columns on a PENDING kind='human_task' row, and set
         question := block_task whenever block_task is given. Refuse (return False)
         a missing id, a non-pending row, or a non-human_task row. Only allow-listed
         columns are writable. `create()` returns-existing on a repeat op_key so it
-        cannot backfill and there was no update verb — this is that verb."""
+        cannot backfill and there was no update verb — this is that verb.
+
+        GUARDED (gm msg_b6993f91, 2026-11-25, for the reschedule patch): when `caller`
+        is given, only the author, its current generation, or gm may change the row
+        (seat_identity.may_patch, the retire circle); the UPDATE itself re-checks
+        status='pending' AND kind='human_task', so a row answered between the read
+        and the write is never changed (rowcount 0 -> False)."""
         cols = {k: v for k, v in fields.items() if k in self._PATCHABLE}
         if not cols:
             return False
@@ -485,9 +714,15 @@ class ApprovalStore:
         c = self._conn()
         try:
             row = c.execute(
-                "SELECT status, kind FROM approval_requests WHERE id=?", [rid]).fetchone()
+                "SELECT status, kind, from_agent FROM approval_requests WHERE id=?", [rid]).fetchone()
             if not row or row["status"] != "pending" or row["kind"] != "human_task":
                 return False
+            if caller is not None:
+                import seat_identity
+                ok, _why = seat_identity.may_patch(
+                    seat_identity.registry_beside(self.db_path), caller, row["from_agent"])
+                if not ok:
+                    return False
             have = {r[1] for r in
                     c.execute("PRAGMA table_info(approval_requests)").fetchall()}
             sets, vals = [], []
@@ -499,9 +734,10 @@ class ApprovalStore:
             if not sets:
                 return False
             vals.append(rid)
-            c.execute(f"UPDATE approval_requests SET {', '.join(sets)} WHERE id=?", vals)
+            res = c.execute(f"UPDATE approval_requests SET {', '.join(sets)} "
+                            "WHERE id=? AND status='pending' AND kind='human_task'", vals)
             c.commit()
-            return True
+            return res.rowcount == 1
         finally:
             c.close()
 
@@ -559,14 +795,81 @@ class ApprovalStore:
         ok = self.update_fields(rid, feature=feature, block_task=block_task,
                                 summary=summary, blocks_what=blocks_what)
         return rid if ok else None
-    def retire(self, rid, caller, reason, superseded_by=None, now_iso=None):
+    def append_note(self, rid, author, text, now_iso=None):
+        """Append an author's timestamped NOTE to a row's summary. Never rewrites the
+        original text and never touches status/answer/notified_at. Works on EVERY kind
+        (menu cards, requests and human_tasks), unlike update_fields, which refuses anything
+        but human_task. A note is the honest CORRECTION path: the original and the correction
+        both stay visible. A card that is no longer NEEDED is retired instead (retire()).
+        Returns (ok, reason). ok=False always carries a reason: a refusal that prints an
+        empty string is the failure-that-reads-as-success class."""
+        text = (text or "").strip()
+        if not text:
+            return False, "empty note: nothing to append"
+        c = self._conn()
+        try:
+            row = c.execute(
+                "SELECT from_agent, summary, question, origin, menu FROM approval_requests WHERE id=?",
+                [rid]).fetchone()
+            if not row:
+                return False, f"no approval row {rid}"
+            if is_gate_row(dict(row)):
+                # a gate card's from_agent is the HELD agent: a note would put its words in front of
+                # the person deciding whether to let it run
+                return False, f"{rid} is a safety-gate card: it takes no notes; only a person answers it"
+            # The author, its own seat across rotations (a successor annotating a predecessor's
+            # card, by POSITIVE registry evidence; seat_identity), or the operator, who owns every
+            # surface.
+            why = None
+            if author != "operator":
+                import seat_identity
+                same, why = seat_identity.may_annotate(
+                    seat_identity.registry_beside(self.db_path), author, row["from_agent"])
+                if not same:
+                    return False, why or (f"{author} is not the author of {rid} "
+                                          f"(authored by {row['from_agent']}); only the author, "
+                                          f"its current successor, or the operator may annotate it")
+            stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            who = f"{author} (orphan steward)" if why == "orphan-steward" else author
+            note = f"\n\n— NOTE {stamp} by {who}: {text}"
+            # one statement: a retire/close/note landing between our read and this write keeps its line
+            c.execute("UPDATE approval_requests SET summary=COALESCE(summary, question, '') || ? WHERE id=?",
+                      [note, rid])
+            c.commit()
+            return True, None
+        finally:
+            c.close()
+
+    def retire(self, rid, caller, reason, superseded_by=None, now_iso=None, read_pane=None, has_session=None):
         """Card RETIRE verb: the author, its current generation, or gm marks a PENDING card no
-        longer needed (operator ruling 2026-10-10). See retire_card. Returns (ok, reason)."""
+        longer needed (operator ruling 2026-10-10). See retire_card. read_pane (close-menu's
+        read-only pane reader) is used only for a bridge menu card; has_session only for the
+        dead-seat rule of a menu card. Returns (ok, reason)."""
         import seat_identity
         c = self._conn()
         try:
             return retire_card(c, "approval_requests", rid, caller, reason, superseded_by,
-                               seat_identity.registry_beside(self.db_path), now_iso)
+                               seat_identity.registry_beside(self.db_path), now_iso, read_pane, has_session)
+        finally:
+            c.close()
+
+    def reopen(self, rid, caller, reason, now_iso=None, ledger_has_card=None):
+        """See reopen_card. Returns (ok, reason)."""
+        import seat_identity
+        c = self._conn()
+        try:
+            return reopen_card(c, rid, caller, reason, seat_identity.registry_beside(self.db_path), now_iso,
+                               ledger_has_card=ledger_has_card)
+        finally:
+            c.close()
+
+    def close_menu(self, rid, caller, reason, read_pane, now_iso=None):
+        """See close_menu_card. Returns (ok, reason, note)."""
+        import seat_identity
+        c = self._conn()
+        try:
+            return close_menu_card(c, rid, caller, reason,
+                                   seat_identity.registry_beside(self.db_path), read_pane, now_iso)
         finally:
             c.close()
 
@@ -1109,24 +1412,45 @@ class ApprovalStore:
         finally:
             c.close()
 
-    def mark_discarded(self, rid):
+    def mark_discarded(self, rid, surface=None, by=None, reason=None, device=None, now=None):
         """DEC-1786664626 Q3 + the operator F2: the operator dismissed a decision WITHOUT
         answering -> terminal 'discarded', SAVED to history (never deleted).
         Only a still-'pending' row can be discarded (an answered one goes to
-        history via its answer). Idempotent: returns False if not pending."""
+        history via its answer). Idempotent: returns False if not pending.
+
+        Every card kind (approval, human_task, menu) takes it (operator order 2026-11-25,
+        gm msg_b083c465). When the caller says where/who/why, the history line
+        (`dismiss_line`) goes onto the summary, as retire does (no new column; a NULL summary
+        starts from the question, the same precedent, so a card that never had a summary
+        renders its question once as the summary and once as the title: accepted, it is
+        what retire already does). The attribution columns are stamped when they are
+        armed (PRAGMA-guarded, fail-open like record_answer); `device` is the caller's
+        "<device_id>:<label>" or None for the fleet bearer, exactly as record_answer takes it.
+        `surface`/`by`/`device` are the EDGE's word, never the client's (R7d): the gateway
+        derives them from the authenticated principal before calling here."""
+        now = now or _now()                   # a caller that also mails the line passes its clock, so both match
         c = self._conn()
         try:
+            sets = ["status='discarded'", "answered_at=?", "discarded_at=?"]
+            vals = [now, now]
+            if surface or by or reason:
+                sets.append("summary=COALESCE(summary, question, '') || ?")
+                vals.append("\n\n" + dismiss_line(now, surface, by, reason))
+                cols = {r[1] for r in c.execute("PRAGMA table_info(approval_requests)").fetchall()}
+                if "answer_surface" in cols and "answered_by" in cols:
+                    sets += ["answer_surface=?", "answered_by=?"]; vals += [surface or "unknown", by]
+                if "answer_device" in cols:
+                    sets.append("answer_device=?"); vals.append(device)
             res = c.execute(
-                "UPDATE approval_requests SET status='discarded', answered_at=?, discarded_at=? "
-                "WHERE id=? AND status='pending'", [_now(), _now(), rid])
+                f"UPDATE approval_requests SET {', '.join(sets)} WHERE id=? AND status='pending'", vals + [rid])
             c.commit()
             return res.rowcount > 0
         finally:
             c.close()
-    def discard(self, rid):
+    def discard(self, rid, surface=None, by=None, reason=None, device=None, now=None):
         """R8 name for mark_discarded (questionnaire-era gateway + tests call
         store.discard). One implementation, two names."""
-        return self.mark_discarded(rid)
+        return self.mark_discarded(rid, surface=surface, by=by, reason=reason, device=device, now=now)
     def answered_unacked(self):
         c = self._conn()
         try:

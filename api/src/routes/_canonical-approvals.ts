@@ -19,14 +19,16 @@
  *   APPROVAL_DB_PATH      — inherited by the python child (execFile inherits env),
  *                           so the canonical read/write hit the scratch tasks.db.
  */
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { join } from 'path';
+import { statSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 const SCRIPTS = process.env.ORCHESTRA_SCRIPTS_DIR || join(CODE_ROOT, 'scripts');   // code, not data (lib/codeRoot.ts)
 const APPROVAL_CLI = join(SCRIPTS, 'approval.py');
+const TASKS_DB = process.env.APPROVAL_DB_PATH || join(ORCHESTRA, 'state', 'tasks.db');   // same default as approval_config.db_path()
 
 export interface CanonicalRow {
   id: string;
@@ -123,6 +125,81 @@ export function readCanonicalPending(): CanonicalRow[] {
   return readCanonicalPendingOrNull() ?? [];
 }
 
+/** mtime+size of tasks.db and its WAL/SHM: any writer (the API, a gateway answer, the python CLI) changes it. */
+function tasksDbStamp(): string {
+  return [TASKS_DB, `${TASKS_DB}-wal`, `${TASKS_DB}-shm`].map((f) => {
+    try { const st = statSync(f); return `${st.mtimeMs}:${st.size}`; } catch { return '-'; }
+  }).join('|');
+}
+
+export const CANONICAL_TTL_MS = 3_000;
+/** How long the last good rows may stand in for a failing CLI before the list goes empty instead. */
+export const CANONICAL_FALLBACK_MAX_AGE_MS = 60_000;
+let canonicalCache: { at: number; stamp: string; rows: CanonicalRow[]; stale: boolean } | null = null;
+let canonicalInflight: { stamp: string; promise: Promise<CanonicalRow[]> } | null = null;
+
+/**
+ * Mark the kept feed stale (an answer through this process did change it; the stamp catches every other
+ * writer): the next read runs the CLI, and the old rows stay only as the fallback for a failed read.
+ */
+export function invalidateCanonicalPendingCache(): void {
+  if (canonicalCache) canonicalCache.stale = true;   // `at` stays: it dates the rows for the fallback below
+  canonicalInflight = null;          // a read already running may predate the write: nobody else joins it
+}
+
+/**
+ * The pending feed for the list routes: one `approval.py pending --json` per tasks.db stamp, shared by
+ * the concurrent requests that saw that stamp (a stamp change or an answer starts another run; runs are
+ * not capped while tasks.db keeps changing), and kept while tasks.db (and its WAL) is unchanged, for at
+ * most CANONICAL_TTL_MS. tasks.db has many writers across a fleet, so on a busy host the saving is
+ * mostly the concurrent requests; the point is that the event loop never blocks. A write by ANY process
+ * changes the stamp, so a gateway answer drops from the web feed on the next read (the resolve-everywhere
+ * contract, api/test/unified-approvals-canonical.test.mjs c2). A failed read is never kept: it returns
+ * the last good rows while they are younger than CANONICAL_FALLBACK_MAX_AGE_MS, else []. Those rows may
+ * predate an answer (they are marked stale, not dropped), so while the CLI is failing a just-answered
+ * card can show as pending for up to that long; before this change the list went empty instead. A read
+ * never overwrites rows fetched by a read that started after it.
+ */
+export function readCanonicalPendingCached(): Promise<CanonicalRow[]> {
+  const stamp = tasksDbStamp();
+  const now = Date.now();
+  if (canonicalCache && !canonicalCache.stale && canonicalCache.stamp === stamp && now - canonicalCache.at < CANONICAL_TTL_MS) {
+    return Promise.resolve(canonicalCache.rows);
+  }
+  if (canonicalInflight && canonicalInflight.stamp === stamp) return canonicalInflight.promise;
+  const mine: { stamp: string; promise: Promise<CanonicalRow[]> } = { stamp, promise: undefined as unknown as Promise<CanonicalRow[]> };
+  const started = now;
+  mine.promise = (async () => {
+    const rows = await readCanonicalPendingAsync();
+    if (rows) {
+      if (!canonicalCache || canonicalCache.at <= started) canonicalCache = { at: Date.now(), stamp, rows, stale: false };
+      return rows;
+    }
+    const fallbackFresh = canonicalCache && Date.now() - canonicalCache.at < CANONICAL_FALLBACK_MAX_AGE_MS;
+    return fallbackFresh ? canonicalCache!.rows : [];
+  })().finally(() => { if (canonicalInflight === mine) canonicalInflight = null; });
+  canonicalInflight = mine;
+  return mine.promise;
+}
+
+/** Same pending feed as readCanonicalPendingOrNull, without blocking the Node event loop. */
+export function readCanonicalPendingAsync(): Promise<CanonicalRow[] | null> {
+  return new Promise((resolve) => {
+    execFile('python3', [APPROVAL_CLI, 'pending', '--json'], {
+      timeout: 5000,
+      encoding: 'utf-8',
+    }, (err, out) => {
+      if (err) { resolve(null); return; }
+      try {
+        const rows = JSON.parse(String(out).trim());
+        resolve(Array.isArray(rows) ? rows : null);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
 /** The pending rows, or null when they could not be read (a timeout, a crash, bad JSON). An authorization
  *  check uses this one, so "could not read" is never mistaken for "no such card" (fail closed). */
 export function readCanonicalPendingOrNull(): CanonicalRow[] | null {
@@ -198,6 +275,7 @@ export function canonicalAnswer(
   const args = canonicalAnswerArgv(id, answer, text, extra, opts);
   try {
     const out = execFileSync('python3', args, { timeout: 15000, encoding: 'utf-8' });
+    invalidateCanonicalPendingCache();
     return JSON.parse(out.trim());
   } catch (err: any) {
     return answerFailure(err, id);
