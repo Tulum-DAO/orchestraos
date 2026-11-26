@@ -24,12 +24,17 @@ UNSERVED_STATES = ("superseded", "archived")
 UNSOURCED_STATE = "unverified"
 
 
+def state_key(state) -> str:
+    """A state as it is compared: lowercased, surrounding whitespace removed (facts_recall.state_key)."""
+    return str(state or "").strip().lower()
+
+
 def is_served(state) -> bool:
-    return (state or "active") not in UNSERVED_STATES
+    return state_key(state) not in UNSERVED_STATES
 
 
 def is_unsourced(state) -> bool:
-    return (state or "") == UNSOURCED_STATE
+    return state_key(state) == UNSOURCED_STATE
 EXPIRY_CLASSES = {"standard", "durable", "ephemeral"}
 _REQUIRED = ("fact_id", "ts", "kind", "text", "actor", "confidence",
              "entities", "lanes", "provenance", "state", "expiry_class")

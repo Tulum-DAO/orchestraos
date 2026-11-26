@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timezone
 
 import bus
-from facts_schema import is_served, is_unsourced
+from facts_schema import is_served, is_unsourced, state_key
 
 API_VERSION = 1
 _AFFINITY_WEIGHT = {"direct": 1.0, "alias": 0.8, "co-mention": 0.6}
@@ -94,11 +94,11 @@ def get_context(lane: str, *, db_path: str | None = None,
     if limit is not None and len(ranked) > limit:
         top = ranked[:limit]
         pinned = [f for f in ranked[limit:]
-                  if f["kind"] in _PINNED_KINDS and f["state"] == "active"]
+                  if f["kind"] in _PINNED_KINDS and state_key(f["state"]) == "active"]
         if pinned:
             # pinned items displace the lowest-scored unpinned tail entries
             keep = [f for f in top if not (f["kind"] in _PINNED_KINDS
-                                           and f["state"] == "active")]
+                                           and state_key(f["state"]) == "active")]
             already = [f for f in top if f not in keep]
             room = max(0, limit - len(already) - len(pinned))
             top = already + pinned + keep[:room]

@@ -8,8 +8,8 @@ import json
 import os
 
 from services.arturo.facts_recall import (K, MAX_CHARS, SNIPPET_CHARS, UNSERVED_STATES, UNSOURCED_FLAG,
-                                         UNSOURCED_STATE, _connect_ro, served, sourced_first, sourced_window,
-                                         unsourced)
+                                         UNSOURCED_STATE, _SERVED_STATES, _STRIP_SQL, _connect_ro, _in, served,
+                                         sourced_first, sourced_window, unsourced)
 
 
 def _statement_state(meta):
@@ -38,7 +38,10 @@ def _window_class(state, is_wal, meta):
 # handed; the SQL only has to keep every row Python would keep. Metadata SQLite may read differently from json.loads
 # (a repeated key, NaN or Infinity, an escape) is always handed to Python.
 _META_JSON = "(typeof(metadata) = 'text' AND json_valid(metadata))"
-_META_STATE = f"COALESCE(CASE WHEN {_META_JSON} THEN json_extract(metadata, '$.state') END, '')"
+# A state as written is decided by a comparison; any other is read as facts_recall.state_sql reads it, without its
+# blob case (json_extract never returns a blob). A number, an array or an object never reads as a state name.
+_META_RAW = f"(CASE WHEN {_META_JSON} THEN json_extract(metadata, '$.state') END)"
+_META_STATE = f"lower(trim(COALESCE({_META_RAW}, ''), {_STRIP_SQL}))"
 _META_ANCHORED = (f"({_META_JSON} AND json_type(metadata, '$.anchor') = 'object'"
                   " AND COALESCE(json_type(metadata, '$.anchor.seq'), 'null') != 'null')")
 _META_ODD = ("(instr(metadata, '\\') > 0 OR instr(metadata, 'NaN') > 0 OR instr(metadata, 'Infinity') > 0"
@@ -58,9 +61,12 @@ def _meta_odd_sql(con):
 
 def _servable_sql(con, wal, sourced_only=False):
     """SQL for the statements a window may keep: served, anchored when a wal row, and sourced when asked."""
-    out = ",".join(f"'{s}'" for s in UNSERVED_STATES + ((UNSOURCED_STATE,) if sourced_only else ()))
+    out = UNSERVED_STATES + ((UNSOURCED_STATE,) if sourced_only else ())
+    keep = _in(s for s in _SERVED_STATES if s not in out)
+    state_ok = (f"(CASE WHEN {_META_RAW} IN {keep} THEN 1 WHEN {_META_RAW} IN {_in(out)} THEN 0"
+                f" ELSE {_META_STATE} NOT IN {_in(out)} END)")
     anchored = _META_ANCHORED if wal else f"(source_type IS NOT 'wal' OR {_META_ANCHORED})"
-    return f"({_meta_odd_sql(con)} OR ({_META_STATE} NOT IN ({out}) AND {anchored}))"
+    return f"({_meta_odd_sql(con)} OR ({state_ok} AND {anchored}))"
 
 
 def _statement_window(con, select, where, params, limit, wal_only):

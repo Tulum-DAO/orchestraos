@@ -49,18 +49,48 @@ MAX_CHARS = 250 * 4          # ~250-token hard clamp, same budget shape as seman
 UNSERVED_STATES = ("superseded", "archived")
 UNSOURCED_STATE = "unverified"
 UNSOURCED_FLAG = "no source quote found"
-SERVED_SQL = "COALESCE(state,'active') NOT IN (" + ",".join(f"'{s}'" for s in UNSERVED_STATES) + ")"
-UNSOURCED_SQL = f"COALESCE(state,'') = '{UNSOURCED_STATE}'"
+# A state is compared lowercased with its surrounding whitespace removed: 'Superseded' and ' archived ' are never
+# served, 'UNVERIFIED' is served flagged. The SQL below reads a state exactly as state_key does: it trims every
+# character str.strip removes (_STRIP_CODES) and lowercases ASCII letters (the only letters a state name has, and
+# no other letter lowercases to one of them). A blob is compared as it is, so it never matches a state name.
+_STRIP_CODES = (9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760, *range(8192, 8203), 8232, 8233, 8239, 8287,
+                12288)
+_STRIP_SQL = "char(" + ",".join(map(str, _STRIP_CODES)) + ")"
+
+
+def state_sql(expr):
+    """SQL for state_key(expr)."""
+    return f"(CASE WHEN typeof({expr}) = 'blob' THEN {expr} ELSE lower(trim(COALESCE({expr}, ''), {_STRIP_SQL})) END)"
+
+
+def _in(states):
+    return "(" + ",".join(f"'{s}'" for s in states) + ")"
+
+
+# The states as they are written (the brain's facts_schema.STATES): one written exactly so is decided by a comparison,
+# and only any other state is read through state_sql, so for these states a window costs what it did before.
+_SERVED_STATES = ("active", "resolved", "expired", UNSOURCED_STATE)
+STATE_SQL = state_sql("state")
+SERVED_SQL = (f"(CASE WHEN state IN {_in(_SERVED_STATES)} THEN 1 WHEN state IN {_in(UNSERVED_STATES)} THEN 0"
+              f" ELSE {STATE_SQL} NOT IN {_in(UNSERVED_STATES)} END)")
+UNSOURCED_SQL = (f"(CASE WHEN state = '{UNSOURCED_STATE}' THEN 1"
+                 f" WHEN state IN {_in(_SERVED_STATES[:-1] + UNSERVED_STATES)} THEN 0"
+                 f" ELSE {STATE_SQL} = '{UNSOURCED_STATE}' END)")
+
+
+def state_key(state):
+    """A state as recall compares it: lowercased, surrounding whitespace removed; no state reads as ''."""
+    return str(state or "").strip().lower()
 
 
 def served(state):
     """True for a state recall may serve. No state (rows from before the column) counts as active."""
-    return (state or "active") not in UNSERVED_STATES
+    return state_key(state) not in UNSERVED_STATES
 
 
 def unsourced(state):
     """True for a served fact with no source quote found."""
-    return (state or "") == UNSOURCED_STATE
+    return state_key(state) == UNSOURCED_STATE
 
 
 def sourced_first(entries):
@@ -71,7 +101,7 @@ def sourced_first(entries):
 def sourced_window(cursor, limit, is_unsourced=None):
     """At most `limit` rows from a cursor in its window order (newest first): sourced rows fill the window first, in
     cursor order, then the first unsourced ones fill what is left. For rows with a `state` column this equals
-    `ORDER BY (COALESCE(state,'')='unverified'), ts DESC LIMIT n`, but read in index order: the scan stops as soon as
+    `ORDER BY (UNSOURCED_SQL), ts DESC LIMIT n`, but read in index order: the scan stops as soon as
     `limit` sourced rows are in, so with no unsourced row it reads exactly what `ORDER BY ts DESC LIMIT n` reads.
     `is_unsourced(row)` decides for rows without a `state` column; by default it is unsourced(row["state"]). It
     returns None for a row that is never served: that row is skipped and takes no place in the window."""
