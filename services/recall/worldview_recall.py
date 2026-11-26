@@ -7,7 +7,7 @@ import json
 import os
 
 from services.arturo.facts_recall import (K, MAX_CHARS, SNIPPET_CHARS, UNSOURCED_FLAG, _connect_ro, served,
-                                         sourced_first, unsourced)
+                                         sourced_first, sourced_window, unsourced)
 
 
 def _statement_state(meta):
@@ -89,6 +89,41 @@ def l2_enabled():
     return os.environ.get(L2_FLAG, "") == "1"
 
 
+def _belief_entry(con, row):
+    """A belief row as its entry, or None when it is dropped: it stands only on statements recall may serve."""
+    subj, claim, value, conf, tier, derived, updated = row
+    cite = ""
+    sids = _derived_ids(derived)
+    b_unsourced = False
+    if sids:
+        # A belief stands only on statements recall may serve; it is dropped when every statement under it
+        # that this db holds is unserved. A belief whose statements are not in this db is served as before.
+        q = ",".join("?" * len(sids))
+        found = {r[0]: r for r in con.execute(
+            f"SELECT statement_id, source_type, ts, metadata FROM statements WHERE statement_id IN ({q})",
+            sids).fetchall()}
+        ok = [found[s] for s in sids if s in found and _statement_served(found[s][3])]
+        if found and not ok:
+            return None
+        last = found.get(sids[-1])
+        if last is not None and _statement_served(last[3]):
+            cite_row = last                       # the last statement it derives from, as always
+        elif last is not None:
+            # the last one is unserved: cite the newest servable one (the later one on a tie)
+            cite_row = max(enumerate(ok), key=lambda ir: (str(ir[1][2] or ""), ir[0]))[1]
+        else:
+            cite_row = None                       # the last one is not in this db: no citation, as always
+        if cite_row is not None:
+            cite = f"per {cite_row[1]} {str(cite_row[2])[:10]}"
+        # a belief is unsourced when every statement it may stand on has no source quote found
+        b_unsourced = bool(ok) and all(unsourced(_statement_state(r[3])) for r in ok)
+    # stmt-cluster beliefs store subject = value[:80] (worldview_migrate
+    # _derive_beliefs), so "{subj}: {value}" would print the prefix twice.
+    text = value if (value or "").startswith(subj or "") else f"{subj}: {value}"
+    return {"kind": "belief", "tier": tier, "text": text,
+            "ts": updated, "cite": cite, "conf": conf, "unsourced": b_unsourced}
+
+
 def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
     """The L2 read path (runs INSIDE the same budget wall/single-flight as query_facts).
     (1) MATERIALIZED beliefs (durable/standard) keyword-matched over subject+current_value,
@@ -98,7 +133,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         matching the keywords, deterministically aggregated newest-wins per subject-key
         (no LLM); the stale side of a contradiction never renders as current. The newest
         SOURCED statement wins its subject; an unsourced one wins only a subject with no sourced one.
-    Sourced entries are picked before every cut (the belief window, the fluid slots, the wal
+    Sourced entries are picked before every cut (the belief, fluid and wal windows, the fluid slots, the wal
     reservation, the final k+2), so an entry with no source quote found never displaces a sourced one.
     """
     if not keywords:
@@ -111,41 +146,14 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         beliefs = con.execute(
             f"SELECT subject, claim, current_value, confidence, tier, derived_from,"
             f" last_updated FROM beliefs WHERE superseded_by IS NULL AND ({like})"
-            f" ORDER BY confidence DESC, last_updated DESC LIMIT ?",
-            params + [k * 2]).fetchall()
-        out = []
-        for subj, claim, value, conf, tier, derived, updated in beliefs:
-            cite = ""
-            sids = _derived_ids(derived)
-            b_unsourced = False
-            if sids:
-                # A belief stands only on statements recall may serve; it is dropped when every statement under it
-                # that this db holds is unserved. A belief whose statements are not in this db is served as before.
-                q = ",".join("?" * len(sids))
-                found = {r[0]: r for r in con.execute(
-                    f"SELECT statement_id, source_type, ts, metadata FROM statements WHERE statement_id IN ({q})",
-                    sids).fetchall()}
-                ok = [found[s] for s in sids if s in found and _statement_served(found[s][3])]
-                if found and not ok:
-                    continue
-                last = found.get(sids[-1])
-                if last is not None and _statement_served(last[3]):
-                    cite_row = last                       # the last statement it derives from, as always
-                elif last is not None:
-                    # the last one is unserved: cite the newest servable one (the later one on a tie)
-                    cite_row = max(enumerate(ok), key=lambda ir: (str(ir[1][2] or ""), ir[0]))[1]
-                else:
-                    cite_row = None                       # the last one is not in this db: no citation, as always
-                if cite_row is not None:
-                    cite = f"per {cite_row[1]} {str(cite_row[2])[:10]}"
-                # a belief is unsourced when every statement it may stand on has no source quote found
-                b_unsourced = bool(ok) and all(unsourced(_statement_state(r[3])) for r in ok)
-            # stmt-cluster beliefs store subject = value[:80] (worldview_migrate
-            # _derive_beliefs), so "{subj}: {value}" would print the prefix twice.
-            text = value if (value or "").startswith(subj or "") else f"{subj}: {value}"
-            out.append({"kind": "belief", "tier": tier, "text": text,
-                        "ts": updated, "cite": cite, "conf": conf, "unsourced": b_unsourced})
-        # every fetched belief is a candidate, so one dropped above is backfilled; sourced ones are picked first
+            f" ORDER BY confidence DESC, last_updated DESC",
+            params)
+        # the window holds k*2 beliefs, sourced ones first, read in confidence order until k*2 are in: an unsourced
+        # belief never pushes a sourced one out of it. A dropped belief (None) holds its place, as under a plain LIMIT.
+        window = sourced_window((_belief_entry(con, r) for r in beliefs), k * 2,
+                                lambda e: e is not None and e["unsourced"])
+        out = [e for e in window if e is not None]
+        # every fetched belief is a candidate, so one dropped is backfilled; sourced ones are picked first
         out = sourced_first(out)[:k]
         n_sourced = sum(1 for e in out if not e["unsourced"])
         # fluid: recent ephemeral statements, newest-wins per subject-key
@@ -155,10 +163,13 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             f"SELECT statement_id, source_type, ts, content, metadata FROM statements"
             f" WHERE ({s_like}) AND metadata LIKE '%ephemeral%'"
             f" AND metadata NOT LIKE '%\"noise\": true%'"
-            f" ORDER BY ts DESC LIMIT ?", s_params + [fluid_limit]).fetchall()
+            f" ORDER BY ts DESC", s_params)
+        # the newest `fluid_limit` statements, sourced ones first: newer unverified ones never push a sourced one out.
+        # Each row is read with its state, parsed once.
+        rows = sourced_window(((r, _statement_state(r[4])) for r in rows), fluid_limit, lambda rs: unsourced(rs[1]))
         newest = {}
-        for sid, stype, ts, content, meta in rows:      # ts DESC: first seen wins per key
-            if not _statement_served(meta):
+        for (sid, stype, ts, content, meta), state in rows:   # sourced, then unsourced, each ts DESC: first seen wins
+            if not served(state):
                 continue                                  # copied from a superseded or archived fact
             if stype == "wal" and not _wal_anchored(meta):
                 continue                                  # an unanchored wal row is not recallable
@@ -166,7 +177,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
             key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
             entry = {"kind": "fluid", "tier": "ephemeral", "text": content,
                      "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0,
-                     "unsourced": unsourced(_statement_state(meta))}
+                     "unsourced": unsourced(state)}
             # newest SOURCED statement wins its subject; the newest unsourced one only when there is no sourced one
             if key not in newest or (newest[key]["unsourced"] and not entry["unsourced"]):
                 newest[key] = entry
@@ -177,7 +188,7 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         # ephemeral rows; the drain writes `standard` (a commit is not ephemeral), so without
         # this pass 497 drained facts were unrecallable on the first live dry run — written
         # but invisible, a green pass with nothing behind it. Anchored rows only (the reader's
-        # half of the anchor rule); keyword-matched; newest first; bounded by the same LIMIT and the same
+        # half of the anchor rule); keyword-matched; newest first; bounded by the same window and the same
         # k+2 contract as everything else in this function.
         # RESERVED SLOTS, not leftovers. My first version ran this pass only
         # `if len(out) < k + 2` — and on the LIVE facts.db 120 matching beliefs filled every
@@ -189,10 +200,18 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         w_rows = con.execute(
             f"SELECT statement_id, ts, content, metadata FROM statements"
             f" WHERE source_type='wal' AND ({s_like})"
-            f" ORDER BY ts DESC LIMIT ?", s_params + [fluid_limit]).fetchall()
+            f" ORDER BY ts DESC", s_params)
+        # the same window rule: sourced wal rows first, so newer unverified ones never take a sourced row's reservation
+        w_rows = sourced_window(((r, _statement_state(r[3])) for r in w_rows), fluid_limit,
+                                lambda rs: unsourced(rs[1]))
         wal_entries, wal_unsourced = [], []
-        for sid, ts, content, meta in w_rows:
-            if not _statement_served(meta):
+        for (sid, ts, content, meta), state in w_rows:
+            is_unsourced = unsourced(state)
+            if len(wal_entries) >= WAL_RESERVE and len(wal_unsourced) >= WAL_RESERVE:
+                break
+            if len(wal_unsourced if is_unsourced else wal_entries) >= WAL_RESERVE:
+                continue                                  # its reservation is full
+            if not served(state):
                 continue
             if not _wal_anchored(meta):
                 continue                                  # unanchored is not recallable
@@ -202,14 +221,8 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 m = {}
             e = {"kind": "wal", "tier": m.get("expiry_class", "standard"),
                  "text": content, "ts": ts, "cite": f"per wal {str(ts)[:10]}",
-                 "conf": m.get("confidence", 0.5), "unsourced": unsourced(_statement_state(meta))}
-            if e["unsourced"]:
-                if len(wal_unsourced) < WAL_RESERVE:
-                    wal_unsourced.append(e)
-                continue
-            wal_entries.append(e)
-            if len(wal_entries) >= WAL_RESERVE:
-                break
+                 "conf": m.get("confidence", 0.5), "unsourced": is_unsourced}
+            (wal_unsourced if is_unsourced else wal_entries).append(e)
         if wal_entries:
             # only sourced wal rows are reserved a slot; `out` is sourced first, so its unsourced tail goes first
             out = out[: max(0, (k + 2) - len(wal_entries))] + wal_entries
