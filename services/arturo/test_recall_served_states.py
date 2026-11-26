@@ -384,3 +384,46 @@ def test_recent_facts_window_fills_with_sourced_rows_first(tmp_path):
     got = fr.recent_facts(48, k=5, dbpath=_window_db(tmp_path / "f.db", rows),
                           now=datetime(2026, 11, 25, 6, tzinfo=timezone.utc))
     assert [f["fact_id"] for f in got][:1] == ["src"] and len(got) == 5
+
+
+# --- the remaining paths: lane_context's pinned branch, the wal pass, the exact unsourced line --------------------
+
+def test_lane_context_with_a_limit_keeps_sourced_facts_ahead_when_a_pinned_decision_is_placed(tmp_path):
+    """limit=2 with a newest unverified fact, two sourced facts and an older active decision past the cut: the
+    decision is pinned in, and the unverified fact never takes a sourced fact's place."""
+    db = _facts_db(tmp_path / "f.db")
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM facts")
+    for fid, ts, kind, st in [("u", "2026-11-25T11:00:00Z", "fact", "unverified"),
+                              ("s1", "2026-11-25T09:00:00Z", "fact", "active"),
+                              ("s2", "2026-11-25T08:00:00Z", "fact", "active"),
+                              ("d", "2026-11-20T08:00:00Z", "decision", "active")]:
+        con.execute("INSERT INTO facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (fid, ts, kind, f"marigold {fid}", "shaw", 1.0, "{}", '["ops"]', "{}", st, "standard", ts,
+                     None, None, None, None))
+    con.commit()
+    con.close()
+    assert [f["fact_id"] for f in lane_context.get_context("ops", db_path=db)["facts"]] == ["s1", "s2", "d", "u"]
+    got = lane_context.get_context("ops", db_path=db, limit=2)["facts"]
+    assert [(f["fact_id"], f["unsourced"]) for f in got] == [("s1", False), ("d", False)]
+
+
+def test_worldview_wal_pass_serves_by_state(tmp_path):
+    """Anchored wal rows (not ephemeral, so only the wal pass reads them): superseded and archived never served,
+    unverified served flagged and last, active served."""
+    st = [(f"w_{s}", "wal", f"2026-11-2{i}T00:00:00Z", f"zinnia wal {s}", _wal(s))
+          for i, s in enumerate(("active", "superseded", "archived", "unverified"))]
+    got = wv.query_worldview(_wv_db(tmp_path / "f.db", statements=st), ["zinnia"], k=5)
+    assert [(e["kind"], e["text"], e["unsourced"]) for e in got] == [("wal", "zinnia wal active", False),
+                                                                     ("wal", "zinnia wal unverified", True)]
+
+
+def test_the_unsourced_line_is_the_bare_text_with_the_flag():
+    """No speaker, no quote marks: the text as stored, the flag in the bracket."""
+    assert fr._render([{"kind": "fact", "ts": "2026-11-25T10:00:00Z", "text": "Shaw prefers short replies",
+                        "unsourced": True}]).splitlines()[1] == \
+        "- [fact 2026-11-25 · no source quote found] Shaw prefers short replies"
+    assert wv._render_worldview([{"kind": "fluid", "tier": "ephemeral", "text": "the proxy is up", "ts": "2026-11-25",
+                                  "cite": "per dream-facts 2026-11-25", "conf": 1.0,
+                                  "unsourced": True}]).splitlines()[1] == \
+        "- [ephemeral · no source quote found] the proxy is up (per dream-facts 2026-11-25)"
