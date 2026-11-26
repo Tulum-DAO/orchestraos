@@ -626,3 +626,30 @@ def test_a_page_thread_short_of_25_is_read_again_locally_and_cut_to_25(tmp_path,
     out = call_context.opening_thread("web_abc123", load=load)
     assert asked == [2500, 4000] and call_context.describe(out)["turns"] == 25
     assert out.info["source"] == "thread" and out.info["reread_result"] == "kept"
+
+
+def test_the_cut_keeps_the_newest_turns_under_an_earlier_heading():
+    # builder's notes on #638 at 01c8481: a reversed cut (the oldest 25) passed every test, and a second read with no
+    # EARLIER block put the omitted line under THREAD, a shape the renderer never makes
+    out = call_context._newest(_opening(30), 25)
+    assert "line 29" in out and "line 5" in out and "line 4" not in out and "line 0" not in out
+    lines = out.splitlines()
+    at = lines.index("EARLIER (summarized):")
+    assert lines[at + 1] == "- (5 older item(s) omitted)" and lines[at + 2] == "RECENT (verbatim):"
+    assert call_context.describe(out)["summarized"] == 5
+    with_earlier = call_context._newest(_opening(30, n_summ=2), 25).splitlines()
+    assert with_earlier.count("EARLIER (summarized):") == 1
+    assert with_earlier[with_earlier.index("RECENT (verbatim):") - 1] == "- (5 older item(s) omitted)"
+
+
+def test_a_cut_without_a_recent_heading_keeps_the_text():
+    odd = "\n".join(f"[2026-11-25T17:{i:02d}:00Z 12:{i:02d} Local] chat Operator: line {i}" for i in range(30))
+    assert call_context._newest(odd, 25) == odd
+
+
+def test_a_second_read_skipped_as_too_slow_says_so(monkeypatch):
+    monkeypatch.delenv("ARTURO_NATIVE_CONTEXT_TOKENS", raising=False)
+    clock = iter([0.0, call_context.FLOOR_MAX_ELAPSED_S + 0.1])
+    monkeypatch.setattr(call_context.time, "monotonic", lambda: next(clock))
+    out = call_context.opening("gm", route=lambda a, b, **k: _opening(12, n_summ=3), load=_NO_TWIN)
+    assert out.info["reread"] is None and out.info["reread_result"] == "too_slow"

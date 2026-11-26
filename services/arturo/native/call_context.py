@@ -44,8 +44,7 @@ MIN_TURNS = 25
 FLOOR_BUDGET_TOKENS = 4000
 FLOOR_MAX_ELAPSED_S = 2.0   # a first read slower than this gets no second one (the server waits 6 s in all)
 READ_DEADLINE_S = 5.0       # both reads end by this, inside the server's OPENING_WAIT_S (6 s), so a slow second read
-#                             never costs the first; the second read gets what is left, from the route alone
-SECOND_READ_MIN_S = 0.5     # less time left than this: no second read
+#                             never costs the first; the second read gets what is left (3 s at least, after the 2 s gate)
 
 
 def budget_tokens():
@@ -109,19 +108,20 @@ _OFF = Opening("", {"budget": 0, "reread": None, "reread_result": None, "source"
 def _with_floor(read):
     """`read(budget, timeout=None)` -> (text, source); with a timeout it reads the route alone. The second read only
     when it can help and cannot cost the thread (Claude reviews of #638): something older exists to fetch (an EARLIER
-    block), the first came quickly from the route or a local read (never the twin), and the second fits inside READ_DEADLINE_S. It asks for what
-    MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more turns, then cut to the newest
-    MIN_TURNS. A junk setting is not an explicit one."""
+    block), the first came quickly from the route or a local read (never the twin), and the second fits inside
+    READ_DEADLINE_S. It asks for what MIN_TURNS cost at the first read's rate, capped at the floor; kept only with more
+    turns, then cut to the newest MIN_TURNS. A junk setting is not an explicit one."""
     budget = budget_tokens()
     t0 = time.monotonic()
     text, source = read(budget)
     turns = describe(text)["turns"]
     reread = result = None
     elapsed = time.monotonic() - t0
-    if (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source in _SECOND_READ_SOURCES
-            and turns < MIN_TURNS
-            and "EARLIER (summarized):" in text and elapsed <= FLOOR_MAX_ELAPSED_S
-            and READ_DEADLINE_S - elapsed >= SECOND_READ_MIN_S):
+    wanted = (not _explicit_budget() and budget < FLOOR_BUDGET_TOKENS and source in _SECOND_READ_SOURCES
+              and turns < MIN_TURNS and "EARLIER (summarized):" in text)
+    if wanted and elapsed > FLOOR_MAX_ELAPSED_S:
+        result = "too_slow"
+    elif wanted:
         reread = min(FLOOR_BUDGET_TOKENS, math.ceil(budget * MIN_TURNS / max(turns, 1)))
         more, _ = read(reread, timeout=READ_DEADLINE_S - elapsed)
         more_turns = describe(more)["turns"]
@@ -136,15 +136,18 @@ def _with_floor(read):
 
 
 def _newest(text, keep):
-    """`text` with only its newest `keep` verbatim turns; the cut ones are counted at the end of EARLIER."""
+    """`text` with only its newest `keep` verbatim turns; the cut ones are counted at the end of EARLIER (made when the
+    text had none, the renderer's shape). A text without a RECENT heading is not the contract's: kept whole."""
     lines = text.splitlines()
     verbatim = [i for i, ln in enumerate(lines) if _LINE_RE.match(ln)]
     cut = verbatim[:max(0, len(verbatim) - keep)]
-    if not cut:
+    if not cut or "RECENT (verbatim):" not in lines:
         return text
     at = lines.index("RECENT (verbatim):")
     drop = set(cut)
     out = [ln for i, ln in enumerate(lines[:at]) if i not in drop]
+    if "EARLIER (summarized):" not in out:
+        out.append("EARLIER (summarized):")
     out.append(f"- ({len(cut)} older item(s) omitted)")
     out += [ln for i, ln in enumerate(lines[at:], start=at) if i not in drop]
     return "\n".join(out)
