@@ -21,6 +21,18 @@ carried 19 operator identifiers onto `main`, which turned every other PR's check
 - A second reviewer, not the author's own session, posts `MERGE-OK` or `BLOCK` with findings **on the PR,
   at a named head**. A verdict on an earlier head does not carry forward: a new head gets a delta verdict.
 - The verdict names the CI jobs it saw green on that head (rule 1 applies to the reviewer too).
+- **Who gives it.** First a Codex reviewer, running fenced and read-only and arguing against the PR.
+  A fenced Claude reviewer stands in only while Codex is out of usage. The merge request names the
+  reviewer, and says why when the fallback ran.
+- **Supplemental review, never gating.** On P0 and security PRs only, a Grok reviewer runs after the
+  gating verdict. Its first fresh-session run cost well over a million tokens, so it is kept to the
+  PRs where an extra pass matters most. It works in a fresh session, never inside a long-lived
+  agent's context, and posts on the PR as "supplemental (non-gating)" at the head it read.
+  The owner folds in each real finding or answers it in one line. `MERGE-OK` never depends on it, and
+  its `BLOCK` never stops a merge. Each supplemental review reports its wall time and tokens.
+  Grok is held out of gating review because it missed blocking defects in two calibration reviews,
+  though both also found real issues the gating review had missed. It is re-calibrated for gating
+  only on the operator's request or when a new Grok model lands.
 
 ## 3. Head-matched merge
 
