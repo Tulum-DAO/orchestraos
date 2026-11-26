@@ -16,14 +16,20 @@ import json
 
 KINDS = {"fact", "goal", "decision", "insight", "commitment"}
 STATES = {"active", "resolved", "expired", "superseded", "archived", "unverified"}
-# Never served by recall. 'archived': decayed or set aside, treated like superseded. 'unverified': claims the
-# operator's words without a quote that checks out; kept, never served. services/arturo/facts_recall.py holds
-# the same tuple (it may not import this module; a test holds them equal).
-UNSERVED_STATES = ("superseded", "archived", "unverified")
+# Never served by recall: 'superseded' and 'archived' (decayed or set aside, treated like superseded).
+# 'unverified' IS served: a fact with no source quote found, flagged and ranked below sourced facts, never
+# rendered as anyone's words. services/arturo/facts_recall.py holds the same tuple (it may not import this
+# module; a test holds them equal).
+UNSERVED_STATES = ("superseded", "archived")
+UNSOURCED_STATE = "unverified"
 
 
 def is_served(state) -> bool:
     return (state or "active") not in UNSERVED_STATES
+
+
+def is_unsourced(state) -> bool:
+    return (state or "") == UNSOURCED_STATE
 EXPIRY_CLASSES = {"standard", "durable", "ephemeral"}
 _REQUIRED = ("fact_id", "ts", "kind", "text", "actor", "confidence",
              "entities", "lanes", "provenance", "state", "expiry_class")
