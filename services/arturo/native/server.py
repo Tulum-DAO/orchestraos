@@ -529,7 +529,12 @@ class NativeCall:
             load, arg = self.server.thread_loader, (self.chat_agent,)
         else:
             load, arg = self.server.calls_loader, ()
-        opening_fut = (asyncio.get_running_loop().run_in_executor(self.server.connect_pool, load, *arg)
+        def read_opening():
+            try:
+                return load(*arg)
+            finally:
+                self._mark("opening_read_s")                 # also when it outlives OPENING_WAIT_S (after START)
+        opening_fut = (asyncio.get_running_loop().run_in_executor(self.server.connect_pool, read_opening)
                        if threaded else None)
         if self.mode == "offline":
             from .simulator import OfflineProvider
@@ -581,7 +586,8 @@ class NativeCall:
                  f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent if self.chat_named else '-'} "
                  f"thread={self.page_thread or '-'} "
                  f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']} start={self.start_kind} "
-                 f"connect_s={self.legs.get('provider_connected_s')} start_s={self.legs.get('start_s')}")
+                 f"connect_s={self.legs.get('provider_connected_s')} start_s={self.legs.get('start_s')} "
+                 f"read_s={self.legs.get('opening_read_s')}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -899,7 +905,7 @@ class NativeCall:
             log.error(f"native {self.binding.conversation_id}: usage record failed: {e!r}")
         rep = self.session.report()
         legs = {k: self.legs.get(k) for k in ("start_frame_s", "provider_connected_s", "start_s", "session_started_s",
-                                              "first_transcript_s", "first_audio_s")}
+                                              "first_transcript_s", "first_audio_s", "opening_read_s")}
         rep.update(start=getattr(self, "start_kind", None), legs=legs, reason=reason,
                    spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,

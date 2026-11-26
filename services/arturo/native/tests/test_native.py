@@ -1595,3 +1595,77 @@ def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, 
         assert legs[after] - legs[before] >= 0.04, (before, after, legs)
     start = next(r.getMessage() for r in caplog.records if ": START " in r.getMessage())
     assert f" connect_s={legs['provider_connected_s']} start_s={legs['start_s']}" in start
+
+
+def test_the_report_times_the_opening_read_apart_from_the_connect(tmp_path, monkeypatch, caplog):
+    # a real call's START came 4.2 s after a 0.33 s connect: the opening read held it, and no leg said so
+    import logging
+    from services.arturo.native import call_context
+
+    def slow_read(*a):
+        time.sleep(0.3)
+        return ""
+
+    monkeypatch.setenv(call_context.FLAG, "1")
+    s = _server(tmp_path, monkeypatch)
+    s.thread_loader = s.calls_loader = slow_read
+
+    async def go():
+        c = await _client(s)
+        try:
+            ws = await c.ws_connect("/native/ws", headers=HDRS)
+            await ws.send_str(json.dumps({"type": "start"}))
+            for _ in range(100):
+                if FakeProvider.instances and FakeProvider.instances[-1].sent:
+                    break
+                await asyncio.sleep(0.02)
+            await ws.send_str(json.dumps({"type": "disconnect"}))
+            await ws.close()
+            await asyncio.sleep(0.2)
+        finally:
+            await c.close()
+    with caplog.at_level(logging.INFO, logger="arturo-native"):
+        _run(go())
+    legs = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())["legs"]
+    assert legs["opening_read_s"] - legs["start_frame_s"] >= 0.29, legs
+    assert legs["opening_read_s"] <= legs["start_s"], legs
+    assert legs["provider_connected_s"] < legs["opening_read_s"], legs
+    start = next(r.getMessage() for r in caplog.records if ": START " in r.getMessage())
+    assert f" read_s={legs['opening_read_s']}" in start
+
+
+def test_a_read_slower_than_the_opening_wait_is_still_timed_after_start(tmp_path, monkeypatch):
+    from services.arturo.native import call_context
+    gate = threading.Event()
+
+    def stuck_read(*a):
+        gate.wait(5)
+        return ""
+
+    monkeypatch.setenv(call_context.FLAG, "1")
+    monkeypatch.setattr(srv, "OPENING_WAIT_S", 0.2)
+    s = _server(tmp_path, monkeypatch)
+    s.thread_loader = s.calls_loader = stuck_read
+
+    async def go():
+        c = await _client(s)
+        try:
+            ws = await c.ws_connect("/native/ws", headers=HDRS)
+            await ws.send_str(json.dumps({"type": "start"}))
+            for _ in range(100):
+                if FakeProvider.instances and FakeProvider.instances[-1].sent:
+                    break
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.3)
+            gate.set()                                   # the read ends ~0.3 s after START, while the call is up
+            await asyncio.sleep(0.2)
+            await ws.send_str(json.dumps({"type": "disconnect"}))
+            await ws.close()
+            await asyncio.sleep(0.2)
+        finally:
+            gate.set()
+            await c.close()
+    _run(go())
+    rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
+    assert rep["thread"]["skipped"] == "timeout"
+    assert rep["legs"]["opening_read_s"] - rep["legs"]["start_s"] >= 0.2, rep["legs"]
