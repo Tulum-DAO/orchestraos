@@ -41,6 +41,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "scripts")):
 
 from services.arturo import facts_recall as fr       # noqa: E402
 from services.arturo import semantic_recall as sr    # noqa: E402
+from services.recall import worldview_recall as wv   # noqa: E402
 
 DEFAULT_POOL_N = 4
 DEFAULT_BUDGETS_MS = {"facts": 250, "worldview": 250, "recall": 300}   # inherited from Arturo
@@ -65,7 +66,7 @@ def open_slot_facts(facts_db, slot_key):
         con = sqlite3.connect(f"file:{facts_db}?mode=ro", uri=True, timeout=1.0)
         try:
             rows = con.execute(
-                "SELECT fact_id, ts, kind, text, expiry_class FROM facts WHERE slot_key=? AND valid_to IS NULL "
+                "SELECT fact_id, ts, kind, text, expiry_class, state FROM facts WHERE slot_key=? AND valid_to IS NULL "
                 f"AND {fr.SERVED_SQL} "
                 "ORDER BY (json_extract(provenance,'$.source_kind')='shaw-location') DESC, valid_from DESC LIMIT 2",
                 (slot_key,)).fetchall()
@@ -73,7 +74,8 @@ def open_slot_facts(facts_db, slot_key):
             con.close()
     except sqlite3.Error:
         return []
-    return [{"fact_id": r[0], "ts": r[1], "kind": r[2], "text": r[3], "expiry_class": r[4]} for r in rows]
+    return [{"fact_id": r[0], "ts": r[1], "kind": r[2], "text": r[3], "expiry_class": r[4],
+             "unsourced": fr.unsourced(r[5])} for r in rows]
 
 
 def closed_slot_ids(facts_db, slot_key, fact_ids):
@@ -144,7 +146,7 @@ def render(blocks):
         if blocks.get("facts"):
             parts.append(fr._render(blocks["facts"]))
         if blocks.get("worldview"):
-            parts.append(fr._render_worldview(blocks["worldview"]))
+            parts.append(wv._render_worldview(blocks["worldview"]))
     except Exception as e:       # noqa: BLE001
         log.error(f"render error (non-fatal): {e}")
     return "\n\n".join(p for p in parts if p)
@@ -258,7 +260,7 @@ class Recall:
         return facts
 
     def _query_worldview(self, keywords, k):
-        return [e for e in fr.query_worldview(self.facts_db, keywords, k=k) if not _is_noise(e.get("text"))]
+        return [e for e in wv.query_worldview(self.facts_db, keywords, k=k) if not _is_noise(e.get("text"))]
 
     def _query_recall(self, text, scope, k, agent):
         smq = sr._import_sm()

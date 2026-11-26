@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timezone
 
 import bus
-from facts_schema import is_served
+from facts_schema import is_served, is_unsourced
 
 API_VERSION = 1
 _AFFINITY_WEIGHT = {"direct": 1.0, "alias": 0.8, "co-mention": 0.6}
@@ -85,9 +85,11 @@ def get_context(lane: str, *, db_path: str | None = None,
                 "freshness": _freshness(db_path, []), "facts": []}
 
     rows = bus.query(db_path, kinds=kinds, since=since)
-    in_lane = [f for f in rows if lane in f["lanes"] and is_served(f["state"])]
+    in_lane = [{**f, "unsourced": is_unsourced(f["state"])} for f in rows
+               if lane in f["lanes"] and is_served(f["state"])]
     now = time.time()
-    ranked = sorted(in_lane, key=lambda f: _score(f, lane, now), reverse=True)
+    # sourced facts first: a fact with no source quote found never outranks one that has one
+    ranked = sorted(in_lane, key=lambda f: (not f["unsourced"], _score(f, lane, now)), reverse=True)
 
     if limit is not None and len(ranked) > limit:
         top = ranked[:limit]
@@ -100,7 +102,7 @@ def get_context(lane: str, *, db_path: str | None = None,
             already = [f for f in top if f not in keep]
             room = max(0, limit - len(already) - len(pinned))
             top = already + pinned + keep[:room]
-            top = sorted(top, key=lambda f: _score(f, lane, now), reverse=True)
+            top = sorted(top, key=lambda f: (not f["unsourced"], _score(f, lane, now)), reverse=True)
         ranked = top[:limit] if len(top) > limit else top
 
     return {"api_version": API_VERSION,

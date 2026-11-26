@@ -42,16 +42,29 @@ MIN_KEYWORD_LEN = 3
 SNIPPET_CHARS = 160
 MAX_CHARS = 250 * 4          # ~250-token hard clamp, same budget shape as semantic recall
 
-# States recall never serves. 'superseded': replaced by a newer fact. 'archived': decayed or set aside, served
-# like superseded. 'unverified': claims the operator's words without a quote that checks out; kept, never served.
+# States recall never serves: 'superseded' (replaced by a newer fact) and 'archived' (decayed or set aside).
+# 'unverified' IS served: it is a fact with no source quote found. It is flagged UNSOURCED_FLAG, ranked below
+# sourced facts, and never rendered as anyone's words.
 # The brain's facts_schema.UNSERVED_STATES is the same tuple (a test holds them equal).
-UNSERVED_STATES = ("superseded", "archived", "unverified")
+UNSERVED_STATES = ("superseded", "archived")
+UNSOURCED_STATE = "unverified"
+UNSOURCED_FLAG = "no source quote found"
 SERVED_SQL = "COALESCE(state,'active') NOT IN (" + ",".join(f"'{s}'" for s in UNSERVED_STATES) + ")"
 
 
 def served(state):
     """True for a state recall may serve. No state (rows from before the column) counts as active."""
     return (state or "active") not in UNSERVED_STATES
+
+
+def unsourced(state):
+    """True for a served fact with no source quote found."""
+    return (state or "") == UNSOURCED_STATE
+
+
+def sourced_first(entries):
+    """Stable: every sourced entry keeps its order and comes before every unsourced one."""
+    return [e for e in entries if not e.get("unsourced")] + [e for e in entries if e.get("unsourced")]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -175,7 +188,7 @@ def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
         con = _connect_ro(dbpath)
         try:
             rows = con.execute(
-                "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+                "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
                 "WHERE ts >= ? AND " + SERVED_SQL
                 + ((" AND " + noise_clause) if noise_clause else "") + " ORDER BY ts DESC LIMIT ?",
                 [cutoff] + [p + "%" for p in _NOISE_PREFIXES] + [max(k * 8, 100)]).fetchall()
@@ -188,7 +201,7 @@ def recent_facts(hours, keywords=None, k=12, dbpath=None, now=None):
     if keywords:
         hit = [f for f in facts if any(kw in f["text"].lower() for kw in keywords)]
         facts = hit + [f for f in facts if f not in hit]
-    return facts[:k]
+    return sourced_first(facts)[:k]
 
 
 def _is_noise(txt):
@@ -286,12 +299,12 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
         noise_params = [p + "%" for p in _NOISE_PREFIXES]
         not_noise = (" AND " + noise_clause) if noise_clause else ""
         rows = con.execute(
-            "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+            "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
             f"WHERE ({like}) AND {not_sup}{not_noise} ORDER BY ts DESC LIMIT ?",
             params + noise_params + [candidate_limit]).fetchall()
         tier_ph = ",".join("?" * len(_NODECAY_TIERS))
         rows2 = con.execute(
-            "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+            "SELECT fact_id, ts, kind, text, expiry_class, confidence, state FROM facts "
             f"WHERE ({like}) AND {not_sup}{not_noise} AND expiry_class IN ({tier_ph}) "
             "ORDER BY ts DESC LIMIT ?",
             params + noise_params + list(_NODECAY_TIERS) + [DURABLE_LIMIT]).fetchall()
@@ -309,7 +322,8 @@ def _row_dicts(rows):
         out.append({"fact_id": r["fact_id"] if "fact_id" in cols else None,
                     "ts": r["ts"], "kind": r["kind"], "text": r["text"] or "",
                     "expiry_class": r["expiry_class"] if "expiry_class" in cols else "standard",
-                    "confidence": r["confidence"] if "confidence" in cols else 1.0})
+                    "confidence": r["confidence"] if "confidence" in cols else 1.0,
+                    "unsourced": unsourced(r["state"] if "state" in cols else None)})
     return out
 
 
@@ -338,8 +352,9 @@ def _score(cands, keywords, k):
         score = hits * 10 + _KIND_WEIGHT.get(r.get("kind"), 0) + eff_conf
         scored.append((score, {"fact_id": r.get("fact_id"), "ts": r.get("ts"),
                                "kind": r.get("kind") or "fact", "text": txt,
-                               "expiry_class": tier}))
-    scored.sort(key=lambda x: (x[0], x[1]["ts"] or ""), reverse=True)
+                               "expiry_class": tier, "unsourced": bool(r.get("unsourced"))}))
+    # sourced facts first: an unsourced fact never outranks one with a source quote
+    scored.sort(key=lambda x: (not x[1]["unsourced"], x[0], x[1]["ts"] or ""), reverse=True)
     return [f for _, f in scored[:k]]
 
 
@@ -378,7 +393,8 @@ def query_facts_json(path, keywords, k=K):
                       "kind": row.get("category") or row.get("kind") or "fact",
                       "text": txt,
                       "expiry_class": row.get("expiry_class") or "standard",
-                      "confidence": row.get("confidence")})
+                      "confidence": row.get("confidence"),
+                      "unsourced": unsourced(str(row.get("state") or ""))})
     return _score(cands, keywords, k)
 
 
@@ -408,7 +424,8 @@ def _render(facts):
     for f in facts:
         d = (f.get("ts") or "")[:10]
         snip = " ".join((f.get("text") or "").split())[:SNIPPET_CHARS]
-        line = f"- [{f.get('kind', 'fact')} {d}] {snip}"
+        tag = f" · {UNSOURCED_FLAG}" if f.get("unsourced") else ""     # never framed as anyone's words
+        line = f"- [{f.get('kind', 'fact')} {d}{tag}] {snip}"
         if used + 1 + len(line) > MAX_CHARS:
             break
         lines.append(line)

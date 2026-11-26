@@ -6,17 +6,22 @@ next to the FACTS block. Read-only: every connection is mode=ro with query_only.
 import json
 import os
 
-from services.arturo.facts_recall import K, MAX_CHARS, SNIPPET_CHARS, _connect_ro, served
+from services.arturo.facts_recall import (K, MAX_CHARS, SNIPPET_CHARS, UNSOURCED_FLAG, _connect_ro, served,
+                                         sourced_first, unsourced)
 
 
-def _statement_served(meta):
-    """A statement carries the state of the fact it was copied from in its metadata; one without a state
-    (written straight from its source) is served."""
+def _statement_state(meta):
+    """A statement carries the state of the fact it was copied from in its metadata. One without a state
+    (written straight from its source, or unreadable) reads as active."""
     try:
         m = json.loads(meta) if isinstance(meta, str) else (meta or {})
     except ValueError:
-        return True
-    return served(str(m.get("state") or "")) if isinstance(m, dict) else True
+        return ""
+    return str(m.get("state") or "") if isinstance(m, dict) else ""
+
+
+def _statement_served(meta):
+    return served(_statement_state(meta))
 
 L2_FLAG = "ARTURO_WORLDVIEW_L2"   # flag-inert until it is turned on
                                   # on purpose — default off = legacy facts path
@@ -111,11 +116,15 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                     continue
                 if ok:
                     cite = f"per {ok[-1][1]} {str(ok[-1][2])[:10]}"
+                # a belief is unsourced when every statement it may stand on has no source quote found
+                b_unsourced = bool(ok) and all(unsourced(_statement_state(r[3])) for r in ok)
+            else:
+                b_unsourced = False
             # stmt-cluster beliefs store subject = value[:80] (worldview_migrate
             # _derive_beliefs), so "{subj}: {value}" would print the prefix twice.
             text = value if (value or "").startswith(subj or "") else f"{subj}: {value}"
             out.append({"kind": "belief", "tier": tier, "text": text,
-                        "ts": updated, "cite": cite, "conf": conf})
+                        "ts": updated, "cite": cite, "conf": conf, "unsourced": b_unsourced})
         # fluid: recent ephemeral statements, newest-wins per subject-key
         s_like = " OR ".join(["content LIKE ?"] * len(keywords))
         s_params = [f"%{kw}%" for kw in keywords]
@@ -127,14 +136,15 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
         newest = {}
         for sid, stype, ts, content, meta in rows:      # ts DESC: first seen wins per key
             if not _statement_served(meta):
-                continue                                  # copied from a fact recall may not serve
+                continue                                  # copied from a superseded or archived fact
             if stype == "wal" and not _wal_anchored(meta):
                 continue                                  # §5.2: unanchored wal row is not recallable
             sp = _sp(content)
             key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
             if key not in newest:
                 newest[key] = {"kind": "fluid", "tier": "ephemeral", "text": content,
-                               "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0}
+                               "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0,
+                               "unsourced": unsourced(_statement_state(meta))}
         out.extend(list(newest.values())[: max(0, k - len(out)) + 2])
         # WAL->semantic drain §5.2 (step 4): the wal pass. The fluid pass above reads ONLY
         # ephemeral rows; the drain writes `standard` (a commit is not ephemeral), so without
@@ -165,12 +175,12 @@ def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
                 m = {}
             wal_entries.append({"kind": "wal", "tier": m.get("expiry_class", "standard"),
                                 "text": content, "ts": ts, "cite": f"per wal {str(ts)[:10]}",
-                                "conf": m.get("confidence", 0.5)})
+                                "conf": m.get("confidence", 0.5), "unsourced": unsourced(_statement_state(meta))})
             if len(wal_entries) >= WAL_RESERVE:
                 break
         if wal_entries:
             out = out[: max(0, (k + 2) - len(wal_entries))] + wal_entries
-        return out[: k + 2]
+        return sourced_first(out)[: k + 2]          # unsourced entries rank last, so they are trimmed first
     finally:
         con.close()
 
@@ -201,7 +211,8 @@ def _render_worldview(entries):
     for e in entries:
         snip = _wv_snippet(e.get("text"))
         cite = f" ({e['cite']})" if e.get("cite") else ""
-        line = f"- [{e.get('tier', '?')}] {snip}{cite}"
+        tag = f" · {UNSOURCED_FLAG}" if e.get("unsourced") else ""     # never framed as anyone's words
+        line = f"- [{e.get('tier', '?')}{tag}] {snip}{cite}"
         if used + 1 + len(line) > MAX_CHARS:
             break
         lines.append(line)
