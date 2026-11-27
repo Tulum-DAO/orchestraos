@@ -1,5 +1,5 @@
 """No tool holds a voice call (arturo-latency-dev msg_2dc6dcd4: GPT-Live takes no new turn while a function call is
-pending; Shaw's call 18:13 Tulum 11-26 had three 25-27 s silences that way). #674 handed gm_command over after
+pending; a call on 11-26 had three 25-27 s silences that way). #674 handed gm_command over after
 DETACH_AFTER_S; now EVERY tool still running then answers "accepted, still running", the call talks on, and the real
 result lands later: as a note while the call is up (the deliveries path), as a line in the call's thread once it ended.
 "Accepted" backs "I've started it", never "it's done"."""
