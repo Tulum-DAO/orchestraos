@@ -1588,12 +1588,16 @@ def test_the_report_says_the_backend_was_rejected(tmp_path, monkeypatch):
 
 
 def test_an_utterance_already_under_way_does_not_count_as_the_notice(tmp_path, monkeypatch):
-    # the rejection lands ~1.4 s after start, about when the greeting begins: the greeting ending is not Arturo saying
-    # the tools are down, so the call waits for the NEXT utterance (or the deadline).
+    # the rejection lands ~1.4 s after start, about when the greeting begins (its first deltas may be quiet): the
+    # greeting ending is not Arturo saying the tools are down, and the notice gets its full time from that end.
     call, closed = _rejected_backend_call(tmp_path, monkeypatch)
-    monkeypatch.setattr(type(call.session), "assistant_speaking", property(lambda self: True))
+    quiet = base64.b64encode(b"\x00" * 3200).decode()
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": quiet})     # the greeting is under way
     call.on_frame("in", REJECTED)
+    call._utterance_t0 -= 6.0                                         # it began 6 s ago, 1 s before the rejection,
+    call._backend_rejected_at -= 5.0                                  # ... and runs 5 s past the rejection
     call._end_utterance(time.monotonic())                             # the greeting ends
-    assert not _run(_tick_fatal(call, 0.0)) and closed == []
-    call._end_utterance(time.monotonic())                             # the notice line ends
+    assert not _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S - 0.5)) and closed == []
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": quiet})     # the notice line
+    call._end_utterance(time.monotonic())
     assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
