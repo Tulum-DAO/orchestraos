@@ -24,10 +24,11 @@ def valid_thread_id(tid):
 
 
 class CallThreads:
-    def __init__(self, store, on_line=None, end_marker=None):
+    def __init__(self, store, on_line=None, end_marker=None, tool_turns=None):
         self.store = store
         self.on_line = on_line              # (thread_id, role, brain_content) -> None
         self.end_marker = end_marker        # (cid) -> (text, meta) for the call's end row
+        self.tool_turns = tool_turns        # (cid, turns) -> the call's tool runs kept outside its journal (archive)
         self._lock = threading.Lock()
         self._by_call = {}                  # relay cid -> thread id
         self._by_thread = {}                # thread id -> relay cid (the live call in that thread)
@@ -104,12 +105,31 @@ class CallThreads:
         """A call that was never bound live (the dashboard's native GPT-Live engine journals client-side): once it
         has ended, its lines and its end marker go into its thread at once, as the live path would have written
         them (the operator's words as "user", Arturo's as "assistant", mode "voice", then the call card). `turns`
-        are call-journal turns ({role: user|arturo, text, ts}); any other role (tool, surface) is not a line the
-        caller saw. Like the live path, the card is written even for a call with no lines. Never raises."""
+        are call-journal turns ({role: user|arturo|tool|surface, text, ts}). Every tool the call ran is a line too,
+        where it happened (call_tool_lines: the journal's own tool turns, and the runs `tool_turns` finds outside
+        it); a surface turn is not a line anyone saw. Like the live path, the card is written even for a call with
+        no lines. Never raises."""
         if not cid or not valid_thread_id(thread_id):
             return False
-        for t in turns or ():
-            if not isinstance(t, dict):
+        from services.arturo import call_tool_lines
+        turns = [t for t in turns or () if isinstance(t, dict)]
+        if self.tool_turns is not None:
+            # The source of truth for the call's tool runs; a journal's own tool turns come from whichever server
+            # journal the merge linked to it (a time-window fallback can link another call's), so they are dropped.
+            turns = [t for t in turns if t.get("role") != "tool"]
+            try:
+                turns = call_tool_lines.merge(turns, self.tool_turns(cid, turns))
+            except Exception as e:  # noqa: BLE001 — the call's words still go in
+                log.warning(f"call {cid[:8]}: its tool runs could not be read: {e!r}")
+        for t in turns:
+            if t.get("role") == "tool":
+                try:
+                    ts = call_tool_lines._ts(t)
+                    self._write(cid, thread_id, "assistant", call_tool_lines.line_for(t), ts=ts, principal=principal,
+                                meta={"kind": call_tool_lines.KIND, "tool": str(t.get("tool") or t.get("name") or "tool"),
+                                      "ok": call_tool_lines.line_ok(t), "tool_call_id": t.get("tool_call_id") or ""})
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"call {cid[:8]}: a tool line failed: {e!r}")
                 continue
             role = {"user": "user", "arturo": "assistant"}.get(t.get("role"))
             text = (t.get("text") or "").strip() if isinstance(t.get("text"), str) else ""
