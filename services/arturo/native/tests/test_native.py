@@ -1500,3 +1500,324 @@ def test_a_tool_on_a_page_thread_call_is_tagged_with_that_thread(tmp_path, monke
             await c.close()
     _run(go())
     assert ex.call_seen["thread_id"] == "web_test1"
+
+
+class _SendLog:
+    disconnected = False
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, frame):
+        self.sent.append(frame)
+
+
+def _rejected_backend_call(tmp_path, monkeypatch):
+    s = _server(tmp_path, monkeypatch)
+    call = srv.NativeCall(s, None, "fleet", "iphone")
+    call.mode, call.driver = "live", _SendLog()
+    call.backend_fallback = "sent"              # these cases: the default-config retry was rejected as well
+    closed = []
+
+    async def close(reason):
+        closed.append(reason)
+    call.close = close
+    return call, closed
+
+
+REJECTED = {"type": "error", "event_id": "event_x", "error": {
+    "type": "invalid_request_error", "code": "responses_validation_failed", "param": "session.delegation.responses",
+    "message": "Responses configuration validation failed: Unsupported value: 'minimal' is not supported with the "
+               "'gpt-6-luna' model.", "client_event_id": "evt_start_000001"}}
+
+
+def test_a_rejected_backend_config_ends_the_call_with_a_spoken_and_visible_notice(tmp_path, monkeypatch):
+    # live probe 2026-11-26 (reasoning 'minimal' on gpt-6-luna): the start was rejected by an error frame, the session
+    # kept running with NO backend, and Arturo still said "I'm getting the GM to check on that". Nothing was checked.
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    call.on_frame("in", REJECTED)
+    out = []
+    while not call.out.empty():
+        out.append(call.out.get_nowait())
+    notices = [m for m in out if isinstance(m, dict) and m.get("type") == "notice"]
+    assert [n.get("code") for n in notices] == ["backend_rejected"]
+    said = [f for f in call.driver.sent if f["type"] == "session.thinking.append"]
+    assert len(said) == 1 and "lost my connection to my tools; please call back" in said[0]["content"]
+    assert call.backend_rejected.startswith("responses_validation_failed")
+    assert not _run(_tick_fatal(call, 0.0)) and closed == []          # Arturo gets to say it first
+    call._end_utterance(time.monotonic())                             # ... and once he has, the call ends
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
+    call.on_frame("in", REJECTED)                                     # a repeat never notices or speaks twice
+    assert len([f for f in call.driver.sent if f["type"] == "session.thinking.append"]) == 1
+
+
+def test_a_rejected_backend_ends_the_call_by_the_deadline_even_if_arturo_never_speaks(tmp_path, monkeypatch):
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    call.on_frame("in", REJECTED)
+    assert not _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S - 0.5))
+    assert _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S + 0.1)) and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def test_other_provider_errors_do_not_end_the_call(tmp_path, monkeypatch):
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    call.on_frame("in", {"type": "error", "error": {"code": "rate_limit_exceeded", "param": None, "message": "slow"}})
+    assert call.backend_rejected is None
+    assert not _run(_tick_fatal(call, 60.0)) and closed == []
+
+
+async def _tick_fatal(call, later_s):
+    return await call._check_backend_rejected(time.monotonic() + later_s)
+
+
+def test_the_report_says_the_backend_was_rejected(tmp_path, monkeypatch):
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        call = srv.NativeCall(s, None, "fleet", "iphone")
+        call.mode, call.t0 = "live", time.monotonic()
+        call.spend.start()
+        call.driver = _SendLog()
+        call.driver.disconnected = True
+        call.backend_fallback = "sent"
+        s.calls[call.binding.conversation_id] = call
+        call.on_frame("in", REJECTED)
+        call._end_utterance(time.monotonic())
+        assert await call._check_backend_rejected(time.monotonic())
+        return json.loads((tmp_path / "native" / "calls" / f"{call.binding.conversation_id}.json").read_text())
+
+    rep = _run(go())
+    assert rep["reason"] == srv.BACKEND_REJECTED_REASON
+    assert rep["backend_rejected"].startswith("responses_validation_failed: Responses configuration validation failed")
+    assert rep["backend_fallback"] == "rejected"
+
+
+def test_an_utterance_already_under_way_does_not_count_as_the_notice(tmp_path, monkeypatch):
+    # the rejection lands ~1.4 s after start, about when the greeting begins (its first deltas may be quiet): the
+    # greeting ending is not Arturo saying the tools are down, and the notice gets its full time from that end.
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    quiet = base64.b64encode(_pcm(0.1, rms=40)).decode()             # far below speech level, but not silence
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": quiet})     # the greeting is under way
+    call.on_frame("in", REJECTED)
+    call._utterance_t0 -= 6.0                                         # it began 6 s ago, 1 s before the rejection,
+    call._backend_rejected_at -= 5.0                                  # ... and runs 5 s past the rejection
+    call._end_utterance(time.monotonic())                             # the greeting ends
+    assert not _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S - 0.5)) and closed == []
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": quiet})     # the notice line
+    call._end_utterance(time.monotonic())
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def test_the_digital_silence_between_utterances_does_not_start_one(tmp_path, monkeypatch):
+    # Claude review of 47a66fa: GPT-Live streams all-zero audio between utterances; counted as an utterance start, it
+    # made the notice look older than the rejection and pushed the close back by up to 8 s.
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    zeros = base64.b64encode(b"\x00" * 3200).decode()
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": zeros})     # silence before the rejection
+    call.on_frame("in", REJECTED)
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": base64.b64encode(_pcm(0.1)).decode()})
+    call._end_utterance(time.monotonic())                             # the notice ends: the call ends now
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def _fallback_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(native_config, "BACKEND_MODEL", "gpt-6-luna-override")   # an override the provider rejects
+    s = _server(tmp_path, monkeypatch)
+    call = srv.NativeCall(s, None, "fleet", "iphone")
+    call.mode = "live"
+    first = FakeProvider()
+    call.transport, call.driver = first, srv.Driver(call.session, first, srv._Observer(call))
+    call._start_args = ([], "")
+    return call, first
+
+
+def _drain(call):
+    out = []
+    while not call.out.empty():
+        out.append(call.out.get_nowait())
+    return out
+
+
+def _appends(*providers):
+    return [f for p in providers for f in p.sent if f["type"].endswith(".append") and f["type"] != "session.input_audio.append"]
+
+
+def test_a_rejected_backend_falls_back_once_to_the_default_config_and_the_caller_never_hears_it(tmp_path, monkeypatch):
+    # Shaw 2026-11-27 on #683: "Arturo's tool calls should never be 'down'". A rejected setting (reasoning 'minimal'
+    # on gpt-6-luna, probe 11-26) is retried once on a fresh session with the default delegation config.
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call.on_frame("in", REJECTED)
+        call.on_frame("in", REJECTED)                                  # the old session repeats itself: one retry
+        await call._fallback_task
+        second = call.transport
+        starts = [f for f in second.sent if f["type"] == "session.start"]
+        call.on_frame("in", {"type": "session.started", "session": {}})
+        return call, first, second, starts
+
+    call, first, second, starts = _run(go())
+    assert second is not first and first.down and len(FakeProvider.instances) == 2
+    assert len(starts) == 1
+    assert starts[0]["session"]["delegation"]["responses"]["model"] == native_config.DEFAULT_BACKEND_MODEL
+    assert call.backend_fallback == "ok" and call.backend_rejected.startswith("responses_validation_failed")
+    assert not [m for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"]
+    assert _appends(first, second) == []                               # nothing is said about it
+    assert not _run(call._check_backend_rejected(time.monotonic() + 60)) and not call.closed
+
+
+def test_a_fallback_rejected_too_says_the_connection_to_the_tools_was_lost_and_ends(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        closed = []
+
+        async def close(reason):
+            closed.append(reason)
+        call.close = close
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        call.on_frame("in", REJECTED)                                  # the default config is rejected as well
+        call._end_utterance(time.monotonic())
+        await call._check_backend_rejected(time.monotonic())
+        return call, first, closed
+
+    call, first, closed = _run(go())
+    said = [f["content"] for f in _appends(call.transport)]
+    assert len(said) == 1 and "lost my connection to my tools" in said[0] and "call back" in said[0]
+    assert "down" not in said[0].lower() and "down" not in srv.BACKEND_REJECTED_REASON.lower()
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
+    assert call.backend_fallback == "rejected" and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def test_a_fallback_that_cannot_connect_takes_the_notice_path(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+
+        def refuse():
+            raise OSError("connect refused")
+        call.server.transport_factory = refuse
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call, first
+
+    call, first = _run(go())
+    assert call.backend_fallback == "failed" and call.transport is first
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
+    assert len(_appends(first)) == 1
+
+
+def test_the_fallback_session_starts_clean_and_keeps_the_first_sessions_seconds(tmp_path, monkeypatch):
+    # review of d88f04e: the swap kept session.started (appends before the new session started), the context the
+    # rejected session was told was never re-sent, and the usage counter restarting at 0 dropped its seconds.
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call.session.started = True
+        call._context, call._host = "ctx-key", "host-page"
+        call.session.cost.on_frame({"type": "session.usage.updated", "usage": {"seconds": 2}})
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call
+
+    call = _run(go())
+    assert call.session.started is False
+    assert (call._context, call._context_pending) == (None, "ctx-key")
+    assert (call._host, call._host_pending) == (None, "host-page")
+    call.session.cost.on_frame({"type": "session.usage.updated", "usage": {"seconds": 5}})
+    assert call.session.cost.billed_seconds == 7.0
+
+
+def test_a_call_that_ends_while_the_fallback_connects_never_keeps_the_new_session(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+
+        def slow():
+            time.sleep(0.3)
+            return FakeProvider()
+        call.server.transport_factory = slow
+        call.on_frame("in", REJECTED)
+        await asyncio.sleep(0.05)
+        call.closed = True                                             # the caller hung up mid-connect
+        await call._fallback_task
+        return call, first
+
+    call, first = _run(go())
+    late = FakeProvider.instances[-1]
+    assert late is not first and late.down and late.sent == []         # closed, never started
+    assert call.transport is first
+
+
+def test_a_rejection_later_in_the_call_does_not_restart_the_conversation(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call.t0 = time.monotonic() - srv.BACKEND_FALLBACK_WINDOW_S - 1
+        call.on_frame("in", REJECTED)
+        return call, first
+
+    call, first = _run(go())
+    assert call._fallback_task is None and call.backend_fallback == "too_late" and len(FakeProvider.instances) == 1
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
+
+
+def test_the_rejected_sessions_greeting_is_cut_and_muted_so_the_caller_hears_one_greeting(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        fed = []
+        call.gate.feed_audio = lambda pcm, now: fed.append(len(pcm))
+        greet = base64.b64encode(_pcm(0.1)).decode()
+        call.on_frame("in", {"type": "session.output_audio.delta", "delta": greet})   # the old greeting began
+        call.on_frame("in", REJECTED)
+        call.on_frame("in", {"type": "session.output_audio.delta", "delta": greet})   # ... and keeps coming
+        n_during = len(fed)
+        await call._fallback_task
+        return call, n_during
+
+    call, n_during = _run(go())
+    assert n_during == 1                                               # only the frame before the rejection played
+    assert {"type": "barge", "cut": True} in _drain(call)
+
+
+def test_the_cut_greeting_leaves_nothing_held_and_its_words_are_not_shown(tmp_path, monkeypatch):
+    # review of 9ff4f71: the barge reached the client but the claim gate still released what it held, and the
+    # rejected session's transcript kept arriving as rows.
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        barged = []
+        call.gate.barge = lambda: barged.append(1) or []
+        greet = base64.b64encode(_pcm(0.1)).decode()
+        call.on_frame("in", {"type": "session.output_audio.delta", "delta": greet})
+        call.on_frame("in", REJECTED)
+        _drain(call)
+        call.on_frame("in", {"type": "session.output_transcript.delta", "delta": "Hey! How's"})
+        rows = [m for m in _drain(call) if isinstance(m, dict) and m.get("type") == "transcript"]
+        await call._fallback_task
+        return barged, rows
+
+    barged, rows = _run(go())
+    assert barged == [1] and rows == []
+
+
+def test_a_newer_pending_context_is_not_replaced_by_the_one_already_sent(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call._context, call._context_pending = "old-page", "new-page"
+        call._host, call._host_pending = "old-host", "new-host"
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call
+
+    call = _run(go())
+    assert (call._context, call._context_pending) == (None, "new-page")
+    assert (call._host, call._host_pending) == (None, "new-host")
+
+
+def test_a_fallback_start_that_raises_takes_the_notice_path(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+
+        def boom(*a, **k):
+            raise ValueError("bad frame")
+        monkeypatch.setattr(native_config, "session_start_frame", boom)
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call
+
+    call = _run(go())
+    assert call.backend_fallback == "failed"
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]

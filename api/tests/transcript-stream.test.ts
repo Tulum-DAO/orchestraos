@@ -74,13 +74,16 @@ test('subscribe with no Last-Event-ID -> one full snapshot in F0 envelope shape'
   assert.equal(snap.id, `session-a:${expected.length}`);
 });
 
+// Appends write a WHOLE line: the text, then its newline, as a transcript writer does. The fixture already
+// ends with a newline. A line with no trailing newline is a partial write, which the log cache holds back
+// on purpose until it completes, so the old '\n' + line form never reached the tailer.
 test('append to the JSONL -> tick pushes ONLY the new item as a delta', () => {
   const tailer = makeTailer();
   const events: TailEvent[] = [];
   tailer.subscribe((ev) => events.push(ev));
   const before = fullItems().length;
 
-  appendFileSync(path, '\n' + claudeTextLine('u-tail-1', 'tail arrived'));
+  appendFileSync(path, claudeTextLine('u-tail-1', 'tail arrived') + '\n');
   tailer.tick();
 
   assert.equal(events.length, 2);
@@ -105,7 +108,7 @@ test('no change -> tick emits nothing', () => {
 
 test('resume with valid Last-Event-ID -> delta of missed items only, no snapshot', () => {
   const offsetAtDisconnect = fullItems().length;
-  appendFileSync(path, '\n' + claudeTextLine('u-missed-1', 'missed while away'));
+  appendFileSync(path, claudeTextLine('u-missed-1', 'missed while away') + '\n');
 
   const tailer = makeTailer();
   const events: TailEvent[] = [];
@@ -125,7 +128,7 @@ test('resume when fully caught up -> no event until the next append', () => {
   tailer.subscribe((ev) => events.push(ev), `session-a:${offset}`);
   assert.equal(events.length, 0);
 
-  appendFileSync(path, '\n' + claudeTextLine('u-tail-2', 'later'));
+  appendFileSync(path, claudeTextLine('u-tail-2', 'later') + '\n');
   tailer.tick();
   assert.equal(events.length, 1);
   assert.equal(events[0].type, 'delta');
@@ -180,7 +183,7 @@ test('unsubscribe stops delivery', () => {
   const events: TailEvent[] = [];
   const off = tailer.subscribe((ev) => events.push(ev));
   off();
-  appendFileSync(path, '\n' + claudeTextLine('u-tail-3', 'after unsub'));
+  appendFileSync(path, claudeTextLine('u-tail-3', 'after unsub') + '\n');
   tailer.tick();
   assert.equal(events.length, 1); // snapshot only
   assert.equal(tailer.subscriberCount, 0);

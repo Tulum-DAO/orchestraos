@@ -64,8 +64,21 @@ OPENING_WAIT_S = 6.0          # the thread above the call loads while the provid
 HOST_CONTEXT_MAX_SENDS = 12
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_CALLS = int(os.environ.get("ARTURO_NATIVE_MAX_CALLS", "2"))   # review M7: concurrent calls share one daily cap
+# A start whose backend config the provider rejects leaves a session with NO backend that still promises to check things
+# (probe 2026-11-26, reasoning 'minimal' on gpt-6-luna). Shaw 2026-11-27: "Arturo's tool calls should never be 'down'":
+# the call retries ONCE on a fresh session with the default delegation config, unheard by the caller. Only if that is
+# rejected too does Arturo say he lost his tools and the call ends, at most this long after.
+BACKEND_REJECTED_SAY_S = 8.0
+BACKEND_FALLBACK_WINDOW_S = 15.0   # a fresh session only at the start: later it would forget the conversation (review)
+BACKEND_REJECTED_REASON = "Arturo lost his connection to his tools: please call back"
+BACKEND_REJECTED_LINE = ("The connection to your tools was lost in this call. Say exactly this, once, and nothing else: "
+                         "\"I've lost my connection to my tools; please call back.\"")
 NO_INPUT_S = 6.0           # gm msg_5b124db0: a live call this old with no input tells the client why it is silent
 DOWNLINK_WARN_S = float(os.environ.get("ARTURO_NATIVE_DOWNLINK_WARN_S", "2.0"))
+# gm's answer to a question a call asked lands in that call's chat thread (services/arturo/gm_answers.py), swept this
+# often; "0" in ARTURO_NATIVE_GM_ANSWERS switches it off. It lives and dies with this service.
+GM_ANSWERS_SWEEP_S = 60.0
+GM_ANSWERS_FLAG = "ARTURO_NATIVE_GM_ANSWERS"
 
 
 # ---- who is calling (the proxy's rule, arturo-proxy.py _forwarded + _stamped_principal) ---------------------------
@@ -93,6 +106,11 @@ def verified_principal(headers, orchestra_dir=ORCHESTRA_DIR, verify=None):
 
 # ---- audio cadence (per call) ------------------------------------------------------------------------------------
 TURN_GAP_S = 1.5            # a longer gap between audio frames is a turn boundary, not a stutter: not counted
+
+
+def _backend_rejected(err):
+    """The provider refused the Responses delegation config (DOC_PRIMARY_WS error {code, param}): the call has no backend."""
+    return err.get("code") == "responses_validation_failed" or str(err.get("param") or "").startswith("session.delegation")
 
 
 def _gap(gaps, last):
@@ -391,6 +409,13 @@ class NativeCall:
         self.up_first_s = None
         self.no_input = None             # None | "no_audio" | "provider_not_ready" | "provider_not_hearing"
         self._no_input_checked = False
+        self.backend_rejected = None     # "<code>: <message>" once the provider rejected the delegation config
+        self._backend_rejected_at = None
+        self._backend_rejected_said = False
+        self.backend_fallback = None     # None | "trying" | "sent" | "ok" | "rejected" | "failed"
+        self._fallback_task = None
+        self._start_args = ([], "")      # (tools, opening) of the start frame, for the fallback start
+        self._utterance_t0 = None        # first output audio delta (any level) since the last utterance ended
         self._final_stats = None
         # ios msg_82c61732: phone underruns 157-653 ms. Provider delta arrival vs our send to the phone, per call.
         self._in_t = self._out_t = None
@@ -471,23 +496,33 @@ class NativeCall:
             return
         t = frame.get("type")
         now = time.monotonic()
+        if t == "session.started" and self.backend_fallback == "sent":
+            self.backend_fallback = "ok"
+            log.warning(f"native {self.binding.conversation_id}: BACKEND-FALLBACK ok: the default delegation config "
+                        f"started; the call keeps its tools")
         if t == "session.output_audio.delta":
             self._in_t = _gap(self._in_gaps, self._in_t)
             try:
                 pcm = base64.b64decode(frame.get("delta") or "")
             except Exception:  # noqa: BLE001
                 pcm = b""
+            # GPT-Live streams digital silence between utterances (probes 11-26: 70-90% of deltas are all zeros); any
+            # non-zero sample, however quiet, is an utterance starting.
+            if self._utterance_t0 is None and pcm.strip(b"\x00"):
+                self._utterance_t0 = now
             if pcm:
                 from services.arturo import openai_live
                 if openai_live.is_speech(pcm):
                     self._out_speech_t = now
-                if not self._force_muted:                 # a forced barge: the rest of this utterance never plays
+                if not self._force_muted and self.backend_fallback != "trying":   # forced barge / rejected session
                     self.gate.feed_audio(pcm, now)
             speaking = self.session.assistant_speaking
             if self._was_speaking and not speaking:
                 self._end_utterance(now)
             self._was_speaking = speaking
         elif t == "session.output_transcript.delta":
+            if self.backend_fallback == "trying":       # the rejected session's words are never shown either
+                return
             fresh = not self.session.assistant_speaking and self._arturo_row_done
             if fresh:
                 self.arturo_text = ""
@@ -514,7 +549,11 @@ class NativeCall:
             self.spend.activity()
             self.emit({"type": "transcript", "who": "user", "text": self.user_text.strip(), "new": fresh})
         elif t == "error":
-            self.emit({"type": "notice", "text": f"provider error: {(frame.get('error') or {}).get('code')}"})
+            err = frame.get("error") or {}
+            if _backend_rejected(err):
+                self._reject_backend(err, now)
+            else:
+                self.emit({"type": "notice", "text": f"provider error: {err.get('code')}"})
         reason = self.spend.on_frame(frame) if self.mode == "live" else None
         if reason:
             asyncio.ensure_future(self.close(reason))
@@ -525,12 +564,100 @@ class NativeCall:
         self.emit({"type": "audio_end"})                  # ios item 1: the client's turn-end signal
         self._force_muted = False
         self._arturo_row_done = True
+        began, self._utterance_t0 = self._utterance_t0, None
+        if self._backend_rejected_at is not None:
+            if began is not None and began < self._backend_rejected_at:
+                self._backend_rejected_at = now          # an utterance under way at the rejection (the greeting) is not
+            else:                                        # the notice: the notice's own time starts when it ends
+                self._backend_rejected_said = True
         line = self.gate.take_correction()
         if line and self.driver is not None:
             try:
                 self.driver.send(protocol.commentary_append(line))
             except TransportDown:
                 pass
+
+    def _reject_backend(self, err, now):
+        """The first rejection: retry once on a fresh session with the default config (_fall_back), unheard. A rejection
+        of that retry (or a retry that cannot connect): tell the caller once, then _check_backend_rejected ends the call."""
+        if self.backend_rejected is None:
+            self.backend_rejected = f"{err.get('code')}: {str(err.get('message') or '')[:200]}"
+        fresh = (self.t0 is None or now - self.t0 <= BACKEND_FALLBACK_WINDOW_S) and not self.session.delegations
+        if self.backend_fallback is None and self.mode == "live" and fresh:
+            self.backend_fallback = "trying"            # its audio is muted from here (on_frame): no double greeting
+            if self._utterance_t0 is not None:
+                self.gate.barge()                       # what the claim gate still holds never plays (review)
+                self.emit({"type": "barge", "cut": True})   # a greeting already playing stops; the new one follows
+            log.warning(f"native {self.binding.conversation_id}: BACKEND-REJECTED {self.backend_rejected!r}; "
+                        f"retrying once with the default delegation config")
+            self._fallback_task = asyncio.ensure_future(self._fall_back())
+            return
+        if self.backend_fallback == "trying":           # the rejected session repeating itself while we reconnect
+            return
+        if self.backend_fallback == "sent":
+            self.backend_fallback = "rejected"
+        elif self.backend_fallback is None:
+            self.backend_fallback = "too_late" if self.mode == "live" else None
+        self._give_up(now)
+
+    async def _fall_back(self):
+        """A fresh provider session started from the known-good config; the rejected one is closed. The caller's audio
+        and the call's state carry on (both go through self.driver)."""
+        try:
+            new = await self._connect()
+        except Exception as e:  # noqa: BLE001 — no second session: the call cannot keep its tools
+            log.warning(f"native {self.binding.conversation_id}: BACKEND-FALLBACK connect failed: {e!r}")
+            self.backend_fallback = "failed"
+            self._give_up(time.monotonic())
+            return
+        if self.closed:                                  # the call ended while we connected: never leak a billed session
+            await asyncio.get_running_loop().run_in_executor(self.server.connect_pool, new.close)
+            return
+        old, self.transport = self.transport, new
+        self.driver = Driver(self.session, new, _Observer(self))
+        self.session.started = False                     # the new session's appends wait for ITS session.started
+        self.session.cost.new_session()                  # its usage counter starts at 0: keep the first one's seconds
+        if self._context is not None:                    # what the rejected session was told, the new one is told again
+            self._context_pending = self._context_pending or self._context   # (a newer pending one wins)
+            self._context = None
+        if self._host is not None:
+            self._host_pending = self._host_pending or self._host
+            self._host = None
+        tools, opening = self._start_args
+        self.backend_fallback = "sent"
+        try:
+            self.driver.send(native_config.session_start_frame(tools, context=opening, fallback=True))
+        except Exception as e:  # noqa: BLE001 — any failure here is a call without tools: say so, never go silent
+            log.warning(f"native {self.binding.conversation_id}: BACKEND-FALLBACK start failed: {e!r}")
+            self.backend_fallback = "failed"
+            self._give_up(time.monotonic())
+        if old is not None:
+            try:
+                await asyncio.get_running_loop().run_in_executor(self.server.connect_pool, old.close)
+            except Exception:  # noqa: BLE001 — the rejected session is already useless
+                pass
+
+    def _give_up(self, now):
+        if self._backend_rejected_at is not None:
+            return
+        self._backend_rejected_at = now
+        log.warning(f"native {self.binding.conversation_id}: BACKEND-REJECTED {self.backend_rejected!r}; "
+                    f"fallback={self.backend_fallback}; ending the call")
+        self.emit({"type": "notice", "code": "backend_rejected", "text": BACKEND_REJECTED_REASON})
+        if self.driver is not None:
+            try:
+                self.driver.send(protocol.thinking_append(BACKEND_REJECTED_LINE))
+            except TransportDown:
+                pass
+
+    async def _check_backend_rejected(self, now):
+        """End a backend-less call once Arturo has said so, or BACKEND_REJECTED_SAY_S after the rejection."""
+        if self._backend_rejected_at is None or self.closed:
+            return False
+        if not self._backend_rejected_said and now - self._backend_rejected_at < BACKEND_REJECTED_SAY_S:
+            return False
+        await self.close(BACKEND_REJECTED_REASON)
+        return True
 
     def tools_snapshot(self):
         conv = self.binding.conversation_id
@@ -666,7 +793,8 @@ class NativeCall:
         # how it was read, so a skipped opening never looks like an empty thread (Claude review of #638)
         self.opening_info = {**call_context.describe(opening), **_OPENING_UNREAD,
                              **(getattr(opening, "info", None) or {}), "skipped": skipped}
-        self.driver.send(native_config.session_start_frame(self.toolset.declared_tools(self.binding), context=opening))
+        self._start_args = (self.toolset.declared_tools(self.binding), opening)
+        self.driver.send(native_config.session_start_frame(self._start_args[0], context=opening))
         if threaded:
             try:
                 self.chat_feed = (self.server.page_feed_factory(self.page_thread, principal=self.binding.principal) if self.page_thread
@@ -974,6 +1102,8 @@ class NativeCall:
                 self.emit(pcm)
             self._check_barge()
             self._check_no_input()
+            if await self._check_backend_rejected(time.monotonic()):
+                break
             self._flush_context()
             self._flush_chat_feed()
             self._flush_host_context()
@@ -1065,6 +1195,8 @@ class NativeCall:
         await asyncio.shield(self._close_task)
 
     async def _finalize_close(self, reason):
+        if self._fallback_task is not None and not self._fallback_task.done():
+            self._fallback_task.cancel()                 # _connect closes a socket that arrives after the cancel
         if self.provider is not None:
             self.provider.interrupt()
         if self.driver is not None and self.mode == "live":
@@ -1099,6 +1231,7 @@ class NativeCall:
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
+                   backend_rejected=self.backend_rejected, backend_fallback=self.backend_fallback,
                    cadence=self.cadence_report(),
                    handed_over=getattr(self.session.orchestra, "handed_over", list)(),
                    thread={"chat": self.chat_agent if self.chat_named else None, "thread_id": self.page_thread,
@@ -1152,13 +1285,46 @@ class NativeServer:
         self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
         self._thread_store = None
+        # the gm answers sweep has its own thread: a sweep stuck on a busy sqlite never takes a live call's tool worker
+        self.sweep_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="native-sweep")
+        self.msg_store_factory = None                               # () -> msg_store.MessageStore (tests inject one)
 
     def thread_store(self):
-        """The proxy's threads.db (after-call lines), opened once: ThreadStore() re-runs its schema and migration."""
+        """The proxy's threads.db (after-call lines, gm answers), opened once: ThreadStore() re-runs its schema and
+        migration."""
         if self._thread_store is None:
             from services.arturo.thread_store import ThreadStore
             self._thread_store = ThreadStore(call_context.thread_context.threads_db_path())
         return self._thread_store
+
+    def sweep_gm_answers(self):
+        """One pass of gm_answers (on its own thread, never the event loop): calls still up wait for their end."""
+        from services.arturo import gm_answers
+        if self.msg_store_factory is not None:
+            store = self.msg_store_factory()
+        else:
+            import sys
+            root = str(Path(__file__).resolve().parents[3])        # msg_store.py is code in the checkout
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            from msg_store import MessageStore
+            store = MessageStore()
+        return gm_answers.post_gm_answers(store, self.thread_store(), live_calls=lambda: set(self.calls))
+
+    async def _gm_answers_loop(self, app):
+        """aiohttp cleanup_ctx: the sweep runs for the life of the service."""
+        async def loop():
+            while True:
+                try:
+                    await asyncio.get_running_loop().run_in_executor(self.sweep_pool, self.sweep_gm_answers)
+                except Exception as e:  # noqa: BLE001 — the next sweep tries again
+                    log.warning(f"native: gm answers sweep failed: {e!r}")
+                await asyncio.sleep(GM_ANSWERS_SWEEP_S)
+        task = asyncio.ensure_future(loop()) if os.environ.get(GM_ANSWERS_FLAG, "1") != "0" else None
+        yield
+        if task is not None:
+            task.cancel()
+        self.sweep_pool.shutdown(wait=False)
 
     def _spoken(self, conversation_id):
         call = self.calls.get(conversation_id)
@@ -1205,6 +1371,7 @@ class NativeServer:
     def app(self):
         a = web.Application()
         a.add_routes([web.get("/native/ws", self.ws), web.get("/native/healthz", self.healthz)])
+        a.cleanup_ctx.append(self._gm_answers_loop)
         return a
 
 

@@ -719,6 +719,19 @@ class ThreadStore:
         except Exception:  # noqa: BLE001
             return "fleet"
 
+    def has_meta(self, conversation_id, **match):
+        """True if a message in this thread carries meta with every key=value in `match` (a poster's dedupe: e.g.
+        kind="gm_answer", msg_id=<reply id>). A store that cannot be read raises: the caller must not post blind."""
+        if not conversation_id or not match:
+            return False
+        with self._connect() as conn:
+            rows = conn.execute("SELECT meta FROM turns WHERE thread_id = ? AND meta != ''", (conversation_id,))
+            for (raw,) in rows:
+                m = _meta(raw) or {}
+                if all(m.get(k) == v for k, v in match.items()):
+                    return True
+        return False
+
     def list_threads(self, limit=50, offset=0, started_by=None):
         """Newest first, paged. Summaries only — never the turns. `started_by` = only the threads that
         principal started (a non-fleet reader's list); None = all of them."""

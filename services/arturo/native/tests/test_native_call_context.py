@@ -674,3 +674,65 @@ def test_a_page_thread_that_could_not_be_read_is_named_and_an_uncut_keep_says_so
     out = call_context.opening("gm", route=lambda a, b, **k: _opening(12, n_summ=3) if b == 2500 else no_recent,
                                load=_NO_TWIN)
     assert out == no_recent and out.info["reread_result"] == "kept_uncut"
+
+
+def _long_opening(n=60):
+    from services.arturo import thread_context as tc
+    lines = [f"[2026-11-26T23:{i:02d}:00Z 18:{i:02d} Local] call vc_x Shaw: line {i} " + "words " * 30 for i in range(n)]
+    return "\n".join([tc.PAST_OPEN, "THREAD web_x: everything above this call, oldest first.", *lines, tc.PAST_CLOSE])
+
+
+def test_the_backend_gets_only_the_newest_lines_of_a_long_opening(monkeypatch):
+    # probes 2026-11-26 (native-0e20464d06eb vs the same run with a 2,463-token opening): the opening cost ~5.8k
+    # backend input tokens per delegation, about twice its size, because GPT-Live hands the backend its own context
+    # too. The backend keeps the newest lines (what "that"/"it" refer to); the live copy stays whole.
+    from services.arturo import thread_context as tc
+    from services.arturo.native import native_config
+    monkeypatch.delenv(native_config.BACKEND_OPENING_ENV, raising=False)
+    ctx = _long_opening()
+    f = native_config.session_start_frame([], context=ctx)
+    live = f["session"]["instructions"]
+    backend = f["session"]["delegation"]["responses"]["instructions"]
+    base = native_config.prompts()["backend"]
+    thread = backend[len(base):].strip()
+    assert "line 0 " in live and "line 59 " in live
+    assert "line 59 " in thread and "line 0 " not in thread
+    assert tc.estimate_tokens(thread) <= native_config.BACKEND_OPENING_TOKENS + 60
+    assert thread.startswith(tc.PAST_OPEN) and thread.count(tc.PAST_OPEN) == 1
+    assert thread.endswith(tc.PAST_CLOSE) and thread.count(tc.PAST_CLOSE) == 1
+    assert "THREAD web_x:" in thread and "older line(s) not shown" in thread
+
+
+def test_the_backend_opening_budget_comes_from_env(monkeypatch):
+    from services.arturo.native import native_config
+    ctx = _long_opening()
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "0")
+    f = native_config.session_start_frame([], context=ctx)
+    assert f["session"]["delegation"]["responses"]["instructions"] == native_config.prompts()["backend"]
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "full")
+    f = native_config.session_start_frame([], context=ctx)
+    assert f["session"]["delegation"]["responses"]["instructions"].endswith(native_config.fenced(ctx))
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "bogus")
+    assert native_config.backend_opening_budget() == native_config.BACKEND_OPENING_TOKENS
+
+
+def test_the_newest_line_survives_a_budget_smaller_than_it(monkeypatch):
+    # Claude review of the trim: a 1,200-char newest line under a 300-token budget left the backend only the fences.
+    from services.arturo import thread_context as tc
+    from services.arturo.native import native_config
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "300")
+    newest = "[2026-11-26T23:59:00Z 18:59 Local] call vc_x Shaw: " + "x" * 1200
+    ctx = "\n".join(["THREAD web_x: header", "[2026-11-26T23:00:00Z 18:00 Local] call vc_x Shaw: old", newest])
+    f = native_config.session_start_frame([], context=ctx)      # unfenced: an older API route
+    thread = f["session"]["delegation"]["responses"]["instructions"][len(native_config.prompts()["backend"]):].strip()
+    assert newest in thread and "Shaw: old" not in thread
+    assert thread.startswith(tc.PAST_OPEN) and thread.endswith(tc.PAST_CLOSE)
+    assert "(1 older line(s) not shown)" in thread
+
+
+def test_a_non_ascii_digit_budget_falls_back_instead_of_failing_the_call(monkeypatch):
+    from services.arturo.native import native_config
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "²")
+    assert native_config.backend_opening_budget() == native_config.BACKEND_OPENING_TOKENS
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, " 800 ")
+    assert native_config.backend_opening_budget() == 800
