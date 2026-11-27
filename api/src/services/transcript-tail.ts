@@ -76,14 +76,24 @@ type Subscriber = (ev: TailEvent) => void;
 const itemKey = (it: any): string =>
   JSON.stringify([it?.kind, it?.role, it?.uuid, it?.id, it?.tool_use_id, String(it?.text ?? '').slice(0, 200)]);
 
+/** Items before the last kept one that must line up too: one key alone can match a copy of it among the new items. */
+const ALIGN_RUN = 4;
+
 /** How far `next` slid relative to `prev` (index in next = index in prev + shift), found by
- *  locating prev's last item in next; null when it cannot be found. 0 below the cap. */
+ *  locating prev's last item in next, with the items before it; null when it cannot be found. 0 below the cap.
+ *  The match nearest its old place wins: a beat moves it by the few items it brought. */
 export function alignShift(prev: any[], next: any[]): number | null {
   if (!prev.length) return 0;
   const last = prev.length - 1;
-  const key = itemKey(prev[last]);
-  if (next.length > last && itemKey(next[last]) === key) return 0;
-  for (let j = next.length - 1; j >= 0; j--) if (itemKey(next[j]) === key) return j - last;
+  const run = prev.slice(Math.max(0, last - ALIGN_RUN + 1)).map(itemKey).reverse();
+  const fits = (j: number): boolean => {
+    for (let d = 0; d < run.length && j - d >= 0; d++) if (itemKey(next[j - d]) !== run[d]) return false;
+    return true;
+  };
+  for (let d = 0; d <= Math.max(last, next.length - 1 - last); d++) {
+    if (last - d >= 0 && last - d < next.length && fits(last - d)) return d ? -d : 0;
+    if (d > 0 && last + d < next.length && fits(last + d)) return d;
+  }
   return null;
 }
 
@@ -215,11 +225,16 @@ export class TranscriptTailer {
     env.items = dropWakeReplies(env.items);
     // reply_to (reply threads P1): the same stamp the poll route's finishWindow gives its items. Fail-open.
     env.items = stampReplyTo(env.items, this.agentId);
-    const truncated = !rotated && env.items.length < prevCount;
     // Old and new windows of one log: at the item cap the window slides (one in, one out, its length stuck at the cap),
     // so they are aligned on the last kept item, never compared by bare index. null: they cannot be lined up.
-    const same = !rotated && !truncated && path === this.path && prevCount > 0;
+    // A shorter window is a shrunk log, except one the cap cut: a window never starts inside a line, so it is one item
+    // longer while a line of two items sits at its front and shorter again when that line slides out (unless the file
+    // itself got smaller: that is a rewrite).
+    const cut = readCount >= tailItemCap;
+    const shorter = !rotated && env.items.length < prevCount;
+    const same = !rotated && path === this.path && prevCount > 0 && (!shorter || (cut && size >= this.fileSize));
     const shift = same ? alignShift(this.items, env.items) : null;
+    const truncated = shorter && shift === null;
     // The new items: those after the last kept one (at the cap, as many as slid out the front).
     const fresh = shift === null ? 0 : Math.max(0, env.items.length - (prevCount + shift));
     // A cut-turn line new this beat and placed before the old tail: every later item moved, which
@@ -247,19 +262,23 @@ export class TranscriptTailer {
     this.interruptedSig = isig;
     this.items = env.items;
 
-    // The numbering goes on across the windows it can line up and starts again where it cannot (a new session, a shrunk
-    // log, a window that does not line up, the first read). It starts at the window's own count: the log's when the read
-    // held all of it (below the cap), so another tailer's numbering of the same log agrees; a nonce of its own otherwise.
-    if (shift !== null) this.seq += fresh;
+    // Below the cap the read held the whole log: the number is its item count, so another tailer's numbering of the same
+    // log agrees. A window the cap cut goes on counting across the windows it can line up (from the log's first item, when
+    // it crossed the cap in this tailer) and starts again where it cannot (a new session, a shrunk log, a window that does
+    // not line up, the first read), at the window's own count with a nonce of its own.
+    if (!cut) {
+      this.seq = env.items.length;
+      this.epoch = '';
+    } else if (shift !== null) this.seq += fresh;
     else {
       this.seq = env.items.length;
-      this.epoch = readCount < tailItemCap ? '' : `e${(++epochs).toString(36)}${BOOT}`;
+      this.epoch = `e${(++epochs).toString(36)}${BOOT}`;
     }
 
     if (rotated || truncated) return { rotated: true, fresh: 0, restated: false };
     if (restated) { this.rev++; return { rotated: false, fresh: 0, restated: true }; }
     // The first read of a log (or of one that was empty): every item is new.
-    if (!same && prevCount === 0) return { rotated: false, fresh: env.items.length, restated: false };
+    if (prevCount === 0) return { rotated: false, fresh: env.items.length, restated: false };
     return { rotated: false, fresh, restated: false };
   }
 

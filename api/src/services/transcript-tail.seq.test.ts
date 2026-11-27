@@ -18,7 +18,7 @@ process.env.HOME = join(dir, 'home');
 if (!process.env.ORCHESTRA_CONFIG) {
   process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
 }
-const { TranscriptTailer, tailerCapForTests } = await import('./transcript-tail.js');
+const { TranscriptTailer, tailerCapForTests, alignShift } = await import('./transcript-tail.js');
 type TailEvent = import('./transcript-tail.js').TailEvent;
 
 const CAP = 5;
@@ -155,4 +155,60 @@ test('a subscriber that joins between beats does not take the new items from the
     assert.deepEqual(texts(a[1]), ['between 1', 'between 2']);
     assert.equal(seqOf(a[1].id) - seqOf(a[0].id), 2);
   }
+});
+
+test('at the cap, a window that shrinks as it slides (a line of two items left the front) is not a truncation', () => {
+  tailerCapForTests(CAP);
+  // An assistant line with text and a tool call is two items with one uuid; a window never starts inside a line, so
+  // the kept window is one longer while such a line sits at its front, and one shorter when the line slides out.
+  const both = (text: string) => JSON.stringify({
+    type: 'assistant', uuid: `a-${++n}`, timestamp: T(n),
+    message: { id: `m-${n}`, role: 'assistant', content: [{ type: 'text', text }, { type: 'tool_use', id: `t-${n}`, name: 'Bash', input: { command: 'ls' } }] },
+  }) + '\n';
+  const f = log(2);
+  for (let i = 0; i < 6; i++) appendFileSync(f, i % 2 ? both(`pair ${i}`) : line(`one ${i}`));
+  const t = tailer(f);
+  const got: TailEvent[] = [];
+  t.subscribe((e) => got.push(e), undefined, 40);
+  const sent: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    appendFileSync(f, i % 2 ? line(`new ${i}`) : both(`new ${i}`));
+    t.tick();
+    sent.push(`new ${i}`);
+  }
+  const later = got.slice(1);
+  assert.ok(later.every((e) => e.type === 'delta'), `every tick is a delta: ${later.map((e) => `${e.type}${e.reset ? '/reset' : ''}`).join(' ')}`);
+  assert.deepEqual(later.flatMap(texts).filter(Boolean), sent, 'each new line\'s text delivered once, in order');
+  assert.equal(new Set(got.map((e) => tagOf(e.id))).size, 1, 'one numbering');
+  for (let i = 1; i < got.length; i++) assert.ok(seqOf(got[i].id) > seqOf(got[i - 1].id));
+});
+
+test('alignment finds the last kept item where it moved to, not a copy of it among the new items', () => {
+  const it = (k: string) => ({ kind: 'text', role: 'assistant', text: k });  // no uuid: two items can share a key
+  const prev = ['a', 'b', 'w', 'x'].map(it);
+  assert.equal(alignShift(prev, ['w', 'x', 'y', 'x'].map(it)), -2, 'slid by two; the new x is not the kept one');
+  assert.equal(alignShift(prev, ['b', 'w', 'x', 'x'].map(it)), -1, 'slid by one; the new x is not the kept one');
+  assert.equal(alignShift(prev, ['a', 'b', 'w', 'x', 'x'].map(it)), 0, 'below the cap');
+  const long = ['a', 'b', 'c', 'd', 'w', 'x'].map(it);
+  assert.equal(alignShift(long, ['q', 'b', 'c', 'd', 'w', 'x', 'y'].map(it)), 0, 'only the items before the last one must line up');
+  assert.equal(alignShift(prev, ['x', 'y', 'z'].map(it)), -3, 'slid almost all the way');
+  assert.equal(alignShift(prev, ['p', 'q'].map(it)), null);
+});
+
+test('below the cap the id stays the item count after a line lands before the tail', () => {
+  const f = join(dir, `cut-${Date.now()}.jsonl`);
+  // the line lands far enough back (more than the items alignment checks) that the windows still line up around it
+  writeFileSync(f, line('hello', 'user') + line('working') + line('again', 'user') + [1, 2, 3, 4, 5].map((i) => line(`done ${i}`)).join(''));
+  const box = { turns: [] as any[], sig: '' };
+  const t = new TranscriptTailer({ agentId: 'zz-seq', resolve: () => ({ path: f, sid: 's' }), limit: 40,
+    interrupted: { read: () => box.turns, sig: () => box.sig } });
+  const got: TailEvent[] = [];
+  t.subscribe((e) => got.push(e), undefined, 40);
+  assert.equal(seqOf(got[0].id), 8);
+  box.turns = [{ id: 'x1', text: 'hello', at: T(1) }]; box.sig = '1';   // the first turn was cut: its line lands before 'again'
+  t.tick();
+  const ev = got.at(-1)!;
+  assert.equal(ev.type, 'snapshot');
+  assert.equal(ev.items.length, 9);
+  assert.equal(seqOf(ev.id), 9, 'another tailer counts the same log the same way');
 });
