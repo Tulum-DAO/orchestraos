@@ -23,7 +23,19 @@ log = logging.getLogger("arturo.gm_answers")
 
 ANSWER_MAX = 4000
 REPLIES_MAX = 500
-TENANT = "operator"                                    # the operator's threads.db: never another tenant's mail
+TENANT = "operator"   # fallback only: a store without tenancy (tests' fakes). Never another tenant's mail.
+
+
+def _read_tenants(store) -> list:
+    """The install's read tenants (its message tenant + [messages] also_read), from the store that wrote the
+    question, so a question sent under the configured tenant gets its reply swept. Strict: never any other."""
+    try:
+        reads = store.read_tenants()
+        if reads:
+            return list(reads)
+    except AttributeError:
+        pass
+    return [TENANT]
 KIND = "gm_answer"
 
 
@@ -78,7 +90,7 @@ def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="art
     done = []
     try:
         replies = store.query(to_agent=to_agent, from_agent=gm, type="reply", status="pending", limit=REPLIES_MAX,
-                              tenant_id=TENANT)
+                              tenant_id=_read_tenants(store))
     except Exception as e:  # noqa: BLE001 — the next sweep tries again
         log.warning(f"gm answers: inbox unreadable: {e!r}")
         return done

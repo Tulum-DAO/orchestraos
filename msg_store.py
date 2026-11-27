@@ -522,47 +522,55 @@ class MessageStore:
         if not allow_live:
             _refuse_live_bus_under_pytest(self.db_path)
 
-    def message_tenant(self) -> str:
-        """The install's ONE message tenant (orchestra_cli.settings.message_tenant_from): written by
-        every send, read by every inbox. Resolved once per store; any config failure is "operator"."""
-        t = getattr(self, "_message_tenant", None)
+    def _tenancy(self) -> tuple:
+        """(tenant, read_tenants), resolved once per store from orchestra.toml alone
+        (orchestra_cli.settings.message_tenancy)."""
+        t = getattr(self, "_tenancy_cache", None)
         if t is None:
-            try:
-                t = _settings.load_settings().message_tenant
-            except Exception:  # noqa: BLE001 - a broken config must never stop mail
-                t = _settings.message_tenant_from(None)
-            self._message_tenant = t
+            t = self._tenancy_cache = _settings.message_tenancy()
         return t
 
-    def _tenant_clause(self, tenant_id):
-        """(sql, params, own) for a reader's tenant filter.
+    def message_tenant(self) -> str:
+        """The install's ONE message tenant: every send writes it."""
+        return self._tenancy()[0]
 
-        Explicit tenant -> strict equality (the caller asked for exactly that tenant).
-        Default -> the install's tenant, plus legacy NULL rows, plus rows under a tenant this
-        install does not know (not the message tenant, no login in tenants.json): mail nobody
-        would ever read otherwise is surfaced, never hidden. Another KNOWN tenant stays hidden."""
+    def read_tenants(self) -> list:
+        """The tenants this install's readers read: the message tenant, then [messages] also_read."""
+        return list(self._tenancy()[1])
+
+    def _tenant_clause(self, tenant_id):
+        """(sql, params, own) for a reader's tenant filter. Always strict: an explicit tenant reads
+        exactly that tenant; the default reads the install's tenant plus its configured also_read
+        names (the same owner under another name). Never a tenant the operator did not name."""
         if tenant_id is not None:
             return "tenant_id = ?", [tenant_id], tenant_id
-        own = self.message_tenant()
-        known = sorted(_settings.known_tenants(os.path.dirname(self.db_path), own))
-        marks = ",".join("?" * len(known))
-        return (f"(tenant_id = ? OR tenant_id IS NULL OR tenant_id NOT IN ({marks}))",
-                [own] + known, own)
+        reads = self.read_tenants()
+        return f"tenant_id IN ({','.join('?' * len(reads))})", reads, reads[0]
 
     @staticmethod
-    def _flag_foreign(rows: list, own: str, where: str) -> list:
-        """Stamp rows surfaced from an unknown tenant and say so once on stderr."""
-        n = 0
+    def _flag_foreign(rows: list, own: str) -> list:
+        """Stamp rows read under an also_read name (not the install's own tenant)."""
         for r in rows:
-            t = r.get("tenant_id")
-            if t is not None and t != own:
+            if r.get("tenant_id") != own:
                 r["tenant_mismatch"] = True
-                n += 1
-        if n:
-            seen = sorted({r.get("tenant_id") for r in rows if r.get("tenant_mismatch")})
-            print(f"[msg_store] {where}: surfaced {n} row(s) under unknown tenant(s) {seen}; "
-                  f"this install's message tenant is {own!r}", file=sys.stderr)
         return rows
+
+    def _warn_unread(self, conn, to_agent: str, clause: str, tparams: list, where: str,
+                     extra: str = "") -> None:
+        """Mail addressed here under a tenant this reader does not read is never silently hidden:
+        say how many rows and under which tenants (counts only, never their content)."""
+        try:
+            rows = conn.execute(
+                f"SELECT COALESCE(tenant_id, '<null>') AS t, count(*) AS n FROM messages "
+                f"WHERE to_agent = ? AND status = 'pending' {extra} AND (tenant_id IS NULL OR NOT ({clause})) GROUP BY 1",
+                [to_agent] + tparams).fetchall()
+        except sqlite3.Error:
+            return
+        if rows:
+            seen = {r["t"]: r["n"] for r in rows}
+            print(f"[msg_store] {where}: {sum(seen.values())} pending row(s) for {to_agent} under tenant(s) "
+                  f"{sorted(seen)} are not read here (this install reads {self.read_tenants()}); if they are "
+                  f"yours, add them to [messages] also_read", file=sys.stderr)
 
     def _conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30)
@@ -893,8 +901,9 @@ class MessageStore:
 
     def inbox(self, agent_id: str, status: str = "pending", limit: int = 50,
               type: str = None, since: str = None, tenant_id: str = None) -> list:
-        """Get messages for an agent's inbox. tenant_id=None: the install's tenant plus any mail
-        under an unknown tenant (flagged tenant_mismatch); an explicit tenant is strict."""
+        """Get messages for an agent's inbox. tenant_id=None: the install's read tenants (its tenant +
+        [messages] also_read; rows under an also_read name are flagged tenant_mismatch); pending mail
+        under any other tenant is reported on stderr by count. An explicit tenant is strict."""
         clause, tparams, own = self._tenant_clause(tenant_id)
         conn = self._conn()
         try:
@@ -908,7 +917,9 @@ class MessageStore:
                 params.append(since)
             sql += f" ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at ASC LIMIT {limit}"
             rows = conn.execute(sql, params).fetchall()
-            return self._flag_foreign([dict(r) for r in rows], own, f"inbox {agent_id}")
+            if tenant_id is None:
+                self._warn_unread(conn, agent_id, clause, tparams, "inbox")
+            return self._flag_foreign([dict(r) for r in rows], own)
         finally:
             conn.close()
 
@@ -924,7 +935,9 @@ class MessageStore:
                 "SELECT * FROM messages WHERE to_agent = ? AND status = 'pending' "
                 f"AND type = 'held_message' AND {clause} ORDER BY created_at ASC",
                 [session] + tparams).fetchall()
-            return self._flag_foreign([dict(r) for r in rows], own, f"held {session}")
+            if tenant_id is None:
+                self._warn_unread(conn, session, clause, tparams, "held", "AND type = 'held_message'")
+            return self._flag_foreign([dict(r) for r in rows], own)
         finally:
             conn.close()
 
@@ -1137,10 +1150,10 @@ class MessageStore:
         completion so ACK+QUEUE can never become a silent drop. A later
         re-dispose (acted/declined) overwrites the metadata disposition and
         removes the row from this set. Read-only."""
-        clause, tparams, _own = self._tenant_clause(tenant_id)
+        clause, tparams, own = self._tenant_clause(tenant_id)
         conn = self._conn()
         try:
-            q = ("SELECT id, from_agent, to_agent, subject, created_at, metadata "
+            q = ("SELECT id, from_agent, to_agent, subject, created_at, metadata, tenant_id "
                  "FROM messages WHERE metadata LIKE '%\"disposition\": \"queued\"%' "
                  f"AND {clause}")
             params = tparams
@@ -1162,8 +1175,9 @@ class MessageStore:
                             "created_at": r["created_at"],
                             "disposition": "queued",
                             "disposed_at": md.get("disposed_at"),
-                            "disposition_by": md.get("disposition_by")})
-        return out
+                            "disposition_by": md.get("disposition_by"),
+                            "tenant_id": r["tenant_id"]})
+        return self._flag_foreign(out, own)
 
     def recipient_replied_after(self, conversation_id: str, to_agent: str,
                                 created_at) -> bool:
@@ -1329,7 +1343,10 @@ class MessageStore:
                 conds.append("conversation_id = ?"); params.append(conversation_id)
             if since:
                 conds.append("created_at > ?"); params.append(since)
-            if tenant_id is not None:
+            if isinstance(tenant_id, (list, tuple, set)):
+                tl = list(tenant_id) or [None]
+                conds.append(f"tenant_id IN ({','.join('?' * len(tl))})"); params.extend(tl)
+            elif tenant_id is not None:
                 conds.append("tenant_id = ?"); params.append(tenant_id)
             sql = f"SELECT * FROM messages WHERE {' AND '.join(conds)} ORDER BY created_at DESC LIMIT {limit}"
             return [dict(r) for r in conn.execute(sql, params).fetchall()]

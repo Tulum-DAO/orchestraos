@@ -1,4 +1,4 @@
-"""One message tenant from config, and readers that never silently hide mail under an unknown tenant.
+"""One message tenant from config; strict readers that read the configured names and never hide other mail in silence.
 
 Defect (2026-11-27): msg_store.py wrote and filtered the literal "operator" while the operator's
 other readers filtered "shaw"; tenant-filtered readers (the Grok mail watcher, `inbox`, Arturo) hid
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 @pytest.fixture
 def install(tmp_path, monkeypatch):
-    """A scratch install: data dir with an empty bus, a config whose message tenant is 'shaw',
-    and a tenant registry that knows 'shaw' and a second real tenant 'kai'."""
+    """A scratch install: data dir with an empty bus, a config whose message tenant is 'shaw' and which
+    also reads its legacy name 'operator'. A second real tenant 'kai' exists in the login registry."""
     data = tmp_path / "data"
     (data / "state").mkdir(parents=True)
     db = data / "state" / "tasks.db"
@@ -50,7 +50,7 @@ def install(tmp_path, monkeypatch):
     conn.executescript(SCHEMA)
     conn.close()
     cfg = tmp_path / "orchestra.toml"
-    cfg.write_text('[operator]\nid = "operator"\n\n[messages]\ntenant = "shaw"\n')
+    cfg.write_text('[operator]\nid = "operator"\n\n[messages]\ntenant = "shaw"\nalso_read = ["operator"]\n')
     (data / "state" / "tenants.json").write_text(json.dumps({"shaw": {"role": "admin"},
                                                              "kai": {"role": "client"}}))
     monkeypatch.setenv("ORCHESTRA_DIR", str(data))
@@ -58,6 +58,7 @@ def install(tmp_path, monkeypatch):
     monkeypatch.setenv("MSG_DB_PATH", str(db))
     monkeypatch.setenv("MSG_STORE_NO_KICK", "1")
     monkeypatch.delenv("ORCHESTRA_TENANT", raising=False)
+    monkeypatch.delenv("ORCHESTRA_TENANT_ALSO_READ", raising=False)
     monkeypatch.delenv("TMUX_PANE", raising=False)
     monkeypatch.delenv("TMUX", raising=False)
     s = ms.MessageStore(db_path=str(db))
@@ -145,23 +146,45 @@ def test_reply_without_parent_tenant_uses_configured(install):
     assert sorted(x["tenant_id"] or "" for x in _rows(db)) == ["", "shaw"]
 
 
-# --- the reader guard ------------------------------------------------------------------------------
+# --- the reader guard: strict, configured names only, nothing hidden in silence ----------------------
 
-def test_inbox_surfaces_unknown_tenant_mail_flagged(install, capsys):
+def test_inbox_reads_also_read_names_flagged(install):
     s, _, db, _ = install
-    _insert(db, "msg_legacy", "grok-gm", "operator")       # 'operator' is in no registry here
+    _insert(db, "msg_legacy", "grok-gm", "operator")       # the same owner's old name, configured
     _insert(db, "msg_own", "grok-gm", "shaw")
     got = {m["id"]: m for m in s.inbox("grok-gm")}
     assert set(got) == {"msg_legacy", "msg_own"}
     assert got["msg_legacy"].get("tenant_mismatch") is True
     assert not got["msg_own"].get("tenant_mismatch")
-    assert "operator" in capsys.readouterr().err
 
 
-def test_inbox_still_hides_another_known_tenant(install):
+def test_inbox_never_reads_an_unnamed_tenant_but_says_so(install, capsys):
     s, _, db, _ = install
-    _insert(db, "msg_kai", "grok-gm", "kai")
+    _insert(db, "msg_kai", "grok-gm", "kai")               # another real tenant
+    _insert(db, "msg_x", "grok-gm", "legacy-x")            # a tenant nobody named
+    _insert(db, "msg_null", "grok-gm", None)
     assert [m["id"] for m in s.inbox("grok-gm")] == []
+    err = capsys.readouterr().err
+    assert "3 pending row(s) for grok-gm" in err and "kai" in err and "legacy-x" in err
+    assert "a real body" not in err and "\"b\"" not in err   # counts only, never content
+
+
+def test_missing_or_broken_registry_never_widens_access(install):
+    s, data, db, _ = install
+    (data / "state" / "tenants.json").write_text("{not json")
+    _insert(db, "msg_kai", "bob", "kai")
+    assert s.inbox("bob") == []
+    (data / "state" / "tenants.json").unlink()
+    assert ms.MessageStore(db_path=str(db)).inbox("bob") == []
+
+
+def test_a_store_elsewhere_never_widens_access(install, tmp_path):
+    s, _, db, _ = install
+    other = tmp_path / "elsewhere.db"
+    import shutil
+    shutil.copy(db, other)
+    _insert(other, "msg_kai", "bob", "kai")
+    assert ms.MessageStore(db_path=str(other)).inbox("bob") == []
 
 
 def test_explicit_tenant_is_strict(install):
@@ -181,33 +204,75 @@ def test_cli_inbox_sees_configured_tenant_mail(install):
     assert [m["id"] for m in json.loads(r.stdout)["messages"]] == ["msg_legacy"]
 
 
-def test_held_pending_and_queued_open_use_the_guard(install):
+def test_held_pending_for_reads_configured_names_only(install):
     s, _, db, _ = install
     conn = sqlite3.connect(str(db))
-    conn.execute("INSERT INTO messages (id, type, from_agent, to_agent, subject, body, status, tenant_id, metadata)"
-                 " VALUES ('msg_h', 'held_message', 'alice', 'sess', 's', 'b', 'pending', 'legacy-tenant', NULL)")
+    for mid, t in (("msg_h1", "operator"), ("msg_h2", "legacy-tenant")):
+        conn.execute("INSERT INTO messages (id, type, from_agent, to_agent, subject, body, status, tenant_id)"
+                     " VALUES (?, 'held_message', 'alice', 'sess', 's', 'b', 'pending', ?)", (mid, t))
     conn.commit()
     conn.close()
-    assert [m["id"] for m in s.held_pending_for("sess")] == ["msg_h"]
+    assert [m["id"] for m in s.held_pending_for("sess")] == ["msg_h1"]
 
 
-def test_no_registry_means_only_the_configured_tenant_is_known(install):
-    s, data, db, _ = install
-    (data / "state" / "tenants.json").unlink()
-    _insert(db, "msg_kai", "bob", "kai")                    # unknown now -> surfaced
-    assert [m["id"] for m in s.inbox("bob")] == ["msg_kai"]
+def test_queued_open_flags_also_read_rows(install):
+    s, _, db, _ = install
+    conn = sqlite3.connect(str(db))
+    for mid, t in (("msg_q1", "shaw"), ("msg_q2", "operator"), ("msg_q3", "kai")):
+        conn.execute("INSERT INTO messages (id, type, from_agent, to_agent, subject, body, status, tenant_id, metadata)"
+                     " VALUES (?, 'task', 'alice', 'bob', 's', 'b', 'delivered', ?, ?)",
+                     (mid, t, json.dumps({"disposition": "queued"})))
+    conn.commit()
+    conn.close()
+    got = {m["id"]: m for m in s.queued_open()}
+    assert set(got) == {"msg_q1", "msg_q2"}
+    assert got["msg_q2"].get("tenant_mismatch") is True and not got["msg_q1"].get("tenant_mismatch")
+
+
+def test_unrelated_bad_setting_never_changes_the_tenant(install):
+    s, _, db, cfg = install
+    cfg.write_text(cfg.read_text() + '\n[gateway]\nport = "not-a-number"\n')
+    assert ms.MessageStore(db_path=str(db)).message_tenant() == "shaw"
+
+
+def test_unreadable_config_falls_back_to_env_then_operator(install, monkeypatch):
+    s, _, db, cfg = install
+    cfg.write_text("this is [ not toml")
+    assert ms.MessageStore(db_path=str(db)).message_tenant() == "operator"
+    monkeypatch.setenv("ORCHESTRA_TENANT", "shaw")
+    assert ms.MessageStore(db_path=str(db)).message_tenant() == "shaw"
+
+
+def test_also_read_env_overrides_config(install, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_TENANT_ALSO_READ", "a, b,,a")
+    assert st.message_tenancy() == ("shaw", ["shaw", "a", "b"])
 
 
 # --- the other readers/writers ---------------------------------------------------------------------
 
-def test_grok_watcher_sees_configured_and_unknown_tenants(install):
+def test_grok_watcher_reads_configured_names_and_counts_the_rest(install):
     sys.path.insert(0, str(ROOT / "scripts"))
     import grok_mail_watch as gw
+    gw._TENANCY = None                                     # resolved once per process: reset for this install
     _, _, db, _ = install
     _insert(db, "msg_a", "grok-gm", "shaw")
     _insert(db, "msg_b", "grok-gm", "operator")
     _insert(db, "msg_c", "grok-gm", "kai")
-    assert sorted(gw.pending_ids(str(db), "grok-gm", None)) == ["msg_a", "msg_b"]
+    assert sorted(gw.pending_ids(str(db), "grok-gm")) == ["msg_a", "msg_b"]
+    _insert(db, "msg_d", "grok-gm", None)
+    assert gw.unread_other_tenants(str(db), "grok-gm") == {"kai": 1, "<null>": 1}
+    assert gw.pending_ids(str(db), "grok-gm", "kai") == ["msg_c"]
+    gw._TENANCY = None
+
+
+def test_gm_answers_sweeps_replies_under_the_configured_tenant(install):
+    from services.arturo import gm_answers
+    s, _, db, _ = install
+    q = s.send(from_agent="arturo", to_agent="gm", type="task", subject="q", body="b")
+    s.reply(q, body="answer")                              # inherits 'shaw' from the question
+    _insert(db, "msg_kai_reply", "arturo", "kai")
+    got = s.query(to_agent="arturo", status="pending", tenant_id=gm_answers._read_tenants(s))
+    assert [r["tenant_id"] for r in got] == ["shaw"]
 
 
 def test_arturo_proxy_has_no_tenant_literal():

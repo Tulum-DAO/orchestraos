@@ -8,7 +8,6 @@ with the same required-key list services/config.py enforces.
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 from dataclasses import dataclass, field
@@ -279,7 +278,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
 
 
 def message_tenant_from(raw: dict | None) -> str:
-    """The tenant every message is written under and read by.
+    """The tenant every message is written under.
 
     Precedence: $ORCHESTRA_TENANT > [messages] tenant > [operator] id > "operator".
     One value for writers AND readers: a reader filtering a tenant no writer uses hides mail
@@ -288,26 +287,47 @@ def message_tenant_from(raw: dict | None) -> str:
     if env:
         return env
     raw = raw or {}
-    for section in ("messages", "operator"):
-        v = str(_get(raw, section, "tenant" if section == "messages" else "id", "") or "").strip()
+    for section, key in (("messages", "tenant"), ("operator", "id")):
+        v = str(_get(raw, section, key, "") or "").strip()
         if v:
             return v
     return "operator"
 
 
-def known_tenants(state_dir: "Path | str", message_tenant: str) -> set:
-    """Tenants this install knows: its message tenant plus every login in <state>/tenants.json.
-    Mail under a tenant outside this set belongs to nobody a reader would recognise, so readers
-    surface it instead of hiding it. An unreadable registry means only the message tenant."""
-    out = {message_tenant}
-    try:
-        with open(os.path.join(str(state_dir), "tenants.json")) as fh:
-            reg = json.load(fh)
-        if isinstance(reg, dict):
-            out.update(str(k) for k in reg)
-    except (OSError, ValueError):
-        pass
+def message_also_read_from(raw: dict | None) -> list:
+    """Other tenant names that are the SAME owner as the message tenant (an install that renamed
+    itself, or two trees sharing one bus): readers read them too. Explicit only, never inferred.
+    $ORCHESTRA_TENANT_ALSO_READ (comma list) > [messages] also_read (list)."""
+    env = os.environ.get("ORCHESTRA_TENANT_ALSO_READ")
+    if env is not None:
+        vals = env.split(",")
+    else:
+        vals = _get(raw or {}, "messages", "also_read", []) or []
+        if isinstance(vals, str):
+            vals = [vals]
+    out = []
+    for v in vals:
+        v = str(v).strip()
+        if v and v not in out:
+            out.append(v)
     return out
+
+
+def message_tenancy(repo_root: Path | None = None, config_path: Path | None = None) -> tuple:
+    """(tenant, read_tenants) for this install, read from orchestra.toml ALONE, so an unrelated bad
+    setting (a non-numeric port) can never change who owns a message. read_tenants = the tenant
+    first, then also_read. An unreadable config resolves from the environment, then "operator"."""
+    root = Path(repo_root or repo_root_from_env()).resolve()
+    path = Path(config_path or config_path_for(root))
+    raw: dict = {}
+    try:
+        if path.exists():
+            raw = read_toml(path)
+    except Exception:  # noqa: BLE001 - never stop mail over a config parse error
+        raw = {}
+    tenant = message_tenant_from(raw)
+    reads = [tenant] + [t for t in message_also_read_from(raw) if t != tenant]
+    return tenant, reads
 
 
 def _connectable(host: str) -> str:

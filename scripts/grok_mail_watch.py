@@ -102,28 +102,29 @@ class Inotify:
 _CONN = {}
 
 
-def install_tenant() -> str:
-    """This install's message tenant (msg_store writes it): $ORCHESTRA_TENANT, [messages] tenant,
-    [operator] id, else "operator". A broken config must never stop the watcher."""
-    try:
-        return _settings.load_settings().message_tenant
-    except Exception:  # noqa: BLE001
-        return _settings.message_tenant_from(None)
+_TENANCY = None
+
+
+def read_tenants() -> list:
+    """This install's read tenants (msg_store writes the first): $ORCHESTRA_TENANT / [messages] tenant /
+    [operator] id, then [messages] also_read. Resolved once per process from orchestra.toml alone."""
+    global _TENANCY
+    if _TENANCY is None:
+        _TENANCY = _settings.message_tenancy()[1]
+    return list(_TENANCY)
+
+
+def _tenant_clause(tenant):
+    reads = [tenant] if tenant is not None else read_tenants()
+    return f"tenant_id IN ({','.join('?' * len(reads))})", reads
 
 
 def pending_ids(db: str, agent: str, tenant: "str | None" = None) -> list:
     """Ids of pending rows for `agent`. Reads ids only - never subject/body.
-    tenant=None: this install's tenant, legacy NULL rows, and rows under a tenant this install does
-    not know (same guard as msg_store.inbox): mail is never hidden because a writer used another
-    tenant. An explicit tenant is strict.
+    tenant=None: the install's read tenants (strict, the same set msg_store.inbox reads); an explicit
+    tenant reads exactly that one.
     One read-only connection is reused (autocommit, so no read txn is held between checks)."""
-    if tenant is None:
-        own = install_tenant()
-        known = sorted(_settings.known_tenants(os.path.dirname(db), own))
-        clause = f"(tenant_id=? OR tenant_id IS NULL OR tenant_id NOT IN ({','.join('?' * len(known))}))"
-        tparams = [own] + known
-    else:
-        clause, tparams = "tenant_id=?", [tenant]
+    clause, tparams = _tenant_clause(tenant)
     conn = _CONN.get(db)
     if conn is None:
         conn = _CONN[db] = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5,
@@ -136,6 +137,22 @@ def pending_ids(db: str, agent: str, tenant: "str | None" = None) -> list:
         _CONN.pop(db, None)
         conn.close()
         raise
+
+
+def unread_other_tenants(db: str, agent: str, tenant: "str | None" = None) -> dict:
+    """{tenant: count} of pending rows for `agent` under tenants this watcher does NOT read. Counts only.
+    The watcher logs a change in this so mail is never hidden in silence (2026-11-27: 36 h)."""
+    clause, tparams = _tenant_clause(tenant)
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            return {str(t): n for t, n in conn.execute(
+                "SELECT COALESCE(tenant_id, '<null>'), count(*) FROM messages WHERE to_agent=? "
+                f"AND status='pending' AND (tenant_id IS NULL OR NOT ({clause})) GROUP BY 1", [agent] + tparams)}
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}
 
 
 # ---------------------------------------------------------------- pane / seat
@@ -345,6 +362,7 @@ def main(argv=None) -> int:
     ino = Inotify(os.path.dirname(a.db), IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE)
     log(f"watching {a.db} for {a.agent} -> tmux {session} (pid {os.getpid()})")
     last_blocker = None
+    last_other = {}
     waiting = False                     # un-nudged mail exists, seat not yet idle
     last_check = 0.0
     gone_since = None
@@ -367,6 +385,13 @@ def main(argv=None) -> int:
                 time.sleep(max(a.debounce_s, a.min_interval_s - (time.monotonic() - last_check)))
                 ino.wait(0)             # drain the burst
         last_check = time.monotonic()
+        other = unread_other_tenants(a.db, a.agent, a.tenant)
+        if other != last_other:
+            if other:
+                log(f"{sum(other.values())} pending row(s) for {a.agent} under tenant(s) {sorted(other)} are NOT "
+                    f"read here (reads {[a.tenant] if a.tenant else read_tenants()}); add them to [messages] "
+                    f"also_read if they are this install's")
+            last_other = other
         try:
             ids = pending_ids(a.db, a.agent, a.tenant)
         except sqlite3.Error as e:
