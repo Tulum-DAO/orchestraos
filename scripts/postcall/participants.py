@@ -20,9 +20,8 @@ evidence, because once Shaw's label is known the other voice can only be that in
 A name is VERIFIED when it is a Pocket-named label, or when it is mapped to a label and is an invitee of
 the matched event. A Pocket name that is exactly an invitee's name gets that invitee's email. Pocket
 names verify only when POSTCALL_SHAW_NAMES is set and Shaw's own label is proven (a quoted proof, or
-his configured name). Everything else
-stays unverified, and nothing here raises on missing or malformed input: an unknown stays
-unknown and the card shows it.
+his configured name). Everything else stays unverified, and nothing here raises on missing or
+malformed input: an unknown stays unknown and the card shows it.
 """
 import datetime as dt
 import re
@@ -206,8 +205,9 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
     named_ids = {id(p) for p in named.values()} | lent
     generic = tuple(l for l in labels if l not in named and _norm(l) not in shaw_names)
     # Pocket names verify only when Shaw's names are configured (so a named label can be ruled out as
-    # his own voice) AND his label is proven: a generic label (ground() required a quoted proof) or his
-    # configured name. Anything else fails closed: names are shown but stay unverified.
+    # his own voice) AND his label is proven: a generic label (ground() requires a quoted proof whenever
+    # there are items) or his configured name. Anything else fails closed: names are shown but stay
+    # unverified.
     shaw_proven = bool(shaw_names) and shaw_label in labels and (
         not _pocket_named(shaw_label) or _norm(shaw_label) in shaw_names)
 
