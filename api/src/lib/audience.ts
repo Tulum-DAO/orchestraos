@@ -186,6 +186,10 @@ export function openerKind(it: any): OpenerKind {
 // the turn it landed in; it does not open one.
 const isOpener = (it: any) => it?.kind === 'text' && it.role === 'user' && !it.mid_turn;
 
+/** On the reply drawn because no turn in the list was a person's: the audience its own turn gave it. Not enumerable,
+ *  so no copy or comparison of the item carries it. */
+export const NEWEST_DRAWN = Symbol('newestDrawn');
+
 /**
  * Stamp `audience` (and `exchange` when known) on every item, in place, and return the list.
  * Run on the WHOLE log before windowing, so a turn whose opener falls outside the window keeps
@@ -228,9 +232,15 @@ export function tagAudience(items: any[]): any[] {
   // No turn the operator opened anywhere in this log (only mail, hooks, the spawn brief): the
   // newest reply is still drawn, never folded (iOS 334: "if there are no recorded turns,
   // display the most recent message"). One rule, server-side, so every client draws the same.
+  // The reply keeps the audience its turn gave it (NEWEST_DRAWN): a chunk of a log can lack the
+  // person's turn the whole log has, and then takes this back.
   if (!personTurn) {
     for (let k = items.length - 1; k >= 0; k--) {
-      if (items[k]?.kind === 'text' && items[k].role === 'assistant') { items[k].audience = 'user'; break; }
+      if (items[k]?.kind === 'text' && items[k].role === 'assistant') {
+        Object.defineProperty(items[k], NEWEST_DRAWN, { value: items[k].audience, enumerable: false, configurable: true });
+        items[k].audience = 'user';
+        break;
+      }
     }
   }
   return items;

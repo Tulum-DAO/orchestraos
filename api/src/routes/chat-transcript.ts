@@ -14,7 +14,7 @@ import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, cl
 import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems, queuedStateSig } from '../services/queued-merge.js';
-import { tagAudience, tagSynthetics, openerKind, wakeKind, mailWake, isRouterMail, promoteWake, promoteEnvelopeRest } from '../lib/audience.js';
+import { tagAudience, tagSynthetics, openerKind, wakeKind, mailWake, isRouterMail, promoteWake, promoteEnvelopeRest, NEWEST_DRAWN } from '../lib/audience.js';
 import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
 import { refable, partAt, messageRef } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices, storePath } from '../services/conversation-store.js';
@@ -1007,6 +1007,10 @@ const CONSUMED_QUEUED = Symbol('consumedQueued');
  *  one per copy). The harness writes every queued message as a real turn before any message typed after them, so the
  *  first opener that is neither ends the turn a cursor is in, with every copy before the cursor matched. */
 const isDrainedOpener = (it: any): boolean => isPersonOpener(it) && !it.queued && it[CONSUMED_QUEUED] !== true;
+/** A turn opener the audience pass opened an exchange on (its own exchange): what a chunk needs below a page for its
+ *  tags to be the whole log's. Read from the tag, not the text: a wake's line is emptied after tagging (hideWakes), and
+ *  an emptied queue digest would read as a person's words. */
+const anchorsExchange = (it: any): boolean => isTurnOpener(it) && !!it.uuid && it.exchange === String(it.uuid);
 
 function segmentView(agentId: string, seg: Segment, range: Range = 'whole'): SegmentView | null {
   const path = seg.file();
@@ -1341,11 +1345,11 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
       const v = views.get(oldest.seg);
       if (isPartial(v)) {
         let opened = false;
-        for (let k = oldest.at - 1; k >= 0 && !opened; k--) if (isPersonOpener(v!.items[k])) opened = true;
+        for (let k = oldest.at - 1; k >= 0 && !opened; k--) if (anchorsExchange(v!.items[k])) opened = true;
         if (!opened) {
           // Sized by the person openers the chunk holds: about one more opener's worth of lines (or doubled).
           const r = views.ranges[oldest.seg];
-          const need = bytesFor(r, v!.items.filter(isPersonOpener).length, 1);
+          const need = bytesFor(r, v!.items.filter(anchorsExchange).length, 1);
           views.reset(oldest.seg, widened(r, need));
           continue;
         }
@@ -2625,23 +2629,28 @@ function takeoverAt(items: readonly any[], promotedAt: string | null | undefined
  *  the hold phase it may start in, so the takeover is found once on the log's HEAD, read forward from its first line
  *  until the takeover is known (a hold phase is the first half hour or so of a green's log), and every chunk is cut at
  *  that line. A found takeover never moves (the log only grows); no takeover yet is read again when the log grows. */
-type Takeover = 'whole' | 'none' | { off: number; firstPromote: number | null | undefined };
+type Takeover = 'whole' | 'none' | { off: number; firstPromote: number | null | undefined; exchange: string | undefined };
 const takeovers = new Map<string, { t: Takeover; size: number }>();
 const TAKEOVERS_MAX = 256;
 const HEAD_WANT0 = 32 * 1024;
 
-function logSize(path: string): number {
-  try { return statSync(path).size; } catch { return -1; }
+/** A log file as a cache key part (its inode: an atomic replace is another file) and its size. */
+function logStat(path: string): { id: string; size: number } {
+  try { const st = statSync(path); return { id: `${st.dev}:${st.ino}`, size: st.size }; } catch { return { id: '', size: -1 }; }
 }
+
+const takeoverKey = (path: string, id: string, promotedAt: string | null | undefined, sig: string): string =>
+  `${path}|${id}|${promotedAt ?? ''}|${sig}`;
 
 function headTakeover(path: string, parser: LogParser<any>, promotedAt: string | null | undefined,
                       prep: (items: readonly any[]) => any[], sig: string): Takeover {
   const t0 = promotedAt ? Date.parse(String(promotedAt)) : NaN;
   if (Number.isNaN(t0)) return 'whole';
-  const key = `${path}|${promotedAt}|${sig}`;
-  const size = logSize(path);
+  const { id, size } = logStat(path);
+  const key = takeoverKey(path, id, promotedAt, sig);
   const kept = takeovers.get(key);
-  if (kept && (typeof kept.t === 'object' || kept.size === size)) return kept.t;
+  // A found takeover never moves while the file only grows; a file cut shorter is read again.
+  if (kept && (typeof kept.t === 'object' ? size >= kept.size : kept.size === size)) return kept.t;
   let t: Takeover = 'whole';
   // From a small head up, doubled: the takeover is usually in the first lines (a person turn, or a short hold phase).
   let hi = Math.min(TAIL_WANT0, HEAD_WANT0);
@@ -2656,7 +2665,10 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
     else if (typeof items[at]?.line_off === 'number') {
       const promote = items.find((it) => it?.wake === 'promote' && isTurnOpener(it) && Date.parse(String(it.ts ?? '')) >= t0);
       // The log's first promote turn after the promotion, when the head holds it; else found when a chunk needs it.
-      t = { off: items[at].line_off, firstPromote: promote ? promote.line_off ?? undefined : (log.eof ? null : undefined) };
+      // The exchange the takeover's turn is in, as the whole log tags it (the head is the log's start): the hold phase
+      // can leave one open (withHeadTags).
+      t = { off: items[at].line_off, firstPromote: promote ? promote.line_off ?? undefined : (log.eof ? null : undefined),
+        exchange: items[at].exchange === undefined ? undefined : String(items[at].exchange) };
     }
     break;
   }
@@ -2678,9 +2690,31 @@ function firstPromoteOff(path: string, parser: LogParser<any>, promotedAt: strin
       .find((it) => it?.wake === 'promote' && isTurnOpener(it) && Date.parse(String(it.ts ?? '')) >= t0);
     found = typeof promote?.line_off === 'number' ? promote.line_off : null;
   } catch { return null; }
-  const kept = takeovers.get(`${path}|${promotedAt}|${sig}`);
+  const kept = takeovers.get(takeoverKey(path, logStat(path).id, promotedAt, sig));
   if (kept && typeof kept.t === 'object') kept.t.firstPromote = found;
   return found;
+}
+
+/** For a log with no takeover to cut at ('whole': no promotion time, or no times): the log line of the promote turn
+ *  settlePromoteTurns takes as the promotion's on the whole log (its first, or its first at or after `promotedAt`).
+ *  Read on the whole log, only for a chunk below the head that holds a promote wake; a found one is kept. */
+const firstPromotes = new Map<string, { off: number | null; size: number }>();
+function wholeFirstPromote(path: string, parser: LogParser<any>, promotedAt: string | null | undefined,
+                           prep: (items: readonly any[]) => any[], sig: string): number | null {
+  const { id, size } = logStat(path);
+  const key = takeoverKey(path, id, promotedAt, sig);
+  const kept = firstPromotes.get(key);
+  if (kept && (kept.off !== null ? size >= kept.size : kept.size === size)) return kept.off;
+  const t0 = promotedAt ? Date.parse(String(promotedAt)) : NaN;
+  let off: number | null = null;
+  try {
+    const promote = prep(cachedLog(path, parser).items).find((it) => it?.wake === 'promote' && isTurnOpener(it)
+      && (Number.isNaN(t0) || Date.parse(String(it.ts ?? '')) >= t0));
+    off = typeof promote?.line_off === 'number' ? promote.line_off : null;
+  } catch { return null; }
+  if (firstPromotes.size >= TAKEOVERS_MAX) firstPromotes.delete(firstPromotes.keys().next().value as string);
+  firstPromotes.set(key, { off, size });
+  return off;
 }
 
 /** Where a view of a log FILE is cut (cheap: the head's takeover is kept): 'log' when the view is the whole log (cut
@@ -2700,7 +2734,11 @@ function liveFromFile(items: readonly any[], view: { path: string; parser: LogPa
                       cut: 'log' | Takeover, promotedAt: string | null | undefined,
                       open: boolean | null | (() => boolean | null), prep: (items: readonly any[]) => any[], sig: string): any[] {
   if (cut === 'log') return liveFrom(items, promotedAt, open);
-  if (cut === 'whole') return dropHookMarkers(settlePromoteTurns(items, promotedAt, open));
+  if (cut === 'whole') {
+    // Nothing to cut at, but a chunk below the head may hold a promote turn that is not the log's first.
+    const first = view.start > 0 && hasPromoteWake(items) ? wholeFirstPromote(view.path, view.parser, promotedAt, prep, sig) : undefined;
+    return dropHookMarkers(settlePromoteTurns(items, promotedAt, open, first));
+  }
   if (cut === 'none') return [];
   const t0 = Date.parse(String(promotedAt));
   // A chunk that starts after the promotion may hold a promote turn that is not the log's first one.
@@ -2710,7 +2748,39 @@ function liveFromFile(items: readonly any[], view: { path: string; parser: LogPa
   const settled = dropHookMarkers(settlePromoteTurns(items, promotedAt, open, first));
   let k = 0;
   while (k < settled.length && typeof settled[k]?.line_off === 'number' && settled[k].line_off < cut.off) k++;
-  return k === 0 ? settled : settled.slice(k);
+  const kept = k === 0 ? settled : settled.slice(k);
+  return view.start > 0 && cut.off >= view.start ? withHeadTags(kept, cut.exchange) : kept;
+}
+
+/** A chunk that holds the takeover but not the log's head was tagged from its own first line (lib/audience.ts
+ *  tagAudience), without the hold phase before it. A person's turn there (a forwarded mail, a typed digest request: the
+ *  audience pass reads them as a person's, though they are never the takeover) leaves its exchange open over the turns
+ *  after the takeover, up to the next person's turn, and means the whole log has a person's turn, so no reply is drawn
+ *  for want of one (NEWEST_DRAWN). `exchange`: that open exchange, read on the head (headTakeover). */
+function withHeadTags(items: any[], exchange: string | undefined): any[] {
+  if (exchange === undefined) return items;
+  let out = items;
+  const copy = (i: number): any => {
+    if (out === items) out = items.slice();
+    if (out[i] === items[i]) out[i] = copyItem(items[i]);
+    return out[i];
+  };
+  for (let i = 0; i < items.length && items[i] && items[i].exchange === undefined; i++) copy(i).exchange = exchange;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i] && Object.prototype.hasOwnProperty.call(items[i], NEWEST_DRAWN)) copy(i).audience = items[i][NEWEST_DRAWN];
+  }
+  return out;
+}
+
+/** A shallow copy of an item that keeps its marks (the non-enumerable symbols, the brief guess): the cache keeps the
+ *  original. */
+function copyItem(it: any): any {
+  const c = { ...it };
+  for (const sym of Object.getOwnPropertySymbols(it)) {
+    if (sym !== NEWEST_DRAWN) Object.defineProperty(c, sym, Object.getOwnPropertyDescriptor(it, sym)!);
+  }
+  if (BRIEF_GUESS.has(it)) BRIEF_GUESS.add(c);
+  return c;
 }
 
 /** `sid`'s generation as the head of `agentId`'s lineage: its promotion time, root and generations row id. */
@@ -2864,27 +2934,60 @@ export function normalizeTranscriptFile(
   }
   // Tail-first (the SSE tailer's first read of a log): the last TAIL_WANT0 bytes, doubled until they hold `limit` shown
   // items with a PERSON turn opener below the oldest of them (the same rule as the poll route's pages: the audience pass
-  // sees the turn the window starts in), or the whole file. Later ticks hit the kept chunk and ride its appends.
-  const ruleSession = keepSidechain ? null : sessionId;
-  const mark = warmupMarkFor(agentId, ruleSession).mark;
-  const rules = storeRules(ruleSession);
+  // sees the turn the window starts in), or the generation's whole chat (the chunk holds its takeover), or the whole
+  // file. Counted on the chat as cut (liveFromFile: no hold phase, hook markers or settled promote turn): a window
+  // shorter than `limit` tells the tailer it is the whole log, and numbers by its count. Later ticks hit the kept chunk
+  // and ride its appends.
   let want = TAIL_WANT0;
   for (let round = 0; round < 64; round++) {
     const log = cachedLogTail(path, parser, want);
     if (log.start === 0) break;
-    const shown = applyStoreRules(dropWarmup(log.items, mark), rules);
-    const oldest = shown.length - limit;
+    const file = { path, parser, start: log.start, eof: true };
+    const live = fileLiveItems(log.items, agentId, sessionId, keepSidechain, file);
+    const oldest = live.items.length - limit;
     let opened = false;
-    for (let k = oldest - 1; k >= 0 && !opened; k--) if (isPersonOpener(shown[k])) opened = true;
-    if (shown.length >= limit && opened) {
+    for (let k = oldest - 1; k >= 0 && !opened; k--) if (anchorsExchange(live.items[k])) opened = true;
+    if (live.whole || (live.items.length >= limit && opened)) {
       return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain,
-        { path, parser, start: log.start, eof: true });
+        file, live.items);
     }
     want *= 2;
   }
   const log = cachedLog(path, parser);
   return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain,
     { path, parser, start: log.start, eof: true });
+}
+
+/** The store's rules and the warm-up a seat's window applies. A subagent's own log (keepSidechain) shares the seat's
+ *  session id but none of the seat's window rules: the store's seen-only/seed rows and the warmup mark name the seat's
+ *  entries, so they never apply to it. */
+function prepFor(agentId: string, sessionId: string | null, keepSidechain: boolean):
+    { prep: (xs: readonly any[]) => any[]; sig: string } {
+  const ruleSession = keepSidechain ? null : sessionId;
+  const warm = warmupMarkFor(agentId, ruleSession);
+  const rules = storeRules(ruleSession);
+  return { prep: (xs) => applyStoreRules(dropWarmup(xs, warm.mark), rules), sig: `${warm.sig}:${rules.sig}` };
+}
+
+/** Whether anything was owed to the operator at this generation's promotion (owedVerdict), read when asked. */
+function openFor(agentId: string, sessionId: string | null, keepSidechain: boolean): () => boolean | null {
+  const head = headOf(agentId, keepSidechain ? null : sessionId);
+  return () => owedVerdict(head?.root ?? null, head?.generationId ?? null, dataDir(), head?.promotedAt ?? null);
+}
+
+/** A log file's items (or a chunk's) as the chat shows them: from this generation's promotion on, as the poll route's
+ *  segments cut it (liveFrom; a chunk at the takeover's line). `whole`: they are the generation's whole chat (the chunk
+ *  reaches the file's start, or holds the takeover, or there is no takeover yet). */
+function fileLiveItems(logged: readonly any[], agentId: string, sessionId: string | null, keepSidechain: boolean,
+                       file: { path: string; parser: LogParser<any>; start: number; eof: boolean }): { items: any[]; whole: boolean } {
+  const { prep, sig } = prepFor(agentId, sessionId, keepSidechain);
+  const head = headOf(agentId, keepSidechain ? null : sessionId);
+  const promotedAt = head?.promotedAt ?? null;
+  const open = () => owedVerdict(head?.root ?? null, head?.generationId ?? null, dataDir(), promotedAt);
+  const cut = cutOfView(file, promotedAt, prep, sig);
+  const items = liveFromFile(prep(logged), file, cut, promotedAt, open, prep, sig);
+  const whole = file.start === 0 || cut === 'none' || (typeof cut === 'object' && cut.off >= file.start);
+  return { items, whole };
 }
 
 function windowFromLog(
@@ -2897,20 +3000,11 @@ function windowFromLog(
   keepWakeReplies: boolean,
   keepSidechain: boolean,
   file: { path: string; parser: LogParser<any>; start: number; eof: boolean } | null = null,
+  live: any[] | null = null,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
-  // A subagent's own log (keepSidechain) shares the seat's session id but none of the seat's window rules:
-  // the store's seen-only/seed rows and the warmup mark name the seat's entries, so they never apply to it.
-  const ruleSession = keepSidechain ? null : sessionId;
-  const warm = warmupMarkFor(agentId, ruleSession);
-  const rules = storeRules(ruleSession);
-  const prep = (xs: readonly any[]) => applyStoreRules(dropWarmup(xs, warm.mark), rules);
-  // From this generation's promotion on, as the poll route's segments cut it (liveFrom; a chunk at the takeover's line).
-  const head = headOf(agentId, ruleSession);
-  const promotedAt = head?.promotedAt ?? null;
-  const open = () => owedVerdict(head?.root ?? null, head?.generationId ?? null, dataDir(), promotedAt);
-  const cutSig = `${warm.sig}:${rules.sig}`;
-  let all = file ? liveFromFile(prep(logged), file, cutOfView(file, promotedAt, prep, cutSig), promotedAt, open, prep, cutSig)
-    : liveFrom(prep(logged), promotedAt, open);
+  let all = live ?? (file ? fileLiveItems(logged, agentId, sessionId, keepSidechain, file).items
+    : liveFrom(prepFor(agentId, sessionId, keepSidechain).prep(logged), headOf(agentId, keepSidechain ? null : sessionId)?.promotedAt ?? null,
+      openFor(agentId, sessionId, keepSidechain)));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
