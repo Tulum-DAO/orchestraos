@@ -29,7 +29,8 @@ class _B:
 
 def _runner(reply, late):
     gate, clock = threading.Event(), [100.0]
-    r = srv.ToolRunner(_Tools(reply, gate), ThreadPoolExecutor(2), late=late, clock=lambda: clock[0])
+    r = srv.ToolRunner(_Tools(reply, gate), ThreadPoolExecutor(2), late=lambda cid, name, ok, text: late(text),
+                       clock=lambda: clock[0])
     return r, gate, clock
 
 
@@ -67,7 +68,9 @@ def test_gms_promise_after_the_hand_over_is_not_repeated_into_the_call():
     assert notes == []
 
 
-def test_any_other_tool_still_holds_until_its_result():
+def test_with_the_receipt_flag_off_any_other_tool_still_holds_until_its_result(monkeypatch):
+    # RECEIPT_FLAG=0 is the undo of the every-tool hand-over (test_native_tool_receipt): #674's scope, gm only
+    monkeypatch.setenv(srv.RECEIPT_FLAG, "0")
     notes = []
     r, gate, clock = _runner("seats: gm", notes.append)
     r.execute(_B(), "c1", "list_agents", "{}")
@@ -92,7 +95,8 @@ def test_a_handed_over_call_stays_handed_over_after_gm_answers():
     assert r.execute(_B(), "c1", "gm_command", "{}") == first == srv.DETACHED
 
 
-def test_a_gm_call_held_beside_a_slow_tool_goes_back_once_as_sent(tmp_path):
+def test_a_gm_call_held_beside_a_slow_tool_goes_back_once_as_sent(tmp_path, monkeypatch):
+    monkeypatch.setenv(srv.RECEIPT_FLAG, "0")                 # with every tool handed over, nothing is held beside
     from services.arturo.native.session import NativeSession
     from services.arturo.native import fixtures as fx
     from services.arturo.native.tests.test_native import _fleet, _tools
@@ -111,7 +115,8 @@ def test_a_gm_call_held_beside_a_slow_tool_goes_back_once_as_sent(tmp_path):
             return {"ok": True, "result": "gm says:\nanswer" if name == "gm_command" else "seats: gm"}
     t, _ = _tools(tmp_path)
     notes = []
-    runner = srv.ToolRunner(Two(t), ThreadPoolExecutor(2), late=notes.append, clock=lambda: clock[0])
+    runner = srv.ToolRunner(Two(t), ThreadPoolExecutor(2), late=lambda cid, name, ok, text: notes.append(text),
+                            clock=lambda: clock[0])
     sess = NativeSession(_fleet(t), runner, clock=lambda: clock[0], settle=None)
     sess.on_server_frame(fx.started()[0])
     for f in fx.tool_turn("d1", "r1", [("g1", "gm_command", "{}"), ("l1", "list_agents", "{}")]):
