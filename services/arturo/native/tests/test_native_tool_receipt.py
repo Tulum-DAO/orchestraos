@@ -253,3 +253,125 @@ def test_a_result_that_lands_after_the_call_ended_is_a_line_in_the_calls_thread(
 async def _call(c, script, start=None):
     from services.arturo.native.tests.test_native import _call as base
     return await base(c, script, start=start)
+
+
+# ---- gm msg_bbfb14fb: a request spoken while a delegation runs is queued and delegated, never lost -------------------
+# Field case (arturo-latency-dev evidence-1126/dropped-request.md, run B1): "ask the GM ..." was spoken while a
+# read_screen_context delegation was still out; no delegation ever followed. The provider swallowed it; the server
+# must never be the one that loses it, and must say so in the log when the provider does (DROPPED-REQUEST).
+def _session_with(tmp_path, slow_names, clock):
+    from services.arturo.native import fixtures as fx, native_config
+    from services.arturo.native.session import NativeSession
+    from services.arturo.native.tests.test_native import _fleet, _tools
+    t, _ = _tools(tmp_path)
+    gates = {n: threading.Event() for n in slow_names}
+    ran = []
+
+    class Slow:
+        def __init__(self, t):
+            self.t, self.ledger = t, t.ledger
+
+        def new_turn(self, c):
+            self.t.new_turn(c)
+
+        def execute(self, binding, cid, name, args):
+            ran.append(name)
+            if name in gates:
+                gates[name].wait(5)
+            return {"ok": True, "result": f"{name} ran"}
+    runner = srv.ToolRunner(Slow(t), ThreadPoolExecutor(4), late=lambda *a: None, clock=lambda: clock[0])
+    sess = NativeSession(_fleet(t), runner, clock=lambda: clock[0], settle=native_config.SETTLE_FAST)
+    sess.on_server_frame(fx.started()[0])
+    sess.ran = ran
+    return sess, gates, fx
+
+
+def _feed(sess, frames):
+    out = []
+    for f in frames:
+        out += sess.on_server_frame(f[0])
+    return out
+
+
+def _outputs(frames):
+    return [f["item"]["call_id"] for f in frames if f.get("type") == "response.item.create"]
+
+
+def test_a_request_spoken_while_a_delegation_runs_is_delegated_and_answered_not_lost(tmp_path):
+    clock = [100.0]
+    sess, gates, fx = _session_with(tmp_path, {"read_screen_context"}, clock)
+    sent = _feed(sess, [fx.input_transcript(" what's on my screen")])
+    sent += _feed(sess, fx.tool_turn("d1", "r1", [("s1", "read_screen_context", "{}")]))
+    clock[0] += 0.5
+    sent += sess.tick()
+    assert _outputs(sent) == []                                       # d1's tool still runs (< 1.5 s)
+    clock[0] += 1.5                                                    # the caller speaks again meanwhile
+    sent += _feed(sess, [fx.input_transcript(" so can you ask the GM to look into the deploy")])
+    sent += _feed(sess, fx.tool_turn("d2", "r2", [("g1", "gm_command", "{}")]))
+    clock[0] += 0.1
+    assert _wait(lambda: sent.extend(sess.tick()) or "g1" in _outputs(sent))
+    gates["read_screen_context"].set()
+    clock[0] += 2.0
+    for _ in range(20):
+        sent += sess.tick()
+        time.sleep(0.02)
+    outs = _outputs(sent)
+    assert sorted(outs) == ["g1", "s1"], outs                          # each call answered exactly once
+    assert sorted(sess.ran) == ["gm_command", "read_screen_context"]  # both really ran once
+    got = {f["item"]["call_id"]: json.loads(f["item"]["output"]) for f in sent if f.get("type") == "response.item.create"}
+    assert all(o.get("status") != "superseded" for o in got.values()), got
+    assert got["g1"] == srv.DETACHED or got["g1"] == {"ok": True, "result": "gm_command ran"}
+    clock[0] += 30                                                     # long after: the request was delegated
+    sess.tick()
+    assert sess.m.dropped_requests == []
+
+
+def test_a_request_the_provider_swallows_while_a_delegation_runs_is_logged_as_dropped(tmp_path, caplog):
+    clock = [100.0]
+    sess, gates, fx = _session_with(tmp_path, {"read_screen_context"}, clock)
+    _feed(sess, [fx.input_transcript(" what's on my screen")])
+    _feed(sess, fx.tool_turn("d1", "r1", [("s1", "read_screen_context", "{}")]))
+    clock[0] += 1.8
+    _feed(sess, [fx.input_transcript(" so can you ask the GM to look into the deploy")])
+    _feed(sess, [fx.output_transcript("I don't have the live dashboard yet.")])
+    clock[0] += srv_session().DROP_AFTER_S - 0.1
+    sess.tick()
+    assert sess.m.dropped_requests == []                               # not yet
+    with caplog.at_level("WARNING"):
+        clock[0] += 0.2
+        sess.tick()
+        sess.tick()
+    assert len(sess.m.dropped_requests) == 1                           # once
+    d = sess.m.dropped_requests[0]
+    assert d["busy"] == ["d1"] and "ask the GM" in d["heard"] and d["no_delegation_s"] >= srv_session().DROP_AFTER_S
+    assert any("DROPPED-REQUEST" in r.getMessage() and sess.binding.conversation_id in r.getMessage()
+               for r in caplog.records)
+    gates["read_screen_context"].set()
+
+
+def test_small_talk_with_no_delegation_out_is_never_called_dropped(tmp_path):
+    clock = [100.0]
+    sess, gates, fx = _session_with(tmp_path, set(), clock)
+    _feed(sess, [fx.input_transcript(" hey arturo how's it going")])
+    _feed(sess, [fx.output_transcript("Doing well. What's up?")])
+    clock[0] += 30
+    sess.tick()
+    assert sess.m.dropped_requests == []
+
+
+def test_the_late_words_of_the_request_that_started_the_delegation_are_not_a_new_request(tmp_path):
+    clock = [100.0]
+    sess, gates, fx = _session_with(tmp_path, {"read_screen_context"}, clock)
+    _feed(sess, [fx.input_transcript(" what's on")])
+    _feed(sess, fx.tool_turn("d1", "r1", [("s1", "read_screen_context", "{}")]))
+    clock[0] += 0.3
+    _feed(sess, [fx.input_transcript(" my screen")])                   # the same utterance's tail, after d1 began
+    clock[0] += 30
+    sess.tick()
+    assert sess.m.dropped_requests == []
+    gates["read_screen_context"].set()
+
+
+def srv_session():
+    from services.arturo.native import session
+    return session
