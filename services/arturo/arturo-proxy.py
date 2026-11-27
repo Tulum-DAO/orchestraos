@@ -9063,6 +9063,9 @@ def _call_end_marker(cid):
 # lines in its thread (call_tool_lines.py).
 from services.arturo import call_tool_lines as _call_tool_lines
 _ARCHIVE_LOCK = _threading.Lock()   # one native call archive at a time (the once check and its write)
+# (thread, call) archives whose lines landed without their card: the thread holds no card for the once check to find,
+# so an overlapping finalize that already chose the card is stopped here instead (the journal is marked after).
+_ARCHIVE_PARTIAL = set()
 
 
 def _archive_client_call(call_id, thread_id, turns, principal=None):
@@ -9082,6 +9085,9 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
         # the write hold one lock, so two finalizes of the same call (each on its own thread) cannot both pass it.
         # has_meta raises on a store it cannot read: the except below then writes nothing (never post blind).
         with _ARCHIVE_LOCK:
+            if (thread_id, call_id) in _ARCHIVE_PARTIAL:
+                log.info(f"call {call_id}: thread {thread_id[:24]} already holds its lines: not written again")
+                return True
             if _THREADS.has_meta(thread_id, kind="call_end", call_id=call_id):
                 log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
                 return True
@@ -9100,6 +9106,7 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
                 return False
             if not card:
                 # Some lines landed but not the card: a retry would write them twice, so this call is done as it is.
+                _ARCHIVE_PARTIAL.add((thread_id, call_id))
                 log.warning(f"call {call_id}: {lines} line(s) but no call card reached thread {thread_id[:24]}")
         log.info(f"call {call_id}: lines + call card written to thread {thread_id[:24]}")
         _maybe_gist(thread_id, force=True)       # a call ended: its conversation's summary catches up

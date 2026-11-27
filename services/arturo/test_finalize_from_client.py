@@ -538,3 +538,21 @@ def test_the_relay_end_marker_is_the_same_card(tmp_path, monkeypatch):
     m = _native_proxy(tmp_path, monkeypatch)
     from services.arturo.relay_live_bridge import journal_call_id
     assert m._call_end_marker("conv-xyz") == m._call_end_card(journal_call_id("conv-xyz"))
+
+
+def test_two_overlapping_finalizes_never_double_a_call_whose_card_failed(tmp_path, monkeypatch):
+    # Both finalizes chose the owed card before either wrote it. The first lands its lines but not the card; the
+    # second must not write those lines again (the thread holds no card for it to find).
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    store = m._THREADS
+    real = store.append_message
+    turns = [{"role": "user", "text": "hi", "ts": 1_800_000_001.0}]
+    monkeypatch.setattr(store, "append_message",
+                        lambda tid, role, text, **k: None if (k.get("meta") or {}).get("kind") == "call_end"
+                        else real(tid, role, text, **k))
+    assert m._archive_client_call(NATIVE, "web_abc123", turns, "fleet") is True     # lines in, card not: done
+    monkeypatch.undo()
+    assert m._archive_client_call(NATIVE, "web_abc123", turns, "fleet") is True     # the overlapping second
+    said = [t["content"] for t in m._THREADS.get_thread("web_abc123")["turns"][2:]]
+    assert said == ["hi"]
