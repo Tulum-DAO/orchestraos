@@ -373,6 +373,46 @@ test('an entry over the cache budget is never kept, from the tail path or a stit
   }
 });
 
+test('a reply whose blocks other lines split (parallel tool calls): a chunk never starts between its blocks, usage on the first', () => {
+  // Claude Code writes parallel tool calls as one reply (one message.id) whose tool_use blocks are separate lines with
+  // the tool results and attachments written between them. Its usage goes on the reply's FIRST drawn item: a chunk that
+  // starts after the first block would put it on a later one.
+  const { path, parser } = fresh();
+  const result = (uuid: string, forTool: string) => JSON.stringify({ type: 'user', uuid, timestamp: T(++seq),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: forTool, content: `ok ${'y'.repeat(300)}` }] } });
+  const attachment = (uuid: string) => JSON.stringify({ type: 'attachment', uuid, timestamp: T(++seq),
+    attachment: { type: 'hook_success', content: '' } });
+  const call = (uuid: string, tool: string) => JSON.stringify({ type: 'assistant', uuid, timestamp: T(++seq),
+    message: { id: 'msg_par', role: 'assistant', content: [{ type: 'tool_use', id: tool, name: 'Bash', input: { command: 'ls' } }],
+      usage: { input_tokens: 9000, output_tokens: 3 } } });
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  lines.push(user('run two things at once', 'u-par'));
+  lines.push(call('a-par-1', 'toolu_p1'), result('r-par-1', 'toolu_p1'), attachment('x-par-1'), call('a-par-2', 'toolu_p2'),
+    result('r-par-2', 'toolu_p2'), attachment('x-par-2'));
+  for (let i = 0; i < 10; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const whole = oracle(path);
+  const usageOf = (items: readonly any[]) => items.filter((it: any) => String(it.uuid).startsWith('a-par-')).map((it: any) => [it.uuid, it.usage?.input_tokens ?? null]);
+  assert.deepEqual(usageOf(whole), [['a-par-1', 9000], ['a-par-2', null]], 'precondition: the whole file counts the reply once, on its first block');
+  // A start on any line between the reply's first and last block: moved back to its first block.
+  for (const at of ['r-par-1', 'x-par-1', 'a-par-2']) {
+    clearLogCache();
+    const tail = cachedLogTail(path, parser, size - offsetOf(path, at));
+    assert.ok(tail.start <= offsetOf(path, 'a-par-1'), `a start at ${at}: the chunk starts at ${tail.start}, after the reply's first block`);
+    assert.deepEqual(usageOf(tail.items), usageOf(whole), `a start at ${at}`);
+    clearLogCache();
+    const range = logRange(path, parser, offsetOf(path, at), size);
+    assert.deepEqual(usageOf(range.items), usageOf(whole), `a cursor window from ${at}`);
+  }
+  // A start after the reply's last block, or before its first, is not moved.
+  clearLogCache();
+  assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'r-par-2')).start, offsetOf(path, 'r-par-2'));
+  clearLogCache();
+  assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'u-par')).start, offsetOf(path, 'u-par'));
+});
+
 test('a reply of more lines than the back-scan guard: the chunk still starts outside it (the whole file, never inside)', () => {
   const { path, parser } = fresh();
   const lines: string[] = [user('q', 'u-first')];

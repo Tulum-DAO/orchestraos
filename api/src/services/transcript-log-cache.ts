@@ -174,13 +174,14 @@ function lineStartAt(path: string, pos: number): number {
 }
 
 /** The uuid and message id of the JSON line starting at `off`, or null when that line is not one JSON value with a uuid. */
-function keysOfLineAt(path: string, off: number, size: number): { uuid: string; mid: string | null } | null {
+function keysOfLineAt(path: string, off: number, size: number): { uuid: string; mid: string | null; next: number } | null {
   let end = off;
   let text = '';
+  let next = size;
   while (end < size) {
     const block = readRange(path, end, Math.min(size, end + SCAN_BLOCK));
     const nl = block.indexOf(0x0a);
-    if (nl >= 0) { text += block.subarray(0, nl).toString('utf-8'); break; }
+    if (nl >= 0) { text += block.subarray(0, nl).toString('utf-8'); next = end + nl + 1; break; }
     text += block.toString('utf-8');
     end += block.length;
     if (!block.length) break;
@@ -190,7 +191,8 @@ function keysOfLineAt(path: string, off: number, size: number): { uuid: string; 
     const u = o?.uuid;
     if (typeof u !== 'string' || !u) return null;
     const m = o?.message?.id;
-    return { uuid: u, mid: typeof m === 'string' && m ? m : null };
+    // `next`: where the line after it starts (read on the way: a long line is never read twice).
+    return { uuid: u, mid: typeof m === 'string' && m ? m : null, next };
   } catch {
     return null;
   }
@@ -430,8 +432,9 @@ function forget(slot: string): void {
  *  the same record group (sameRecord: one Claude reply's lines never straddle a chunk edge, by uuid or message id). */
 function chunkStartAt(path: string, pos: number, size: number): number {
   let start = lineStartAt(path, pos);
+  let k: ReturnType<typeof keysOfLineAt> = null;
   if (start > 0) {
-    let k = keysOfLineAt(path, start, size);
+    k = keysOfLineAt(path, start, size);
     for (let guard = 0; k && start > 0; guard++) {
       if (guard >= BACK_SCAN_MAX) return 0;   // a record group longer than the scan: the whole file, never a start inside it
       const prev = lineStartAt(path, start - 1);
@@ -441,7 +444,46 @@ function chunkStartAt(path: string, pos: number, size: number): number {
       k = pk;
     }
   }
-  return start;
+  return start > 0 ? replyStart(path, start, size, k) : start;
+}
+
+/** A chunk start never falls between two blocks of one reply that other lines split: parallel tool calls are one reply
+ *  (one message.id) written as tool_use, its result, an attachment, the next tool_use. The reply's usage goes on its
+ *  first drawn item (chat-transcript.ts parseClaudeLines), so a chunk that started after that block would put it on a
+ *  later one. `start` (a record group's first line) moves back to the reply's first block when the nearest reply above
+ *  it goes on below it. Measured on real logs: 3 to 5 lines split a reply's blocks. 0 when a scan runs past its guard
+ *  (the whole file, never a start inside a reply). */
+function replyStart(path: string, start: number, size: number,
+                    atStart: { mid: string | null; next: number } | null): number {
+  // The nearest assistant line above, over the lines that are not one (results, attachments, user turns).
+  let at = start;
+  let mid: string | null = null;
+  for (let guard = 0; !mid; guard++) {
+    if (at <= 0) return start;                // no reply above: nothing to straddle
+    if (guard >= BACK_SCAN_MAX) return 0;
+    at = lineStartAt(path, at - 1);
+    mid = keysOfLineAt(path, at, size)?.mid ?? null;
+  }
+  // Does that reply go on at or below the start? Its next assistant line says (usually the start line or the next).
+  let off = start;
+  let goesOn = false;
+  for (let guard = 0; off < size; guard++) {
+    if (guard >= BACK_SCAN_MAX) { goesOn = true; break; }   // not known within the scan: the start that is safe either way
+    const k = guard === 0 && atStart ? atStart : keysOfLineAt(path, off, size);
+    if (k?.mid) { goesOn = k.mid === mid; break; }
+    off = k ? k.next : lineEndAt(path, off, size);
+  }
+  if (!goesOn) return start;
+  // It straddles the start: back to its first block, over its own blocks and the lines between them.
+  let first = at;
+  for (let guard = 0; at > 0; guard++) {
+    if (guard >= BACK_SCAN_MAX) return 0;
+    at = lineStartAt(path, at - 1);
+    const k = keysOfLineAt(path, at, size);
+    if (k?.mid === mid) first = at;
+    else if (k?.mid) break;
+  }
+  return first;
 }
 /** How many lines back a chunk start is moved over one record group before the whole file is read instead. */
 const BACK_SCAN_MAX = 64;
