@@ -64,7 +64,9 @@ def test_the_live_prompt_asks_for_varied_receipts_not_one_line():
 def test_progress_claims_are_their_own_kind():
     for said in ("That's running now.", "It's now running in the background.", "It's under way.", "That's queued."):
         assert claim_gate.claim_kind(said) == ("state", "progress"), said
-    for said in ("That's done.", "It's saved.", "All done!", "It's running. Done."):
+    for said in ("That's done.", "It's saved.", "All done!", "It's running. Done.",
+                 "It's running and the note is saved.", "It's running; it's done now.",   # codex on #698: mixed
+                 "The agent has been started.", "It's started."):                         # a finished start
         assert claim_gate.claim_kind(said) == ("state", None), said
     for said in ("I'm pulling that up.", "On it, it'll take a moment."):
         assert claim_gate.claim_kind(said) is None, said
@@ -157,3 +159,17 @@ class _SlowVia:
     def execute(self, binding, cid, name, args):
         self.gate.wait(5)
         return {"ok": True, "result": "seats: gm"}
+
+
+def test_a_finished_success_is_no_evidence_that_something_is_running_now(tmp_path, monkeypatch):
+    # codex on #698: a remember_note that finished must not back "that's running now"; a started seat does
+    call = srv.NativeCall(_server(tmp_path, monkeypatch), None, "fleet", "iphone")
+    b, progress = call.binding, ("state", "progress")
+    assert call.toolset.execute(b, "n1", "remember_note", "{}")["ok"]
+    assert call.gate.is_backed(("state", None)) and not call.gate.is_backed(progress)
+    spawn = '{"session_name": "research-bot", "machine": "vps", "task": "compare the vendors"}'
+    call.toolset.new_turn(b.conversation_id)                                # the caller asks again (I5 fence)
+    call.session.spoken_turn = "I'll start a seat called research-bot."
+    call.toolset.spoken_fn = lambda conv: call.session.spoken_turn
+    assert call.toolset.execute(b, "s1", "spawn_agent", spawn)["ok"]
+    assert call.gate.is_backed(progress)                                    # the seat runs: true

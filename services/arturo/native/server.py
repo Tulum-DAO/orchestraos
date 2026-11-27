@@ -455,6 +455,14 @@ class NativeCall:
         self.session.delivery_kind = call_context.feed_kind        # late results: the kind measured to be voiced
 
     def _is_backed(self, kind):
+        if kind == ("state", "progress"):
+            # "that's running now": a handed-over call still running, or a seat/research that started (its result says
+            # it runs). Any other finished success is no evidence of work going on now (codex on #698).
+            running = getattr(self.session.orchestra, "accepted_running", None)
+            return bool(running is not None and running()) or self._is_backed(("action", "start"))
+        return self._is_backed_claim(kind)
+
+    def _is_backed_claim(self, kind):
         """A receipt backs the claim (the ledger), or, for "I've started it" only, a handed-over call is still running.
         ACCEPTED is never a success: "it's done" / "I've saved it" wait for the real result."""
         if self.toolset.backed(self.binding.conversation_id, self.session.turn_started_epoch, kind):
@@ -468,11 +476,7 @@ class NativeCall:
             if ok and name not in DETACH_TOOLS and at >= since and (backers is None or name in backers):
                 return True
         running = getattr(self.session.orchestra, "accepted_running", None)
-        if running is None:
-            return False
-        if kind == ("state", "progress"):                  # "that's running now": true while any handed-over call runs
-            return running()
-        return kind == ("action", "start") and running(CLAIM_BACKERS["start"])
+        return kind == ("action", "start") and running is not None and running(CLAIM_BACKERS["start"])
 
     # ---- plumbing --------------------------------------------------------------------------------------------
     def emit(self, msg):

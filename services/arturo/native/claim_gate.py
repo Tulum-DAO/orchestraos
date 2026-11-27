@@ -52,7 +52,8 @@ _STATE_RES = [
 # PROGRESS state claims ("that's running now", "it's under way") say work is going, not that it is done: a tool still
 # running after its "accepted" receipt backs these (Shaw 2026-11-27: "that's running now" and other phrases besides
 # "I've started it"); every other state claim needs a finished result.
-_PROGRESS = re.compile(r"^(?:running|started|queued|on its way|under ?way)$", re.I)
+# "started" is NOT progress: "the agent has been started" claims a finished start (start-class evidence, codex on #698).
+_PROGRESS = re.compile(r"^(?:running|queued|on its way|under ?way)$", re.I)
 
 
 def claim_kind(text):
@@ -60,10 +61,11 @@ def claim_kind(text):
     for cls, r in _ACTION_RES:
         if r.search(text or ""):
             return ("action", cls)
-    m = _STATE_RES[0].search(text or "")
-    if m and _PROGRESS.match(m.group("word")) and not any(r.search(text or "") for r in _STATE_RES[1:]):
-        return ("state", "progress")
-    if m or any(r.search(text or "") for r in _STATE_RES[1:]):
+    words = [m.group("word") for m in _STATE_RES[0].finditer(text or "")]
+    other = any(r.search(text or "") for r in _STATE_RES[1:])
+    if words and not other and all(_PROGRESS.match(w) for w in words):   # EVERY claim in it is progress (codex: "it's
+        return ("state", "progress")                                      # running and the note is saved" is not)
+    if words or other:
         return ("state", None)
     return None
 
