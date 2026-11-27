@@ -808,6 +808,19 @@ def finalize_from_client(client_call_id="", conv_id=""):
         except Exception as _ce:
             log.error(f"finalize_from_client read error: {_ce}")
             return False
+        # A headless/test call is never the operator's history.  The gateway may
+        # still write its diagnostic journal, but finalization must be a terminal
+        # no-op: no GM injection, no thread card, and no later retry can revive it.
+        # This is deliberately checked before merge/link/archive work.
+        if client.get("test") is True:
+            client["status"] = "test"
+            client["gm_inject_suppressed"] = True
+            client["thread_card_written"] = False
+            client["test_finalized"] = True
+            from services.arturo.call_journal import _atomic_write
+            _atomic_write(cpath, client)
+            log.info(f"finalize_from_client: {cpath.name} test call — no operator delivery")
+            return True
         # idempotency: a re-notify after we've SUCCESSFULLY injected (or given up) must not re-drive.
         # A merged-but-not-yet-injected journal (gm_injected False) MUST fall through so the inject
         # is re-attempted (DELIB-BUG-1: the old optimistic flag made re-notify a silent no-op).
