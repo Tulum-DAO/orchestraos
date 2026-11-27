@@ -94,3 +94,21 @@ export function publicOrigins(publicHost: string): string[] {
   if (!hostOnly || /\s/.test(hostOnly)) return [];
   return [`http://${hostOnly}`, `https://${hostOnly}`];
 }
+
+/** The install's own browser origins for a route's own cross-site write check (routes/usage.ts):
+ *  ORCHESTRA_API_CORS_ORIGINS, [public].host, and the dashboard's address on both loopback spellings (http and
+ *  https). The same list server.ts builds for CORS (corsAllowlist); kept in step by hand until server.ts calls this. */
+export function configuredOrigins(cfg: { dashboardHost: string; dashboardPort: number; publicHost: string },
+  env: Record<string, string | undefined> = process.env): string[] {
+  const extra = (env.ORCHESTRA_API_CORS_ORIGINS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const hosts = cfg.dashboardHost === '0.0.0.0' || cfg.dashboardHost === '::'
+    ? ['127.0.0.1', 'localhost']
+    : [cfg.dashboardHost, cfg.dashboardHost === '127.0.0.1' ? 'localhost' : cfg.dashboardHost];
+  const origins = new Set<string>([...extra, ...publicOrigins(cfg.publicHost)]);
+  for (const h of hosts) {
+    origins.add(`http://${h}:${cfg.dashboardPort}`);
+    origins.add(`https://${h}:${cfg.dashboardPort}`);
+  }
+  return [...origins];
+}
