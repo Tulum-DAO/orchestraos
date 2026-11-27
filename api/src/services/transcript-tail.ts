@@ -39,6 +39,8 @@ import {
   mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
 } from '../routes/chat-transcript.js';
 import { storeRules } from './conversation-store.js';
+import { finalReplyUuids, turnScan } from './live-step.js';
+import { RawTail } from './raw-tail.js';
 import { stampRefs } from '../lib/messageRef.js';
 import { stampReplyTo } from '../lib/reply-to-store.js';
 
@@ -114,6 +116,9 @@ function isReadError(err: unknown): boolean {
   return typeof code === 'string' && READ_ERROR_CODES.has(code);
 }
 
+/** The turn marks a tailer reads from its log's raw lines (turn()). */
+export interface TurnMarks { ended: string | null; finals: ReadonlySet<string>; known: boolean }
+
 export class TranscriptTailer {
   private agentId: string;
   private resolve: Resolver;
@@ -124,6 +129,9 @@ export class TranscriptTailer {
   private sid: string | null = null;
   private path: string | null = null;
   private fileSize = -1;
+  /** The log's newest raw lines (services/raw-tail.ts), for turn(): never the whole file. */
+  private raw = new RawTail();
+  private turnMemo: { version: number; turn: TurnMarks } | null = null;
   private items: any[] = [];
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
   /** The sequence number of the newest kept item: every item this tailer has read counts once (see eventId). */
@@ -163,6 +171,27 @@ export class TranscriptTailer {
     return this.items.slice(-n);
   }
 
+  /** The turn as the log's newest raw lines mark it (live-step): when it ended (else null), which lines are final
+   *  replies, and whether those lines can say (`known` false: Claude Code lines cut short by their size, none of which
+   *  decides the turn; the step is then none, never a guess. Another CLI's lines carry no turn marks: known). Kept for
+   *  the same lines, so the quarter-second step beat parses nothing new while the log is still. */
+  turn(): TurnMarks {
+    const m = this.turnMemo;
+    if (m && m.version === this.raw.version) return m.turn;
+    const lines = this.raw.lines;
+    const scan = turnScan(lines);
+    const turn = { ended: scan.ended, finals: finalReplyUuids(lines), known: scan.decided || !scan.claude || !this.raw.cut };
+    this.turnMemo = { version: this.raw.version, turn };
+    return turn;
+  }
+
+  /** Whether the file this tailer follows has grown since its last read: a stat only, no re-resolve (the stream's
+   *  quarter-second peek, routes/transcript-stream.ts). */
+  grew(): boolean {
+    if (!this.path || this.fileSize < 0) return false;
+    try { return statSync(this.path).size !== this.fileSize; } catch { return false; }
+  }
+
   /** Whether the items read so far hold this uuid (live text: its finished line has landed). */
   hasItemUuid(uuid: string): boolean {
     for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i]?.uuid === uuid) return true;
@@ -180,6 +209,7 @@ export class TranscriptTailer {
       this.sid = sid;
       this.path = null;
       this.fileSize = -1;
+      this.raw.reset();
       this.items = [];
       this.seq = 0;
       this.epoch = '';
@@ -199,6 +229,8 @@ export class TranscriptTailer {
       return { rotated: false, fresh: 0 };
     }
 
+    // The raw lines for turn(): the appended bytes only (a fresh tail read for a new or replaced file).
+    try { this.raw.update(path); } catch { this.raw.reset(); }
     // Through the parsed-log cache (services/transcript-log-cache.ts): the file is parsed once, then on each tick
     // that found it grown only the appended lines are read, with the Claude grammar's carried state. Before this,
     // every tick that found a new line re-read and re-parsed the whole file (4 MB: seconds on a throttled box, on a
