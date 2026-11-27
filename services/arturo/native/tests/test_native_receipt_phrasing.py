@@ -67,7 +67,12 @@ def test_progress_claims_are_their_own_kind():
                  "That's running now; meanwhile, what else do you need?",                  # natural receipts must
                  "It's under way, I'll tell you when it lands.",                           # never be cut off
                  "On it. That's running now, should be finished in a minute.",
-                 "That's running now, about a hundred rows to go."):
+                 "That's running now, about a hundred rows to go.",
+                 "That's running now; I'll let you know when it lands.",                   # codex round 6: same-form
+                 "That's running now; meanwhile, we can run through your other questions.",   # verbs, modals
+                 "It's under way; I need to read the rest first.",
+                 "That's running now; did you want anything else?",
+                 "That's running now; are you interested in the details?"):
         assert claim_gate.claim_kind(said) == ("state", "progress"), said
     for said in ("That's done.", "It's saved.", "All done!", "It's running. Done.",
                  "It's running and the note is saved.", "It's running; it's done now.",   # codex on #698: mixed
@@ -230,3 +235,20 @@ def test_require_owner_is_opt_in_and_lets_the_owner_and_the_fleet_write(tmp_path
     assert t.append_message("w1", "assistant", "d", principal="fleet", require_owner=True) is not None
     assert t.append_message("w1", "assistant", "e", principal="owner:dev2") is not None      # default: unchanged
     assert t.append_message("w2", "assistant", "f", principal="owner:dev2", require_owner=True) is not None  # new
+
+
+def test_natural_receipts_stream_through_the_gate_word_by_word_unblocked():
+    # the gate classifies the transcript as it grows: no prefix of a natural receipt may be cut off
+    backs = {("state", "progress")}
+    for said in ("That's running now; I'll let you know when it lands.",
+                 "That's running now; meanwhile, we can run through your other questions.",
+                 "On it. That's running now, should be finished in a minute.",
+                 "That's running now; meanwhile, what else do you need?"):
+        g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
+        for w in said.split(" "):
+            g.feed_transcript(w + " ")
+            assert not g.blocked, (said, g.text)
+    g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
+    for w in "That's running now; the message has been broadcast.".split(" "):
+        g.feed_transcript(w + " ")
+    assert g.blocked                                                        # a completion still needs its result
