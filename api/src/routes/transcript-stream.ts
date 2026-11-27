@@ -71,8 +71,9 @@ const HEARTBEAT_MS = 25000;
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 500;
 /** Live text is read more often than the transcript: words arrive many times a second. A tmux seat's log is peeked at
- *  the same pace (a stat of the file it follows) and read at once when it grew, so its step and its new lines go out
- *  within a quarter second of being written; the full beat (re-resolve the session, notices, gone) stays at TICK_MS. */
+ *  the same pace (a stat of the file it follows, no re-resolve) and read at once when it grew (that read is a tick:
+ *  it re-resolves the session), so its step and its new lines go out within a quarter second of being written; the
+ *  notices and the gone count stay on the full beat (TICK_MS). */
 const LIVE_TICK_MS = 250;
 
 // One shared tailer (+ one file-read per beat) per agent, however many
@@ -128,7 +129,11 @@ export function liveTextOn(agentId: string, headless: Set<string> = headlessSeat
 // never waits on a scan.
 let probe: Map<string, DetectorStatus> = new Map();
 let probing = false;
+let probeOverride: Map<string, DetectorStatus> | null = null;
+/** Tests: the probe's verdicts as given (null: the real probe again). */
+export function probeForTests(m: Map<string, DetectorStatus> | null): void { probeOverride = m; }
 function probeNow(): Map<string, DetectorStatus> {
+  if (probeOverride) return probeOverride;
   if (!probing) {
     probing = true;
     getDetectorStates().then((m) => { probe = m; }).catch(() => { /* keep the last */ }).finally(() => { probing = false; });

@@ -36,7 +36,8 @@ const call = (n: number) => JSON.stringify({
 }) + '\n';
 
 const { TranscriptTailer } = await import('../services/transcript-tail.js');
-const { default: router } = await import('./transcript-stream.js');
+const { default: router, currentStep, probeForTests } = await import('./transcript-stream.js');
+const { seatTmuxSession } = await import('./chat-transcript.js');
 const express = (await import('express')).default;
 const app = express();
 app.use('/api/agents', router);
@@ -120,4 +121,64 @@ test('the agent list reads an open stream\'s step for that seat, and forgets it 
   const deadline = Date.now() + 2000;
   while (streamStep(TMUX) !== undefined && Date.now() < deadline) await new Promise((ok) => setTimeout(ok, 50));
   assert.equal(streamStep(TMUX), undefined);
+});
+
+// Gate round 1 on #706 (fenced reviewer): the wiring itself, with a probe verdict (none: every step is null either way).
+const busyProbe = () => new Map([[seatTmuxSession(TMUX)!, { state: 'thinking', state_age_s: 1 } as any]]);
+
+test('a tmux seat\'s step is its transcript\'s: the running call\'s own description, not the probe\'s word', () => {
+  probeForTests(busyProbe());
+  try {
+    appendFileSync(log, call(70));
+    const t = new TranscriptTailer({ agentId: TMUX, limit: 50, resolve: () => ({ path: log, sid: SID }) });
+    const off = t.subscribe(() => {});
+    const s = currentStep(TMUX, { headless: false, tailer: t } as any);
+    assert.deepEqual(s && { kind: s.kind, tool: s.tool, summary: s.summary, described: s.described },
+      { kind: 'tool', tool: 'Bash', summary: 'Step 70', described: true });
+    off();
+  } finally {
+    probeForTests(null);
+  }
+});
+
+test('a tmux seat\'s step goes out within a quarter second of its call landing, not at the next 1 s beat', async () => {
+  probeForTests(busyProbe());
+  const ctl = new AbortController();
+  try {
+    const res = await fetch(`${base}/${TMUX}/transcript/stream`, { signal: ctl.signal });
+    const reader = res.body!.getReader();
+    let buf = '';
+    const steps: { summary?: string; at: number }[] = [];
+    let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+    const read = async (until: () => boolean, ms: number) => {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline && !until()) {
+        pending ??= reader.read();
+        const r = await Promise.race([pending, new Promise<null>((ok) => setTimeout(() => ok(null), 50))]);
+        if (!r) continue;
+        pending = null;
+        if (r.done) break;
+        buf += Buffer.from(r.value).toString('utf-8');
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          if (/^event: step$/m.test(block)) steps.push({ summary: JSON.parse(/^data: (.*)$/m.exec(block)![1]).summary, at: Date.now() });
+        }
+      }
+    };
+    await read(() => false, 400);
+    const lags: number[] = [];
+    for (const n of [81, 82, 83]) {
+      const t0 = Date.now();
+      appendFileSync(log, call(n));
+      await read(() => steps.some((x) => x.summary === `Step ${n}`), 2500);
+      const got = steps.find((x) => x.summary === `Step ${n}`);
+      assert.ok(got, `the step for call ${n} arrived`);
+      lags.push(got!.at - t0);
+    }
+    assert.ok(Math.max(...lags) < 600, `lags ${lags.join(', ')} ms`);
+  } finally {
+    ctl.abort();
+    probeForTests(null);
+  }
 });

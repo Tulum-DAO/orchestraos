@@ -19,8 +19,11 @@ const BLOCK = 64 * 1024;
 const PROBE_BYTES = 64;
 
 let bytesRead = 0;
+let bytesScanned = 0;
 /** Tests: the bytes every raw tail has read (never the whole of a big log). */
 export function rawTailBytesRead(): number { return bytesRead; }
+/** Tests: the bytes a first read has counted newlines in (each byte once: never the growing buffer again per block). */
+export function rawTailBytesScanned(): number { return bytesScanned; }
 
 function readRange(fd: number, from: number, to: number): Buffer {
   const buf = Buffer.allocUnsafe(Math.max(0, to - from));
@@ -51,6 +54,14 @@ export class RawTail {
   version = 0;
 
   constructor(private readonly max = RAW_TAIL_LINES, private readonly maxBytes = RAW_TAIL_MAX_BYTES) {}
+
+  /** The log could not be read: keep nothing and say so (`cut`, no lines: live-step's turn is not known, so no step),
+   *  and read it fresh next time. */
+  fail(): void {
+    this.path = null; this.ino = -1; this.mtimeMs = -1; this.end = 0; this.partialBytes = 0; this.probe = Buffer.alloc(0);
+    this.midLine = false; this.lines = []; this.cut = true;
+    this.version++;
+  }
 
   /** Forget the log (no session, or a new one). */
   reset(): void {
@@ -109,18 +120,22 @@ export class RawTail {
     const fd = openSync(path, 'r');
     try {
       let lo = size;
-      let buf: Buffer = Buffer.alloc(0);
+      const blocks: Buffer[] = [];
       // Back from the end a block at a time, until the bytes hold max + 1 newlines (max whole lines after the first
-      // one, which may be cut), the file's start, or maxBytes.
+      // one, which may be cut), the file's start, or maxBytes. Each block's newlines are counted once, and the blocks
+      // joined once at the end.
+      let n = 0;
       for (;;) {
         const from = Math.max(0, lo - BLOCK, size - this.maxBytes);
         if (from >= lo) break;
-        buf = Buffer.concat([readRange(fd, from, lo), buf]);
+        const block = readRange(fd, from, lo);
+        blocks.unshift(block);
         lo = from;
-        let n = 0;
-        for (let i = 0; i < buf.length && n <= this.max; i++) if (buf[i] === 0x0a) n++;
+        for (let i = 0; i < block.length; i++) if (block[i] === 0x0a) n++;
+        bytesScanned += block.length;
         if (n > this.max || lo === 0) break;
       }
+      const buf = blocks.length === 1 ? blocks[0] : Buffer.concat(blocks);
       const nl = buf.lastIndexOf(0x0a);
       let lines = nl < 0 ? [] : buf.subarray(0, nl).toString('utf8').split('\n');
       // A read that did not start at the file's start begins inside a line: that piece is not a line.
