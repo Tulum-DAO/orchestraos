@@ -131,3 +131,76 @@ def test_shaws_own_named_label_is_never_a_participant(base):
     call = dataclasses.replace(base, transcript=NAMED_TWO)
     roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
     assert "Shaw Cole" not in roster.label_names and "Shaw Cole" not in roster.verified_names
+
+
+# --- review round 1 (fenced Claude reviewer; codex out of credits) ------------------------------
+
+def _items_raw(shaw_label, evidence):
+    item = {"owner": "shaw", "kind": "commitment", "counterpart": "Dana Reyes", "action_type": "document_send",
+            "operation": "send", "deliverable": "pricing deck", "commitment_text": "Send Dana the pricing deck",
+            "timeframe": "by Friday", "quote": "I'll send you the pricing deck by Friday.", "speaker": shaw_label}
+    return {"shaw_label": shaw_label, "shaw_label_evidence": evidence, "items": [item]}
+
+
+def test_ground_refuses_a_claimed_shaw_label_when_another_label_names_shaw(base, monkeypatch):
+    """B1: Pocket labels Shaw by name, the extractor claims Dana's label: an attribution failure."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
+    call = dataclasses.replace(base, transcript=NAMED_TWO)
+    raw = _items_raw("Dana Reyes", "Likewise. I will share the API credentials with you tomorrow morning.")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(call, extract.Extraction(ok=True, raw=raw))
+
+
+def test_shaw_named_label_is_never_a_verified_participant_even_if_misclaimed(base, monkeypatch):
+    """B1: even when shaw_label is wrong, the label naming Shaw never becomes a participant, and
+    Shaw-side items do not verify."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
+    call = dataclasses.replace(base, transcript=NAMED_TWO)
+    roster = participants.resolve(call, _raw(shaw_label="Dana Reyes"), [], shaw_emails=SHAW)
+    assert "Shaw Cole" not in roster.label_names and "Shaw Cole" not in roster.verified_names
+    [it] = participants.apply_trust([_item("shaw", "Dana Reyes")], roster)
+    assert it.trust == "inferred"
+
+
+@pytest.mark.parametrize("label", [
+    "SPEAKER_00", "SPEAKER_00a", "Speaker 3", "Speaker A", "Speaker B", "Unknown", "Unknown Speaker",
+    "Guest Speaker", "Guest", "Person 1", "Voice 2", "S1", "Spkr 2", "Participant_A", "Host", "Me",
+    "Other", "You", "Caller", "A", "",
+])
+def test_generic_labels_are_not_pocket_names(label):
+    assert not participants._pocket_named(label)
+
+
+@pytest.mark.parametrize("label", ["Dana Reyes", "Ivonne", "Mary-Jane O'Neil", "Dr. Lee", "Sanjay Bhatia"])
+def test_person_names_are_pocket_names(label):
+    assert participants._pocket_named(label)
+
+
+SHORT_NAME = NAMED_TWO.replace("**Dana Reyes**", "**Dana**")
+
+
+def test_pocket_name_is_kept_and_gets_no_email_from_a_partial_invitee_match(base):
+    """S4: Pocket "Dana" stays "Dana"; only an exact invitee name lends an email."""
+    call = dataclasses.replace(base, transcript=SHORT_NAME)
+    roster = participants.resolve(call, _raw(), _calendar_with_dana(), shaw_emails=SHAW)
+    spoke = [(p.name, p.email) for p in roster.participants if p.status == "spoke"]
+    assert spoke == [("Dana", None)]
+
+
+def test_next_call_due_resolves_through_a_named_invitee_label(base):
+    """N7: "by the next call" works for a Pocket-named speaker whose name is an invitee."""
+    future = cal.parse(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"
+        "BEGIN:VEVENT\r\nUID:sync-1@example.com\r\n"
+        f"DTSTART:{Z(2026, 11, 24, 19, 0)}\r\nDTEND:{Z(2026, 11, 24, 19, 30)}\r\nSUMMARY:Sync\r\n"
+        "ATTENDEE;CN=Shaw Cole;PARTSTAT=ACCEPTED:mailto:shaw@example.com\r\n"
+        "ATTENDEE;CN=Dana Reyes;PARTSTAT=ACCEPTED:mailto:dana@example.com\r\nEND:VEVENT\r\n"
+        "BEGIN:VEVENT\r\nUID:next-1@example.com\r\n"
+        f"DTSTART:{Z(2026, 12, 1, 19, 0)}\r\nDTEND:{Z(2026, 12, 1, 20, 0)}\r\nSUMMARY:Check-in\r\n"
+        "ATTENDEE;CN=Shaw Cole;PARTSTAT=ACCEPTED:mailto:shaw@example.com\r\n"
+        "ATTENDEE;CN=Dana Reyes;PARTSTAT=ACCEPTED:mailto:dana@example.com\r\nEND:VEVENT\r\n"
+        "END:VCALENDAR\r\n")
+    call = dataclasses.replace(base, transcript=NAMED)
+    roster = participants.resolve(call, _raw(), future, shaw_emails=SHAW)
+    due = participants.next_call_due("Dana Reyes", roster, future, (), sources.call_end(call), "America/New_York")
+    assert due is not None and due.due_ts.startswith("2026-12-01T13:00")

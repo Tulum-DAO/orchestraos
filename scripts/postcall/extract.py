@@ -115,6 +115,10 @@ def ground(call, extraction):
     call_turns = turns(call.transcript)
     diarized = bool(getattr(call, "diarized", True)) and bool(call_turns)
     shaw_label = raw_all.get("shaw_label")
+    names = _shaw_names()
+    if diarized and raw_all.get("items") and any(lab.strip().casefold() in names and lab != shaw_label
+                                                 for lab, _, _ in call_turns):
+        raise AttributionError(f"{call.call_id}: a label names Shaw but shaw_label is {shaw_label!r}")
     if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns):
         evidence = locate_quote(raw_all.get("shaw_label_evidence"), call.transcript)
         if not shaw_label or evidence is None or _speaker_of(evidence, call_turns) != shaw_label:

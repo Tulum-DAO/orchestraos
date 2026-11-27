@@ -57,12 +57,29 @@ class _Person:
     keys: set = field(default_factory=set)              # normalized names/aliases it answers to
 
 
-_GENERIC = re.compile(r"(speaker|spk|unknown|guest|participant)?[\s_-]*\d*", re.I)
+# A person's name: letters, spaces and . ' - only (no digits or underscores), at least two letters.
+_NAME_SHAPE = re.compile(r"[^\W\d_][^\W\d_ .'-]*(?:[ .'-]+[^\W\d_][^\W\d_ .'-]*)*\.?")
+# Words a diarizer uses for a voice it could not name; any of them anywhere makes the label generic.
+_GENERIC_WORDS = {"speaker", "spk", "spkr", "unknown", "unidentified", "guest", "participant", "person",
+                  "voice", "host", "me", "other", "you", "caller", "user", "narrator", "interviewer",
+                  "interviewee", "moderator", "attendee"}
 
 
 def _pocket_named(label):
-    """True for a label Pocket gave a person's name to, False for SPEAKER_02, "Unknown", "Speaker 3"."""
-    return isinstance(label, str) and any(c.isalpha() for c in label) and not _GENERIC.fullmatch(label.strip())
+    """True only for a label shaped like a person's name ("Dana Reyes", "Mary-Jane O'Neil"); False for
+    SPEAKER_02, "Speaker A", "Unknown Speaker", "Person 1", "Host", "S1" and anything else generic.
+    Fails closed: a doubtful label is generic and keeps the evidence/invitee rules."""
+    if not isinstance(label, str) or not _NAME_SHAPE.fullmatch(label.strip()):
+        return False
+    words = [w for w in re.split(r"[ .'-]+", label.strip().casefold()) if w]
+    return sum(len(w) for w in words) >= 2 and not any(w in _GENERIC_WORDS for w in words)
+
+
+def _invitee_named(people, label):
+    """The invitee whose name is exactly `label` (case/space-insensitive), or None. Only an exact
+    invitee name lends an email to a Pocket-named speaker; aliases and contacts never do."""
+    hits = [p for p in people if p.invited and _norm(p.name) == _norm(label)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _norm(name):
@@ -152,7 +169,9 @@ def _shortcut(event, invitees, labels, shaw_label, people):
 
 
 def resolve(call, raw, events, *, shaw_emails, contacts=()):
-    """Build the call's Roster (design §2a). Never raises on missing or odd input."""
+    """Build the call's Roster (design §2a). Never raises on missing or odd input. Known limit: a
+    Pocket name that is only part of an invitee's name ("Dana" vs invitee "Dana Reyes") is kept as
+    its own person, so the card can list both if a generic label is also mapped to the invitee."""
     raw = raw if isinstance(raw, dict) else {}
     labels = _labels(getattr(call, "transcript", ""))
     shaw_label = raw.get("shaw_label") if isinstance(raw.get("shaw_label"), str) else None
@@ -163,17 +182,23 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
         invitees = []
     people = _directory(invitees, contacts)
 
-    # Pocket-named labels first: the name is the identity (an invitee of that name lends its email).
-    named = {}
+    # Pocket-named labels first: the name is the identity (an invitee of exactly that name lends its
+    # email). A label naming Shaw is never a participant, even when the extractor claimed another one.
+    shaw_names = extract._shaw_names()
+    named, lent = {}, set()                             # lent: ids of invitees a named label stands for
     for label in labels:
-        if label != shaw_label and _pocket_named(label):
-            named[label] = _lookup(people, label) or _Person(name=label.strip(), email=None, invited=False,
-                                                              keys={_norm(label)})
-    named_ids = {id(p) for p in named.values()}
-    generic = tuple(l for l in labels if l not in named)
+        if label == shaw_label or _norm(label) in shaw_names or not _pocket_named(label):
+            continue
+        invitee = _invitee_named(people, label)
+        named[label] = _Person(name=label.strip(), email=invitee.email if invitee else None,
+                               invited=False, keys={_norm(label)})
+        if invitee:
+            lent.add(id(invitee))
+    named_ids = {id(p) for p in named.values()} | lent
+    generic = tuple(l for l in labels if l not in named and _norm(l) not in shaw_names)
 
     pairs = [(l, p) for l, p in _proposed(raw, call, generic, shaw_label, people) if id(p) not in named_ids]
-    shortcut = _shortcut(event, invitees, labels, shaw_label, people) if len(generic) == len(labels) else None
+    shortcut = _shortcut(event, invitees, labels, shaw_label, people) if not named else None
     if shortcut:
         pairs.append(shortcut)
 
@@ -197,7 +222,7 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
         roster.participants.append(Participant(person.name, person.email, label, "spoke"))
         if person.invited or label in named:
             roster.verified_names.add(person.name)
-    spoken_ids = {id(p) for p in mapped.values()}
+    spoken_ids = {id(p) for p in mapped.values()} | lent
     for person in people:           # invited but never mapped to a voice
         if person.invited and id(person) not in spoken_ids:
             roster.participants.append(Participant(person.name, person.email, None, "invited"))
@@ -222,6 +247,8 @@ def _shaw_side_verified(roster):
     event is required."""
     if roster.shaw_label not in roster.labels:
         return False
+    if any(_norm(l) in extract._shaw_names() for l in roster.labels if l != roster.shaw_label):
+        return False                # a label naming Shaw is not the one claimed: the claim is wrong
     others = [l for l in roster.labels if l != roster.shaw_label]
     return bool(others) and all(roster.label_names.get(l) in roster.verified_names for l in others)
 

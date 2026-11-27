@@ -112,14 +112,15 @@ Two sources are combined, and each participant gets a trust level.
 1. **Calendar match:** the event whose start-end window overlaps the recording (`created_at` to `created_at + duration`, ±10 min), using the §3 ICS feed.
    - Its attendee list (CN + email, minus Shaw and `DECLINED`) is the **invited set**. An invitee counts as a **participant** only once a speaker is mapped to them. The card's `With:` line marks spoken participants ✓ and invited-but-unmapped people `(invited)`.
    - Two overlapping events: the one with the larger overlap wins, and a tie means no match.
-   - No calendar feed, or no event: participants are unverified.
+   - No calendar feed, or no event: participants mapped only by evidence are unverified. Pocket-named speakers (2 below) are verified without any calendar.
 2. **Speakers:**
    - Segments files carry **names** (`speaker`), which are verified when they match a calendar attendee or a people or client contact.
-   - Pocket carries only `SPEAKER_00/01`.
+   - **Pocket-named speakers (Shaw, 2026-11-27: "We need to not require a calendar integration in order to match speakers or trigger a post call workflow"):** a Pocket label shaped like a person's name ("Dana Reyes"; letters, spaces and `.'-` only, no generic word such as speaker/unknown/guest/person/host) is that participant and is **verified** with no calendar. Neither the extractor nor the calendar can rename it. An invitee whose name is exactly the label lends its email (for "by the next call"); aliases and contacts never do. A label naming Shaw (`POSTCALL_SHAW_NAMES`) is never a participant, and a call where such a label exists but the extractor claimed another one is an attribution failure (`failed_retry`). A doubtful label is treated as generic.
+   - Generic Pocket labels (`SPEAKER_00/01`, "Speaker A", "Unknown"):
      - The LLM proposes a mapping from label to name using in-call evidence (self-introductions, "thanks, <name>"), and must quote the evidence.
      - Code accepts a mapping only if the quoted evidence is in the transcript AND the name is in the verified participant set.
      - Otherwise the label stays `participant (unidentified)`.
-   - **A two-party shortcut:** if the calendar event has exactly one non-Shaw attendee and the transcript has exactly 2 labels, then once Shaw's label is established, the other label is that attendee.
+   - **A two-party shortcut** (only when no label is Pocket-named): if the calendar event has exactly one non-Shaw attendee and the transcript has exactly 2 labels, then once Shaw's label is established, the other label is that attendee.
 - **Counterpart on an item** = the speaker's mapped name for theirs; the named person for Shaw's. An item whose counterpart doesn't resolve shows `with: unidentified` and is ⚠ (needs Shaw's own answer).
 - **Grounding is tighter than the miner's:**
   1. **Exact normalized match only.** The miner also accepts fuzzy ≥0.90 (`commitment_miner.py:269-276` → `goal_grounding.quote_in_transcript`). v2 drops the fuzzy path.
@@ -128,11 +129,12 @@ Two sources are combined, and each participant gets a trust level.
      - **inferred:** every Pocket item.
        - Diarized transcripts carry only `SPEAKER_00`/`SPEAKER_01` labels (checked on disk 2026-11-25), and nothing on the box maps a label to Shaw.
        - When a transcript is diarized, the LLM proposes Shaw's label with quoted evidence, and code requires that label to agree across the call's items; if it doesn't, the call goes `failed_retry` and then to manual review.
-       - **Named labels (gm msg_ac5f49bf, 11-26):** some recorder transcripts label speakers by name. A label equal to a name in `POSTCALL_SHAW_NAMES` (set in the sweep's environment, never in code) proves itself, but only if it is the ONLY label naming Shaw and it is the label claimed. Otherwise quoted evidence is still required. Calendar verification stays the stronger path.
+       - **Named labels (gm msg_ac5f49bf, 11-26):** some recorder transcripts label speakers by name. A label equal to a name in `POSTCALL_SHAW_NAMES` (set in the sweep's environment, never in code) proves itself, but only if it is the ONLY label naming Shaw and it is the label claimed. Otherwise quoted evidence is still required.
+       - **Shaw's own items** are verified when Shaw's label is one of the voices and every OTHER voice is verified (Pocket-named, or a verified invitee). A matched calendar event is no longer required (11-27). One unnamed generic voice keeps Shaw's items inferred (⚠).
        - **Quote-in-segment rule:** the grounded quote's span must lie entirely inside **one** speaker turn (the text between two `**SPEAKER_xx**` / segment boundaries), and that turn's speaker determines the attribution. An item's `owner` must match it: Shaw's label for `shaw`, any other label for `participant`. A quote that spans turns, or an owner mismatch, drops the item. The same rule applies to segments files, using the `speaker` field.
        - When a transcript isn't diarized, the item is marked `speaker unknown`.
      - **Inferred and unknown items are never covered by Q1 accept-all (§4).** Each needs its own explicit answer, so no task or dispatch comes from an unconfirmed attribution.
-       - **(Inferred:** most Pocket items will be ⚠ until a calendar feed exists, so accept-all will cover little. That's the honest cost of having no speaker identity on the box.)
+       - **(Inferred:** with Pocket-named speakers, calls whose voices are all named are verified with no calendar. Calls with a generic voice stay ⚠ for the items it touches.)
      - A trusted voiceprint or speaker-name mapping is out of scope; that's a pocket-service feature.
   3. **Citation** is computed in code from where the quote sits: `pocket:<id>@MM:SS` (nearest preceding `_[MM:SS]_` in `transcript.md`) or `seg:<id>@<start s>`.
   4. **A substance filter** drops items whose `commitment_text` is under 3 content words or is a pure pleasantry ("talk soon"). The list is fixture-tuned.
