@@ -396,7 +396,7 @@ class _Matrix:
     def __init__(self, path):
         self.path = path
         self.ident = None
-        self.checked = 0.0                           # monotonic time of the last refresh check (see search)
+        self.checked = NEVER                         # monotonic time of the last refresh check (see search)
         self.snap = None
         self.rlock = threading.Lock()
 
@@ -500,6 +500,7 @@ _lock = threading.Lock()
 _state = {"embed": None, "matrix": None, "loading": False, "failed": None}
 MAX_INLINE_ROWS = 2000       # a turn absorbs at most this many freshly synced vectors; more go to the loader
 REFRESH_EVERY_S = 30.0       # how often a lookup checks the sidecar for newly synced rows
+NEVER = float("-inf")        # "not checked yet": 0.0 is a real monotonic time on a freshly booted host
 
 
 def _reset_for_tests():
@@ -571,7 +572,7 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None
     if now - m.checked >= REFRESH_EVERY_S:           # new facts land twice a day; no need to look on every turn
         m.checked = now
         if not m.refresh(max_inline=MAX_INLINE_ROWS):
-            m.checked = 0.0
+            m.checked = NEVER
             _start_loader(index_path, embed_factory)
             return None
     snap = m.snap

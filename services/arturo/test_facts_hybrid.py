@@ -428,7 +428,9 @@ def test_fts_list_prefers_the_fact_holding_more_of_the_question(store):
 
 
 def test_lookups_check_for_new_rows_at_most_every_interval(store, monkeypatch):
+    """The clock is pinned near zero, as on a freshly booted CI runner (the first CI run failed exactly there)."""
     monkeypatch.setattr(fi, "REFRESH_EVERY_S", 3600.0)
+    monkeypatch.setattr(fi.time, "monotonic", lambda: 10.0)
     fi.sync(store["db"], store["index"], embed=fake_embed)
     _ready(store["index"])
     fi.search("luna", index_path=store["index"])
@@ -437,7 +439,7 @@ def test_lookups_check_for_new_rows_at_most_every_interval(store, monkeypatch):
     con.close()
     fi.sync(store["db"], store["index"], embed=fake_embed)
     assert "f-boat" not in fi.search("sailboat regatta", index_path=store["index"])[0]
-    fi._state["matrix"].checked = 0.0                    # the interval has passed
+    fi._state["matrix"].checked = fi.NEVER               # as after a failed refresh
     assert "f-boat" in fi.search("sailboat regatta", index_path=store["index"])[0]
 
 
