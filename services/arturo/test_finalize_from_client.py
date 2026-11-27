@@ -392,6 +392,78 @@ def test_a_thread_store_that_throws_never_fails_the_finalize(tmp_path, monkeypat
     assert reached == ["has_meta"]                                       # no append after an unanswerable check
 
 
+class _Unreadable:
+    """A thread store that cannot answer the once check (a locked db): the card is not written, and nothing else."""
+    usable = True
+
+    def has_meta(self, tid, **match):
+        raise RuntimeError("database is locked")
+
+    def __getattr__(self, name):
+        raise RuntimeError("database is locked")
+
+
+def test_a_failed_first_card_is_written_on_the_next_finalize(tmp_path, monkeypatch):
+    # The flag is set only once the card is in the thread: a first archive that failed is not marked written,
+    # so the call's next finalize writes it (once).
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    store = m._THREADS
+    _native_journal(m)
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert not d.get("thread_card_written")
+    m._THREADS = store
+    assert m.finalize_from_client(client_call_id=NATIVE) is True          # the re-notify
+    assert m.finalize_from_client(client_call_id=NATIVE) is True          # and another: still once
+    assert len(_cards(m, "web_abc123")) == 1
+    said = [(t["role"], t["content"]) for t in m._THREADS.get_thread("web_abc123")["turns"][2:]]
+    assert said[:2] == [("user", "what is up"), ("assistant", "Two approvals.")]
+    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert d["thread_card_written"] is True and "own_turns" not in d     # the kept lines go once the card is in
+
+
+def test_a_failed_card_is_retried_even_after_gm_has_the_call(tmp_path, monkeypatch):
+    # gm's inject succeeding first makes a re-notify skip the merge; the card still owed is written all the same.
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    store = m._THREADS
+    _native_journal(m)
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    p = m.VOICE_CALLS_DIR / f"{NATIVE}.json"
+    d = json.loads(p.read_text())
+    d["gm_injected"] = True
+    p.write_text(json.dumps(d))
+    m._THREADS = store
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    assert len(_cards(m, "web_abc123")) == 1
+    assert json.loads(p.read_text())["thread_card_written"] is True
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    assert len(_cards(m, "web_abc123")) == 1
+
+
+def test_a_retried_card_carries_the_callers_own_lines_not_the_merge(tmp_path, monkeypatch):
+    # The first finalize replaces the journal's turns with the merge (which can recover another call's lines); the
+    # retry must still write only what this caller's journal held.
+    m = _native_proxy(tmp_path, monkeypatch)
+    now = 1_800_000_000.0
+    other = {"call_id": "vc_server_0000other", "started_at": now - 5, "page": "server", "status": "live",
+             "turns": [{"role": "user", "text": "someone else's secret", "ts": now + 2},
+                       {"role": "arturo", "text": "their answer", "ts": now + 4}]}
+    (m.VOICE_CALLS_DIR / "vc_server_0000other.json").write_text(json.dumps(other))
+    store = m._THREADS
+    _native_journal(m, thread_id="dev1_t", turns=[], principal="device:dev1")
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    m._THREADS = store
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    lines = [t["content"] for t in m._THREADS.get_thread("dev1_t")["turns"]]
+    assert not any("someone else" in c or "their answer" in c for c in lines), lines
+    assert len(_cards(m, "dev1_t")) == 1
+
+
 def test_a_call_from_a_fresh_page_starts_its_thread_under_the_caller_like_the_relay(tmp_path, monkeypatch):
     # a native call from an Arturo page nobody has typed in yet: the relay's bind starts the thread under the
     # caller, so the native card does too (not lost because the thread did not exist yet)

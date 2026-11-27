@@ -51,7 +51,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # DATA dir (state/, logs/, registry.json) — from orchestra.toml via the supervisor /
 # orchestra-env.sh; defaults to the checkout so a bare run still works.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
+
+
+def _orchestra_dir(env=os.environ):
+    """An empty ORCHESTRA_DIR is unset (the checkout), as the native server reads it: "" used to be Path(""), the
+    process's cwd, so the two disagreed on where the native tool ledger is."""
+    return Path(env.get("ORCHESTRA_DIR") or str(_REPO_ROOT))
+
+
+ORCHESTRA_DIR = _orchestra_dir()
 from services.arturo import secrets_vault as _secrets_vault
 try:
     from services.arturo import source_health as _source_health   # fresh/stale/missing gate on prompt sources
@@ -779,6 +787,32 @@ def _settle_for_finalize(conv_id="", cap_s=10.0, quiet_s=1.0):
     log.warning(f"finalize settle cap hit ({cap_s}s) for conv={conv_id or '(none)'} — proceeding")
 
 
+def _card_owed(client, own_turns):
+    """(thread, the caller's own lines, caller) when this client journal still owes its Arturo thread a call card."""
+    tid = client.get("thread_id")
+    if (tid and not client.get("thread_card_written") and not client.get("agent")
+            and _call_threads.valid_thread_id(tid)):
+        return tid, list(own_turns), client.get("thread_principal")
+    return None
+
+
+def _write_call_card(cpath, call_id, thread_id, turns, principal):
+    """The card goes in (once: the thread is asked), and only then is the journal marked: a failed one is owed still."""
+    if not _archive_client_call(call_id, thread_id, turns, principal):
+        return False
+    from services.arturo.call_journal import _atomic_write
+    import json as _json
+    with _JOURNALS_LOCK:
+        try:
+            d = _json.loads(cpath.read_text())
+            d["thread_card_written"] = True
+            d.pop("own_turns", None)
+            _atomic_write(cpath, d)
+        except Exception as e:  # noqa: BLE001 — the card is in; the thread's own once check covers a re-drive
+            log.warning(f"call {call_id}: card written but the journal was not marked: {e!r}")
+    return True
+
+
 def finalize_from_client(client_call_id="", conv_id=""):
     # A.5 client-authoritative finalize: the client journal (source=client, status=ended, full-text
     # spine) is the trigger. Merge the overlapping SERVER journal's TOOL turns + the surface sidecar
@@ -795,6 +829,18 @@ def finalize_from_client(client_call_id="", conv_id=""):
 
     # settle BEFORE taking the lock (poll-sleep holds no lock)
     _settle_for_finalize(conv_id=conv_id)
+
+    # gm already has this call, so the merge below is skipped; a call card a failed archive still owes is written.
+    owed = None
+    with _JOURNALS_LOCK:
+        try:
+            _d = _json.loads(cpath.read_text())
+        except Exception:
+            _d = {}
+        if _d.get("gm_injected") or _d.get("gm_inject_gaveup"):
+            owed = _card_owed(_d, _d["own_turns"] if "own_turns" in _d else _d.get("turns", []))
+    if owed:
+        _write_call_card(cpath, _d.get("call_id") or cpath.stem, *owed)
 
     do_inject = False
     summary = ""
@@ -852,7 +898,7 @@ def finalize_from_client(client_call_id="", conv_id=""):
         # The caller's OWN lines, before the merge: the thread gets these and nothing else. The merge can link any
         # overlapping server journal (the time-window fallback) and recovers a role this journal lacks from it, so
         # merged user/arturo lines may be another call's; they stay in the journal and the gm record only.
-        own_turns = list(client.get("turns", []))
+        own_turns = list(client["own_turns"] if "own_turns" in client else client.get("turns", []))
         merged = _fm.merge_timeline(client.get("turns", []), server_turns, surface_events)
         summary = _endcall.sanitize_summary(_fm.summarize(merged))
         client["turns"] = merged
@@ -884,14 +930,13 @@ def finalize_from_client(client_call_id="", conv_id=""):
             client["gm_inject_suppressed"] = True
             log.info(f"finalize_from_client: {cpath.name} is a trivial split-call stub — inject SUPPRESSED")
         # Item 10: a client journal that names its Arturo thread (the dashboard's native engine) gets its call card
-        # there. Claimed HERE, in the same write as the merge, so a re-driven finalize never writes it twice; the
-        # thread write itself happens after the lock. An agent's call lives in that agent's chat (as on the relay).
-        _tid = client.get("thread_id")
-        if (_tid and not client.get("thread_card_written") and not client.get("agent")
-                and _call_threads.valid_thread_id(_tid)):
-            client["thread_card_written"] = True
-            card_thread = _tid
-            card_principal = client.get("thread_principal")
+        # there, after the lock. It is marked written only once it is in the thread (the thread's own once check
+        # stops a double), so a card that failed is written by the call's next finalize; until then the journal
+        # keeps the caller's own lines, since its turns are now the merge. An agent's call lives in that agent's chat.
+        card = _card_owed(client, own_turns)
+        if card:
+            card_thread, own_turns, card_principal = card
+            client["own_turns"] = own_turns
         from services.arturo.call_journal import _atomic_write
         _atomic_write(cpath, client)
         # flip + supersede the server shard (so the watchdog's superseded_by guard suppresses it)
@@ -923,7 +968,7 @@ def finalize_from_client(client_call_id="", conv_id=""):
         log.error(f"finalize_from_client: sidecar unlink error: {_ue}")
 
     if card_thread:
-        _archive_client_call(inj_call_id or cpath.stem, card_thread, own_turns, card_principal)
+        _write_call_card(cpath, inj_call_id or cpath.stem, card_thread, own_turns, card_principal)
 
     if do_inject:
         # First attempt now; the background sweeper re-drives until gm accepts (DELIB-BUG-1).
@@ -8015,7 +8060,7 @@ def thread_delete_endpoint(conversation_id):
 
 
 def _semantic_db_path():
-    return Path(os.environ.get("ORCHESTRA_DIR", str(ORCHESTRA_DIR))) / "state" / "semantic-memory.db"
+    return Path(os.environ.get("ORCHESTRA_DIR") or str(ORCHESTRA_DIR)) / "state" / "semantic-memory.db"
 
 
 def _spawn_warm(argv, env=None):
