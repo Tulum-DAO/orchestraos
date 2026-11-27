@@ -107,6 +107,8 @@ class NativeSession:
         self._order = []                        # delegation ids in creation order
         self._held = []                         # completed delegations whose calls are not submitted yet
         self._done = {}                         # (turn, name, args_sha) -> (call_id, output): L2 per-turn reuse
+        self.delivery_kind = None               # () -> append kind for late results; None: the POC's rule
+        self.deliveries_open = True             # False once the call ended: a late result goes to its thread instead
 
     # ---------------------------------------------------------------------------------------------------
     def on_server_frame(self, frame):
@@ -362,8 +364,11 @@ class NativeSession:
 
     def delivery_frames(self):
         """(task_id, frame) pairs to send now; call delivery_sent() for each one the transport accepted."""
+        if not self.deliveries_open:
+            return []
         return [(tid, protocol.validate_client(f)) for tid, f in self.delivery.frames_for(
-            self.binding.conversation_id, self.user_speaking, self.assistant_speaking)]
+            self.binding.conversation_id, self.user_speaking, self.assistant_speaking,
+            kind=self.delivery_kind() if self.delivery_kind else None)]
 
     def delivery_sent(self, task_id, frame):
         self.delivery.mark_sent(task_id, frame)
@@ -381,7 +386,7 @@ class NativeSession:
             "barge_to_last_speech_s": [round(s - b, 3) if s else None for b, s in self.m.barges],
             "claims": self.claims, "acks": self.acks, "errors": self.m.errors,
             "undocumented_types": self.m.undocumented_types, "cost": self.cost.summary(),
-            "deliveries": self.delivery.states(),
+            "deliveries": self.delivery.states(self.binding.conversation_id),
             "hold_wait_s": self.m.hold_wait_s,
             "not_executed": [{k: r[k] for k in ("tool_call_id", "name", "status", "ref")}
                              for r in self.orchestra.ledger.not_executed()],
