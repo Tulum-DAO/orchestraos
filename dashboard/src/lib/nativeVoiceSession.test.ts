@@ -227,3 +227,24 @@ test('the start frame is exactly {"type":"start","settle":"fast"} and no frame o
   assert.equal(texts.filter((t) => t.includes('"start"')).length, 1);
   assert.ok(texts.every((t) => !/"settle"\s*:\s*"wait"/.test(t)), texts.join(' | '));
 });
+
+test('the journal names the call\'s Arturo thread (thread_id, as the relay sends threadId); omitted when unknown or malformed', async () => {
+  const withThread = async (threadId: string | null | undefined) => {
+    posts = [];
+    const x = session();
+    await x.s.start({ route: '/', threadId });
+    const ws = FakeWS.last!;
+    ws.open();
+    ws.msg({ type: 'state', mode: 'live', conversation_id: 'native-0123456789ab', principal: 'fleet' });
+    ws.msg({ type: 'transcript', who: 'user', text: 'hi', new: true });
+    x.s.stop();
+    await tick(); await tick(); await tick();
+    assert.equal(posts.length, 1);
+    return posts[0].body;
+  };
+  assert.equal((await withThread('web_k3j9x2ab')).thread_id, 'web_k3j9x2ab');
+  assert.ok(!('thread_id' in (await withThread(undefined))));
+  assert.ok(!('thread_id' in (await withThread(null))));
+  assert.ok(!('thread_id' in (await withThread('has a space'))));      // never a body the API would refuse
+  assert.ok(!('thread_id' in (await withThread('x'.repeat(81)))));
+});

@@ -170,3 +170,23 @@ def test_an_answer_during_the_call_is_not_posted_twice(P, monkeypatch):
     P._openai_delegate("cid_live", [{"role": "user", "content": "hi"}])
     assert not any((t.get("meta") or {}).get("kind") == "after_call"
                    for t in (P._THREADS.get_thread("web_live") or {"turns": []})["turns"])
+
+
+def test_archive_writes_a_finished_calls_lines_then_its_card(tmp_path):
+    """Item 10: a native call (never bound live) is archived at once, in the live path's grammar."""
+    s = ThreadStore(tmp_path / "t.db")
+    seen = []
+    ct = CallThreads(s, on_line=lambda *a: seen.append(a),
+                     end_marker=lambda cid: (f"Call ended ({cid}). [voice-call: {cid} /x.json]",
+                                             {"kind": "call_end", "call_id": cid}))
+    turns = [{"role": "user", "text": "hi", "ts": 1000.0}, {"role": "tool", "name": "x"},
+             {"role": "surface", "text": "nav"}, {"role": "arturo", "text": "  "}, {"role": "arturo", "text": "Hello.", "ts": 1002.0}]
+    assert not ct.archive("vc_client_1", "bad id", turns)
+    assert s.get_thread("bad id") is None
+    assert ct.archive("vc_client_1", "web_n1", turns, principal="fleet")
+    got = s.get_thread("web_n1")["turns"]
+    assert [(t["role"], t["content"], t.get("mode")) for t in got] == [
+        ("user", "hi", "voice"), ("assistant", "Hello.", "voice"),
+        ("assistant", "Call ended (vc_client_1). [voice-call: vc_client_1 /x.json]", "voice")]
+    assert got[0]["ts"] == 1000.0 and got[2]["meta"] == {"kind": "call_end", "call_id": "vc_client_1"}
+    assert seen[-1] == ("web_n1", "assistant", CALL_ENDED_LINE)
