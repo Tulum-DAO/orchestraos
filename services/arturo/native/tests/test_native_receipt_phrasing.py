@@ -72,7 +72,8 @@ def test_progress_claims_are_their_own_kind():
                  "It's under way; that's already saved.",                                 # subject, adverbs
                  "It's running and the message was delivered.",                           # codex round 3
                  "It's running; your note is confirmed to be saved already.",
-                 "It's running; your note appears to be saved already."):                  # "to be" is no future
+                 "It's running; your note appears to be saved already.",                   # "to be" is no future
+                 "It's running; your note has been written down."):                        # codex round 4
         assert claim_gate.claim_kind(said) == ("state", None), said
     for said in ("I'm pulling that up.", "On it, it'll take a moment."):
         assert claim_gate.claim_kind(said) is None, said
@@ -192,3 +193,34 @@ def test_every_claim_in_an_utterance_needs_its_own_backing():
     g2 = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
     g2.feed_transcript("I've started it, and that's running now.")
     assert not g2.blocked
+
+
+def test_a_thread_created_by_someone_else_after_the_owner_check_is_not_written(tmp_path, monkeypatch):
+    # codex round 4 on #698: _may_write saw no thread; the fleet created it before the append. The append itself
+    # refuses (require_owner, inside its transaction), and the row says the post failed
+    import sqlite3
+    from services.arturo import gm_answers
+    from services.arturo.thread_store import ThreadStore
+    from services.arturo.native import call_context
+    monkeypatch.setattr(gm_answers, "_may_write", lambda threads, tid, principal: None)   # the check already passed
+    ThreadStore(call_context.thread_context.threads_db_path()).append_message("web_race1", "user", "fleet's",
+                                                                              principal="fleet")
+    call = srv.NativeCall(_server(tmp_path, monkeypatch), None, "owner:dev1", "iphone")
+    call.page_thread = "web_race1"
+    call._end_late(None)
+    call._late("c1", "remember_note", True, "Noted and saved: planted")
+    db = tmp_path / "orch" / "state" / "arturo" / "threads.db"
+    assert [r[0] for r in sqlite3.connect(db).execute("SELECT content FROM turns WHERE thread_id = 'web_race1'")] == \
+        ["fleet's"]
+    assert call.session.delivery.states(call.binding.conversation_id) == {"c1#0": "post_failed"}
+
+
+def test_require_owner_is_opt_in_and_lets_the_owner_and_the_fleet_write(tmp_path):
+    from services.arturo.thread_store import ThreadStore
+    t = ThreadStore(tmp_path / "threads.db")
+    t.append_message("w1", "user", "a", principal="owner:dev1")
+    assert t.append_message("w1", "assistant", "b", principal="owner:dev2", require_owner=True) is None
+    assert t.append_message("w1", "assistant", "c", principal="owner:dev1", require_owner=True) is not None
+    assert t.append_message("w1", "assistant", "d", principal="fleet", require_owner=True) is not None
+    assert t.append_message("w1", "assistant", "e", principal="owner:dev2") is not None      # default: unchanged
+    assert t.append_message("w2", "assistant", "f", principal="owner:dev2", require_owner=True) is not None  # new

@@ -1009,7 +1009,7 @@ class NativeCall:
                 seq = self.server.thread_store().append_message(
                     target, "assistant", line + tc._redact(text or ""),
                     meta={"kind": "after_call", "tool": name, "call_id": cid, "conversation_id": conv},
-                    principal=self.binding.principal)
+                    principal=self.binding.principal, require_owner=True)
                 state = "posted" if seq is not None else "post_failed"
             for tid in task_ids:
                 self.session.delivery.mark(tid, state)

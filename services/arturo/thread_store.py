@@ -620,11 +620,14 @@ class ThreadStore:
         except Exception:  # noqa: BLE001
             return []
 
-    def append_message(self, conversation_id, role, content, mode="", meta=None, principal=None, ts=None):
+    def append_message(self, conversation_id, role, content, mode="", meta=None, principal=None, ts=None,
+                       require_owner=False):
         """Archive ONE message on its own: a line said on a call (a call is not question/answer pairs: a
         greeting, an interrupted line, small talk), or a call's end marker. Same thread, same seq space as
         record_turn, so typed and spoken turns read back in the order they happened. Returns the seq, or
-        None (never raises, like record_turn)."""
+        None (never raises, like record_turn). require_owner: a non-fleet principal writes only a thread it started
+        (or starts a new one), checked inside the write transaction, so a thread created by someone else between a
+        caller's check and this write is refused (codex round 4 on #698)."""
         if not self.usable or not conversation_id or role not in ("user", "assistant"):
             return None
         now = float(ts if ts is not None else time.time())
@@ -633,7 +636,11 @@ class ThreadStore:
             conn = self._connect()
             conn.execute("BEGIN IMMEDIATE")
             with conn:
-                row = conn.execute("SELECT turns, title FROM threads WHERE id = ?", (conversation_id,)).fetchone()
+                row = conn.execute("SELECT turns, title, started_by FROM threads WHERE id = ?",
+                                   (conversation_id,)).fetchone()
+                if (require_owner and row is not None and principal != "fleet"
+                        and (row["started_by"] or "fleet") != principal):
+                    return None
                 title = derive_title(content) if role == "user" else ""
                 if row is None:
                     conn.execute(

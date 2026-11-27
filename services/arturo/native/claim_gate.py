@@ -64,9 +64,18 @@ _COMPLETION = re.compile(r"\b(?:done|finished|complete[d]?|saved|sent|started|cr
 _FUTURE_BEFORE = re.compile(r"(?:(?:'ll|\bwill|\bshould|\bgoing to|\bgonna)\s+be\s+(?:\w+\s+)?|\bbeing\s+)$", re.I)
 
 
+# A blocklist of completion words always misses one ("your note has been written down": codex round 4 on #698), so
+# beside it any past form counts too: a word ending in -ed or a common irregular participle, other than the progress
+# words themselves. Conservative on purpose: "I just checked, it's running" then needs a result as well.
+_PAST = re.compile(r"\b(?:\w{2,}ed|written|done|sent|made|set|put|given|taken|built|kept|found|got|gotten|shown|told|"
+                   r"paid|bought|brought|left|begun|run)\b", re.I)
+
+
 def _completes(text):
-    for m in _COMPLETION.finditer(text or ""):
-        if not _FUTURE_BEFORE.search(text[max(0, m.start() - 32):m.start()]):
+    for rx in (_COMPLETION, _PAST):
+        for m in rx.finditer(text or ""):
+            if _PROGRESS.match(m.group(0)) or _FUTURE_BEFORE.search(text[max(0, m.start() - 32):m.start()]):
+                continue
             return True
     return False
 
