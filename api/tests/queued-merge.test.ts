@@ -128,6 +128,7 @@ test('interleave: a batch sits between log items by its time; a pending turn goe
   const iPhone = texts.indexOf('hello from phone');
   const iLate = texts.indexOf('late reply');
   assert.ok(iEarly < iBatchEntryA, 'early reply before batch');
+  assert.ok(iBatchEntryA < iLate, 'batch before the late reply: it sits between the two replies by its time');
   assert.ok(iBatchEntryA < iPhone, 'batch before pending phone turn');
   assert.ok(iLate < iPhone, 'pending phone turn after the late reply (delivery order, not send time)');
   assert.equal(iPhone, out.length - 1, 'the pending turn is the last item');
