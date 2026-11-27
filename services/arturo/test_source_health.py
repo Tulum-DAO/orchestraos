@@ -196,6 +196,34 @@ def test_all_fresh_is_byte_identical_to_base(mod, data, monkeypatch, channel):
     assert "  - confirm before spawning" in gated
 
 
+# An oracle the gate's own code does not produce: with every source fresh, the stretch from the first source block to
+# the clock line is exactly this text (blocks, their lines, separators, order and place), in every channel. The equality
+# above runs the same block code on both sides, so a doubled block or a stray separator would pass it; not this.
+_KNOWLEDGE_LINE = ("You have a `knowledge` tool for instant lookups. Use it for ANY question about people, projects, "
+                   "status, priorities, or agents. It's faster than reading files or calling GM.")
+
+
+@pytest.mark.parametrize("channel", ["text", "voice", "telegram", "dashboard"])
+def test_all_fresh_source_blocks_are_exactly_these(mod, data, channel):
+    write_profile(data)
+    write_telegram(data)
+    write_learning(data)
+    write_unified(data)
+    ctx = _stable(mod.build_context(calling_channel=channel))
+    unified = ("" if channel == "dashboard"           # the dashboard's own lines are not cross-channel to it
+               else UNIFIED_HEAD + "\n  [dashboard:operator] ship the dream fix\n")
+    expected = (PROFILE_HEAD + "\n  [preference] likes short answers\n"
+                + unified
+                + "\n" + _KNOWLEDGE_LINE + "\n"
+                + TELEGRAM_HEAD + "\n  [system] deploy finished\n"
+                + RULES_HEAD + "\n  - confirm before spawning\n"
+                + "\n--- TIME: <clock> ---")
+    start = ctx.index(PROFILE_HEAD)
+    assert ctx[start:start + len(expected)] == expected
+    for head in (PROFILE_HEAD, TELEGRAM_HEAD, RULES_HEAD, _KNOWLEDGE_LINE):
+        assert ctx.count(head) == 1
+
+
 @pytest.mark.parametrize("writer,head,window", [
     (write_profile, PROFILE_HEAD, SH.PROFILE_MAX_AGE),
     (write_telegram, TELEGRAM_HEAD, SH.TELEGRAM_MAX_AGE),
