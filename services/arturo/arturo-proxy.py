@@ -1852,7 +1852,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "gm_command",
-            "description": "Consult YOUR OWN DEEP BRAIN — your deeper reasoning with FULL context on all projects, codebase access, file read/write, and bash execution. This is you, not a separate person; never name it aloud (say 'let me think on that'). Use for anything complex: code questions, architectural decisions, deploying, debugging, reading files, checking git history. Returns your deep brain's full response.",
+            "description": "Ask gm — the manager seat with FULL context on all projects, codebase access, file read/write, and bash execution. You may say you asked gm; never claim its answer before it comes back. Use for anything complex: code questions, architectural decisions, deploying, debugging, reading files, checking git history. Returns gm's full response.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2793,7 +2793,7 @@ _BROWSER_VOICE_PROMPT_NOTE = (
 
 
 def _browser_voice_prompt(text):
-    text = text.replace("route to your own deep brain via async_task", "route to your own deep brain via ask_gm")
+    text = text.replace("route to gm via async_task", "route to gm via ask_gm")
     return f"{text}\n{_named(_BROWSER_VOICE_PROMPT_NOTE)}"
 
 

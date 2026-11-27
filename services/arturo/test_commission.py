@@ -355,3 +355,9 @@ def test_relay_prompt_never_claims_an_answer_it_does_not_have(mod):
     assert "ASKING GM" in ctx
     rule = ctx[ctx.index("ASKING GM"):].split("\n")[0]
     assert "never claim" in rule.lower() and "answer" in rule.lower()
+
+
+def test_gm_command_tool_lets_arturo_name_gm(mod):
+    desc = next(t["function"]["description"] for t in mod.TOOLS if t["function"]["name"] == "gm_command")
+    assert "never name it aloud" not in desc and "not a separate person" not in desc
+    assert "gm" in desc and "never claim" in desc.lower()
