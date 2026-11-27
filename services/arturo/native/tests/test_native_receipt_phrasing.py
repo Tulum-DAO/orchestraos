@@ -1,6 +1,7 @@
 """Shaw, approving #680 (2026-11-27): "that's running now" or other phrases besides "I've started it"; gpt-live-1 is
 full duplex. The receipt gives the live model the INTENT (running, not done; vary it; keep talking) and never a line
-to read out; a progress claim ("that's running now") is backed while the tool runs, "it's done" never is."""
+to read out. Option 3 (arturo-context-dev msg_0e179be5): no progress claim kind; the receipt is said as a non-claim
+("I'm on it", "pulling that up"), and "it's running" / "it's done" need the real result like any state claim."""
 import re
 
 import pytest
@@ -20,7 +21,7 @@ def test_no_receipt_carries_a_fixed_sentence_to_read_out():
         assert not _QUOTED.search(text), f"a quoted line in the receipt: {text!r}"
         assert "own words" in text and "say" not in out
         assert "meanwhile" in text.lower()                                      # full duplex: keep talking, take other asks
-    assert "differently" in srv.ACCEPTED["result"] and "never say it is done" in srv.ACCEPTED["result"]
+    assert "differently" in srv.ACCEPTED["result"] and "started, running or done" in srv.ACCEPTED["result"]
 
 
 class _Tools:
@@ -56,36 +57,25 @@ def test_each_receipt_in_a_call_is_numbered_so_the_model_can_vary_it():
 
 
 def test_the_live_prompt_asks_for_varied_receipts_not_one_line():
-    live = native_config.prompts()["live"]
-    assert 'If a result says "accepted", the work is running, not done' in live
-    assert "differently each\ntime" in live or "differently each time" in live.replace("\n", " ")
-    assert "take\nanything else" in live or "take anything else" in live.replace("\n", " ")
-    assert "accepted and is starting" not in live
+    live = " ".join(native_config.prompts()["live"].split())
+    assert 'If a result says "accepted", it is not done yet: say you\'re on it in your own words and differently each time' in live
+    assert "without calling it started, running or done" in live and "take anything else he asks meanwhile" in live
+    assert "accepted and is starting" not in live and "running now" not in live
 
 
 NATURAL_RECEIPTS = (
-    "That's running now.", "It's now running in the background.", "It's under way.", "That's queued.",
-    "It's running, it'll be done in a minute.", "That's running now and being saved.",
-    "That's running now; meanwhile, what else do you need?", "It's under way, I'll tell you when it lands.",
-    "On it. That's running now, should be finished in a minute.", "That's running now, about a hundred rows to go.",
-    "That's running now; I'll let you know when it lands.",
-    "That's running now; meanwhile, we can run through your other questions.",
-    "It's under way; I need to read the rest first.", "That's running now; did you want anything else?",
-    "That's running now; are you interested in the details?",
-    "That's running now; I'll keep you posted.", "That's running now; you mentioned another question?",   # codex r7
+    "I'm on it.", "I'm pulling that up.", "On it, it'll take a moment.", "Give me a moment, I'm on it.",
+    "I'm on it; meanwhile, what else do you need?", "Pulling that up now; I'll keep you posted.",
+    "On it. Did you want anything else?", "I'm on it; you mentioned another question?",
+    "Working on that; are you interested in the details?", "I'm getting that for you now.",
 )
 
 
-def test_progress_claims_are_their_own_kind():
+def test_receipts_are_said_as_non_claims_and_running_needs_a_result():
     for said in NATURAL_RECEIPTS:
-        assert claim_gate.claim_kind(said) == ("state", "progress"), said
-    for said in ("That's done.", "It's saved.", "All done!", "It's running. Done.",
-                 "It's running and the note is saved.", "It's running; it's done now.",   # mixed (codex r1-r2)
-                 "The agent has been started.", "It's started.",                          # a finished start
-                 ):
-        assert claim_gate.claim_kind(said) == ("state", None), said
-    for said in ("I'm pulling that up.", "On it, it'll take a moment."):
-        assert claim_gate.claim_kind(said) is None, said
+        assert claim_gate.claim_kinds(said) == [], said
+    for said in ("That's running now.", "It's under way.", "That's done.", "It's saved.", "It's started."):
+        assert claim_gate.claim_kinds(said) == [("state", None)], said
 
 
 # Every completion phrase main's own claim-gate tests know (test_native.py: m6 phrasings, backed/unbacked gate tests)
@@ -100,10 +90,10 @@ MAIN_COMPLETIONS = (
 )
 
 
-def test_the_invariant_a_progress_phrase_never_lets_a_main_blocked_completion_through():
-    # arturo-context-dev msg_0e179be5: with ONLY a running receipt (progress backed, nothing finished), every
-    # completion main blocks alone is blocked alone, and stays blocked with a progress phrase before or after it
-    backs = {("state", "progress")}
+def test_a_receipt_phrase_never_hides_a_completion_main_blocks_alone():
+    # arturo-context-dev msg_0e179be5: with only a running receipt (nothing finished), every completion main blocks
+    # alone is blocked alone, and stays blocked beside a receipt phrase
+    backs = set()
 
     def blocked(text):
         g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
@@ -111,7 +101,7 @@ def test_the_invariant_a_progress_phrase_never_lets_a_main_blocked_completion_th
         return g.blocked
     for x in MAIN_COMPLETIONS:
         assert blocked(x), f"main blocks {x!r} alone"
-        for p in ("That's running now.", "It's under way;"):
+        for p in ("I'm on it.", "Pulling that up;", "On it,"):
             assert blocked(f"{p} {x}") and blocked(f"{x} {p}"), (p, x)
 
 
@@ -122,37 +112,6 @@ def test_the_invariant_a_progress_phrase_never_lets_a_main_blocked_completion_th
                                "Your note is confirmed to be saved already.", "That's already saved."])
 def test_known_limit_completions_main_misses_alone(x):
     assert claim_gate.claim_kind(x) is not None
-
-
-def test_while_a_tool_runs_after_its_receipt_thats_running_now_is_true_and_its_done_is_not(tmp_path, monkeypatch):
-    gate = threading.Event()
-    ex = FakeExecutor()
-
-    class Slow:
-        non_fleet = ex.non_fleet
-
-        def specs(self, fleet):
-            return ex.specs(fleet)
-
-        def __call__(self, *a, **k):
-            gate.wait(5)
-            return ex(*a, **k)
-    call = srv.NativeCall(_server(tmp_path, monkeypatch, executor=Slow()), None, "fleet", "iphone")
-    clock = [100.0]
-    call.session.orchestra.clock = lambda: clock[0]
-    progress = claim_gate.claim_kind("That's running now.")
-    assert not call.gate.is_backed(progress)                              # nothing running: not true
-    call.session.orchestra.execute(call.binding, "n1", "remember_note", "{}")
-    clock[0] += srv.DETACH_AFTER_S
-    assert call.session.orchestra.execute(call.binding, "n1", "remember_note", "{}")["receipt"] == "accepted"
-    assert call.gate.is_backed(progress)
-    assert not call.gate.is_backed(claim_gate.claim_kind("That's done."))
-    assert not call.gate.is_backed(claim_gate.claim_kind("It's saved."))
-    gate.set()
-    end = time.monotonic() + 3
-    while call.session.orchestra.accepted_running() and time.monotonic() < end:
-        time.sleep(0.02)
-    assert call.gate.is_backed(claim_gate.claim_kind("It's saved."))      # the real result is in
 
 
 # ---- review NITs from #680 -------------------------------------------------------------------------------------
@@ -213,30 +172,16 @@ class _SlowVia:
         return {"ok": True, "result": "seats: gm"}
 
 
-def test_a_finished_success_is_no_evidence_that_something_is_running_now(tmp_path, monkeypatch):
-    # codex on #698: a remember_note that finished must not back "that's running now"; a started seat does
-    call = srv.NativeCall(_server(tmp_path, monkeypatch), None, "fleet", "iphone")
-    b, progress = call.binding, ("state", "progress")
-    assert call.toolset.execute(b, "n1", "remember_note", "{}")["ok"]
-    assert call.gate.is_backed(("state", None)) and not call.gate.is_backed(progress)
-    spawn = '{"session_name": "research-bot", "machine": "vps", "task": "compare the vendors"}'
-    call.toolset.new_turn(b.conversation_id)                                # the caller asks again (I5 fence)
-    call.session.spoken_turn = "I'll start a seat called research-bot."
-    call.toolset.spoken_fn = lambda conv: call.session.spoken_turn
-    assert call.toolset.execute(b, "s1", "spawn_agent", spawn)["ok"]
-    assert call.gate.is_backed(progress)                                    # the seat runs: true
-
-
 def test_every_claim_in_an_utterance_needs_its_own_backing():
     # codex round 3 on #698: "I've started it and it's done" was checked only as a start, so a running spawn backed
     # the "done" beside it
     assert claim_gate.claim_kinds("I've started it and it's done.") == [("action", "start"), ("state", None)]
-    backs = {("action", "start"), ("state", "progress")}                 # a spawn still running after its receipt
+    backs = {("action", "start")}                                         # a started seat backs the start only
     g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
     g.feed_transcript("I've started it and it's done.")
     assert g.blocked
     g2 = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
-    g2.feed_transcript("I've started it, and that's running now.")
+    g2.feed_transcript("I've started it, I'm on the rest.")
     assert not g2.blocked
 
 
@@ -273,13 +218,13 @@ def test_require_owner_is_opt_in_and_lets_the_owner_and_the_fleet_write(tmp_path
 
 def test_natural_receipts_stream_through_the_gate_word_by_word_unblocked():
     # the gate classifies the transcript as it grows: no prefix of a natural receipt may be cut off
-    backs = {("state", "progress")}
+    backs = set()
     for said in NATURAL_RECEIPTS:
         g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
         for w in said.split(" "):
             g.feed_transcript(w + " ")
             assert not g.blocked, (said, g.text)
     g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
-    for w in "That's running now; the note is saved.".split(" "):
+    for w in "I'm on it; the note is saved.".split(" "):
         g.feed_transcript(w + " ")
     assert g.blocked                                                        # a completion still needs its result

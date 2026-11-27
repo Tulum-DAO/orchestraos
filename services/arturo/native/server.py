@@ -255,9 +255,9 @@ DETACHED = {"ok": True, "result": "Sent to gm; gm has not answered yet. Let the 
                                   "your own words; gm's answer comes into this call when it lands, or to the chat "
                                   "after it. Meanwhile keep answering him yourself, with no status filler."}
 ACCEPTED = {"ok": True, "receipt": "accepted", "status": "running",
-            "result": "Running, not done yet. Let the operator know briefly and in your own words, phrased differently "
-                      "from any earlier receipt in this call; never say it is done. Keep the conversation going and "
-                      "take anything else meanwhile: its result comes into this call when it lands."}
+            "result": "Not done yet. Let the operator know briefly and in your own words that you are on it, phrased "
+                      "differently from any earlier receipt in this call; do not call it started, running or done "
+                      "until its result comes in. Keep the conversation going and take anything else meanwhile."}
 # Never handed over: a tool whose result is a guard's question the caller must answer on a LATER turn (answer_menu's
 # staged read-back, a spending guard), and the spending group (G6: its words carry amounts and merchants, which must
 # not reach the native ledger's deliveries table or a thread). The tracker's call timeout bounds a spending hold.
@@ -455,11 +455,6 @@ class NativeCall:
         self.session.delivery_kind = call_context.feed_kind        # late results: the kind measured to be voiced
 
     def _is_backed(self, kind):
-        if kind == ("state", "progress"):
-            # "that's running now": a handed-over call still running, or a seat/research that started (its result says
-            # it runs). Any other finished success is no evidence of work going on now (codex on #698).
-            running = getattr(self.session.orchestra, "accepted_running", None)
-            return bool(running is not None and running()) or self._is_backed(("action", "start"))
         return self._is_backed_claim(kind)
 
     def _is_backed_claim(self, kind):

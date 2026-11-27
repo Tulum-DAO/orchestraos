@@ -50,29 +50,17 @@ _STATE_RES = [
 # actions ("you started"), and narration to Shaw ("I told you", "I asked you").
 
 
-# PROGRESS state claims ("that's running now", "it's under way") say work is going, not that it is done: a tool still
-# running after its "accepted" receipt backs these (Shaw 2026-11-27: "that's running now" and other phrases besides
-# "I've started it"); every other state claim needs a finished result.
-# "started" is NOT progress: "the agent has been started" claims a finished start (start-class evidence, codex on #698).
-_PROGRESS = re.compile(r"^(?:running|queued|on its way|under ?way)$", re.I)
-# THE INVARIANT (#698, arturo-context-dev msg_0e179be5): a progress phrase never lets through a completion that main's
-# gate blocks on its own. claim_kinds runs every recogniser over the WHOLE utterance and returns every claim, and the
-# gate requires each to be backed: a completion main recognises alone is still its own claim beside "that's running
-# now". A completion main ALSO misses alone ("your note has been written down", "it went through") is a gap in the
-# base recognisers, not this path (follow-up). No word blocklists here: they cut off natural receipts ("I'll keep you
-# posted", codex round 7).
+# #698 option 3 (arturo-context-dev msg_0e179be5): no "progress" claim kind. A receipt is said as a non-claim ("I'm
+# on it", "pulling that up"); "it's running" needs a result like any state claim. claim_kinds still returns EVERY claim
+# in the utterance and the gate requires each to be backed.
 
 
 def claim_kinds(text):
     """EVERY claim in the utterance, each of which must be backed on its own (codex round 3 on #698: "I've started it
-    and it's done" was checked only as a start). Kinds: ("action", class), ("state", "progress"), ("state", None)."""
+    and it's done" was checked only as a start). Kinds: ("action", class), ("state", None)."""
     text = text or ""
     kinds = list(dict.fromkeys(("action", cls) for cls, r in _ACTION_RES if r.search(text)))
-    words = [m.group("word") for m in _STATE_RES[0].finditer(text)]
-    other = any(r.search(text) for r in _STATE_RES[1:])
-    if words and not other and all(_PROGRESS.match(w) for w in words):
-        kinds.append(("state", "progress"))                 # every state claim in it is progress, nothing completes
-    elif words or other:
+    if any(r.search(text) for r in _STATE_RES):
         kinds.append(("state", None))
     return kinds
 
