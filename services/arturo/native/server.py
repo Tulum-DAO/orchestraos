@@ -338,6 +338,7 @@ class NativeCall:
         self.backend_rejected = None     # "<code>: <message>" once the provider rejected the delegation config
         self._backend_rejected_at = None
         self._backend_rejected_said = False
+        self._backend_rejected_midway = False   # Arturo was already speaking: that utterance's end is not the notice
         self._final_stats = None
         # ios msg_82c61732: phone underruns 157-653 ms. Provider delta arrival vs our send to the phone, per call.
         self._in_t = self._out_t = None
@@ -460,7 +461,10 @@ class NativeCall:
         self._force_muted = False
         self._arturo_row_done = True
         if self._backend_rejected_at is not None:
-            self._backend_rejected_said = True
+            if self._backend_rejected_midway:
+                self._backend_rejected_midway = False
+            else:
+                self._backend_rejected_said = True
         line = self.gate.take_correction()
         if line and self.driver is not None:
             try:
@@ -474,6 +478,7 @@ class NativeCall:
             return
         self.backend_rejected = f"{err.get('code')}: {str(err.get('message') or '')[:200]}"
         self._backend_rejected_at = now
+        self._backend_rejected_midway = self.session.assistant_speaking
         log.warning(f"native {self.binding.conversation_id}: BACKEND-REJECTED {self.backend_rejected!r}")
         self.emit({"type": "notice", "code": "backend_rejected", "text": BACKEND_REJECTED_REASON})
         if self.driver is not None:

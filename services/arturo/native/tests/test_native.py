@@ -1585,3 +1585,15 @@ def test_the_report_says_the_backend_was_rejected(tmp_path, monkeypatch):
     rep = _run(go())
     assert rep["reason"] == srv.BACKEND_REJECTED_REASON
     assert rep["backend_rejected"].startswith("responses_validation_failed: Responses configuration validation failed")
+
+
+def test_an_utterance_already_under_way_does_not_count_as_the_notice(tmp_path, monkeypatch):
+    # the rejection lands ~1.4 s after start, about when the greeting begins: the greeting ending is not Arturo saying
+    # the tools are down, so the call waits for the NEXT utterance (or the deadline).
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(call.session), "assistant_speaking", property(lambda self: True))
+    call.on_frame("in", REJECTED)
+    call._end_utterance(time.monotonic())                             # the greeting ends
+    assert not _run(_tick_fatal(call, 0.0)) and closed == []
+    call._end_utterance(time.monotonic())                             # the notice line ends
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
