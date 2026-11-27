@@ -5,8 +5,9 @@
  * Protocol (GET /api/agents/:id/transcript/stream, server transcript-stream.ts):
  *   event: snapshot  -> full backfill (F0 v2 items + render_items); replaces list
  *   event: delta     -> only the newly-appended items; appended to list
- *   id: <session_id>:<offset> — the browser replays it as Last-Event-ID on
- *   auto-reconnect, so a resume receives just the missed tail (no refetch).
+ *   id: opaque (<tag>:<sequence> on the server) — the browser replays it as
+ *   Last-Event-ID on auto-reconnect, so a resume receives just the missed tail
+ *   (no refetch). This module never reads it.
  *   event: live_text -> a headless seat's reply still being written (LiveTextEvent);
  *                       no id, text '' clears. See liveTextOf.
  *
