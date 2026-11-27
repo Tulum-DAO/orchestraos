@@ -419,6 +419,19 @@ test('a reply whose blocks other lines split (parallel tool calls): a chunk neve
     const tail = cachedLogTail(p2, parser, size2 - offsetOf(p2, at));
     assert.deepEqual(usageOf(tail.items), usageOf(whole2), `with a sidechain row, a start at ${at}`);
   }
+  // A subagent's own log (every row sidechain, read with the sidechain kept): its replies are the ones that count.
+  const { path: p3 } = fresh();
+  const sub = lines.map((l) => JSON.stringify({ ...JSON.parse(l), isSidechain: true }));
+  writeFileSync(p3, sub.join('\n') + '\n');
+  const subParser = logParser(false, true);
+  const size3 = readFileSync(p3).length;
+  const whole3 = logItems(sub, false, true);
+  assert.deepEqual(usageOf(whole3), usageOf(whole), 'precondition: the subagent parse counts the reply on its first block');
+  for (const at of ['r-par-1', 'a-par-2']) {
+    clearLogCache();
+    const tail = cachedLogTail(p3, subParser, size3 - offsetOf(p3, at));
+    assert.deepEqual(usageOf(tail.items), usageOf(whole3), `a subagent log, a start at ${at}`);
+  }
   // A start after the reply's last block, or before its first, is not moved.
   clearLogCache();
   assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'r-par-2')).start, offsetOf(path, 'r-par-2'));
@@ -440,6 +453,29 @@ test('a long run of lines that are no reply above a start (attachments, results)
   const size = readFileSync(path).length;
   const range = logRange(path, parser, size - 64 * 1024, size - 32 * 1024);
   assert.ok(range.start > 0, `a cursor window starts at ${range.start}`);
+});
+
+test('a reply of many parallel calls, spread over more lines than the back-scan guard: a start at its last block moves to its first, no whole-file parse', () => {
+  const { path, parser } = fresh();
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  lines.push(user('run many things at once', 'u-many'));
+  for (let i = 0; i < 30; i++) {
+    lines.push(JSON.stringify({ type: 'assistant', uuid: `a-many-${i}`, timestamp: T(++seq), message: { id: 'msg_many', role: 'assistant',
+      content: [{ type: 'tool_use', id: `toolu_m${i}`, name: 'Bash', input: { command: 'ls' } }], usage: { input_tokens: 7000, output_tokens: 2 } } }),
+    JSON.stringify({ type: 'user', uuid: `r-many-${i}`, timestamp: T(++seq), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_m${i}`, content: 'ok' }] } }),
+    JSON.stringify({ type: 'attachment', uuid: `x-many-${i}`, timestamp: T(++seq), attachment: { type: 'hook_success', content: '' } }));
+  }
+  for (let i = 0; i < 5; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const whole = oracle(path);
+  const full0 = logCacheFullParses();
+  const tail = cachedLogTail(path, parser, size - offsetOf(path, 'a-many-29'));
+  assert.equal(tail.start, offsetOf(path, 'a-many-0'), 'the start moves to the reply\'s first block');
+  assert.equal(logCacheFullParses(), full0, 'no whole-file parse');
+  const usage = (items: readonly any[]) => items.filter((it: any) => String(it.uuid).startsWith('a-many-')).map((it: any) => it.usage?.input_tokens ?? null);
+  assert.deepEqual(usage(tail.items), usage(whole));
 });
 
 test('a reply of more lines than the back-scan guard: the chunk still starts outside it (the whole file, never inside)', () => {
