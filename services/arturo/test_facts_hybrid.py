@@ -236,12 +236,93 @@ def test_sync_resumes_after_a_partial_run(store):
     assert out["added"] == len(ROWS) - 3 and out["indexed"] == len(ROWS)
 
 
-def test_sync_rebuilds_when_the_store_is_replaced(store, tmp_path):
+def test_sync_walks_back_over_rows_the_store_lost(store):
     fi.sync(store["db"], store["index"], embed=fake_embed)
     os.remove(store["db"])
-    _make_db(store["db"], ROWS[:2])
+    _make_db(store["db"], ROWS[:2])                      # the same first two facts, the rest gone
     out = fi.sync(store["db"], store["index"], embed=fake_embed)
-    assert out["rebuilt"] and out["indexed"] == 2
+    assert out["removed"] == len(ROWS) - 2 and out["indexed"] == 2 and not out["rebuilt"] and out["complete"]
+
+
+def test_sync_rebuilds_when_the_store_is_replaced(store):
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    os.remove(store["db"])
+    _make_db(store["db"], [("g-" + fid, kind, text, state) for fid, kind, text, state in ROWS[:2]])
+    out = fi.sync(store["db"], store["index"], embed=fake_embed)
+    assert out["rebuilt"] and out["indexed"] == 2 and out["complete"]
+
+
+def test_a_reused_top_rowid_is_reindexed(store):
+    """grok first pass #3: SQLite hands a deleted top rowid to the next insert."""
+    os.remove(store["db"])
+    _make_db(store["db"], ROWS[:2])
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    con = sqlite3.connect(store["db"])
+    con.execute("DELETE FROM facts WHERE fact_id='f-bill'")
+    con.commit()
+    _add(con, [("f-dog", "fact", "Luna the dog has a vet appointment next week", "active")])
+    assert con.execute("SELECT rowid FROM facts WHERE fact_id='f-dog'").fetchone()[0] == 2
+    con.close()
+    out = fi.sync(store["db"], store["index"], embed=fake_embed)
+    assert out["removed"] == 1 and out["added"] == 1
+    ix = sqlite3.connect(store["index"])
+    assert sorted(r[0] for r in ix.execute("SELECT fact_id FROM doc")) == ["f-car", "f-dog"]
+
+
+def test_a_partial_index_serves_keyword_recall(store, monkeypatch):
+    """A build from empty that has not caught up would miss facts keyword recall finds."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    out = fi.sync(store["db"], store["index"], embed=fake_embed, max_rows=2)
+    assert not out["complete"]
+    assert fi.search("warm", index_path=store["index"], embed_factory=lambda: fake_embed) is None
+    for _ in range(200):
+        if fi.ready(store["index"]):
+            break
+        time.sleep(0.01)
+    q = "what about the northwind invoice"
+    kws = fr.extract_keywords(q)
+    assert fi.search(q, index_path=store["index"]) is None
+    assert fr.query_sources(kws, text=q) == fr._query_sources_keyword(kws)
+    assert fi.sync(store["db"], store["index"], embed=fake_embed)["complete"]
+    assert fi.search(q, index_path=store["index"]) is not None
+
+
+def test_an_emptied_index_serves_keyword_recall(store, monkeypatch):
+    """grok first pass #2: rows deleted under a loaded matrix must not read as a finished, empty index."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    ix = sqlite3.connect(store["index"])
+    ix.execute("DELETE FROM doc")
+    ix.execute("DELETE FROM fts")
+    ix.commit()
+    ix.close()
+    q = "what about the northwind invoice"
+    kws = fr.extract_keywords(q)
+    for _ in range(3):                                   # the first call hands the reload to the loader
+        assert fr.query_sources(kws, text=q) == fr._query_sources_keyword(kws)
+        time.sleep(0.05)
+    assert fi.search(q, index_path=store["index"]) is None
+
+
+def test_a_lookup_reads_one_snapshot_while_the_index_is_rebuilt(store, monkeypatch):
+    """grok first pass #1: a rebuild published mid-lookup must not pair the old vectors with the new ids."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    m = fi._state["matrix"]
+
+    def rebuilding_embed(texts):
+        if texts == ["the northwind invoice"]:
+            os.remove(store["db"])
+            _make_db(store["db"], [("f-zebra", "fact", "The zebra exhibit opens in March", "active")])
+            fi.sync(store["db"], store["index"], embed=fake_embed)
+            m.refresh()                                  # a concurrent full reload, published before we read
+            assert m.snap.ids == ["f-zebra"]
+        return fake_embed(texts)
+    monkeypatch.setitem(fi._state, "embed", rebuilding_embed)
+    fts, vec = fi.search("the northwind invoice", index_path=store["index"])
+    assert "f-bill" in vec and "f-zebra" not in vec + fts
 
 
 def test_a_reinserted_fact_replaces_its_old_entry(store):
@@ -326,7 +407,7 @@ def test_word_counts_follow_sync(store):
     fi.sync(store["db"], store["index"], embed=fake_embed)
     ix = dict(sqlite3.connect(store["index"]).execute("SELECT term, n FROM df"))
     m = fi._state["matrix"]
-    assert m.refresh(max_inline=10) and ix["luna"] == m.df["luna"] == 2
+    assert m.refresh(max_inline=10) and ix["luna"] == m.snap.df["luna"] == 2
     assert "f-luna2" in fi.search("luna sofa", index_path=store["index"], keywords=["luna", "sofa"])[0]
 
 
@@ -342,7 +423,7 @@ def test_fts_list_prefers_the_fact_holding_more_of_the_question(store):
     bm25 = [r[0] for r in ix.execute("SELECT doc.fact_id FROM fts JOIN doc ON doc.rowid = fts.rowid WHERE fts "
                                      "MATCH '\"zebra\" OR \"apple\" OR \"mango\"' ORDER BY bm25(fts)")]
     assert bm25.index("f-rep") < bm25.index("f-all")     # bm25 alone prefers the rare word repeated
-    got = fi._state["matrix"].fts("zebra apple mango", 20, ["zebra", "apple", "mango"])
+    got = fi._snap_fts(fi._state["matrix"].snap, "zebra apple mango", 20, ["zebra", "apple", "mango"])
     assert got.index("f-all") < got.index("f-rep")
 
 
@@ -358,3 +439,26 @@ def test_lookups_check_for_new_rows_at_most_every_interval(store, monkeypatch):
     assert "f-boat" not in fi.search("sailboat regatta", index_path=store["index"])[0]
     fi._state["matrix"].checked = 0.0                    # the interval has passed
     assert "f-boat" in fi.search("sailboat regatta", index_path=store["index"])[0]
+
+
+def test_a_lookup_sees_a_row_that_replaced_the_top_one(store, monkeypatch):
+    """The walked-back top row and its replacement share a doc rowid, so the row count alone looks unchanged;
+    the generation tells the reader to reload."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    fi.search("luna", index_path=store["index"])
+    con = sqlite3.connect(store["db"])
+    con.execute("DELETE FROM facts WHERE fact_id='f-dog'")
+    con.commit()
+    _add(con, [("f-zebra", "fact", "The zebra exhibit opens in March", "active")])
+    con.close()
+    assert fi.sync(store["db"], store["index"], embed=fake_embed)["removed"] == 1
+    found = False
+    for _ in range(200):
+        got = fi.search("zebra exhibit march", index_path=store["index"])
+        if got and "f-zebra" in got[0] + got[1]:
+            found = True
+            break
+        time.sleep(0.01)
+    assert found

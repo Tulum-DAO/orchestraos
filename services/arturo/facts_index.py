@@ -208,59 +208,97 @@ def _yield_cpu():
         pass
 
 
+def _drop_doc(con, doc_rowid):
+    _df_add(con, [r[0] for r in con.execute("SELECT text FROM fts WHERE rowid=?", (doc_rowid,))], -1)
+    con.execute("DELETE FROM fts WHERE rowid=?", (doc_rowid,))
+    con.execute("DELETE FROM doc WHERE rowid=?", (doc_rowid,))
+
+
+def _walk_back(con, src):
+    """Drop indexed rows, from the top down, whose facts.db row is gone or is now a different fact, and stop at the
+    first that still matches. SQLite reuses a deleted TOP rowid, so without this a fact deleted and another added
+    after it would leave the old one indexed and skip the new one. Lower rowids are never reused; a fact deleted
+    below the top only leaves a stale index entry, which facts_recall drops on the live row. A replaced store
+    walks back to empty, which is a rebuild."""
+    removed = 0
+    while True:
+        row = con.execute("SELECT rowid, fact_id, src_rowid FROM doc ORDER BY src_rowid DESC LIMIT 1").fetchone()
+        if row is None:
+            return removed
+        live = src.execute("SELECT fact_id FROM facts WHERE rowid=?", (row[2],)).fetchone()
+        if live is not None and live[0] == row[1]:
+            return removed
+        _drop_doc(con, row[0])
+        removed += 1
+
+
+def _bump_generation(con):
+    _set_meta(con, "generation", int(_meta(con, "generation", "0")) + 1)
+
+
 def sync(facts_path=None, index_path=None, embed=None, batch=256, max_rows=None, threads=BUILD_THREADS):
     """Embed and FTS-index every facts.db row past the last one indexed. Resumable: each batch commits on its own.
 
-    Returns {"added", "indexed", "source_rows", "rebuilt"}. A facts.db whose top rowid fell below the index's
-    (a restore or a rebuilt store) drops the index and starts again, since its rowids no longer mean the same
-    rows. A fact_id that comes back under a new rowid replaces its old entry."""
+    Returns {"added", "indexed", "source_rows", "rebuilt", "removed", "complete"}. Before going forward it walks
+    back over indexed rows facts.db no longer holds (see _walk_back). Meta `generation` changes whenever an indexed
+    row is removed, so a reader reloads instead of appending; meta `complete` is '1' once the index has caught up
+    with facts.db and '0' while a build from empty is still under way, and search serves nothing until it is '1'.
+    A fact_id that comes back under a new rowid replaces its old entry."""
     facts_path = facts_path or default_facts_path()
     index_path = index_path or default_index_path()
     if embed is None:
         embed = fastembed_embedder(min(int(threads), BUILD_THREADS))
     src = _open_ro(facts_path)
     con = _open_rw(index_path)
-    rebuilt = False
     added = 0
     try:
         top_src = src.execute("SELECT COALESCE(MAX(rowid), 0) FROM facts").fetchone()[0]
-        mark = con.execute("SELECT COALESCE(MAX(src_rowid), 0) FROM doc").fetchone()[0]
-        if mark > top_src:
-            con.execute("DELETE FROM doc")
-            con.execute("DELETE FROM fts")
-            con.execute("DELETE FROM df")
-            con.commit()
-            mark, rebuilt = 0, True
         _df_backfill(con)
-        _set_meta(con, "model", MODEL)
-        _set_meta(con, "dim", DIM)
-        con.commit()
+        with con:
+            removed = _walk_back(con, src)
+            if removed:
+                _bump_generation(con)
+            mark = con.execute("SELECT COALESCE(MAX(src_rowid), 0) FROM doc").fetchone()[0]
+            if mark == 0 and top_src:
+                _set_meta(con, "complete", "0")
+            _set_meta(con, "model", MODEL)
+            _set_meta(con, "dim", DIM)
+        rebuilt = bool(removed) and mark == 0
+        caught_up = False
         while max_rows is None or added < max_rows:
             n = batch if max_rows is None else min(batch, max_rows - added)
             rows = src.execute("SELECT rowid, fact_id, text FROM facts WHERE rowid > ? ORDER BY rowid LIMIT ?",
                                (mark, n)).fetchall()
             if not rows:
+                caught_up = True
                 break
             vecs = embed([t or "" for _, _, t in rows])
             with con:
+                replaced = False
                 for (rid, fid, txt), v in zip(rows, vecs):
                     old = con.execute("SELECT rowid FROM doc WHERE fact_id=?", (fid,)).fetchone()
                     if old:
-                        _df_add(con, [r[0] for r in con.execute("SELECT text FROM fts WHERE rowid=?", old)], -1)
-                        con.execute("DELETE FROM fts WHERE rowid=?", old)
-                        con.execute("DELETE FROM doc WHERE rowid=?", old)
+                        _drop_doc(con, old[0])
+                        replaced = True
                     cur = con.execute("INSERT INTO doc(fact_id, src_rowid, vec) VALUES (?, ?, ?)",
                                       (fid, rid, to_blob(v)))
                     con.execute("INSERT INTO fts(rowid, text) VALUES (?, ?)", (cur.lastrowid, txt or ""))
                 _df_add(con, [t for _, _, t in rows])
+                if replaced:
+                    _bump_generation(con)
                 _set_meta(con, "synced_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
             added += len(rows)
             mark = rows[-1][0]
-        if added:
-            con.execute("INSERT INTO fts(fts) VALUES('optimize')")
-            con.commit()
+        if not caught_up:
+            caught_up = src.execute("SELECT 1 FROM facts WHERE rowid > ? LIMIT 1", (mark,)).fetchone() is None
+        with con:
+            if caught_up:
+                _set_meta(con, "complete", "1")
+            if added:
+                con.execute("INSERT INTO fts(fts) VALUES('optimize')")
         indexed = con.execute("SELECT COUNT(*) FROM doc").fetchone()[0]
-        return {"added": added, "indexed": indexed, "source_rows": top_src, "rebuilt": rebuilt}
+        return {"added": added, "indexed": indexed, "source_rows": top_src, "rebuilt": rebuilt,
+                "removed": removed, "complete": _meta(con, "complete") == "1"}
     finally:
         con.close()
         src.close()
@@ -276,6 +314,8 @@ def status(facts_path=None, index_path=None):
             out["indexed"] = con.execute("SELECT COUNT(*) FROM doc").fetchone()[0]
             out["mark"] = con.execute("SELECT COALESCE(MAX(src_rowid), 0) FROM doc").fetchone()[0]
             out["synced_at"] = _meta(con, "synced_at")
+            out["complete"] = _meta(con, "complete") == "1"
+            out["generation"] = int(_meta(con, "generation", "0"))
             out["model"] = _meta(con, "model")
         finally:
             con.close()
@@ -326,115 +366,134 @@ def _trim_heap():
         pass
 
 
+class _Snap:
+    """One consistent view for a lookup: the vectors and the ids they belong to, the in-memory FTS copy, the word
+    counts, and the sidecar's generation and completeness. Never changed once published; refresh publishes a new
+    one. An incremental refresh shares the FTS copy and appends to it (under mlock): an older view that sees the
+    newer rows there only sees more real facts."""
+    __slots__ = ("gen", "complete", "top", "ids", "mat", "mem", "mlock", "df")
+
+    def __init__(self, gen, complete, top, ids, mat, mem, mlock, df):
+        self.gen, self.complete, self.top, self.ids, self.mat = gen, complete, top, ids, mat
+        self.mem, self.mlock, self.df = mem, mlock, df
+
+
+def _new_mem():
+    mem = sqlite3.connect(":memory:", check_same_thread=False)
+    mem.execute("CREATE VIRTUAL TABLE m USING fts5(text, fid UNINDEXED, tokenize='porter unicode61')")
+    return mem
+
+
 class _Matrix:
     """What a lookup reads, held in memory and appended to as sync adds rows: the vectors (brute-force dot
     products, 50k x 384 is a few ms), an in-memory copy of the FTS table and the word counts. The sidecar file is
     only checked for new rows; measured 2026-11-27, the same FTS query costs p95 ~10 ms in memory against ~35 ms
-    on the file, under the same load."""
+    on the file, under the same load.
+
+    Lookups read `snap` once and use only that; refreshes run one at a time and replace it whole. Any row sync
+    removed (generation changed) or a replaced file means a full reload on the loader thread."""
 
     def __init__(self, path):
         self.path = path
         self.ident = None
         self.checked = 0.0                           # monotonic time of the last refresh check (see search)
-        self.mlock = threading.Lock()                # the FTS copy is written on refresh and read on the FTS thread
-        self._clear()
-
-    def _clear(self):
-        np = _np()
-        self.top, self.ids, self.mat, self.df = 0, [], np.zeros((0, DIM), dtype=np.float32), {}
-        mem = sqlite3.connect(":memory:", check_same_thread=False)
-        mem.execute("CREATE VIRTUAL TABLE m USING fts5(text, fid UNINDEXED, tokenize='porter unicode61')")
-        with self.mlock:
-            self.mem = mem
+        self.snap = None
+        self.rlock = threading.Lock()
 
     def _file_ident(self):
         st = os.stat(self.path)
         return (st.st_dev, st.st_ino)
 
     def refresh(self, max_inline=None):
-        """Load rows past the last loaded rowid. Returns False when more than max_inline rows are waiting (the
-        caller then reloads off the turn path) or when the file was replaced (a rebuild starts from zero)."""
+        """Publish a snapshot with every row the sidecar holds. A lookup (max_inline set) only appends up to
+        max_inline new rows; it returns False when a full reload is due (more rows waiting, rows removed, the file
+        replaced) so the caller hands that to the loader. A lookup never waits behind another refresh."""
+        if not self.rlock.acquire(blocking=max_inline is None):
+            return True
+        try:
+            return self._refresh(max_inline)
+        finally:
+            self.rlock.release()
+
+    def _refresh(self, max_inline):
         np = _np()
         ident = self._file_ident()
-        if ident != self.ident:
-            self.ident = ident
-            self._clear()
-            if max_inline is not None:
-                return False
+        old = self.snap
         con = _open_ro(self.path)
         try:
             con.execute("BEGIN")                     # one snapshot for the counts and the rows, whatever sync does
+            gen = _meta(con, "generation", "0")
+            complete = _meta(con, "complete") == "1"
             top = con.execute("SELECT COALESCE(MAX(rowid), 0) FROM doc").fetchone()[0]
-            if top < self.top:                       # rows were deleted under us (a rebuild in place)
-                self._clear()
-            if top == self.top:
+            full = old is None or ident != self.ident or gen != old.gen or top < old.top
+            if not full and top == old.top:
+                if complete != old.complete:
+                    self.snap = _Snap(gen, complete, old.top, old.ids, old.mat, old.mem, old.mlock, old.df)
                 return True
-            if max_inline is not None:
-                waiting = con.execute("SELECT COUNT(*) FROM doc WHERE rowid > ?", (self.top,)).fetchone()[0]
-                if waiting > max_inline:
-                    return False
-            first = self.top == 0
-            n_new = con.execute("SELECT COUNT(*) FROM doc WHERE rowid > ?", (self.top,)).fetchone()[0]
+            base = 0 if full else old.top
+            n_new = con.execute("SELECT COUNT(*) FROM doc WHERE rowid > ?", (base,)).fetchone()[0]
+            if max_inline is not None and (full or n_new > max_inline):
+                return False
+            if full:
+                mem, mlock, df = _new_mem(), threading.Lock(), dict(con.execute("SELECT term, n FROM df"))
+            else:
+                mem, mlock, df = old.mem, old.mlock, dict(old.df)
             cur = con.execute("SELECT doc.rowid, doc.fact_id, doc.vec, fts.text FROM doc JOIN fts "
-                              "ON fts.rowid = doc.rowid WHERE doc.rowid > ? ORDER BY doc.rowid", (self.top,))
+                              "ON fts.rowid = doc.rowid WHERE doc.rowid > ? ORDER BY doc.rowid", (base,))
             # streamed in chunks into one preallocated block: the first load is 50k rows, and holding every row
             # (vector blobs + text) at once before copying them doubled the proxy's memory for nothing
             block = np.empty((n_new, DIM), dtype=np.float32)
-            ids, df, filled, last = [], (None if first else self.df), 0, self.top
-            while True:
-                chunk = cur.fetchmany(4096)
-                if not chunk:
-                    break
-                chunk = chunk[:n_new - filled]          # rows synced after the COUNT wait for the next refresh
+            ids, filled, last = [], 0, base
+            while filled < n_new:
+                chunk = cur.fetchmany(4096)[:n_new - filled]
                 if not chunk:
                     break
                 block[filled:filled + len(chunk)] = from_blobs([r[2] for r in chunk])
                 filled += len(chunk)
                 ids.extend(r[1] for r in chunk)
-                if df is not None:
+                if not full:
                     for r in chunk:
                         for t in terms(r[3]):
                             df[t] = df.get(t, 0) + 1
-                with self.mlock:
-                    self.mem.executemany("INSERT INTO m(rowid, text, fid) VALUES (?, ?, ?)",
-                                         ((r[0], r[3] or "", r[1]) for r in chunk))
+                with mlock:
+                    mem.executemany("INSERT INTO m(rowid, text, fid) VALUES (?, ?, ?)",
+                                    ((r[0], r[3] or "", r[1]) for r in chunk))
                 last = chunk[-1][0]
-            if first:
-                df = dict(con.execute("SELECT term, n FROM df"))
         finally:
             con.close()
-        if not filled:
-            return True
-        if first:
-            with self.mlock:
-                self.mem.execute("INSERT INTO m(m) VALUES('optimize')")
-        # a fact_id re-indexed under a new rowid leaves its old row in memory; search drops duplicates
-        self.df = df
-        self.ids.extend(ids)
-        self.mat = block[:filled] if not len(self.mat) else np.vstack([self.mat, block[:filled]])
-        self.top = last
-        if first:
+        if full:
+            with mlock:
+                mem.execute("INSERT INTO m(m) VALUES('optimize')")
+            mat, all_ids = block[:filled], ids
+        else:
+            mat, all_ids = np.vstack([old.mat, block[:filled]]), old.ids + ids
+        # a fact_id re-indexed under a new rowid can leave its old row here until the next full load; search
+        # drops duplicates, and the live facts.db row decides what is served
+        self.ident = ident
+        self.snap = _Snap(gen, complete, last, all_ids, mat, mem, mlock, df)
+        if full:
             _trim_heap()
         return True
 
-    def fts(self, text, depth, keywords=None):
-        """The FTS list (see search): bm25 candidates re-ranked by how many keywords each holds."""
-        q = fts_match(text, self.df, len(self.ids))
-        if not q:
-            return []
-        with self.mlock:
-            rows = self.mem.execute("SELECT fid, text FROM m WHERE m MATCH ? ORDER BY bm25(m) LIMIT ?",
-                                    (q, max(depth, FTS_POOL))).fetchall()
-        kws = keywords if keywords else terms(text)
-        held = [sum(1 for k in kws if k in (t or "").lower()) for _, t in rows]
-        order = sorted(range(len(rows)), key=lambda i: (-held[i], i))    # stable: bm25 order within a count
-        out = []
-        for i in order:
-            if rows[i][0] not in out:
-                out.append(rows[i][0])
-            if len(out) >= depth:
-                break
-        return out
+
+def _snap_fts(snap, text, depth, keywords=None):
+    """The FTS list (see search): bm25 candidates re-ranked by how many keywords each holds."""
+    q = fts_match(text, snap.df, len(snap.ids))
+    if not q:
+        return []
+    with snap.mlock:
+        rows = snap.mem.execute("SELECT fid, text FROM m WHERE m MATCH ? ORDER BY bm25(m) LIMIT ?",
+                                (q, max(depth, FTS_POOL))).fetchall()
+    kws = keywords if keywords else terms(text)
+    held = [sum(1 for k in kws if k in (t or "").lower()) for _, t in rows]
+    order = sorted(range(len(rows)), key=lambda i: (-held[i], i))    # stable: bm25 order within a count
+    out = []
+    for i in order:
+        if rows[i][0] not in out:
+            out.append(rows[i][0])
+        if len(out) >= depth:
+            break
+    return out
 
 
 _lock = threading.Lock()
@@ -457,7 +516,7 @@ def _loader(index_path, embed_factory):
         m.refresh()
         with _lock:
             _state.update(embed=embed, matrix=m, failed=None)
-        log.info(f"facts-index: ready, {len(m.ids)} vectors")
+        log.info(f"facts-index: ready, {len(m.snap.ids) if m.snap else 0} vectors")
     except Exception as e:                           # noqa: BLE001 — absent model / index = keyword recall
         with _lock:
             _state["failed"] = str(e)
@@ -479,7 +538,7 @@ def _start_loader(index_path, embed_factory):
 def ready(index_path=None):
     index_path = index_path or default_index_path()
     m = _state["matrix"]
-    return bool(_state["embed"] and m is not None and m.path == index_path and m.ids)
+    return bool(_state["embed"] and m is not None and m.path == index_path and m.snap is not None)
 
 
 def min_cos():
@@ -495,8 +554,8 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None
     The FTS list is the FTS_POOL best bm25 rows re-ranked by how many of `keywords` (default: the topic words
     of `text`) each one holds, bm25 breaking ties: keyword recall's own signal, over a better candidate set.
 
-    Returns None while the index is not usable (missing file, model or matrix still loading, load failed);
-    the first such call starts the background loader. Never loads a model or the full matrix on the caller's
+    Returns None while the index is not usable (missing file, model or matrix still loading, load failed, the
+    sidecar empty or mid-rebuild); the first such call starts the background loader. Never loads a model or the full matrix on the caller's
     thread."""
     index_path = index_path or default_index_path()
     if not os.path.exists(index_path):
@@ -515,10 +574,13 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None
             m.checked = 0.0
             _start_loader(index_path, embed_factory)
             return None
-    fts_job = _fts_pool().submit(m.fts, text, depth, keywords)      # sqlite and onnx both release the GIL
+    snap = m.snap
+    if snap is None or not snap.complete or not snap.ids:
+        return None                                  # a partial index would miss facts keyword recall finds
+    fts_job = _fts_pool().submit(_snap_fts, snap, text, depth, keywords)   # sqlite and onnx both release the GIL
     np = _np()
     qv = np.frombuffer(to_blob(_state["embed"]([text])[0]), dtype="<f4")
-    sims = m.mat @ qv
+    sims = snap.mat @ qv
     n = min(len(sims), depth * 2)                    # headroom for duplicate ids from re-indexed facts
     part = np.argpartition(-sims, n - 1)[:n] if n < len(sims) else np.arange(len(sims))
     vec_ids = []
@@ -526,7 +588,7 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None
     for i in part[np.argsort(-sims[part])]:
         if sims[i] < floor:
             break
-        fid = m.ids[int(i)]
+        fid = snap.ids[int(i)]
         if fid not in vec_ids:
             vec_ids.append(fid)
         if len(vec_ids) >= depth:
