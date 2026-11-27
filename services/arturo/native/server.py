@@ -403,13 +403,15 @@ class NativeCall:
         t = frame.get("type")
         now = time.monotonic()
         if t == "session.output_audio.delta":
-            if self._utterance_t0 is None:
-                self._utterance_t0 = now
             self._in_t = _gap(self._in_gaps, self._in_t)
             try:
                 pcm = base64.b64decode(frame.get("delta") or "")
             except Exception:  # noqa: BLE001
                 pcm = b""
+            # GPT-Live streams digital silence between utterances (probes 11-26: 70-90% of deltas are all zeros); any
+            # non-zero sample, however quiet, is an utterance starting.
+            if self._utterance_t0 is None and pcm.strip(b"\x00"):
+                self._utterance_t0 = now
             if pcm:
                 from services.arturo import openai_live
                 if openai_live.is_speech(pcm):
