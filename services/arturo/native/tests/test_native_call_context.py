@@ -678,7 +678,7 @@ def test_a_page_thread_that_could_not_be_read_is_named_and_an_uncut_keep_says_so
 
 def _long_opening(n=60):
     from services.arturo import thread_context as tc
-    lines = [f"[2026-11-26T23:{i:02d}:00Z 18:{i:02d} Tulum] call vc_x Shaw: line {i} " + "words " * 30 for i in range(n)]
+    lines = [f"[2026-11-26T23:{i:02d}:00Z 18:{i:02d} Local] call vc_x Shaw: line {i} " + "words " * 30 for i in range(n)]
     return "\n".join([tc.PAST_OPEN, "THREAD web_x: everything above this call, oldest first.", *lines, tc.PAST_CLOSE])
 
 
@@ -721,8 +721,8 @@ def test_the_newest_line_survives_a_budget_smaller_than_it(monkeypatch):
     from services.arturo import thread_context as tc
     from services.arturo.native import native_config
     monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "300")
-    newest = "[2026-11-26T23:59:00Z 18:59 Tulum] call vc_x Shaw: " + "x" * 1200
-    ctx = "\n".join(["THREAD web_x: header", "[2026-11-26T23:00:00Z 18:00 Tulum] call vc_x Shaw: old", newest])
+    newest = "[2026-11-26T23:59:00Z 18:59 Local] call vc_x Shaw: " + "x" * 1200
+    ctx = "\n".join(["THREAD web_x: header", "[2026-11-26T23:00:00Z 18:00 Local] call vc_x Shaw: old", newest])
     f = native_config.session_start_frame([], context=ctx)      # unfenced: an older API route
     thread = f["session"]["delegation"]["responses"]["instructions"][len(native_config.prompts()["backend"]):].strip()
     assert newest in thread and "Shaw: old" not in thread
