@@ -7,10 +7,14 @@
  *
  * Model:
  *  - snapshot: full backfill (last `limit` items + server-paired render_items)
- *  - delta:    only the items appended since the subscriber's offset
- *  - resume:   SSE Last-Event-ID = `<session_id>:<offset>` where offset is the
- *              item count in the FULL normalized transcript. Valid id -> delta
- *              of the missed tail; stale/foreign id -> fresh snapshot.
+ *  - delta:    only the items appended since the subscriber's last one
+ *  - resume:   SSE Last-Event-ID = `<tag>:<sequence>`: every item the tailer
+ *              reads gets the next number, and an id names its last item's.
+ *              Below the cap that is the item count in the FULL normalized
+ *              transcript and the tag is the session id, as it always was. A
+ *              window the cap cut numbers from its own read and the tag carries
+ *              that numbering's epoch. Valid id -> delta of the missed tail;
+ *              stale/foreign id, or one slid out of the kept window -> snapshot.
  *  - reset:    session rotation or file truncation -> snapshot { reset: true }.
  *
  * A headless seat's cut turns (the supervisor's interrupted.json) get the same "[TURN INTERRUPTED]"
@@ -43,12 +47,15 @@ const TAIL_ITEM_CAP = 2000;
 let tailItemCap = TAIL_ITEM_CAP;
 /** Tests: a smaller cap, so a modest fixture shows the first read costing the cap's items, not the file. */
 export function tailerCapForTests(n: number | null): void { tailItemCap = n ?? TAIL_ITEM_CAP; }
+/** This process's mark in an epoch (see TranscriptTailer.epoch), and the numberings started so far. */
+const BOOT = Math.random().toString(36).slice(2, 6);
+let epochs = 0;
 /** Beats in a row with no transcript and no tmux window before a tailer stops (about 30 s at the route's 1 s beat). */
 export const GONE_TICKS = 30;
 
 export interface TailEvent {
   type: 'snapshot' | 'delta';
-  /** SSE event id: `<session_id>:<full-transcript item offset after this event>` */
+  /** SSE event id: `<tag>:<sequence number of the newest item after this event>` (see eventId) */
   id: string;
   agent_id: string;
   session_id: string | null;
@@ -103,6 +110,11 @@ export class TranscriptTailer {
   private fileSize = -1;
   private items: any[] = [];
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
+  /** The sequence number of the newest kept item: every item this tailer has read counts once (see eventId). */
+  private seq = 0;
+  /** '' when the numbering counts from the log's first item (the read that started it held all of it); otherwise this
+   *  numbering's own nonce, so an id from another tailer (an API restart) is never read as one of these (see sidTag). */
+  private epoch = '';
   private interrupted: Interrupted;
   private interruptedSig = '';
   private rulesSig = '';
@@ -142,7 +154,7 @@ export class TranscriptTailer {
   }
 
   /** Re-resolve + re-read the transcript. Returns what changed. */
-  private refresh(): { rotated: boolean; grewFrom: number | null; restated?: boolean } {
+  private refresh(): { rotated: boolean; fresh: number; restated?: boolean } {
     const { path, sid } = this.resolve();
     const prevSid = this.sid;
     const prevCount = this.items.length;
@@ -153,7 +165,9 @@ export class TranscriptTailer {
       this.path = null;
       this.fileSize = -1;
       this.items = [];
-      return { rotated, grewFrom: null };
+      this.seq = 0;
+      this.epoch = '';
+      return { rotated, fresh: 0 };
     }
 
     // Cheap no-op check: same file, same size -> nothing to re-normalize.
@@ -166,7 +180,7 @@ export class TranscriptTailer {
     let rsig = '';
     try { rsig = this.keepSidechain ? '' : storeRules(sid).sig; } catch { rsig = ''; }
     if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig && rsig === this.rulesSig) {
-      return { rotated: false, grewFrom: null };
+      return { rotated: false, fresh: 0 };
     }
 
     // Through the parsed-log cache (services/transcript-log-cache.ts): the file is parsed once, then on each tick
@@ -187,6 +201,8 @@ export class TranscriptTailer {
       if (!isReadError(err)) throw err;
       env = normalizeTranscript([], this.agentId, sid, tailItemCap, false, false, null, true, this.keepSidechain);
     }
+    // What the read itself held, before the merges below: fewer than the cap is the whole log.
+    const readCount = env.items.length;
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }
     env.items = mergeInterruptedTurns(env.items, turns);
@@ -199,25 +215,27 @@ export class TranscriptTailer {
     env.items = dropWakeReplies(env.items);
     // reply_to (reply threads P1): the same stamp the poll route's finishWindow gives its items. Fail-open.
     env.items = stampReplyTo(env.items, this.agentId);
+    const truncated = !rotated && env.items.length < prevCount;
+    // Old and new windows of one log: at the item cap the window slides (one in, one out, its length stuck at the cap),
+    // so they are aligned on the last kept item, never compared by bare index. null: they cannot be lined up.
+    const same = !rotated && !truncated && path === this.path && prevCount > 0;
+    const shift = same ? alignShift(this.items, env.items) : null;
+    // The new items: those after the last kept one (at the cap, as many as slid out the front).
+    const fresh = shift === null ? 0 : Math.max(0, env.items.length - (prevCount + shift));
     // A cut-turn line new this beat and placed before the old tail: every later item moved, which
     // a delta (append only) cannot say. Sent as a snapshot.
     const sentUuids = new Set(this.items.map((it) => it?.uuid));
-    const insertedBeforeTail = !rotated && path === this.path && prevCount > 0
-      && env.items.some((it, i) => it?.interrupted_turn && !sentUuids.has(it.uuid) && i < prevCount);
+    const insertedBeforeTail = shift !== null
+      && env.items.some((it, i) => it?.interrupted_turn && !sentUuids.has(it.uuid) && i < prevCount + shift);
 
-    const truncated = !rotated && env.items.length < prevCount;
     // Codex reports a response's tokens after its items: `usage` can land on an item a delta
     // already carried. Deltas only append, so a usage change on a sent item is re-sent as a
-    // (non-reset) snapshot. Only the last few sent items can gain one. At the item cap the window
-    // slides, so old and new are aligned on the last sent item, never compared by bare index.
+    // (non-reset) snapshot. Only the last few sent items can gain one.
     let restated = false;
-    if (!rotated && !truncated && path === this.path && prevCount > 0) {
-      const shift = alignShift(this.items, env.items);
-      if (shift === null) restated = true;               // cannot line them up: re-send everything
-      else {
-        for (let i = prevCount - 1; i >= Math.max(0, prevCount - 20); i--) {
-          if (JSON.stringify(this.items[i]?.usage) !== JSON.stringify(env.items[i + shift]?.usage)) { restated = true; break; }
-        }
+    if (prevCount > 0 && shift === null) restated = true;  // cannot line them up: re-send everything
+    else if (shift !== null) {
+      for (let i = prevCount - 1; i >= Math.max(0, prevCount - 20); i--) {
+        if (JSON.stringify(this.items[i]?.usage) !== JSON.stringify(env.items[i + shift]?.usage)) { restated = true; break; }
       }
     }
     if (insertedBeforeTail) restated = true;
@@ -229,21 +247,33 @@ export class TranscriptTailer {
     this.interruptedSig = isig;
     this.items = env.items;
 
-    if (rotated || truncated) return { rotated: true, grewFrom: null, restated: false };
-    if (restated) { this.rev++; return { rotated: false, grewFrom: null, restated: true }; }
-    if (env.items.length > prevCount) return { rotated: false, grewFrom: prevCount, restated: false };
-    return { rotated: false, grewFrom: null, restated: false };
+    // The numbering goes on across the windows it can line up and starts again where it cannot (a new session, a shrunk
+    // log, a window that does not line up, the first read). It starts at the window's own count: the log's when the read
+    // held all of it (below the cap), so another tailer's numbering of the same log agrees; a nonce of its own otherwise.
+    if (shift !== null) this.seq += fresh;
+    else {
+      this.seq = env.items.length;
+      this.epoch = readCount < tailItemCap ? '' : `e${(++epochs).toString(36)}${BOOT}`;
+    }
+
+    if (rotated || truncated) return { rotated: true, fresh: 0, restated: false };
+    if (restated) { this.rev++; return { rotated: false, fresh: 0, restated: true }; }
+    // The first read of a log (or of one that was empty): every item is new.
+    if (!same && prevCount === 0) return { rotated: false, fresh: env.items.length, restated: false };
+    return { rotated: false, fresh, restated: false };
   }
 
-  /** The session tag in event ids: the sid, plus a revision once an already-sent item changed
-   *  (late usage), so a client resuming from an older id is no longer "caught up" and gets a
-   *  snapshot. Ids stay opaque to clients (they only echo Last-Event-ID). */
+  /** The session tag in event ids: the sid, plus the numbering's epoch when it does not count from the log's first item,
+   *  plus a revision once an already-sent item changed (late usage), so a client resuming from an older id is no longer
+   *  "caught up" and gets a snapshot. Ids stay opaque to clients (they only echo Last-Event-ID). */
   private sidTag(): string {
-    return `${this.sid ?? ''}${this.rev ? `~${this.rev}` : ''}`;
+    return `${this.sid ?? ''}${this.epoch ? `~${this.epoch}` : ''}${this.rev ? `~${this.rev}` : ''}`;
   }
 
+  /** `<tag>:<sequence number of the newest item>`. Below the cap that is the item count, as it always was; at the cap
+   *  it keeps counting while the window slides (a window offset stops there, and a resume read as caught up). */
   private eventId(): string {
-    return `${this.sidTag()}:${this.items.length}`;
+    return `${this.sidTag()}:${this.seq}`;
   }
 
   /** The newest `limit` items as a snapshot. Built once per (limit, reset) within one broadcast: `memo` is the broadcast's
@@ -267,37 +297,41 @@ export class TranscriptTailer {
     return ev;
   }
 
-  private delta(fromOffset: number): TailEvent {
+  /** The newest `count` items (the ones a subscriber has not had). */
+  private delta(count: number): TailEvent {
     return {
       type: 'delta',
       id: this.eventId(),
       agent_id: this.agentId,
       session_id: this.sid,
       grammar_version: GRAMMAR_VERSION,
-      items: this.items.slice(fromOffset),
+      items: count > 0 ? this.items.slice(-count) : [],
     };
   }
 
   /**
    * Subscribe with a window of `limit` items (the tailer's default when not given). With a valid `lastEventId`
-   * (`<sid>:<offset>`) the subscriber resumes: it immediately receives a delta of anything it missed (nothing if
+   * (`<tag>:<sequence>`) the subscriber resumes: it immediately receives a delta of anything it missed (nothing if
    * caught up). Otherwise it receives a snapshot of its window. A subscriber is never sent more items at once than
    * its window: a resume that missed more than `limit` items (an API restart under a busy seat drew a 1500-row
-   * delta) gets its snapshot instead, which holds the newest `limit` and says nothing older is missing.
+   * delta) gets its snapshot instead, which holds the newest `limit` and says nothing older is missing. So does one
+   * whose last item slid out of the kept window, or a sequence this numbering has not reached.
    */
   subscribe(cb: Subscriber, lastEventId?: string, limit?: number): () => void {
     const window = Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : this.limit;
-    this.refresh();
+    // What this read found new since the last beat goes to the subscribers already here, as the beat would have sent
+    // it: the next beat's read finds nothing new (a second page opened between beats took two items from the first).
+    this.broadcast(this.refresh());
     let resumed = false;
     if (lastEventId) {
       const i = lastEventId.lastIndexOf(':');
       const sid = i >= 0 ? lastEventId.slice(0, i) : '';
-      const offset = i >= 0 ? Number(lastEventId.slice(i + 1)) : NaN;
-      if (sid && sid === this.sidTag() && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
-        const missed = this.items.length - offset;
-        if (missed <= window) {
+      const seen = i >= 0 ? Number(lastEventId.slice(i + 1)) : NaN;
+      if (sid && sid === this.sidTag() && Number.isInteger(seen)) {
+        const missed = this.seq - seen;
+        if (missed >= 0 && missed <= Math.min(window, this.items.length)) {
           resumed = true;
-          if (missed > 0) cb(this.delta(offset));
+          if (missed > 0) cb(this.delta(missed));
         }
       }
     }
@@ -319,7 +353,7 @@ export class TranscriptTailer {
   /** One poll-tail beat: re-read, broadcast delta / reset-snapshot as needed. 'gone' once, when it stops. */
   tick(): 'gone' | void {
     if (this.subs.size === 0 || this.stopped) return;
-    const { rotated, grewFrom, restated } = this.refresh();
+    const { rotated, fresh, restated } = this.refresh();
     let gone = false;
     try { gone = this.path === null && this.windowGone(); } catch { gone = false; }
     this.goneBeats = gone ? this.goneBeats + 1 : 0;
@@ -327,6 +361,12 @@ export class TranscriptTailer {
       this.stopped = true;
       return 'gone';
     }
+    this.broadcast({ rotated, fresh, restated });
+  }
+
+  /** What one read changed, to every subscriber. */
+  private broadcast({ rotated, fresh, restated }: ReturnType<TranscriptTailer['refresh']>): void {
+    if (this.subs.size === 0) return;
     if (rotated || restated) {
       // reset only for a new session or a shrunk log; a late usage update is a plain snapshot. Each subscriber's own
       // window; one render pass per distinct window.
@@ -334,10 +374,10 @@ export class TranscriptTailer {
       for (const [cb, window] of this.subs) cb(this.snapshot(window, rotated, memo));
       return;
     }
-    if (grewFrom !== null) {
+    if (fresh > 0) {
       // A growth that fits a subscriber's window is its delta; one that does not (a burst after a stall, a resumed
       // seat) is its snapshot: the newest `window` items, never more than the window at once.
-      const ev = this.delta(grewFrom);
+      const ev = this.delta(fresh);
       const memo = new Map<string, TailEvent>();
       for (const [cb, window] of this.subs) cb(ev.items.length <= window ? ev : this.snapshot(window, false, memo));
     }

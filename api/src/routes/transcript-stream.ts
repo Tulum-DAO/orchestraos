@@ -8,10 +8,12 @@
  *                             items[last N], render_items[], reset? }
  *   event: delta      data: { agent_id, session_id, grammar_version,
  *                             items[only the new ones] }
- *   id: <session_id>:<offset>   — offset = item count in the FULL transcript;
- *                                 browsers replay it as Last-Event-ID on
- *                                 reconnect, so a resume gets a delta of the
- *                                 missed tail instead of a full refetch.
+ *   id: <tag>:<sequence>        — the sequence number of the event's newest
+ *                                 item (services/transcript-tail.ts eventId);
+ *                                 opaque to clients. Browsers replay it as
+ *                                 Last-Event-ID on reconnect, so a resume gets
+ *                                 a delta of the missed tail instead of a full
+ *                                 refetch.
  *
  * ADDITIVE lane: GET /:id/transcript (the poll path) is untouched and remains
  * the client fallback. Live agent STATE stays the v2-detector lane — never
