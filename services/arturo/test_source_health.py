@@ -176,19 +176,52 @@ def _stable(ctx):
     return _CLOCK.sub("--- TIME: <clock> ---", ctx)
 
 
-def test_all_fresh_is_byte_identical_to_base(mod, data, monkeypatch):
+# Every channel, not only text. This replaces a comparison against the pre-fix build_context read from a fixed old
+# commit: that one went red on every intended prompt change after it (#701's included) and skipped in CI, whose
+# depth-1 checkout has no such commit, so main carried it red unseen. The claim, that the gate adds nothing when every
+# source is fresh, is this test's, against today's prompt, in every checkout.
+@pytest.mark.parametrize("channel", ["text", "voice", "telegram", "dashboard"])
+def test_all_fresh_is_byte_identical_to_base(mod, data, monkeypatch, channel):
     write_profile(data)
     write_telegram(data)
     write_learning(data)
-    gated = mod.build_context(calling_channel="text")
+    gated = mod.build_context(calling_channel=channel)
     _always_inject(monkeypatch)
-    base = mod.build_context(calling_channel="text")
+    base = mod.build_context(calling_channel=channel)
     assert _stable(gated) == _stable(base)
     for head in (PROFILE_HEAD, TELEGRAM_HEAD, RULES_HEAD):
         assert head in gated
     assert "  [preference] likes short answers" in gated
     assert "  [system] deploy finished" in gated
     assert "  - confirm before spawning" in gated
+
+
+# An oracle the gate's own code does not produce: with every source fresh, the stretch from the first source block to
+# the clock line is exactly this text (blocks, their lines, separators, order and place), in every channel. The equality
+# above runs the same block code on both sides, so a doubled block or a stray separator would pass it; not this.
+_KNOWLEDGE_LINE = ("You have a `knowledge` tool for instant lookups. Use it for ANY question about people, projects, "
+                   "status, priorities, or agents. It's faster than reading files or calling GM.")
+
+
+@pytest.mark.parametrize("channel", ["text", "voice", "telegram", "dashboard"])
+def test_all_fresh_source_blocks_are_exactly_these(mod, data, channel):
+    write_profile(data)
+    write_telegram(data)
+    write_learning(data)
+    write_unified(data)
+    ctx = _stable(mod.build_context(calling_channel=channel))
+    unified = ("" if channel == "dashboard"           # the dashboard's own lines are not cross-channel to it
+               else UNIFIED_HEAD + "\n  [dashboard:operator] ship the dream fix\n")
+    expected = (PROFILE_HEAD + "\n  [preference] likes short answers\n"
+                + unified
+                + "\n" + _KNOWLEDGE_LINE + "\n"
+                + TELEGRAM_HEAD + "\n  [system] deploy finished\n"
+                + RULES_HEAD + "\n  - confirm before spawning\n"
+                + "\n--- TIME: <clock> ---")
+    start = ctx.index(PROFILE_HEAD)
+    assert ctx[start:start + len(expected)] == expected
+    for head in (PROFILE_HEAD, TELEGRAM_HEAD, RULES_HEAD, _KNOWLEDGE_LINE):
+        assert ctx.count(head) == 1
 
 
 @pytest.mark.parametrize("writer,head,window", [
@@ -258,27 +291,6 @@ def test_knowledge_tool_unreadable_store_is_named_not_raised(mod, data, monkeypa
     (data / "facts" / "facts_db.json").mkdir()
     out = mod._knowledge_lookup("nobody-in-particular")
     assert "is unreadable" in out and "Traceback" not in out
-
-
-def test_all_fresh_matches_the_base_commit_byte_for_byte(mod, data, tmp_path, monkeypatch):
-    """The strongest identity check: the pre-fix build_context itself, read from the base commit,
-    against the gated one with every source fresh. Skipped where the base commit is not in the clone
-    (a depth-1 CI checkout); the always-inject comparison above runs everywhere."""
-    import subprocess
-    base_sha = "94ff6791"
-    r = subprocess.run(["git", "show", f"{base_sha}:services/arturo/arturo-proxy.py"], capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout:
-        pytest.skip("base commit not in this clone")
-    src = tmp_path / "base-arturo-proxy.py"
-    src.write_text(r.stdout)
-    spec = importlib.util.spec_from_file_location("arturo_proxy_base_copy", src)
-    base_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(base_mod)
-    as_fleet(base_mod)
-    write_profile(data)
-    write_telegram(data)
-    write_learning(data)
-    assert _stable(mod.build_context(calling_channel="voice")) == _stable(base_mod.build_context(calling_channel="voice"))
 
 
 # --- safe_import: a prompt-source reader that fails to import must never fail a turn --------------
