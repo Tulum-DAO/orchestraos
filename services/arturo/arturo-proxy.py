@@ -1536,7 +1536,7 @@ def _knowledge_lookup(query, category=None):
                 from services.arturo import facts_recall as _fr
             _kws = _fr.extract_keywords(query)
             if _kws:
-                _bf = _fr.query_sources(_kws, k=4)
+                _bf = _fr.query_sources(_kws, k=4, text=query)
                 if _bf:
                     _lines = []
                     for _f in _bf:

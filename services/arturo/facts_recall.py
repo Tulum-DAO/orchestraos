@@ -29,6 +29,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    from services.arturo import facts_index
+except ImportError:                                    # loaded as a top-level module (the proxy's fallback import)
+    import facts_index
+
 log = logging.getLogger("arturo-facts-recall")
 
 FLAG = "ARTURO_FACTS_RECALL"
@@ -371,12 +376,28 @@ def query_facts_json(path, keywords, k=K):
     return _score(cands, keywords, k)
 
 
-def query_sources(keywords, k=K, dbpath=None, jsonpath=None):
+def query_sources(keywords, k=K, dbpath=None, jsonpath=None, text=None):
     """ONE entrypoint over every facts source on the box — the sqlite ingest store
     when it exists (private nightly cron) and the dashboard JSON store — merged and
     re-ranked on the shared scale. Both the passive FACTS block and the knowledge
     tool read through here so a fact written on the dashboard surfaces on every
-    path Arturo answers from."""
+    path Arturo answers from.
+
+    With `text` (the caller's own words) and ARTURO_FACTS_HYBRID=1, the ranking is
+    the hybrid one (query_hybrid). Any other case, and any time the hybrid index is
+    not ready, returns exactly the keyword ranking below."""
+    if text and facts_index.enabled():
+        try:
+            hy = query_hybrid(text, keywords, k=k, dbpath=dbpath, jsonpath=jsonpath)
+        except Exception as e:                         # noqa: BLE001 — hybrid trouble = keyword recall
+            log.error(f"facts-recall: hybrid error, keyword recall used (non-fatal): {e}")
+            hy = None
+        if hy is not None:
+            return hy
+    return _query_sources_keyword(keywords, k=k, dbpath=dbpath, jsonpath=jsonpath)
+
+
+def _query_sources_keyword(keywords, k=K, dbpath=None, jsonpath=None):
     dbpath = dbpath or default_db_path()
     jsonpath = jsonpath or default_json_path()
     cands = []
@@ -389,6 +410,55 @@ def query_sources(keywords, k=K, dbpath=None, jsonpath=None):
     for c in cands:                                    # re-rank: give the scorer confidence back
         c.setdefault("confidence", 1.0)
     return _score(cands, keywords, k)
+
+
+def _facts_by_id(dbpath, fact_ids):
+    """facts.db rows for these ids, as scorer dicts, with the same state and noise filters as query_facts:
+    the index only points; what may be served is decided here, on the live row. Unknown ids drop out."""
+    if not fact_ids:
+        return {}
+    noise_clause = " AND ".join(["lower(ltrim(text)) NOT LIKE ?"] * len(_NOISE_PREFIXES))
+    con = _connect_ro(dbpath)
+    try:
+        rows = con.execute(
+            "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+            f"WHERE fact_id IN ({','.join('?' * len(fact_ids))}) AND COALESCE(state,'active') != 'superseded'"
+            + ((" AND " + noise_clause) if noise_clause else ""),
+            list(fact_ids) + [p + "%" for p in _NOISE_PREFIXES]).fetchall()
+    finally:
+        con.close()
+    return {f["fact_id"]: f for f in _row_dicts(rows) if not _is_noise(f["text"])}
+
+
+def query_hybrid(text, keywords, k=K, dbpath=None, jsonpath=None, index_path=None):
+    """Plan step 1 (Shaw's option B, card apr_39e1b560): keyword ranking + FTS5 bm25 + MiniLM vectors,
+    fused by reciprocal rank. Returns None when the index cannot answer yet (the caller then serves the
+    keyword ranking unchanged).
+
+    Three ranked lists are fused:
+      1. today's keyword ranking (_query_sources_keyword, every source, its kind and recency terms included),
+         so a fact keyword recall finds is never silently dropped;
+      2. FTS5 bm25 over the indexed fact text;
+      3. cosine similarity of the question to every fact vector, which finds the same fact in other words.
+    Lists 2 and 3 are the measured option B; list 1 keeps the dashboard JSON store and today's tie-breaks in."""
+    dbpath = dbpath or default_db_path()
+    if not os.path.exists(dbpath):
+        return None
+    lists = facts_index.search(text, index_path=index_path)
+    if lists is None:
+        return None
+    fts_ids, vec_ids = lists
+    base = _query_sources_keyword(keywords, k=facts_index.DEPTH, dbpath=dbpath, jsonpath=jsonpath) if keywords else []
+    rows = {f["fact_id"]: f for f in base}
+    rows.update({fid: f for fid, f in _facts_by_id(dbpath, [i for i in set(fts_ids) | set(vec_ids)
+                                                            if i not in rows]).items()})
+    # an id the live store no longer serves (superseded, noise, gone) takes no place in any list
+    ranked = [[f["fact_id"] for f in base]] + [[i for i in lst if i in rows] for lst in (fts_ids, vec_ids)]
+    score = facts_index.rrf(ranked)
+    order = sorted(score, key=lambda i: (score[i], rows[i].get("ts") or ""), reverse=True)
+    return [{"fact_id": i, "ts": rows[i].get("ts"), "kind": rows[i].get("kind") or "fact",
+             "text": rows[i].get("text") or "", "expiry_class": rows[i].get("expiry_class") or "standard"}
+            for i in order[:k]]
 
 
 def _render(facts):
@@ -451,6 +521,8 @@ def warm_cache(dbpath=None):
         if not os.path.exists(dbpath) and not os.path.exists(default_json_path()):
             return 0.0
         query_sources(["__bootwarm__"], k=K, dbpath=dbpath)
+        if facts_index.enabled():
+            facts_index.search("boot warm")             # starts the embedder + vector load off the turn path
         ms = (time.perf_counter() - t0) * 1000.0
         log.info(f"facts-recall: cache warm in {ms:.0f}ms")
         return ms
@@ -488,7 +560,7 @@ def facts_preamble(user_text, dbpath=None, budget_ms=None):
     def _work():
         try:
             _t0 = time.perf_counter()
-            result["r"] = query_sources(keywords, k=K, dbpath=dbpath)
+            result["r"] = query_sources(keywords, k=K, dbpath=dbpath, text=text)
             result["ms"] = (time.perf_counter() - _t0) * 1000.0
         except Exception as e:               # noqa: BLE001 — degrade, never raise into the turn
             result["e"] = e
