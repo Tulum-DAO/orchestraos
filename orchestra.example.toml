@@ -114,6 +114,14 @@ id = "operator"
 # from the server on purpose: a cloud server usually runs in UTC, not where you are.
 timezone = ""
 
+[messages]
+# The ONE tenant every message is written under and read by (msg_store send/inbox, the Grok mail
+# watcher, Arturo). Empty = [operator] id. $ORCHESTRA_TENANT overrides both. Set it when your
+# message bus already holds rows under another name, so every writer and reader agree. Readers also
+# surface mail under a tenant this install does not know (not this value, no login in
+# <data>/state/tenants.json) instead of hiding it.
+tenant = ""
+
 [machines]
 # The dashboard's Mac+VPS status view (api/src/routes/system.ts) is still
 # shaped for a two-machine (laptop + VPS) reference topology, not a generic

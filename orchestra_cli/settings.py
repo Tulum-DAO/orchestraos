@@ -8,6 +8,7 @@ with the same required-key list services/config.py enforces.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass, field
@@ -77,6 +78,8 @@ class Settings:
     db_checkpoint_enabled: bool = True
     db_checkpoint_interval: int = 300
     runtime_dir: Path = Path(DEFAULT_RUNTIME_DIR)
+    # The ONE tenant every message is written under and read by (see message_tenant_from()).
+    message_tenant: str = "operator"
 
     @property
     def token_file(self) -> Path:
@@ -270,8 +273,41 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         db_checkpoint_enabled=bool(_get(raw, "db_checkpoint", "enabled", True)),
         db_checkpoint_interval=int(_get(raw, "db_checkpoint", "interval_seconds", 300)),
         runtime_dir=Path(os.path.expanduser(str(rot.get("runtime_dir", DEFAULT_RUNTIME_DIR)))),
+        message_tenant=message_tenant_from(raw),
     )
     return st
+
+
+def message_tenant_from(raw: dict | None) -> str:
+    """The tenant every message is written under and read by.
+
+    Precedence: $ORCHESTRA_TENANT > [messages] tenant > [operator] id > "operator".
+    One value for writers AND readers: a reader filtering a tenant no writer uses hides mail
+    (2026-11-27: seven messages stranded, one for 36 h, between "operator" and "shaw")."""
+    env = os.environ.get("ORCHESTRA_TENANT", "").strip()
+    if env:
+        return env
+    raw = raw or {}
+    for section in ("messages", "operator"):
+        v = str(_get(raw, section, "tenant" if section == "messages" else "id", "") or "").strip()
+        if v:
+            return v
+    return "operator"
+
+
+def known_tenants(state_dir: "Path | str", message_tenant: str) -> set:
+    """Tenants this install knows: its message tenant plus every login in <state>/tenants.json.
+    Mail under a tenant outside this set belongs to nobody a reader would recognise, so readers
+    surface it instead of hiding it. An unreadable registry means only the message tenant."""
+    out = {message_tenant}
+    try:
+        with open(os.path.join(str(state_dir), "tenants.json")) as fh:
+            reg = json.load(fh)
+        if isinstance(reg, dict):
+            out.update(str(k) for k in reg)
+    except (OSError, ValueError):
+        pass
+    return out
 
 
 def _connectable(host: str) -> str:

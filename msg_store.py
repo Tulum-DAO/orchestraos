@@ -522,6 +522,48 @@ class MessageStore:
         if not allow_live:
             _refuse_live_bus_under_pytest(self.db_path)
 
+    def message_tenant(self) -> str:
+        """The install's ONE message tenant (orchestra_cli.settings.message_tenant_from): written by
+        every send, read by every inbox. Resolved once per store; any config failure is "operator"."""
+        t = getattr(self, "_message_tenant", None)
+        if t is None:
+            try:
+                t = _settings.load_settings().message_tenant
+            except Exception:  # noqa: BLE001 - a broken config must never stop mail
+                t = _settings.message_tenant_from(None)
+            self._message_tenant = t
+        return t
+
+    def _tenant_clause(self, tenant_id):
+        """(sql, params, own) for a reader's tenant filter.
+
+        Explicit tenant -> strict equality (the caller asked for exactly that tenant).
+        Default -> the install's tenant, plus legacy NULL rows, plus rows under a tenant this
+        install does not know (not the message tenant, no login in tenants.json): mail nobody
+        would ever read otherwise is surfaced, never hidden. Another KNOWN tenant stays hidden."""
+        if tenant_id is not None:
+            return "tenant_id = ?", [tenant_id], tenant_id
+        own = self.message_tenant()
+        known = sorted(_settings.known_tenants(os.path.dirname(self.db_path), own))
+        marks = ",".join("?" * len(known))
+        return (f"(tenant_id = ? OR tenant_id IS NULL OR tenant_id NOT IN ({marks}))",
+                [own] + known, own)
+
+    @staticmethod
+    def _flag_foreign(rows: list, own: str, where: str) -> list:
+        """Stamp rows surfaced from an unknown tenant and say so once on stderr."""
+        n = 0
+        for r in rows:
+            t = r.get("tenant_id")
+            if t is not None and t != own:
+                r["tenant_mismatch"] = True
+                n += 1
+        if n:
+            seen = sorted({r.get("tenant_id") for r in rows if r.get("tenant_mismatch")})
+            print(f"[msg_store] {where}: surfaced {n} row(s) under unknown tenant(s) {seen}; "
+                  f"this install's message tenant is {own!r}", file=sys.stderr)
+        return rows
+
     def _conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
@@ -658,7 +700,7 @@ class MessageStore:
              task_id: str = None, conversation_id: str = None, parent_id: str = None,
              source: str = "system", metadata: dict = None, msg_id: str = None,
              depends_on: list = None, gather_mode: str = "gather_all",
-             tenant_id: str = "operator", closes_thread: bool = False,
+             tenant_id: str = None, closes_thread: bool = False,
              reason: str = None, contributes_to: str = None,
              allow_unaddressable: bool = False,
              allow_self_addressed: bool = False) -> str:
@@ -670,6 +712,8 @@ class MessageStore:
         flag-only and lives router-side)."""
         msg_id = msg_id or _gen_id()
         self.last_send_note = None
+        if tenant_id is None:
+            tenant_id = self.message_tenant()
         # Seat names: an agent may be addressed by its id, its current name or an old name (exactly). A name is
         # turned into the id HERE, before anything is keyed on it, so the row, the conversation and the router
         # all see the id and a rename never splits a thread. An exact id skips this (the common case, no cost).
@@ -848,12 +892,14 @@ class MessageStore:
             conn.close()
 
     def inbox(self, agent_id: str, status: str = "pending", limit: int = 50,
-              type: str = None, since: str = None, tenant_id: str = "operator") -> list:
-        """Get messages for an agent's inbox."""
+              type: str = None, since: str = None, tenant_id: str = None) -> list:
+        """Get messages for an agent's inbox. tenant_id=None: the install's tenant plus any mail
+        under an unknown tenant (flagged tenant_mismatch); an explicit tenant is strict."""
+        clause, tparams, own = self._tenant_clause(tenant_id)
         conn = self._conn()
         try:
-            sql = "SELECT * FROM messages WHERE to_agent = ? AND status = ? AND tenant_id = ?"
-            params = [agent_id, status, tenant_id]
+            sql = f"SELECT * FROM messages WHERE to_agent = ? AND status = ? AND {clause}"
+            params = [agent_id, status] + tparams
             if type:
                 sql += " AND type = ?"
                 params.append(type)
@@ -862,22 +908,23 @@ class MessageStore:
                 params.append(since)
             sql += f" ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at ASC LIMIT {limit}"
             rows = conn.execute(sql, params).fetchall()
-            return [dict(r) for r in rows]
+            return self._flag_foreign([dict(r) for r in rows], own, f"inbox {agent_id}")
         finally:
             conn.close()
 
-    def held_pending_for(self, session: str, tenant_id: str = "operator") -> list:
+    def held_pending_for(self, session: str, tenant_id: str = None) -> list:
         """Pending §9.6 held rows (type='held_message') addressed to `session`,
         created_at ASC. The boundary-delivery consumer (s96) reads this on a
         turn_ended to bundle + deliver; the router backstop reads the same rows.
         Both gate on claim() (shared CAS) so a row can't double-deliver."""
+        clause, tparams, own = self._tenant_clause(tenant_id)
         conn = self._conn()
         try:
             rows = conn.execute(
                 "SELECT * FROM messages WHERE to_agent = ? AND status = 'pending' "
-                "AND type = 'held_message' AND tenant_id = ? ORDER BY created_at ASC",
-                [session, tenant_id]).fetchall()
-            return [dict(r) for r in rows]
+                f"AND type = 'held_message' AND {clause} ORDER BY created_at ASC",
+                [session] + tparams).fetchall()
+            return self._flag_foreign([dict(r) for r in rows], own, f"held {session}")
         finally:
             conn.close()
 
@@ -1032,15 +1079,16 @@ class MessageStore:
                     f"a message that arrived")
         return f"not pending (status={row['status']!r}); only a pending row can be retracted"
 
-    def disposition_stats(self, sender: str = None, tenant_id: str = "operator") -> dict:
+    def disposition_stats(self, sender: str = None, tenant_id: str = None) -> dict:
         """Per-sender disposition stats over drive-class rows (§9.6-B.6): the
         gm/PM feedback loop that keeps interruptions measurably beneficial.
         Undisposed rows are counted — absence is itself the stat."""
+        clause, tparams, _own = self._tenant_clause(tenant_id)
         conn = self._conn()
         try:
             q = ("SELECT from_agent, metadata FROM messages "
-                 "WHERE type IN (?,?,?) AND tenant_id = ?")
-            params = list(self.DRIVE_CLASS_TYPES) + [tenant_id]
+                 f"WHERE type IN (?,?,?) AND {clause}")
+            params = list(self.DRIVE_CLASS_TYPES) + tparams
             if sender:
                 q += " AND from_agent = ?"
                 params.append(sender)
@@ -1083,18 +1131,19 @@ class MessageStore:
                             dead_letter_reason=reason)
         return True
 
-    def queued_open(self, sender: str = None, tenant_id: str = "operator") -> list:
+    def queued_open(self, sender: str = None, tenant_id: str = None) -> list:
         """Guard-(d) of §9.6 (s96 guards-a-e): every row whose CURRENT
         disposition is 'queued' — the live tracked set a PM verifies at node
         completion so ACK+QUEUE can never become a silent drop. A later
         re-dispose (acted/declined) overwrites the metadata disposition and
         removes the row from this set. Read-only."""
+        clause, tparams, _own = self._tenant_clause(tenant_id)
         conn = self._conn()
         try:
             q = ("SELECT id, from_agent, to_agent, subject, created_at, metadata "
                  "FROM messages WHERE metadata LIKE '%\"disposition\": \"queued\"%' "
-                 "AND tenant_id = ?")
-            params = [tenant_id]
+                 f"AND {clause}")
+            params = tparams
             if sender:
                 q += " AND from_agent = ?"
                 params.append(sender)
@@ -1406,7 +1455,7 @@ class MessageStore:
 
         reply_id = _gen_id()
         conv_id = orig["conversation_id"]
-        tenant_id = orig.get("tenant_id") or "operator"
+        tenant_id = orig.get("tenant_id") or self.message_tenant()
 
         conn = self._conn()
         try:
@@ -1569,10 +1618,12 @@ class MessageStore:
     def create_task_with_message(self, title: str, description: str,
                                   assigned_to: str, from_agent: str,
                                   project: str = None, priority: str = "medium",
-                                  tenant_id: str = "operator",
+                                  tenant_id: str = None,
                                   roadmap_phase_id: str = None) -> tuple:
         """Create a task AND send a message to the assigned agent.
         Returns (task_id, msg_id)."""
+        if tenant_id is None:
+            tenant_id = self.message_tenant()
         task_id = _gen_id("task")
         now = _now()
 
@@ -1990,6 +2041,7 @@ def main():
 
     # send
     p = sub.add_parser("send")
+    p.add_argument("--tenant", default=None, help="message tenant (default: this install's, from $ORCHESTRA_TENANT / [messages] tenant / [operator] id)")
     p.add_argument("--from", dest="from_agent", required=True)
     p.add_argument("--to", dest="to_agent", required=True)
     p.add_argument("--type", default="task_request")
@@ -2050,6 +2102,8 @@ def main():
 
     # inbox
     p = sub.add_parser("inbox")
+    p.add_argument("--tenant", default=None, help="strict: only this tenant (default: this install's "
+                   "tenant plus any mail under an unknown tenant, flagged tenant_mismatch)")
     p.add_argument("--agent", required=True)
     p.add_argument("--status", default="pending")
     p.add_argument("--all", dest="all_flag", action="store_true", default=False)
@@ -2123,7 +2177,8 @@ def main():
                 type=args.type, subject=subject, body=body,
                 priority=args.priority, task_id=args.task_id, source=args.source,
                 closes_thread=args.closes_thread,
-                reason=args.reason, contributes_to=args.contributes_to
+                reason=args.reason, contributes_to=args.contributes_to,
+                tenant_id=args.tenant,
             )
         except UnknownRecipient as e:
             print(json.dumps({"sent": False, "error": str(e)}))
@@ -2205,7 +2260,7 @@ def main():
 
     elif args.command == "inbox":
         status = "all" if args.all_flag else args.status
-        messages = store.inbox(args.agent, status=status, limit=args.limit)
+        messages = store.inbox(args.agent, status=status, limit=args.limit, tenant_id=args.tenant)
         print(json.dumps({"messages": messages, "count": len(messages)}, indent=2, default=str))
 
     elif args.command == "stats":

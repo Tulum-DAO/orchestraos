@@ -53,6 +53,9 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+if ROOT not in sys.path:
+    sys.path.append(ROOT)
+from orchestra_cli import settings as _settings  # noqa: E402
 
 IN_MODIFY, IN_CLOSE_WRITE, IN_MOVED_TO, IN_CREATE = 0x2, 0x8, 0x80, 0x100
 DB_NAMES = {"tasks.db", "tasks.db-wal"}
@@ -99,17 +102,36 @@ class Inotify:
 _CONN = {}
 
 
-def pending_ids(db: str, agent: str, tenant: str) -> list:
+def install_tenant() -> str:
+    """This install's message tenant (msg_store writes it): $ORCHESTRA_TENANT, [messages] tenant,
+    [operator] id, else "operator". A broken config must never stop the watcher."""
+    try:
+        return _settings.load_settings().message_tenant
+    except Exception:  # noqa: BLE001
+        return _settings.message_tenant_from(None)
+
+
+def pending_ids(db: str, agent: str, tenant: "str | None" = None) -> list:
     """Ids of pending rows for `agent`. Reads ids only - never subject/body.
+    tenant=None: this install's tenant, legacy NULL rows, and rows under a tenant this install does
+    not know (same guard as msg_store.inbox): mail is never hidden because a writer used another
+    tenant. An explicit tenant is strict.
     One read-only connection is reused (autocommit, so no read txn is held between checks)."""
+    if tenant is None:
+        own = install_tenant()
+        known = sorted(_settings.known_tenants(os.path.dirname(db), own))
+        clause = f"(tenant_id=? OR tenant_id IS NULL OR tenant_id NOT IN ({','.join('?' * len(known))}))"
+        tparams = [own] + known
+    else:
+        clause, tparams = "tenant_id=?", [tenant]
     conn = _CONN.get(db)
     if conn is None:
         conn = _CONN[db] = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5,
                                            isolation_level=None)
     try:
         return [r[0] for r in conn.execute(
-            "SELECT id FROM messages WHERE to_agent=? AND status='pending' AND tenant_id=? "
-            "ORDER BY created_at ASC", (agent, tenant))]
+            f"SELECT id FROM messages WHERE to_agent=? AND status='pending' AND {clause} "
+            "ORDER BY created_at ASC", [agent] + tparams)]
     except sqlite3.Error:
         _CONN.pop(db, None)
         conn.close()
@@ -286,7 +308,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="instant mechanical mail wake for a Grok seat")
     ap.add_argument("--agent", required=True)
     ap.add_argument("--session", default=None, help="tmux session (default: --agent)")
-    ap.add_argument("--tenant", default=os.environ.get("ORCHESTRA_TENANT") or "operator")
+    ap.add_argument("--tenant", default=None,
+                    help="strict: only this tenant (default: the install's tenant + unknown-tenant mail)")
     ap.add_argument("--db", default=None, help="msg_store db (default: MSG_DB_PATH or <data dir>/state/tasks.db)")
     ap.add_argument("--orphan-exit-s", type=float, default=120.0,
                     help="exit once the tmux session has been gone this long (0 = never)")
