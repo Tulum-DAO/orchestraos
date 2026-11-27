@@ -442,6 +442,8 @@ class NativeSession:
         (ready), result sent, first audio after the result, and what came first after the result."""
         t0 = self.m.started_at or 0.0
         rel = lambda t: None if t is None else round(t - t0, 3)   # noqa: E731
+        # handed over: result_s is when the "accepted" receipt went back, not the tool's real result
+        handed = {h["call_id"] for h in getattr(self.orchestra, "handed_over", list)()}
         rows = []
         for cid, name in self.m.tool_names.items():
             sent = self.m.tool_result_sent_at.get(cid)
@@ -449,11 +451,12 @@ class NativeSession:
             rows.append({"call_id": cid, "name": name, "requested_s": rel(self.m.tool_requested_at.get(cid)),
                          "ready_s": rel(self.m.tool_ready_at.get(cid)), "result_s": rel(sent),
                          "first_audio_s": None if sent is None or after is None else rel(sent + after),
-                         "next": self.m.tool_next.get(cid)})
+                         "next": self.m.tool_next.get(cid), "handed_over": cid in handed})
         return rows
 
     def delivery_sent(self, task_id, frame):
         self.delivery.mark_sent(task_id, frame)
+        self._after_results("note")      # speech after a late note is the note's, not the earlier receipts' (#662)
         fence = getattr(self.orchestra, "fence", None)     # the note's text cannot steer an action (I5): fenced from
         if fence is not None:                               # the moment it is in the call, whatever turn this is
             fence(self.binding.conversation_id)

@@ -39,9 +39,9 @@ _ACTION_RES += [
 # evidence: "the build is finished" after get_agent_output said so). Present / present-perfect only: "it was created
 # yesterday" is history, not a claim (gm msg_04c7d9bd).
 _STATE_RES = [
-    re.compile(r"\b(?:it|that|this|the (?:task|seat|agent|note|message))(?:'s| is| has been)\s+"
-               r"(?:done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
-               r"on its way|up|live)\b", re.I),
+    re.compile(r"\b(?:it|that|this|the (?:task|seat|agent|note|message))(?:'s| is| has been)\s+(?:now\s+)?"
+               r"(?P<word>done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
+               r"on its way|under ?way|up|live)\b", re.I),
     re.compile(r"\b(?:all )?(?:done|finished)[.!]|\btaken care of\b|\bconsider it done\b", re.I),
 ]
 # NOT claims, by design: progress/announcement tense ("I'm starting a seat called X to ..." is how the spawn read-back
@@ -49,12 +49,21 @@ _STATE_RES = [
 # actions ("you started"), and narration to Shaw ("I told you", "I asked you").
 
 
+# PROGRESS state claims ("that's running now", "it's under way") say work is going, not that it is done: a tool still
+# running after its "accepted" receipt backs these (Shaw 2026-11-27: "that's running now" and other phrases besides
+# "I've started it"); every other state claim needs a finished result.
+_PROGRESS = re.compile(r"^(?:running|started|queued|on its way|under ?way)$", re.I)
+
+
 def claim_kind(text):
-    """("action", class) | ("state", None) | None."""
+    """("action", class) | ("state", "progress") | ("state", None) | None."""
     for cls, r in _ACTION_RES:
         if r.search(text or ""):
             return ("action", cls)
-    if any(r.search(text or "") for r in _STATE_RES):
+    m = _STATE_RES[0].search(text or "")
+    if m and _PROGRESS.match(m.group("word")) and not any(r.search(text or "") for r in _STATE_RES[1:]):
+        return ("state", "progress")
+    if m or any(r.search(text or "") for r in _STATE_RES[1:]):
         return ("state", None)
     return None
 

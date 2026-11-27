@@ -28,6 +28,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 
 from . import call_context, claim_gate, native_config, protocol, spend
+from .. import gm_answers
 from .. import host_page, tracker_snapshot
 from .offline import LocalTransport, OfflineTools
 from .session import RUNNING, Driver, NativeSession, TransportDown
@@ -247,13 +248,16 @@ RECEIPT_FLAG = "ARTURO_NATIVE_TOOL_RECEIPT"
 DETACH_TOOLS = frozenset({"gm_command"})
 DETACH_AFTER_S = 1.5
 LATE_NOTE_VOICE_S = 8.0     # a note sent this close to the hang-up may not have been voiced (thinking: ~5 s after send)
-DETACHED = {"ok": True, "result": "Sent to gm; gm has not answered yet. Tell the operator that once, in a few words "
-                                  "(gm's answer comes into this call when it lands, or to the chat after it), then "
-                                  "keep answering him yourself. Never fill the air with 'still on it'."}
+# INTENT, never a line to read out (Shaw 2026-11-27, approving #680: "that's running now" or other phrases besides
+# "I've started it"; gpt-live-1 is full duplex). The live model phrases the receipt itself, differently each time
+# (receipt_n counts this call's receipts), keeps the conversation going and may answer something else meanwhile.
+DETACHED = {"ok": True, "result": "Sent to gm; gm has not answered yet. Let the operator know once, briefly and in "
+                                  "your own words; gm's answer comes into this call when it lands, or to the chat "
+                                  "after it. Meanwhile keep answering him yourself, with no status filler."}
 ACCEPTED = {"ok": True, "receipt": "accepted", "status": "running",
-            "result": "Accepted; still running. Tell the operator in a few words that it is under way, never that it "
-                      "is done; its result comes into this call when it lands (or to the chat after the call). Then "
-                      "keep talking with the operator."}
+            "result": "Running, not done yet. Let the operator know briefly and in your own words, phrased differently "
+                      "from any earlier receipt in this call; never say it is done. Keep the conversation going and "
+                      "take anything else meanwhile: its result comes into this call when it lands."}
 # Never handed over: a tool whose result is a guard's question the caller must answer on a LATER turn (answer_menu's
 # staged read-back, a spending guard), and the spending group (G6: its words carry amounts and merchants, which must
 # not reach the native ledger's deliveries table or a thread). The tracker's call timeout bounds a spending hold.
@@ -302,7 +306,9 @@ class ToolRunner:
         if not fut.done():
             if ((name in DETACH_TOOLS or (_receipts_on() and not self.holds(name)))
                     and self.clock() - self._started[tool_call_id] >= DETACH_AFTER_S):
-                out = DETACHED if name in DETACH_TOOLS else ACCEPTED
+                out = (DETACHED if name in DETACH_TOOLS                 # receipt_n: this call's Nth receipt
+                       else dict(ACCEPTED, receipt_n=sum(1 for n, _, _ in self._detached.values()
+                                                         if n not in DETACH_TOOLS) + 1))
                 self._detached[tool_call_id] = (name, out, self.clock() - self._started[tool_call_id])
                 fut.add_done_callback(lambda f, cid=tool_call_id, n=name: self._dispatch_late(cid, n, f))
                 return dict(out)
@@ -462,7 +468,11 @@ class NativeCall:
             if ok and name not in DETACH_TOOLS and at >= since and (backers is None or name in backers):
                 return True
         running = getattr(self.session.orchestra, "accepted_running", None)
-        return kind == ("action", "start") and running is not None and running(CLAIM_BACKERS["start"])
+        if running is None:
+            return False
+        if kind == ("state", "progress"):                  # "that's running now": true while any handed-over call runs
+            return running()
+        return kind == ("action", "start") and running(CLAIM_BACKERS["start"])
 
     # ---- plumbing --------------------------------------------------------------------------------------------
     def emit(self, msg):
@@ -988,8 +998,8 @@ class NativeCall:
                 state = "gm_chat"                                   # gm's answer is gm's to post (#674)
             elif not target:
                 state = "no_thread"
-            elif not tc.thread_readable(target, self.binding.principal):
-                state = "not_owner"
+            elif gm_answers._may_write(self.server.thread_store(), target, self.binding.principal):
+                state = "not_owner"                                 # #687's rule: fleet, the thread's starter, or new
             else:
                 line = (f"After the call, {name} finished.\n\n" if ok else f"After the call, {name} didn't finish.\n\n")
                 seq = self.server.thread_store().append_message(
