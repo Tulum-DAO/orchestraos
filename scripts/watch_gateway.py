@@ -7350,7 +7350,28 @@ def _seat_for_session(session):
         session, (session, {}))
     st = _agent_status().get_agent_status(session) or {}
     runtime = (st.get("process") or {}).get("runtime") or meta.get("runtime") or None
-    return name, meta, runtime, _str_or_none(meta.get("model"))
+    stored = _str_or_none(meta.get("model"))
+    if (runtime or "").lower() != "claude":
+        return name, meta, runtime, stored
+    # The stored model is the next spawn's; the seat runs what its transcript says (a drop or a
+    # person's own /model can be ahead of the registry projection). scripts/agent_model.py: live_model.
+    from scripts import agent_model as AM
+    try:
+        seen = AM.transcript_model(_seat_transcript_path(session, meta))
+    except Exception:  # noqa: BLE001 — an unreadable transcript is no reading
+        seen = None
+    root = _orchestra_root()
+    ids = lambda: [r["id"] for r in AM.load_catalog("claude", root / "config" / "providers.json", root / "state")]
+    return name, meta, runtime, AM.live_model(stored, seen, _last_switch(session), ids)
+
+
+def _last_switch(session):
+    """The gateway's last switch record for this session (agent_model_pending), None when unreadable."""
+    from scripts import agent_model_pending as AMP
+    try:
+        return AMP.last(AMP.state_path(ORCH_DIR), session)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _pane_session_ids(session):

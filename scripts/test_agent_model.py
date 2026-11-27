@@ -1001,3 +1001,101 @@ def test_r1_every_immediate_switch_records_who_made_it(gw, fable):
     assert _drop().status == 200
     assert AMP.last(AMP.state_path(G.ORCH_DIR), "dev") == {**AMP.last(AMP.state_path(G.ORCH_DIR), "dev"),
                                                           "model": OPUS1M, "by": "limit-watch", "outcome": "switched"}
+
+
+# --- the model a seat is on NOW (gm 2026-11-26): the live transcript, not the registry's stored model -------
+# The first proactive Fable drop switched gm to Opus 5.5, but
+# GET /agent-model kept reading registry.json, which still said claude-fable-5-1[1m].
+
+def _transcript(path, *rows):
+    """rows: (model, ts) for an answer, or ("set:<display>", ts) for the CLI's switch confirmation."""
+    with open(path, "w") as f:
+        for model, ts in rows:
+            if model.startswith("set:"):
+                f.write(json.dumps({"type": "user", "timestamp": ts, "message": {"role": "user", "content":
+                        f"<local-command-stdout>Set model to `{model[4:]}` and saved</local-command-stdout>"}}) + "\n")
+                continue
+            f.write(json.dumps({"type": "assistant", "timestamp": ts, "message": {"model": model}}) + "\n")
+            f.write(json.dumps({"type": "user", "timestamp": ts, "message": {"content": "x"}}) + "\n")
+    return path
+
+
+DROP = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"}
+
+
+def test_m1_the_newest_evidence_in_the_transcript_is_read(tmp_path):
+    p = _transcript(tmp_path / "t.jsonl", ("claude-fable-5-1", "2026-11-26T22:00:00.000Z"),
+                    ("claude-opus-5-5", "2026-11-26T23:11:00.000Z"), ("<synthetic>", "2026-11-26T23:11:00.000Z"))
+    assert AM.transcript_model(p) == ("model", "claude-opus-5-5", "2026-11-26T23:11:00.000Z")
+    q = _transcript(tmp_path / "q.jsonl", ("claude-fable-5-1", "2026-11-26T22:00:00.000Z"),
+                    ("set:Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z"))
+    assert AM.transcript_model(q) == ("set", "Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z")
+    assert AM.transcript_model(tmp_path / "missing.jsonl") is None
+    assert AM.transcript_model(None) is None
+
+
+def test_m2_a_dropped_seat_reads_opus_with_its_exact_id_though_the_registry_says_fable():
+    seen = ("model", "claude-opus-5-5", "2026-11-26T23:11:00.000Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-opus-5-5"
+
+
+def test_m3_the_stored_id_is_kept_when_the_transcript_agrees_with_it():
+    seen = ("model", "claude-fable-5-1", "2026-11-26T22:00:00.000Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-fable-5-1[1m]"
+
+
+def test_m4_a_switch_the_seat_has_not_answered_on_yet_counts_by_its_own_confirmation_line():
+    seen = ("set", "Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) == "claude-opus-5-5[1m]"
+    # codex R2 on #672: a fresh occupant switched before its first answer is on the new model
+    assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) != "claude-fable-5-1[1m]"
+    # a person switched it back after the drop, and the seat has answered since: the transcript wins
+    seen2 = ("model", "claude-fable-5-1", "2026-11-26T23:20:00.000Z")
+    assert AM.live_model("claude-opus-5-5[1m]", seen2, DROP) == "claude-fable-5-1"
+    # a switch that did not happen supplies no id
+    failed = dict(DROP, outcome="failed")
+    assert AM.live_model("claude-fable-5-1[1m]", ("model", "claude-fable-5-1", "t"), failed) == "claude-fable-5-1[1m]"
+
+
+def test_m5_no_evidence_is_the_stored_model_never_an_earlier_occupants_switch():
+    # codex R1 on #672: the switch record is keyed by tmux name only; a fresh spawn in that pane with
+    # nothing in its transcript yet runs its stored model, so the previous occupant's switch never counts.
+    fable_switch = dict(DROP, model="claude-fable-5-1[1m]")
+    assert AM.live_model("claude-opus-5-5[1m]", None, fable_switch) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", None, None) == "claude-fable-5-1[1m]"
+    assert AM.live_model(None, None, None) is None
+
+
+def test_m6_the_gateway_seat_lookup_reports_the_live_model_for_a_dropped_seat(monkeypatch, tmp_path):
+    t = _transcript(tmp_path / "t.jsonl", ("claude-opus-5-5", "2026-11-26T23:11:00.000Z"))
+    meta = {"runtime": "claude", "model": "claude-fable-5-1[1m]"}
+    monkeypatch.setattr(G, "_load_json", lambda p: {"agents": {"gm": meta}})
+    monkeypatch.setattr(G, "_resolve_sess_meta", lambda agents: {"gm": ("gm", meta)})
+    monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
+        lambda s: {"process": {"runtime": "claude"}})})())
+    monkeypatch.setattr(G, "_seat_transcript_path", lambda s, m=None: t)
+    monkeypatch.setattr(G, "_last_switch", lambda s: DROP)
+    assert G._seat_for_session("gm") == ("gm", meta, "claude", "claude-opus-5-5[1m]")
+    # a Codex seat has no Claude transcript: its stored model stands
+    monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
+        lambda s: {"process": {"runtime": "codex"}})})())
+    assert G._seat_for_session("gm")[3] == "claude-fable-5-1[1m]"
+
+
+def test_m7_a_persons_own_switch_resolves_by_the_catalog_never_to_a_model_it_contradicts():
+    # codex R3 on #672: registry Fable, no gateway switch, the person re-picks Opus by /model
+    seen = ("set", "Opus 5.5 (1M context)", "2026-11-26T23:30:00.000Z")
+    ids = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5-5[1m]", "claude-sonnet-5-5"]
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, ids) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5", "t"), None, lambda: ids) == "claude-opus-5-5"
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, None) is None        # unknown, not Fable
+    boom = lambda: (_ for _ in ()).throw(OSError("catalog"))
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, boom) is None
+
+
+def test_m8_the_catalog_fallback_never_reports_the_other_context_variant():
+    # codex R4 on #672: the live catalog may hold only the 1M Opus; "Opus 5.5" is the 200k one
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5", "t"), None, ["claude-opus-5-5[1m]"]) is None
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5 (1M context)", "t"), None,
+                         ["claude-opus-5-5"]) is None
