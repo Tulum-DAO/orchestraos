@@ -4,15 +4,20 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toolLabel, toolChip, runHeader, toolResultLines } from './toolDisplay.js';
+import { toolLabel, toolRunningLabel, toolChip, runHeader, toolResultLines } from './toolDisplay.js';
 
 test('known tools read as plain actions', () => {
   assert.equal(toolLabel('list_agents'), 'List agents');
   assert.equal(toolLabel('send_telegram'), 'Send Telegram');
 });
 
-test('the deep brain is never named as a separate "GM" on screen (one identity)', () => {
-  assert.doesNotMatch(toolLabel('gm_command'), /\bgm\b/i);
+// Shaw, 2026-11-26: his voice call asked gm three times and he could not see it ("the issue wasn't that the tool calls
+// didn't happen, it's that they weren't logged in the chat"). gm_command messages gm and gm answers (Arturo says so
+// on the call), so the chip says it asked gm. Replaces the 2026-09-30 "one identity" rule (gm never named on screen).
+test('a question to gm reads as asking gm, never as Arturo thinking', () => {
+  assert.equal(toolLabel('gm_command'), 'Ask gm');
+  assert.equal(toolRunningLabel('gm_command'), 'Asking gm');
+  assert.doesNotMatch(toolLabel('gm_command'), /think/i);
 });
 
 test('an unknown tool still reads, never as a raw identifier', () => {

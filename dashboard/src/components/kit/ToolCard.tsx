@@ -35,7 +35,7 @@ import { shortPath } from '../../lib/transcript';
 import { withRefs } from './RefText';
 import { CodeFrame, type Skin } from './Markdown';
 import {
-  callCode, callDetail, callLabel, callLine, hasDetail, iconKey, liveCall, runSummary, runTimes, type IconKey, type ToolCallView,
+  callCode, callDetail, callLabel, callLine, callRunSummary, hasDetail, iconKey, liveCall, runSummary, runTimes, type IconKey, type ToolCallView,
 } from '../../lib/toolCalls';
 import { MESSAGE_TIME_TONE, messageTimeLabel } from '../../lib/messageTime';
 import { useInstallTimeZone } from '../../stores/serverSettings';
@@ -182,7 +182,7 @@ function Row({ call, skin }: { call: ToolCallView; skin: Skin }) {
 /** What a folded run lists when opened: its calls, and anything said between them (an agent's thinking), in order. */
 export type ToolRunEntry = { kind: 'call'; call: ToolCallView } | { kind: 'note'; key: string; node: ReactNode };
 
-export default function ToolCard({ calls, entries, interrupted = false, density: densityProp, className, skin = 'bubbles', look = 'card' }: {
+export default function ToolCard({ calls, entries, interrupted = false, density: densityProp, className, skin = 'bubbles', look = 'card', everyTool = false }: {
   calls: ToolCallView[];
   skin?: Skin;
   /** 'card' (above) or Bubbles' thin 'lines' (ToolLines, below). */
@@ -191,6 +191,8 @@ export default function ToolCard({ calls, entries, interrupted = false, density:
   entries?: ToolRunEntry[];
   /** The agent stopped before these finished: they read as stopped, not as still running. */
   interrupted?: boolean;
+  /** A voice call's card: its folded header counts every row ("used 3 tools, 1 failed"), not only what worked. */
+  everyTool?: boolean;
   density?: ToolDensity;
   className?: string;
 }) {
@@ -209,7 +211,7 @@ export default function ToolCard({ calls, entries, interrupted = false, density:
   if (calls.length === 1) {
     return <div className={card} data-testid="tool-calls" data-skin={skin}><Row call={calls[0]} skin={skin} /></div>;
   }
-  const s = runSummary(calls, interrupted);
+  const s = (everyTool ? callRunSummary : runSummary)(calls, interrupted);
   return (
     <div className={`${card} ${s.tone === 'failed' ? 'border-red/40' : ''}`} data-testid="tool-calls" data-skin={skin}>
       <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}

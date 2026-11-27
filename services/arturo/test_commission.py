@@ -336,3 +336,28 @@ def test_a_commissioned_claude_seat_is_spawned_on_opus_5_5_1m(mod, monkeypatch):
     plan = mod.commission_plan("x", "y", runtime="claude", repo_root=pathlib.Path("/r"))
     assert plan.env["AGENT_MODEL"] == "claude-opus-5-5[1m]" and plan.env["AGENT_RUNTIME"] == "claude"
     assert mod.commission_plan("x", "y", runtime="codex", repo_root=pathlib.Path("/r")).env["AGENT_MODEL"] == "gpt-5.6-terra"
+
+
+# ---- Arturo may say he asked gm (gm ruling, 2026-11-27): the call card's chip reads "Ask gm" and the native
+# prompt names gm, so the relay prompt no longer makes him hide it. What stays forbidden is claiming an answer
+# he does not have. ------------------------------------------------------------------------------------------
+
+def test_relay_prompt_lets_arturo_say_he_asked_gm(mod):
+    ctx = mod.build_context(calling_channel="voice")
+    assert "ONE IDENTITY" not in ctx
+    assert 'NEVER refer to "the GM" out loud' not in ctx
+    assert "never name it out loud" not in ctx
+    assert "I asked gm" in ctx
+
+
+def test_relay_prompt_never_claims_an_answer_it_does_not_have(mod):
+    ctx = mod.build_context(calling_channel="voice")
+    assert "ASKING GM" in ctx
+    rule = ctx[ctx.index("ASKING GM"):].split("\n")[0]
+    assert "never claim" in rule.lower() and "answer" in rule.lower()
+
+
+def test_gm_command_tool_lets_arturo_name_gm(mod):
+    desc = next(t["function"]["description"] for t in mod.TOOLS if t["function"]["name"] == "gm_command")
+    assert "never name it aloud" not in desc and "not a separate person" not in desc
+    assert "gm" in desc and "never claim" in desc.lower()

@@ -130,6 +130,18 @@ export function runSummary(calls: ToolCallView[], interrupted = false): {
   return { lead, headline: s.headline, tone };
 }
 
+/** A voice call's card header: runSummary's lead, but counting every row it opens to ("used 3 tools, 1 failed"), as
+ *  three rows under "used 2 tools" read as a contradiction there. Only the call card uses it; the kit's other groups
+ *  keep counting what worked. */
+export function callRunSummary(calls: ToolCallView[], interrupted = false): ReturnType<typeof runSummary> {
+  const n = (status: ToolStatus) => calls.filter((c) => c.status === status).length;
+  const stillRunning = n('running');
+  const clauses = [`used ${calls.length} ${calls.length === 1 ? 'tool' : 'tools'}`];
+  if (n('failed')) clauses.push(`${n('failed')} failed`);
+  if (stillRunning) clauses.push(interrupted ? `${stillRunning} interrupted` : `${stillRunning} running`);
+  return { ...runSummary(calls, interrupted), headline: clauses.join(', ') };
+}
+
 /** Bubbles' thin line for one call (components/kit/ToolCard.tsx ToolLines): the tool's name and a short summary of
  *  what it was given (a file as its short path). */
 export function callLine(c: ToolCallView): { label: string; detail: string } {

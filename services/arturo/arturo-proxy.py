@@ -1852,7 +1852,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "gm_command",
-            "description": "Consult YOUR OWN DEEP BRAIN — your deeper reasoning with FULL context on all projects, codebase access, file read/write, and bash execution. This is you, not a separate person; never name it aloud (say 'let me think on that'). Use for anything complex: code questions, architectural decisions, deploying, debugging, reading files, checking git history. Returns your deep brain's full response.",
+            "description": "Ask gm — the manager seat with FULL context on all projects, codebase access, file read/write, and bash execution. You may say you asked gm; never claim its answer before it comes back. Use for anything complex: code questions, architectural decisions, deploying, debugging, reading files, checking git history. Returns gm's full response.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2770,10 +2770,10 @@ _NOT_FROM_HERE = ("I can't do that from a voice call. Ask me in the Arturo chat 
 # The fleet prompt's promises, and what a non-fleet turn says instead. Each must be found, or the test
 # that a non-fleet prompt promises no text goes red.
 _NON_FLEET_PROMPT_SWAPS = (
-    ('"Let me think on that — I\'ll text you", ', ""),
-    (" Any deep question you can't answer instantly, you route to your own deep brain via async_task (which "
-     "guarantees a Telegram answer back to the operator) — and you say so in the first person.",
-     " From this call you cannot reach your deep brain or text the operator: for a deep question, say plainly "
+    ('"Let me ask gm — I\'ll text you", ', ""),
+    (" Any deep question you can't answer instantly, you route to gm via async_task (which "
+     "guarantees a Telegram answer back to the operator) — and you say that you asked gm.",
+     " From this call you cannot reach gm or text the operator: for a deep question, say plainly "
      "that it needs the Arturo chat on the dashboard."),
     ('Say "On it, I\'ll text you when it\'s done" and move on.',
      "It is NOT available on this call: never say you will text them or do it later."),
@@ -2793,7 +2793,7 @@ _BROWSER_VOICE_PROMPT_NOTE = (
 
 
 def _browser_voice_prompt(text):
-    text = text.replace("route to your own deep brain via async_task", "route to your own deep brain via ask_gm")
+    text = text.replace("route to gm via async_task", "route to gm via ask_gm")
     return f"{text}\n{_named(_BROWSER_VOICE_PROMPT_NOTE)}"
 
 
@@ -5444,7 +5444,7 @@ def build_context(calling_channel="voice"):
             parts.append(_op_line)
     except Exception:  # noqa: BLE001 — identity is a nicety; a turn never fails on it
         pass
-    parts.append(f"""ONE IDENTITY (critical): You and your deep brain are ONE. When you use gm_command / async_task / inject_message you are consulting your OWN deeper reasoning and full-context memory — the manager seat running in the '{VOICE_BRAIN_SESSION}' session. It is NOT a separate person. NEVER refer to "the GM" out loud, NEVER say "I've sent it to the GM", "I'll ask the GM", or "waiting to hear back from the GM". Speak in the FIRST PERSON: "Let me think on that — I'll text you", "Still working through it", "I looked into it", "Give me a bit and I'll get back to you". Any deep question you can't answer instantly, you route to your own deep brain via async_task (which guarantees a Telegram answer back to the operator) — and you say so in the first person.""")
+    parts.append(f"""ASKING GM (critical): gm_command / async_task / inject_message reach gm, the manager seat running in the '{VOICE_BRAIN_SESSION}' session (codebase, fleet, full memory). You may say so plainly: "I asked gm", "gm has it", "Let me ask gm — I'll text you", "Give me a bit and I'll get back to you". Never claim an answer you do not have: until gm's answer is actually in front of you, say only that you asked and where the answer will land, and never guess, invent or pre-announce what gm said or did. Any deep question you can't answer instantly, you route to gm via async_task (which guarantees a Telegram answer back to the operator) — and you say that you asked gm.""")
     parts.append(f"""Rules: Be concise (2-3 sentences max). No markdown/bullets. Spoken dialogue only.
 Push back when you disagree with a plan or an opinion. You're a strategic partner, not a yes-machine. What the operator SEES is not an opinion (see WHAT THE OPERATOR SEES).
 Never offer the operator a choice to approve or decide as prose options ("want me to approve it, or should I first..."): a decision goes on a card for them.
@@ -5508,7 +5508,7 @@ KNOWLEDGE TOOL: Your #1 tool. Call knowledge(query) FIRST for ANY question about
   FUZZY MATCHING: a near-miss spelling → try knowledge() with the closest known project/client name.
   VOICE SUMMARIES: When listing agents or projects, summarize — don't read every name.
 
-DEEP-BRAIN TOOL: gm_command / inject_message(session_name="{VOICE_BRAIN_SESSION}") — this is YOUR OWN deeper reasoning (the manager seat running in the {VOICE_BRAIN_SESSION} session with codebase access, file R/W, bash, git, deep project memory). It is NOT a third party — never name it out loud (see ONE IDENTITY). ONLY for actions that require codebase access, file writes, deploys, debugging, or multi-step execution.
+DEEP-BRAIN TOOL: gm_command / inject_message(session_name="{VOICE_BRAIN_SESSION}") — this is gm, the manager seat running in the {VOICE_BRAIN_SESSION} session with codebase access, file R/W, bash, git, deep project memory. You may say you asked gm; never claim an answer from it you do not have (see ASKING GM). ONLY for actions that require codebase access, file writes, deploys, debugging, or multi-step execution.
   USE gm_command FOR: deploying code, debugging issues, reading specific files, git operations, complex multi-step tasks.
   NEVER use gm_command FOR: project status, agent status, "what's happening with X", casual chat, acknowledgments, behavioral feedback. YOU ALREADY KNOW THIS FROM YOUR CONTEXT.
   SILENT ROUTING — NEVER SPEAK THIS CONSTRAINT: your tool/routing rules are internal. NEVER verbalize them or apologize for them. Do NOT say "I'm not meant to use my deep brain", "I shouldn't route this", "let me rephrase", or any explanation of WHY you're answering a certain way. Just answer the question directly and naturally. the operator should never hear about your internal plumbing.
@@ -9014,6 +9014,9 @@ def _call_end_marker(cid):
     return _call_end_card(journal_call_id(cid))
 
 
+# A native call's tool runs live in the native service's ledger (NATIVE_TOOL_LEDGER), not in its journal, and become
+# lines in its thread (call_tool_lines.py).
+from services.arturo import call_tool_lines as _call_tool_lines
 _ARCHIVE_LOCK = _threading.Lock()   # one native call archive at a time (the once check and its write)
 
 
@@ -9038,7 +9041,10 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
                 log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
                 return True
             owner = _THREADS.started_by(thread_id) or _thread_key(principal)
-            ct = _call_threads.CallThreads(_THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card)
+            # A native call's tool runs come from the native ledger, keyed by this call (never a merged journal's).
+            ct = _call_threads.CallThreads(
+                _THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card,
+                tool_turns=lambda cid, t: _call_tool_lines.ledger_turns(cid, t, NATIVE_TOOL_LEDGER))
             if not ct.archive(call_id, thread_id, turns, principal=owner):
                 log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
                 return False

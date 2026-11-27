@@ -84,3 +84,13 @@ test('times on the lines: the run its start (or range), each call its own; at th
   assert.match(lines, /\{children\}\{chevron\}\{time && <span className="ml-2 inline-block">\{time\}<\/span>\}/);
   assert.doesNotMatch(lines, /ml-auto/);
 });
+
+test("a voice call's card asks for the every-row header; the kit's other cards keep the default", () => {
+  const call = src('components/kit/CallCard.tsx');
+  const uses = call.match(/<ToolCard [^>]*\/>/g) ?? [];
+  assert.ok(uses.length >= 2);
+  for (const u of uses) assert.match(u, /\beveryTool\b/);
+  const card = src('components/kit/ToolCard.tsx');
+  assert.match(card, /everyTool = false/);
+  assert.match(card, /\(everyTool \? callRunSummary : runSummary\)\(calls, interrupted\)/);
+});

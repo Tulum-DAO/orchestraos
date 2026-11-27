@@ -30,7 +30,7 @@ import { MessageText } from './Message';
 import { AgentTurn, UserTurn } from './Turns';
 import type { Skin } from './Markdown';
 import { fromPart } from '../../lib/toolCalls';
-import { groupParts, hasToolParts, type TurnPart } from '../../lib/turnParts';
+import { foldToolTurns, groupParts, hasToolParts, type TurnPart } from '../../lib/turnParts';
 import { fetchVoiceCall } from '../../lib/api';
 import { fmtClock, recordLines, transcriptText, type CallLine, type CallRecord } from '../../lib/threadKit/calls';
 import { assistantName } from '../../lib/assistantName';
@@ -115,7 +115,7 @@ function Lines({ lines, skin, bubble }: { lines: CallLine[]; skin: Skin; bubble:
   return (
     <>
       {lines.map((l, i) => l.kind === 'tools'
-        ? <div key={i} className="call-tools"><ToolCard calls={l.calls} skin={skin} /></div>
+        ? <div key={i} className="call-tools"><ToolCard calls={l.calls} skin={skin} everyTool /></div>
         : <div key={i} className={bubble(l.role)}>{withRefs(l.text, skin)}</div>)}
     </>
   );
@@ -277,13 +277,13 @@ function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSin
             ))}
             {agentTurns.length === 0 && <p className="call-note">No words were kept for this call.</p>}
           </>
-        ) : turns.length ? turns.map((t, i) => t.role === 'user'
+        ) : turns.length ? foldToolTurns(turns).map((t, i) => t.role === 'user'
           ? <div key={t.key ?? i} className={bubble('user')}>{withRefs(t.text, skin)}</div>
           : hasToolParts(t.parts)
             ? groupParts(t.parts!).map((g, gi) => g.kind === 'tools'
                 ? (
                   <div key={`${t.key ?? i}-${gi}`} className="call-tools">
-                    <ToolCard calls={g.tools.map(fromPart)} skin={skin} />
+                    <ToolCard calls={g.tools.map(fromPart)} skin={skin} everyTool />
                     {/* Arturo handed work to a job: a chip that opens his job drawer (JobTray) */}
                     {g.tools.some((x) => JOB_TOOLS.has(x.name)) && (
                       <button type="button" className="call-job-chip mt-1 inline-flex items-center gap-1.5 rounded-full border border-line bg-field px-2.5 py-0.5 text-px12 text-ink-2 hover:text-ink"

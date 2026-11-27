@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fromBlock, fromPart, callLabel, iconKey, callDetail, hasDetail, runSummary, callCode, callLine, liveCall, runTimes } from './toolCalls.ts';
+import { fromBlock, fromPart, callLabel, iconKey, callDetail, hasDetail, runSummary, callRunSummary, callCode, callLine, liveCall, runTimes } from './toolCalls.ts';
 import type { ToolBlock } from './transcript.ts';
 
 const block = (over: Partial<ToolBlock>): ToolBlock =>
@@ -65,6 +65,21 @@ test('the run header says how long it worked and what it did', () => {
   assert.match(s.headline, /edited 1 file/);
   assert.equal(s.tone, 'done');
   assert.equal(runSummary([fromBlock(block({ key: 'r' }))]).lead, 'Working');
+});
+
+// A voice call's card (gm, 2026-11-27): three tool rows under "used 2 tools, 1 failed" read as a contradiction, so a
+// call card's header counts every row it opens to; the kit's other groups keep counting what worked.
+test("a call card's tool header counts every row: used 3 tools, 1 failed", () => {
+  const part = (callId: string, name: string, status: 'ok' | 'failed' | 'running') =>
+    fromPart({ kind: 'tool', callId, name, argsSummary: '', status, summary: '' });
+  const rows = [part('a', 'list_agents', 'ok'), part('b', 'gm_command', 'failed'), part('c', 'research', 'ok')];
+  assert.equal(callRunSummary(rows).headline, 'used 3 tools, 1 failed');
+  assert.equal(runSummary(rows).headline, 'used 2 tools, 1 failed');   // kit-wide count unchanged
+  assert.equal(callRunSummary(rows).lead, runSummary(rows).lead);
+  assert.equal(callRunSummary([part('a', 'list_agents', 'ok'), part('b', 'research', 'ok')]).headline, 'used 2 tools');
+  assert.equal(callRunSummary([part('a', 'gm_command', 'failed'), part('b', 'research', 'failed')]).headline, 'used 2 tools, 2 failed');
+  assert.equal(callRunSummary([part('a', 'list_agents', 'ok'), part('b', 'research', 'running')]).headline, 'used 2 tools, 1 running');
+  assert.equal(callRunSummary([part('a', 'list_agents', 'ok'), part('b', 'research', 'running')], true).headline, 'used 2 tools, 1 interrupted');
 });
 
 test("a call's code block (Bubbles' thin lines): its input as written and what came back, copied together", () => {
