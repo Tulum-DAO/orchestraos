@@ -1,9 +1,8 @@
 /**
  * toolDisplay.ts — how one of Arturo's tool calls reads on the shared tool card (components/kit/ToolCard.tsx).
  *
- * Plain actions, never raw identifiers. One rule is Arturo's, not styling: its deep brain
- * (gm_command / async_task / inject_message) is Arturo thinking, never a separate "GM" — the
- * system prompt forbids saying so, and the card must not say it either.
+ * Plain actions, never raw identifiers. A question Arturo hands to gm (gm_command) reads as asking gm: gm answers
+ * it, Arturo says so on the call, and the operator must see that it happened (Shaw, 2026-11-26).
  */
 import type { ToolPart } from './turnParts';
 
@@ -11,7 +10,7 @@ const LABELS: Record<string, [string, string]> = {
   // name: [label, what it reads as while running]
   list_agents: ['List agents', 'Listing agents'],
   query_roadmap: ['Check roadmap', 'Checking roadmap'],
-  gm_command: ['Think it through', 'Thinking it through'],
+  gm_command: ['Ask gm', 'Asking gm'],
   async_task: ['Work on it in the background', 'Starting background work'],
   inject_message: ['Message an agent', 'Messaging an agent'],
   agent_message: ['Message an agent', 'Messaging an agent'],

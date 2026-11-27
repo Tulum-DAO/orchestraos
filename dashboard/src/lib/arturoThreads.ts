@@ -28,6 +28,8 @@ export interface ThreadSummary { id: string; title: string; title_custom?: boole
 /** `meta.kind === 'job_result'`: posted by a background job (jobs.py), with the steps it ran. */
 export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: string; title?: string; status?: string;
   steps?: import('./arturoJobs').JobStep[]; call_id?: string;
+  /** A tool a voice call ran (kind "call_tool", services/arturo/call_tool_lines.py): which, whether it worked, its id. */
+  tool?: string; ok?: boolean; tool_call_id?: string;
   /** A reply that showed a choice card (kind "card"): the card, its id, and whether it was closed unanswered. */
   card_id?: string; choices?: import('./arturo').ChoiceCard; dismissed?: boolean;
   /** The card's answer as the server keeps it (the turn that answered it said so): picks and words, and when. */
