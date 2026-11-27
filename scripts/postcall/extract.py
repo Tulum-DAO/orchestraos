@@ -1,6 +1,7 @@
 """Extraction result + grounding. An item survives only if its quote is in the transcript
 verbatim (after normalization); no fuzzy path (design §2, codex round 2)."""
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 _PUNCT = re.compile(r"[^\w\s]")
@@ -93,17 +94,22 @@ def _substantive(text):
     return len(words) >= MIN_CONTENT_WORDS
 
 
+def norm_name(name):
+    """The one form every speaker-name comparison uses: NFC, whitespace collapsed, casefolded."""
+    return unicodedata.normalize("NFC", " ".join(name.split())).casefold() if isinstance(name, str) else ""
+
+
 def _shaw_names():
     """Shaw's own name(s) as a recorder labels him (POSTCALL_SHAW_NAMES, comma list; set by the sweep's
     environment, never written in code)."""
     import os
-    return {n.strip().casefold() for n in (os.environ.get("POSTCALL_SHAW_NAMES") or "").split(",") if n.strip()}
+    return {norm_name(n) for n in (os.environ.get("POSTCALL_SHAW_NAMES") or "").split(",") if n.strip()}
 
 
 def _named_shaw_label(label, call_turns):
     """A transcript whose speaker label IS Shaw's configured name proves the label by itself."""
     names = _shaw_names()
-    named = {lab for lab, _, _ in call_turns if lab.strip().casefold() in names}
+    named = {lab for lab, _, _ in call_turns if norm_name(lab) in names}
     return bool(label and named == {label})     # exactly one label names Shaw, and it is the claimed one
 
 
@@ -116,7 +122,7 @@ def ground(call, extraction):
     diarized = bool(getattr(call, "diarized", True)) and bool(call_turns)
     shaw_label = raw_all.get("shaw_label")
     names = _shaw_names()
-    if diarized and raw_all.get("items") and any(lab.strip().casefold() in names and lab != shaw_label
+    if diarized and raw_all.get("items") and any(norm_name(lab) in names and lab != shaw_label
                                                  for lab, _, _ in call_turns):
         raise AttributionError(f"{call.call_id}: a label names Shaw but shaw_label is {shaw_label!r}")
     if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns):

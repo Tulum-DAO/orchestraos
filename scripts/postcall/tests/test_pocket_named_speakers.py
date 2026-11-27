@@ -74,7 +74,8 @@ def _calendar_with_dana():
     return cal.parse(ics)
 
 
-def test_named_label_is_a_verified_speaker_without_any_calendar(base):
+def test_named_label_is_a_verified_speaker_without_any_calendar(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
     call = dataclasses.replace(base, transcript=NAMED)
     roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
     assert roster.event is None
@@ -89,7 +90,8 @@ def test_generic_label_stays_unmapped_and_unverified_without_calendar(base):
     assert "SPEAKER_02" not in roster.label_names
 
 
-def test_participant_item_from_named_label_is_verified_with_counterpart(base):
+def test_participant_item_from_named_label_is_verified_with_counterpart(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
     call = dataclasses.replace(base, transcript=NAMED)
     roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
     dana, gen = participants.apply_trust([_item("participant", "Dana Reyes"),
@@ -98,7 +100,8 @@ def test_participant_item_from_named_label_is_verified_with_counterpart(base):
     assert gen.trust == "inferred"
 
 
-def test_shaw_item_verified_without_calendar_when_every_other_voice_is_named(base):
+def test_shaw_item_verified_without_calendar_when_every_other_voice_is_named(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
     call = dataclasses.replace(base, transcript=NAMED_TWO)
     roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
     [it] = participants.apply_trust([_item("shaw", "Shaw Cole")], roster)
@@ -112,7 +115,8 @@ def test_shaw_item_stays_inferred_when_a_generic_voice_is_unidentified(base):
     assert it.trust == "inferred"
 
 
-def test_calendar_adds_the_email_of_a_named_invitee(base):
+def test_calendar_adds_the_email_of_a_named_invitee(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
     call = dataclasses.replace(base, transcript=NAMED_TWO)
     roster = participants.resolve(call, _raw(), _calendar_with_dana(), shaw_emails=SHAW)
     dana = [p for p in roster.participants if p.name == "Dana Reyes"]
@@ -165,13 +169,15 @@ def test_shaw_named_label_is_never_a_verified_participant_even_if_misclaimed(bas
 @pytest.mark.parametrize("label", [
     "SPEAKER_00", "SPEAKER_00a", "Speaker 3", "Speaker A", "Speaker B", "Unknown", "Unknown Speaker",
     "Guest Speaker", "Guest", "Person 1", "Voice 2", "S1", "Spkr 2", "Participant_A", "Host", "Me",
-    "Other", "You", "Caller", "A", "",
+    "Other", "You", "Caller", "A", "", "Multiple Speakers", "Speakers", "Unknown Speakers", "Guests",
+    "Participants", "SpeakerA", "Attendees",
 ])
 def test_generic_labels_are_not_pocket_names(label):
     assert not participants._pocket_named(label)
 
 
-@pytest.mark.parametrize("label", ["Dana Reyes", "Ivonne", "Mary-Jane O'Neil", "Dr. Lee", "Sanjay Bhatia"])
+@pytest.mark.parametrize("label", ["Dana Reyes", "Ivonne", "Mary-Jane O'Neil", "Dr. Lee", "Sanjay Bhatia",
+                                   "Mary-Jane O\u2019Neil", "Jose\u0301 Garci\u0301a", "Ren\u00e9e"])
 def test_person_names_are_pocket_names(label):
     assert participants._pocket_named(label)
 
@@ -204,3 +210,46 @@ def test_next_call_due_resolves_through_a_named_invitee_label(base):
     roster = participants.resolve(call, _raw(), future, shaw_emails=SHAW)
     due = participants.next_call_due("Dana Reyes", roster, future, (), sources.call_end(call), "America/New_York")
     assert due is not None and due.due_ts.startswith("2026-12-01T13:00")
+
+
+# --- review round 2 ------------------------------------------------------------------------------
+
+def test_misclaim_without_configured_names_verifies_nobody(base):
+    """R2 blocker: with POSTCALL_SHAW_NAMES unset, a person-named shaw_label cannot be proven, so a
+    wrong claim (Dana as Shaw) must not make "Shaw Cole" a verified participant or verify Shaw items."""
+    call = dataclasses.replace(base, transcript=NAMED_TWO)
+    roster = participants.resolve(call, _raw(shaw_label="Dana Reyes"), [], shaw_emails=SHAW)
+    assert roster.verified_names == set()
+    shaw_it, part_it = participants.apply_trust([_item("shaw", "Dana Reyes"),
+                                                 _item("participant", "Shaw Cole")], roster)
+    assert shaw_it.trust == "inferred" and part_it.trust == "inferred"
+
+
+def test_unconfigured_person_named_shaw_label_verifies_nobody(base):
+    """Even a correct claim of a person-named label is unproven without the configured name."""
+    call = dataclasses.replace(base, transcript=NAMED_TWO)
+    roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
+    assert roster.verified_names == set()
+
+
+def test_generic_shaw_label_with_evidence_still_verifies_pocket_names(base):
+    """A generic Shaw label (proven by quoted evidence in ground) does not need the configured name."""
+    call = dataclasses.replace(base, transcript=NAMED_TWO.replace("**Shaw Cole**", "**SPEAKER_00**"))
+    roster = participants.resolve(call, _raw(shaw_label="SPEAKER_00"), [], shaw_emails=SHAW)
+    assert roster.verified_names == {"Dana Reyes"}
+
+
+def test_shaw_name_comparison_is_whitespace_and_case_insensitive_everywhere(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "shaw cole")
+    call = dataclasses.replace(base, transcript=NAMED_TWO.replace("**Shaw Cole**", "**Shaw  Cole**"))
+    raw = _items_raw("Dana Reyes", "Likewise. I will share the API credentials with you tomorrow morning.")
+    with pytest.raises(extract.AttributionError):
+        extract.ground(call, extract.Extraction(ok=True, raw=raw))
+
+
+def test_shortcut_still_maps_a_generic_voice_when_shaw_is_name_labelled(base, monkeypatch):
+    """Shortcut gate: Shaw-named label + SPEAKER_01 + one invitee maps SPEAKER_01 to the invitee."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
+    call = dataclasses.replace(base, transcript=NAMED_TWO.replace("**Dana Reyes**", "**SPEAKER_01**"))
+    roster = participants.resolve(call, _raw(), _calendar_with_dana(), shaw_emails=SHAW)
+    assert roster.label_names == {"SPEAKER_01": "Dana Reyes"} and roster.verified_names == {"Dana Reyes"}
