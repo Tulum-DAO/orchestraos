@@ -2941,7 +2941,9 @@ def _ask_brain(prompt, question):
                 f"spoken in the call; later, put the answer in the operator's chat"
                 f"{(' (thread ' + thread + ')') if thread else ''}.")
         mid = store.send(from_agent="arturo", to_agent=VOICE_BRAIN_SESSION, type="task", subject=subject, body=body,
-                         priority="high", metadata={"voice_call": call, "thread_id": thread})
+                         priority="high", metadata={"voice_call": call, "thread_id": thread,
+                                                    # who asked: gm_answers posts a late reply only into their thread
+                                                    "principal": turn.get("principal")})
         with _GM_ASKED_LOCK:
             _GM_ASKED[key] = (mid, now)
         conv = (store.get(mid) or {}).get("conversation_id")
