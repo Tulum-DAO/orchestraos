@@ -72,6 +72,10 @@ BACKEND_REJECTED_LINE = ("Your backend is not available in this call, so you can
                          "short sentence that his tools are not working right now and that you are ending the call.")
 NO_INPUT_S = 6.0           # gm msg_5b124db0: a live call this old with no input tells the client why it is silent
 DOWNLINK_WARN_S = float(os.environ.get("ARTURO_NATIVE_DOWNLINK_WARN_S", "2.0"))
+# gm's answer to a question a call asked lands in that call's chat thread (services/arturo/gm_answers.py), swept this
+# often; "0" in ARTURO_NATIVE_GM_ANSWERS switches it off. It lives and dies with this service.
+GM_ANSWERS_SWEEP_S = 60.0
+GM_ANSWERS_FLAG = "ARTURO_NATIVE_GM_ANSWERS"
 
 
 # ---- who is calling (the proxy's rule, arturo-proxy.py _forwarded + _stamped_principal) ---------------------------
@@ -1033,6 +1037,46 @@ class NativeServer:
         self.calls_loader = call_context.opening_calls              # () -> Arturo's own calls, no chat
         self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
+        self._thread_store = None
+        # the gm answers sweep has its own thread: a sweep stuck on a busy sqlite never takes a live call's tool worker
+        self.sweep_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="native-sweep")
+        self.msg_store_factory = None                               # () -> msg_store.MessageStore (tests inject one)
+
+    def thread_store(self):
+        """The proxy's threads.db, opened once: ThreadStore() re-runs its schema and migration."""
+        if self._thread_store is None:
+            from services.arturo.thread_store import ThreadStore
+            self._thread_store = ThreadStore(call_context.thread_context.threads_db_path())
+        return self._thread_store
+
+    def sweep_gm_answers(self):
+        """One pass of gm_answers (on its own thread, never the event loop): calls still up wait for their end."""
+        from services.arturo import gm_answers
+        if self.msg_store_factory is not None:
+            store = self.msg_store_factory()
+        else:
+            import sys
+            root = str(Path(__file__).resolve().parents[3])        # msg_store.py is code in the checkout
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            from msg_store import MessageStore
+            store = MessageStore()
+        return gm_answers.post_gm_answers(store, self.thread_store(), live_calls=lambda: set(self.calls))
+
+    async def _gm_answers_loop(self, app):
+        """aiohttp cleanup_ctx: the sweep runs for the life of the service."""
+        async def loop():
+            while True:
+                try:
+                    await asyncio.get_running_loop().run_in_executor(self.sweep_pool, self.sweep_gm_answers)
+                except Exception as e:  # noqa: BLE001 — the next sweep tries again
+                    log.warning(f"native: gm answers sweep failed: {e!r}")
+                await asyncio.sleep(GM_ANSWERS_SWEEP_S)
+        task = asyncio.ensure_future(loop()) if os.environ.get(GM_ANSWERS_FLAG, "1") != "0" else None
+        yield
+        if task is not None:
+            task.cancel()
+        self.sweep_pool.shutdown(wait=False)
 
     def _spoken(self, conversation_id):
         call = self.calls.get(conversation_id)
@@ -1079,6 +1123,7 @@ class NativeServer:
     def app(self):
         a = web.Application()
         a.add_routes([web.get("/native/ws", self.ws), web.get("/native/healthz", self.healthz)])
+        a.cleanup_ctx.append(self._gm_answers_loop)
         return a
 
 
