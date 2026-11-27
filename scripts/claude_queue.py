@@ -109,6 +109,17 @@ def queue_items(rows):
     return items
 
 
+#: The remove reasons measured as the message going into the turn (Claude Code 2.1.284).
+DELIVERY_REMOVE_REASONS = ("absorbed_mid_turn",)
+
+
+def left_as_delivery(item) -> bool:
+    """The item left the queue BY BEING SENT: a dequeue (it became a turn) or a remove measured as delivery."""
+    left = (item or {}).get("left") or {}
+    return left.get("how") == "dequeue" or (left.get("how") == "remove"
+                                            and left.get("reason") in DELIVERY_REMOVE_REASONS)
+
+
 def find(rows, text, since=None, until=None):
     """The queue's picture for one message: {"item": the LAST enqueue of this text with its time in [since, until]
     (epoch s; an unbounded side when None), or None; "matches": how many enqueues of it fall in the window (more than

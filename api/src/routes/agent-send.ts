@@ -721,6 +721,12 @@ export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, r
     res.status(502).json({ state: 'unknown', outcome: 'unknown', session, message_id: messageId, error: SEND_NOW_WORDS.unknown });
     return;
   }
+  // A 2xx with no outcome the API knows (an unreadable or truncated body): the keys may have gone, so unknown.
+  if (gw.httpStatus >= 200 && gw.httpStatus < 300) {
+    console.error(`[agent-send] send-now: gateway answered ${gw.httpStatus} with no known outcome; reported as unknown`);
+    res.status(502).json({ state: 'unknown', outcome: 'unknown', session, message_id: messageId, error: SEND_NOW_WORDS.unknown });
+    return;
+  }
   // A 4xx nobody expected (400, 401): refused before anything was pressed. Said once, never the gateway's raw body.
   console.error(`[agent-send] send-now: unexpected gateway answer ${gw.httpStatus}`);
   res.status(502).json({ outcome: 'refused', reason: 'gateway-error', session, error: SEND_NOW_WORDS.failed });

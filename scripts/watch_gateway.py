@@ -7550,9 +7550,10 @@ def _send_now(session, message_id):
     window = {"since": at - SEND_NOW_SINCE_SLACK_S, "until": at + SEND_NOW_UNTIL_SLACK_S}
     text = row.get("text") or ""
 
-    def screen_shows_it():
-        shown = Q.screen_queue(_capture_pane(session, lines=0, ansi=True) or "") or []
-        return any(_screen_shows(x, text) for x in shown)
+    def screen_queue_empty():
+        # Positive evidence only: nothing at all drawn queued. A row that merely fails to match exactly (a word the
+        # CLI wrapped mid-word) is not evidence the message is gone.
+        return not (Q.screen_queue(_capture_pane(session, lines=0, ansi=True) or "") or [])
 
     with _pane_guard(session) as held:
         if not held:
@@ -7565,11 +7566,14 @@ def _send_now(session, message_id):
                 return _send_now_refused("queue-unclear")
             if item is None or item["left"]:
                 # "Left" from the rows alone can be a dequeue paired wrongly (a tail that starts mid-queue), and "never
-                # queued" can be a tail too short: either is said only when the screen agrees.
-                if screen_shows_it():
+                # queued" can be a tail too short: either is said only when the screen shows nothing queued at all.
+                if not screen_queue_empty():
                     return _send_now_refused("queue-unclear")
                 SS.drop(ORCH_DIR, message_id)
-                return 200, {"ok": True, "outcome": "not-queued" if item is None else "already-sent",
+                # Only a dequeue or an absorbed_mid_turn remove was measured as delivery; any other remove (a message
+                # pulled back to edit) took it out of the queue without sending it.
+                delivered = item is not None and Q.left_as_delivery(item)
+                return 200, {"ok": True, "outcome": "already-sent" if delivered else "not-queued",
                              "message_id": message_id}
             fresh = SS.get(ORCH_DIR, message_id)          # re-read under the lock: a concurrent call may have marked it
             if fresh is None:

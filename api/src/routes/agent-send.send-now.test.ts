@@ -209,3 +209,14 @@ test('send-now: only a refused connection says nothing was sent; a reset after t
     globalThis.fetch = realFetch;
   }
 });
+
+
+// ── review r2 (MERGE-OK @ 0bfe3fda, non-blocking folds) ──────────────────
+
+test('send-now: a 2xx the API cannot read (no known outcome) is unknown, never "nothing was sent"', async () => {
+  for (const body of [{}, { outcome: 'sent-ish' }]) {
+    const calls = await sendNow({ httpStatus: 200, body });
+    assert.equal(calls.status, 502, JSON.stringify(body));
+    assert.equal(calls.json.state, 'unknown');
+  }
+});

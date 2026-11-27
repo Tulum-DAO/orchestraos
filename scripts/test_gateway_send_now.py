@@ -623,3 +623,24 @@ def test_G3_a_screen_row_cut_short_never_matches_by_prefix(box, monkeypatch, tmp
 def test_G5_words_match_with_their_spaces():
     assert Q.same_text("look  at\nthe test", "look at the test")
     assert not Q.same_text("to get her", "together")
+
+
+# ------------------------------------------------------------------ review r2 (MERGE-OK @ 0bfe3fda, non-blocking folds)
+def test_N1_already_sent_needs_a_screen_with_nothing_queued_not_just_no_exact_match(box, monkeypatch, tmp_path):
+    # the CLI wrapped the message mid-word, so the screen row is not an exact match; the rows read as left
+    mid = _steered("see https://example.test/averyveryverylongpath now")
+    seat = _seat(monkeypatch, tmp_path, queued_pane("see https://example.test/averyvery verylongpath now"),
+                 [enq("see https://example.test/averyveryverylongpath now"), deq()])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is not None, "the row is kept: send-now can be asked again"
+
+
+def test_N2_a_remove_for_another_reason_is_not_already_sent(box, monkeypatch, tmp_path):
+    # only absorbed_mid_turn was measured as delivery; any other remove (a message pulled back to edit) is not
+    mid = _steered()
+    edited = {**rem(WORDS), "reason": "edited"}
+    seat = _seat(monkeypatch, tmp_path, queued_pane(), [enq(WORDS), edited])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "not-queued", body
+    assert seat.keys() == []
