@@ -592,9 +592,10 @@ const STEP_ENDED: readonly StepEnded[] = ['none', 'backgrounded', 'truncated', '
 export interface GatewaySendNowResult {
   httpStatus: number;
   body: Record<string, any>;
+  /** The request never reached the gateway (no token, or the connection was refused): nothing was sent. */
   unreachable?: boolean;
-  /** No answer in time: the gateway may have sent the keys. */
-  timedOut?: boolean;
+  /** The request went and no answer came back (a timeout, a reset): the gateway may have sent the keys. */
+  maybeSent?: boolean;
 }
 
 export interface AgentSendNowDeps {
@@ -604,9 +605,10 @@ export interface AgentSendNowDeps {
   gatewaySendNow(session: string, messageId: string): Promise<GatewaySendNowResult>;
 }
 
-export async function postAgentSendNow(session: string, messageId: string): Promise<GatewaySendNowResult> {
+export async function postAgentSendNow(session: string, messageId: string,
+  opts: { tokenFile?: () => string } = {}): Promise<GatewaySendNowResult> {
   let token = '';
-  try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token provisioned */ }
+  try { token = (opts.tokenFile ? opts.tokenFile() : readFileSync(GATEWAY_TOKEN_FILE, 'utf-8')).trim(); } catch { /* no token provisioned */ }
   if (!token) return { httpStatus: 0, body: {}, unreachable: true };
   try {
     const resp = await fetch(`${GATEWAY_URL}/agent-send-now`, {
@@ -620,8 +622,11 @@ export async function postAgentSendNow(session: string, messageId: string): Prom
     const body: any = await resp.json().catch(() => ({}));
     return { httpStatus: resp.status, body: body && typeof body === 'object' ? body : {} };
   } catch (err: any) {
-    const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
-    return { httpStatus: 0, body: {}, unreachable: !timedOut, timedOut };
+    // Only a refused connection proves the request never arrived. A timeout or a reset (a gateway restarting inside
+    // its window) may come after the keys went.
+    const code = err?.cause?.code || err?.code;
+    if (code === 'ECONNREFUSED') return { httpStatus: 0, body: {}, unreachable: true };
+    return { httpStatus: 0, body: {}, maybeSent: true };
   }
 }
 
@@ -642,6 +647,7 @@ const sentence = (v: unknown, fallback: string) => (typeof v === 'string' && v.t
 
 /** POST /api/agents/:id/send-now {message_id} -> the CLI's own send-now for a message it already holds in its queue.
  *  200 {outcome: delivered-now | already-sent | not-queued, session, message_id, step_ended?, also_submitted?};
+ *  404 {outcome:"unknown-id"} for an id the gateway does not know;
  *  409 {outcome:"refused", reason, error} when anything else would go with it (another queued message) or the pane is
  *  not safe, 423 the same shape when someone is at the pane (draft-in-composer, terminal-attached); 501 {outcome:"unsupported"} for a runtime with no such key; 502 {state:"unknown"} when the keys
  *  went and the leaving was not seen (never retried). Who asked is the principal (actingAgent); the body is the id only. */
@@ -663,7 +669,7 @@ export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, r
   const session = deps.resolveSession(agentId);
   const gw = await deps.gatewaySendNow(session, messageId);
   const b = gw.body || {};
-  if (gw.timedOut) {
+  if (gw.maybeSent) {
     res.status(502).json({ state: 'unknown', outcome: 'unknown', session, message_id: messageId, error: SEND_NOW_WORDS.unknown });
     return;
   }
@@ -700,11 +706,22 @@ export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, r
     res.status(501).json({ outcome: 'unsupported', session, error: sentence(b.error, "This agent has no send-now key.") });
     return;
   }
+  if (gw.httpStatus === 404 && b.outcome === 'unknown-id') {
+    res.status(404).json({ outcome: 'unknown-id', session, message_id: messageId,
+                           error: sentence(b.error, 'That message is not known here; nothing was sent.') });
+    return;
+  }
   if (gw.httpStatus === 404) {
     res.status(404).json({ ok: false, error: 'agent not running', agent: agentId });
     return;
   }
-  // 400, 401 from the gateway or anything unexpected: the server's fault, said once, never the gateway's raw body.
+  // Any other 5xx (a gateway that failed mid-request): the keys may have gone, so unknown, never "nothing was sent".
+  if (gw.httpStatus >= 500) {
+    console.error(`[agent-send] send-now: gateway answered ${gw.httpStatus}; reported as unknown`);
+    res.status(502).json({ state: 'unknown', outcome: 'unknown', session, message_id: messageId, error: SEND_NOW_WORDS.unknown });
+    return;
+  }
+  // A 4xx nobody expected (400, 401): refused before anything was pressed. Said once, never the gateway's raw body.
   console.error(`[agent-send] send-now: unexpected gateway answer ${gw.httpStatus}`);
   res.status(502).json({ outcome: 'refused', reason: 'gateway-error', session, error: SEND_NOW_WORDS.failed });
 }

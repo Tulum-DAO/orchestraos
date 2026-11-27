@@ -135,7 +135,7 @@ test('send-now: unknown (502) and a timeout are both state unknown', async () =>
   let calls = await sendNow({ httpStatus: 502, body: { state: 'unknown', outcome: 'unknown', error: 'It may still go.' } });
   assert.equal(calls.status, 502);
   assert.equal(calls.json.state, 'unknown');
-  calls = await sendNow({ httpStatus: 0, body: {}, timedOut: true });
+  calls = await sendNow({ httpStatus: 0, body: {}, maybeSent: true });
   assert.equal(calls.status, 502);
   assert.equal(calls.json.state, 'unknown');
 });
@@ -174,4 +174,38 @@ test('send-now: an unexpected gateway answer never forwards its raw body', async
   const calls = await sendNow({ httpStatus: 400, body: { ok: false, error: 'session and a message_id ... /home/someone/x' } });
   assert.equal(calls.status, 502);
   assert.doesNotMatch(JSON.stringify(calls.json), /home/);
+});
+
+// ── review r1 (fenced Claude, BLOCK @ 64815b69) ──────────────────────────
+
+test('send-now: a gateway 500 (it may have sent the keys) is unknown, never "nothing was sent"', async () => {
+  const calls = await sendNow({ httpStatus: 500, body: {} });
+  assert.equal(calls.status, 502);
+  assert.equal(calls.json.state, 'unknown');
+  assert.doesNotMatch(calls.json.error, /nothing was sent/i);
+});
+
+test('send-now: an unknown id is its own 404 with the gateway sentence', async () => {
+  const calls = await sendNow({ httpStatus: 404, body: { ok: false, outcome: 'unknown-id',
+    error: 'That message is not known here (older than a day, or never queued); nothing was sent.' } });
+  assert.equal(calls.status, 404);
+  assert.equal(calls.json.outcome, 'unknown-id');
+  assert.match(calls.json.error, /not known here/);
+});
+
+test('send-now: only a refused connection says nothing was sent; a reset after the request went is unknown', async () => {
+  const { postAgentSendNow } = await import('./agent-send.js');
+  const realFetch = globalThis.fetch;
+  const fail = (code: string) => { globalThis.fetch = (async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code } }); }) as any; };
+  try {
+    fail('ECONNREFUSED');
+    let r = await postAgentSendNow('s', 'stq_0123456789abcdef', { tokenFile: () => 'tok' });
+    assert.equal(r.unreachable, true);
+    fail('ECONNRESET');
+    r = await postAgentSendNow('s', 'stq_0123456789abcdef', { tokenFile: () => 'tok' });
+    assert.equal(r.unreachable, undefined);
+    assert.equal(r.maybeSent, true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

@@ -7443,7 +7443,7 @@ async def handle_agent_message(request):
         # (the seat reads it at its next step), or Escape + typed (read at once). Held answers say "held" above.
         info = {**info, "outcome": ("interrupted" if info.get("interrupted")
                                     else "delivered-steer" if info.get("queued_mid_turn") else "delivered-now")}
-        if info["outcome"] == "delivered-steer":
+        if info["outcome"] == "delivered-steer" and instant:   # a person's words only: the ledger is for send-now
             mid = await asyncio.get_event_loop().run_in_executor(None, lambda: _record_steered(session, text, info))
             if mid:
                 info = {**info, "message_id": mid}
@@ -7470,11 +7470,12 @@ def _record_steered(session, text, info):
 
 
 #: Send-now (POST /agent-send-now): how long the transcript is watched for the message to leave the queue after
-#: the chord, how often, and how far before the ledger row's time its enqueue may be (the row is written after the
-#: submit is verified, seconds after the CLI queued it).
+#: the chord, how often, and the window around the ledger row's time its enqueue must fall in (the row is written
+#: after the submit is verified, seconds after the CLI queued it; a later re-send of the same words falls outside).
 SEND_NOW_POLL_S = 0.25
 SEND_NOW_POLLS = 20                     # 5 s
-SEND_NOW_SINCE_SLACK_S = 120.0
+SEND_NOW_SINCE_SLACK_S = 60.0
+SEND_NOW_UNTIL_SLACK_S = 5.0
 #: The full sentence a person reads for each refusal (nothing was sent in any of them).
 SEND_NOW_REFUSALS = {
     "other-agent": "That message was sent to a different agent; nothing was sent.",
@@ -7493,6 +7494,8 @@ SEND_NOW_REFUSALS = {
 }
 _RECHECK_TO_REFUSAL = {"composer_text": "draft-in-composer", "stranded_chip": "composer-chip",
                        "permission_pending": "prompt-open", "no_composer": "prompt-open"}
+SEND_NOW_HALF = ("Only the first of the two send-now keys reached the agent; its next keystroke may complete them. "
+                 "The message may or may not go; nothing will be retried.")
 SEND_NOW_UNKNOWN = ("The send-now keys went to the agent, but its transcript did not show the message leaving the "
                     "queue in time. It may still go; nothing will be retried.")
 
@@ -7521,15 +7524,17 @@ def _send_now(session, message_id):
     the chord submits the WHOLE queue and any typed draft, and it ends the current step early (a running command
     moves to the background; a reply being written is cut short). So nothing is sent unless, under the pane lock
     and immediately before the keys: the ledger row is this seat's, the transcript queue holds this message and no
-    other person's, the composer is empty and safe, and the screen shows exactly this one message queued. After the
-    keys, the transcript must show it leave the queue within SEND_NOW_POLLS x SEND_NOW_POLL_S, else 502 unknown,
-    never a retry."""
+    other person's, no terminal is attached, the composer is empty and safe, and the screen shows exactly this one
+    message queued. After the keys, the transcript must show it leave the queue within SEND_NOW_POLLS x
+    SEND_NOW_POLL_S, else 502 unknown, never a retry. From the moment the row is marked, any failure is "unknown":
+    the keys may have gone, so the answer never says nothing was sent."""
     import time as _time
     from scripts import claude_queue as Q
     from scripts import steered_sends as SS
     row = SS.get(ORCH_DIR, message_id)
     if row is None:
-        return 200, {"ok": True, "outcome": "not-queued", "message_id": message_id}
+        return 404, {"ok": False, "outcome": "unknown-id", "message_id": message_id,
+                     "error": "That message is not known here (older than a day, or never queued); nothing was sent."}
     if row.get("session") != session:
         return _send_now_refused("other-agent")
     st = _agent_status().get_agent_status(session) or {}
@@ -7541,23 +7546,35 @@ def _send_now(session, message_id):
     path = _seat_transcript_path(session, meta)
     if not path:
         return _send_now_refused("no-transcript")
-    since = float(row.get("at") or 0) - SEND_NOW_SINCE_SLACK_S
+    at = float(row.get("at") or 0)
+    # The CLI queued it before the gateway verified the submit and wrote the row: its enqueue sits just before the
+    # row's time. A later re-send of the same words is never this message.
+    window = {"since": at - SEND_NOW_SINCE_SLACK_S, "until": at + SEND_NOW_UNTIL_SLACK_S}
     text = row.get("text") or ""
+
+    def screen_shows_it():
+        shown = Q.screen_queue(_capture_pane(session, lines=0, ansi=True) or "") or []
+        return any(_screen_shows(x, text) for x in shown)
+
     with _pane_guard(session) as held:
         if not held:
             return _send_now_refused("busy")
         with _session_send_lock(session):
-            pic = Q.find(Q.read_rows(path), text, since=since)
+            pic = Q.find(Q.read_rows(path), text, **window)
             item = pic["item"]
-            if item is None:
+            if item is None or item["left"]:
+                # "Left" from the rows alone can be a dequeue paired wrongly (a tail that starts mid-queue), and "never
+                # queued" can be a tail too short: either is said only when the screen agrees.
+                if screen_shows_it():
+                    return _send_now_refused("queue-unclear")
                 SS.drop(ORCH_DIR, message_id)
-                return 200, {"ok": True, "outcome": "not-queued", "message_id": message_id}
-            if item["left"]:
-                SS.drop(ORCH_DIR, message_id)
-                return 200, {"ok": True, "outcome": "already-sent", "message_id": message_id}
+                return 200, {"ok": True, "outcome": "not-queued" if item is None else "already-sent",
+                             "message_id": message_id}
             fresh = SS.get(ORCH_DIR, message_id)          # re-read under the lock: a concurrent call may have marked it
             if fresh is None:
-                return 200, {"ok": True, "outcome": "not-queued", "message_id": message_id}
+                return 404, {"ok": False, "outcome": "unknown-id", "message_id": message_id,
+                             "error": "That message is not known here (older than a day, or never queued); "
+                                      "nothing was sent."}
             if fresh.get("chorded_at"):
                 # An earlier send-now sent the keys and could not confirm: never the keys twice for one message.
                 return 502, {"ok": False, "state": "unknown", "outcome": "unknown", "message_id": message_id,
@@ -7581,23 +7598,37 @@ def _send_now(session, message_id):
                 SS.mark_chorded(ORCH_DIR, message_id)       # FAIL CLOSED: an unmarked chord could go twice
             except OSError:
                 return _send_now_refused("send-failed", status=502)
-            if _tmux("send-keys", "-t", _st(session), "C-x").returncode != 0:
-                SS.unmark_chorded(ORCH_DIR, message_id)
-                return _send_now_refused("send-failed", status=502)
-            _tmux("send-keys", "-t", _st(session), "C-s")
-            system_before = [o for o in pic["others"] if o["kind"] != "person"]
-            for _ in range(SEND_NOW_POLLS):
-                _time.sleep(SEND_NOW_POLL_S)
-                rows = Q.read_rows(path)
-                now = Q.find(rows, text, since=since)
-                if now["item"] and now["item"]["left"]:
-                    SS.drop(ORCH_DIR, message_id)
-                    still = {(o["content"], o["at"]) for o in now["others"]}      # never by row index: the tail moves
-                    went = sorted({o["kind"] for o in system_before if (o["content"], o["at"]) not in still})
-                    return 200, {"ok": True, "outcome": "delivered-now", "message_id": message_id,
-                                 "step_ended": Q.step_ended(rows, now["item"]), "also_submitted": went}
-            return 502, {"ok": False, "state": "unknown", "outcome": "unknown", "message_id": message_id,
-                         "error": SEND_NOW_UNKNOWN}
+            unknown = {"ok": False, "state": "unknown", "outcome": "unknown", "message_id": message_id,
+                       "error": SEND_NOW_UNKNOWN}
+            try:
+                if _tmux("send-keys", "-t", _st(session), "C-x").returncode != 0:
+                    SS.unmark_chorded(ORCH_DIR, message_id)     # tmux refused the first key: nothing reached the pane
+                    return _send_now_refused("send-failed", status=502)
+                keys_at = _time.time()
+                if _tmux("send-keys", "-t", _st(session), "C-s").returncode != 0:
+                    # ctrl+x went and ctrl+s did not: the CLI waits for the chord's second key, and the next key into
+                    # the pane completes it. Nothing here can clear that safely; the answer says so.
+                    log.warning(f"SEND-NOW {session} {message_id}: ctrl+s refused after ctrl+x (chord half-pressed)")
+                    return 502, {**unknown, "error": SEND_NOW_HALF}
+                system_before = [o for o in pic["others"] if o["kind"] != "person"]
+                for _ in range(SEND_NOW_POLLS):
+                    _time.sleep(SEND_NOW_POLL_S)
+                    rows = Q.read_rows(path)
+                    now = Q.find(rows, text, **window)
+                    if now["item"] and now["item"]["left"]:
+                        try:
+                            SS.drop(ORCH_DIR, message_id)
+                        except OSError as e:                # the message went: the answer says so all the same
+                            log.warning(f"SEND-NOW {session} {message_id}: ledger drop failed ({type(e).__name__})")
+                        still = {(o["content"], o["at"]) for o in now["others"]}  # never by row index: the tail moves
+                        went = sorted({o["kind"] for o in system_before if (o["content"], o["at"]) not in still})
+                        return 200, {"ok": True, "outcome": "delivered-now", "message_id": message_id,
+                                     "step_ended": Q.step_ended(rows, now["item"], since=keys_at - 1.0),
+                                     "also_submitted": went}
+                return 502, unknown
+            except Exception as e:  # noqa: BLE001 — the keys may have gone: unknown, never "nothing was sent"
+                log.warning(f"SEND-NOW {session} {message_id}: failed after the mark ({type(e).__name__}); unknown")
+                return 502, unknown
 
 
 async def handle_agent_send_now(request):

@@ -366,12 +366,6 @@ def test_S4_a_message_that_already_left_the_queue_is_already_sent(box, monkeypat
     assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is None
 
 
-def test_S4_an_id_nobody_minted_is_not_queued(box, monkeypatch, tmp_path):
-    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)])
-    status, body = _send_now(box, {"session": "seat", "message_id": "stq_" + "0" * 16})
-    assert status == 200 and body["outcome"] == "not-queued" and seat.keys() == []
-
-
 def test_S4_a_message_the_queue_never_held_is_not_queued(box, monkeypatch, tmp_path):
     mid = _steered()
     seat = _seat(monkeypatch, tmp_path, queued_pane(), [prompt(WORDS)])
@@ -397,6 +391,7 @@ def test_S4_two_send_nows_for_one_message_send_the_chord_once(box, monkeypatch, 
     def chord(seat):
         gate.wait(2)                       # the second call is waiting on the lock while the first is mid-chord
         seat.write([bg_result(), rem(WORDS)])
+        seat.screen = queued_pane()        # the CLI no longer draws it queued
     seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)], on_chord=chord)
     out = []
     ts = [threading.Thread(target=lambda: out.append(G._send_now("seat", mid))) for _ in range(2)]
@@ -487,3 +482,120 @@ def test_the_ledger_is_capped_by_count_and_age(box):
     rows = [json.loads(ln) for ln in open(SS.ledger_path(G.ORCH_DIR))]
     assert len(rows) == SS.MAX_ROWS and old not in {r["id"] for r in rows}
     assert rows[-1]["id"] == ids[-1] and SS.get(G.ORCH_DIR, ids[0], now=t0 + SS.MAX_AGE_S) is None
+
+
+# ------------------------------------------------------------------ review r1 (fenced Claude, BLOCK @ 64815b69)
+def _raising_on(seat, key, exc):
+    real = seat.__call__
+
+    def t(*args, timeout=5):
+        if args[0] == "send-keys" and args[-1] == key:
+            seat.calls.append(args)
+            raise exc
+        return real(*args, timeout=timeout)
+    return t
+
+
+@pytest.mark.parametrize("key", ["C-x", "C-s"])
+def test_R1_a_failure_once_the_keys_may_have_gone_is_unknown_never_nothing_sent(box, monkeypatch, tmp_path, key):
+    import subprocess
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)])
+    monkeypatch.setattr(G, "_tmux", _raising_on(seat, key, subprocess.TimeoutExpired(["tmux"], 5)))
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 502 and body["state"] == "unknown", body
+    assert "nothing was sent" not in json.dumps(body).lower()
+    assert SS.get(G.ORCH_DIR, mid)["chorded_at"], "the keys may have gone: the mark stays, no second chord"
+
+
+def test_R1_a_ledger_that_cannot_drop_after_the_leaving_is_seen_still_says_delivered_now(box, monkeypatch, tmp_path):
+    mid = _steered()
+    _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)], on_chord=absorbed(lambda: [bg_result(), rem(WORDS)]))
+    monkeypatch.setattr(SS, "drop", lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")))
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "delivered-now", body
+
+
+def test_R1_a_second_key_tmux_refused_is_unknown_and_says_the_chord_is_half_pressed(box, monkeypatch, tmp_path):
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)])
+    real = seat.__call__
+
+    def t(*args, timeout=5):
+        if args[0] == "send-keys" and args[-1] == "C-s":
+            seat.calls.append(args)
+            return types.SimpleNamespace(returncode=1, stdout="")
+        return real(*args, timeout=timeout)
+    monkeypatch.setattr(G, "_tmux", t)
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 502 and body["state"] == "unknown" and "first of the two" in body["error"], body
+
+
+def test_R1_a_tail_that_starts_mid_queue_never_reads_a_still_queued_message_as_sent(box, monkeypatch, tmp_path):
+    # the dequeue belongs to an older message enqueued before the rows read; the screen still shows ours queued
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS), deq()])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is not None
+
+
+def test_R1_not_queued_is_said_only_when_the_screen_agrees(box, monkeypatch, tmp_path):
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [prompt("go")])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == []
+
+
+def test_R1_an_id_nobody_minted_is_its_own_404_not_a_claim_about_the_queue(box, monkeypatch, tmp_path):
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)])
+    status, body = _send_now(box, {"session": "seat", "message_id": "stq_" + "0" * 16})
+    assert status == 404 and body["outcome"] == "unknown-id" and body["error"].endswith("nothing was sent."), body
+    assert seat.keys() == []
+
+
+@pytest.mark.parametrize("extra,actor", [({"source": "mail"}, None), ({}, "automation:router")])
+def test_R1_mail_and_automation_steers_are_not_kept(box, monkeypatch, extra, actor):
+    monkeypatch.setattr(G, "_agent_status", lambda: _Det("working", "claude"))
+    monkeypatch.setattr(G, "verified_inject",
+                        lambda *a, **k: (True, {"state": "working", "attempts": 1, "queued_mid_turn": True}))
+    status, body = _post(box, {**PHONE, **extra}, actor=actor)
+    assert status == 200 and "message_id" not in body, body
+    assert not os.path.exists(SS.ledger_path(G.ORCH_DIR))
+
+
+def test_R1_a_later_resend_of_the_same_words_is_never_sent_under_an_old_id(box, monkeypatch, tmp_path):
+    t0 = time.time() - 600
+    mid = SS.record(G.ORCH_DIR, "seat", WORDS, now=t0)
+    rows = [enq(WORDS, t0 - 3), tool_result(t0 + 5), rem(WORDS, t0 + 5), enq(WORDS, t0 + 300)]
+    # the re-send is drawn queued: identical words on screen cannot be told apart, so nothing is claimed or sent
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), rows)
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear" and seat.keys() == [], body
+    # and once the re-send is gone from the screen, the old id reads as what it is: already sent
+    seat.screen = queued_pane()
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "already-sent" and seat.keys() == [], body
+
+
+def test_R1_step_ended_counts_only_rows_after_the_keys():
+    t = time.time()
+    # an old ordinary tool result before the keys; the background row written AFTER the remove (order not pinned)
+    rows = [prompt("go", t - 60), enq(WORDS, t - 30), tool_result(t - 20), rem(WORDS, t + 1), bg_result(t + 1)]
+    assert Q.step_ended(rows, Q.find(rows, WORDS)["item"], since=t) == "backgrounded"
+    rows = [prompt("go", t - 60), enq(WORDS, t - 30), tool_result(t - 20), rem(WORDS, t + 1)]
+    assert Q.step_ended(rows, Q.find(rows, WORDS)["item"], since=t) == "unknown", "an old tool result is no evidence"
+    # a dequeue with no prompt row after it yet: the new turn's rows are never read as the old turn's ending
+    rows = [prompt("go", t - 60), enq(WORDS, t - 30), deq(t + 1), asst("end_turn", t + 2), turn_end(t + 2)]
+    assert Q.step_ended(rows, Q.find(rows, WORDS)["item"], since=t) == "unknown"
+
+
+def test_R1_the_real_composer_reader_reads_the_queued_layout(monkeypatch):
+    real = G._load_agent_status_mod()
+
+    class _DetReal(_Det):
+        _find_chrome = staticmethod(real._find_chrome)
+    monkeypatch.setattr(G, "_agent_status", lambda: _DetReal("working", "claude"))
+    assert G._typed_on_prompt_line(queued_pane(WORDS)) == "", "the placeholder under a queue is not a draft"
+    assert G._typed_on_prompt_line(queued_pane(WORDS, composer=DRAFT)) == "my own half-typed draft"

@@ -83,8 +83,10 @@ def _ts(row):
 
 
 def queue_items(rows):
-    """Every queued item in enqueue order: {content, kind, at, idx, left: None | {how, idx, reason}}. A dequeue or
-    remove whose enqueue is older than the rows read is ignored (it cannot be any item seen here)."""
+    """Every queued item in enqueue order: {content, kind, at, idx, left: None | {how, idx, reason}}. A remove whose
+    enqueue is older than the rows read matches nothing and is ignored. A DEQUEUE carries no content, so when the rows
+    read start mid-queue (an older item still queued before the tail) it is paired with the oldest item SEEN, which
+    may be the wrong one: a caller never trusts "left" on its own (send-now cross-checks the screen)."""
     items, open_ = [], []
     for i, r in enumerate(rows):
         if r.get("type") != "queue-operation":
@@ -106,37 +108,51 @@ def queue_items(rows):
     return items
 
 
-def find(rows, text, since=None):
-    """The queue's picture for one message: {"item": the LAST enqueue of this text at or after `since` (epoch s),
-    or None; "others": every OTHER item still queued}."""
+def find(rows, text, since=None, until=None):
+    """The queue's picture for one message: {"item": the LAST enqueue of this text with its time in [since, until]
+    (epoch s; an unbounded side when None), or None; "others": every OTHER item still queued}. An enqueue with no
+    readable time never matches a bounded window."""
     items = queue_items(rows)
     target = None
     for it in items:
-        if same_text(it["content"], text) and (since is None or it["at"] is None or it["at"] >= since):
-            target = it
+        if not same_text(it["content"], text):
+            continue
+        if since is not None or until is not None:
+            if it["at"] is None or (since is not None and it["at"] < since) or (until is not None and it["at"] > until):
+                continue
+        target = it
     others = [it for it in items if it["left"] is None and it is not target]
     return {"item": target, "others": others}
 
 
-def step_ended(rows, item) -> str:
+def step_ended(rows, item, since=None) -> str:
     """What the delivery of a queued item did to the step that was running, from the rows only:
     "backgrounded" (a running command was moved to the background to deliver it), "truncated" (the reply being
     written was cut short and the queue started a new turn), "none" (it went in at a boundary the turn reached on
-    its own), or "unknown" when the rows do not say."""
+    its own), or "unknown" when the rows do not say. `since` (epoch s, the moment the keys went): a tool result older
+    than that is no evidence of what the keys did, so only rows at or after it count on the remove path."""
     left = (item or {}).get("left")
     if not left:
         return "unknown"
     j = left["idx"]
+    k = next((n for n in range(j + 1, len(rows)) if _is_prompt_row(rows[n])), None)
+    fresh = lambda r: since is None or ((_ts(r) or 0) >= since)
     if left["how"] == "remove":
-        for r in reversed(rows[item["idx"]:j]):
-            tur = r.get("toolUseResult")
-            if r.get("type") == "user" and isinstance(tur, dict):
-                return "backgrounded" if tur.get("backgroundedToDeliverMessage") is True else "none"
-        return "unknown"
+        # The background row may be written before or after the remove row (the order is not pinned): read both
+        # sides, up to the next prompt (or the end).
+        window = [r for r in rows[item["idx"]:(k if k is not None else len(rows))] if fresh(r)]
+        results = [r.get("toolUseResult") for r in window if r.get("type") == "user"
+                   and isinstance(r.get("toolUseResult"), dict)]
+        if any(t.get("backgroundedToDeliverMessage") is True for t in results):
+            return "backgrounded"
+        before = [r for r in rows[item["idx"]:j] if fresh(r) and r.get("type") == "user"
+                  and isinstance(r.get("toolUseResult"), dict)]
+        return "none" if before else "unknown"
     # The ending turn's last rows are written AFTER the dequeue row (measured): read the rows between the dequeue
-    # and the new turn's prompt first, newest first, then the rows before the dequeue.
-    k = next((n for n in range(j + 1, len(rows)) if _is_prompt_row(rows[n])), len(rows))
-    for r in list(reversed(rows[j + 1:k])) + list(reversed(rows[:j])):
+    # and the new turn's prompt first, newest first, then the rows before the dequeue. With no prompt row after the
+    # dequeue yet, the rows after it may already be the NEW turn's: only the rows before it are read.
+    after = list(reversed(rows[j + 1:k])) if k is not None else []
+    for r in after + list(reversed(rows[:j])):
         if r.get("type") == "system" and r.get("subtype") == "turn_duration":
             return "none"                       # the turn had ended: an ordinary drain
         if r.get("type") == "assistant":
