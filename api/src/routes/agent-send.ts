@@ -475,8 +475,12 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   // Delivered — the parser-confirmed submit landed. agent_state says whether the agent was
   // mid-turn (the CLI then holds it in its input queue until the turn ends), for the "queued" chip.
   if (gw.ok && gw.delivered) {
+    // message_id only on delivered-steer (the words sit in the CLI's queue): the id POST /:id/send-now takes. Additive.
+    const steerId = gw.outcome === 'delivered-steer' && typeof gw.message_id === 'string' && STEER_ID.test(gw.message_id)
+      ? gw.message_id : undefined;
     keepReplyTo();
-    res.status(200).json(shape('delivered', { session, attempts: gw.attempts, agent_state: gw.state, ...pointer, ...outcome }));
+    res.status(200).json(shape('delivered', { session, attempts: gw.attempts, agent_state: gw.state, ...pointer, ...outcome,
+                                              ...(steerId ? { message_id: steerId } : {}) }));
     return;
   }
 
@@ -574,6 +578,137 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   }));
 }
 
+// ── send-now: a queued message, submitted at once ───────────────────────
+
+/** The id the gateway mints for a delivered-steer send (scripts/steered_sends.py). */
+export const STEER_ID = /^stq_[0-9a-f]{16}$/;
+export type SendNowOutcome = 'delivered-now' | 'already-sent' | 'not-queued';
+export const SEND_NOW_OUTCOMES: readonly SendNowOutcome[] = ['delivered-now', 'already-sent', 'not-queued'];
+/** What submitting the queue did to the step that was running (measured on Claude Code 2.1.284): a running command
+ *  moved to the background, a reply being written cut short, nothing, or the transcript did not say. */
+export type StepEnded = 'none' | 'backgrounded' | 'truncated' | 'unknown';
+const STEP_ENDED: readonly StepEnded[] = ['none', 'backgrounded', 'truncated', 'unknown'];
+
+export interface GatewaySendNowResult {
+  httpStatus: number;
+  body: Record<string, any>;
+  unreachable?: boolean;
+  /** No answer in time: the gateway may have sent the keys. */
+  timedOut?: boolean;
+}
+
+export interface AgentSendNowDeps {
+  agentExists(agentId: string): boolean;
+  resolveSession(agentId: string): string;
+  /** POST /agent-send-now on the watch gateway. Never throws. */
+  gatewaySendNow(session: string, messageId: string): Promise<GatewaySendNowResult>;
+}
+
+export async function postAgentSendNow(session: string, messageId: string): Promise<GatewaySendNowResult> {
+  let token = '';
+  try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token provisioned */ }
+  if (!token) return { httpStatus: 0, body: {}, unreachable: true };
+  try {
+    const resp = await fetch(`${GATEWAY_URL}/agent-send-now`, {
+      method: 'POST',
+      // operator:web: a person pressed it in the web chat (the gateway refuses anything that is not a person's surface)
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': 'operator:web' },
+      body: JSON.stringify({ session, message_id: messageId }),
+      // the gateway waits up to ~8 s for the pane lock, then up to 5 s for the transcript to show the message leave
+      signal: AbortSignal.timeout(20000),
+    });
+    const body: any = await resp.json().catch(() => ({}));
+    return { httpStatus: resp.status, body: body && typeof body === 'object' ? body : {} };
+  } catch (err: any) {
+    const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    return { httpStatus: 0, body: {}, unreachable: !timedOut, timedOut };
+  }
+}
+
+export const defaultAgentSendNowDeps: AgentSendNowDeps = {
+  agentExists: realAgentExists,
+  resolveSession: realResolveSession,
+  gatewaySendNow: postAgentSendNow,
+};
+
+const SEND_NOW_WORDS = {
+  badId: 'A message_id from a queued send (delivered-steer) is required.',
+  unreachable: "The agent's gateway could not be reached; nothing was sent.",
+  unknown: 'Send-now may have gone through, but it could not be confirmed. It will not be retried.',
+  refused: 'Send-now was refused; nothing was sent.',
+  failed: 'Send-now failed; nothing was sent.',
+};
+const sentence = (v: unknown, fallback: string) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 400) : fallback);
+
+/** POST /api/agents/:id/send-now {message_id} -> the CLI's own send-now for a message it already holds in its queue.
+ *  200 {outcome: delivered-now | already-sent | not-queued, session, message_id, step_ended?, also_submitted?};
+ *  409 {outcome:"refused", reason, error} when anything else would go with it (another queued message) or the pane is
+ *  not safe, 423 the same shape when someone is at the pane (draft-in-composer, terminal-attached); 501 {outcome:"unsupported"} for a runtime with no such key; 502 {state:"unknown"} when the keys
+ *  went and the leaving was not seen (never retried). Who asked is the principal (actingAgent); the body is the id only. */
+export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, res: Response): Promise<void> {
+  const agentId = String(req.params.id || '').trim();
+  const messageId = String((req.body || {}).message_id ?? '').trim();
+  if (!agentId || !STEER_ID.test(messageId)) {
+    res.status(400).json({ error: SEND_NOW_WORDS.badId });
+    return;
+  }
+  if (!deps.agentExists(agentId)) {
+    res.status(404).json({ ok: false, error: 'unknown agent', agent: agentId });
+    return;
+  }
+  if (!actingAgent(req)) {
+    res.status(401).json({ ok: false, error: 'unauthenticated' });
+    return;
+  }
+  const session = deps.resolveSession(agentId);
+  const gw = await deps.gatewaySendNow(session, messageId);
+  const b = gw.body || {};
+  if (gw.timedOut) {
+    res.status(502).json({ state: 'unknown', outcome: 'unknown', session, message_id: messageId, error: SEND_NOW_WORDS.unknown });
+    return;
+  }
+  if (gw.unreachable) {
+    res.status(502).json({ outcome: 'refused', reason: 'gateway-unreachable', session, error: SEND_NOW_WORDS.unreachable });
+    return;
+  }
+  if (gw.httpStatus === 200 && (SEND_NOW_OUTCOMES as readonly string[]).includes(String(b.outcome))) {
+    const delivered = b.outcome === 'delivered-now';
+    res.status(200).json({
+      outcome: b.outcome, session, message_id: messageId,
+      ...(delivered ? {
+        step_ended: (STEP_ENDED as readonly string[]).includes(String(b.step_ended)) ? b.step_ended : 'unknown',
+        also_submitted: Array.isArray(b.also_submitted) ? b.also_submitted.filter((k: unknown) => typeof k === 'string') : [],
+      } : {}),
+    });
+    return;
+  }
+  if (gw.httpStatus === 502 && b.state === 'unknown') {
+    res.status(502).json({ state: 'unknown', outcome: 'unknown', session, message_id: messageId, error: sentence(b.error, SEND_NOW_WORDS.unknown) });
+    return;
+  }
+  // 423 = someone is at the pane (a draft in the composer, an attached terminal): its own status, never 409, which the
+  // dashboard reads elsewhere as "already answered".
+  if (gw.httpStatus === 409 || gw.httpStatus === 423 || gw.httpStatus === 403 || (gw.httpStatus === 502 && b.outcome === 'refused')) {
+    res.status(gw.httpStatus).json({
+      outcome: 'refused', reason: typeof b.reason === 'string' ? b.reason : 'refused', session,
+      error: sentence(b.error, SEND_NOW_WORDS.refused),
+      ...(typeof b.queued === 'number' ? { queued: b.queued } : {}),
+    });
+    return;
+  }
+  if (gw.httpStatus === 501) {
+    res.status(501).json({ outcome: 'unsupported', session, error: sentence(b.error, "This agent has no send-now key.") });
+    return;
+  }
+  if (gw.httpStatus === 404) {
+    res.status(404).json({ ok: false, error: 'agent not running', agent: agentId });
+    return;
+  }
+  // 400, 401 from the gateway or anything unexpected: the server's fault, said once, never the gateway's raw body.
+  console.error(`[agent-send] send-now: unexpected gateway answer ${gw.httpStatus}`);
+  res.status(502).json({ outcome: 'refused', reason: 'gateway-error', session, error: SEND_NOW_WORDS.failed });
+}
+
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
 // applies (lib/agent-scope.ts). Registered as a param handler so a /:id route added later is
@@ -585,6 +720,13 @@ router.post('/:id/send', (req: Request, res: Response) => {
     // Same rule as the 502 above: an unexpected throw's message routinely
     // carries local paths (ENOENT /Users/...). Log it, don't ship it.
     console.error('[agent-send] unhandled error:', err);
+    res.status(500).json({ ok: false, error: 'internal error' });
+  });
+});
+
+router.post('/:id/send-now', (req: Request, res: Response) => {
+  handleAgentSendNow(defaultAgentSendNowDeps, req, res).catch((err) => {
+    console.error('[agent-send] send-now unhandled error:', err);
     res.status(500).json({ ok: false, error: 'internal error' });
   });
 });
