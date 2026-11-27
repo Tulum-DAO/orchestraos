@@ -9,6 +9,7 @@
     "pretest": "python3 ../scripts/check_disk_free.py",
     "test": "ORCHESTRA_CONFIG=${ORCHESTRA_CONFIG:-../orchestra.example.toml} tsx --test \"src/**/*.test.ts\"",
     "conformance": "ORCHESTRA_CONFIG=${ORCHESTRA_CONFIG:-../orchestra.example.toml} tsx --test \"../contract/transcript/tests/*.test.ts\"",
+    "test:folders": "ORCHESTRA_CONFIG=${ORCHESTRA_CONFIG:-../orchestra.example.toml} tsx --test \"tests/**/*.test.ts\" \"tests/**/*.test.mjs\" \"test/**/*.test.ts\" \"test/**/*.test.mjs\"",
     "stream-test": "tsx --test tests/transcript-stream.test.ts tests/transcript-stream-client.test.ts"
   },
   "dependencies": {

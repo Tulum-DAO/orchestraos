@@ -119,6 +119,23 @@ jobs:
       # is no orchestra.toml. `npm test` points them at the example config.
       - run: npm test
 
+  # api/tests/ and api/test/ ran NOWHERE: `npm test` globs src/**/*.test.ts only, and no job named either
+  # folder. Five tests there went red on main unseen (two stream tests appending a partial line, a merge test
+  # that predated delivery order, a tenant-scope pair), and one file imported dist/ and failed on every clean
+  # checkout. Separate job, separate name, so this blind spot cannot reopen quietly.
+  api-test-folders:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run test:folders
+
   # The TS contract tests ran NOWHERE. `python-tests (contract, contract)` is pytest, and
   # neither contract/transcript/tests/conformance.test.ts nor codegen.test.ts was referenced
   # by any job -- so conformance went red in #124 (looksLikeCodex started requiring a
