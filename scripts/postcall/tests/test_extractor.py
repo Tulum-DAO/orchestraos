@@ -75,6 +75,7 @@ def test_prompt_states_shaw_is_always_a_speaker():
     prompt = extractor.build_prompt("x")[0]
     assert "Shaw is one of the diarized speakers in EVERY recording" in prompt
     assert "never decide that Shaw is absent" in prompt
+    assert "leave shaw_label_evidence empty" in prompt          # an unproven guess fails closed in ground()
 
 
 def test_claude_bin_from_param_or_env(monkeypatch):

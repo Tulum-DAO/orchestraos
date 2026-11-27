@@ -39,7 +39,8 @@ An agent NEVER sends anything as Shaw.
 Your job is to find WHICH label is Shaw; never decide that Shaw is absent. Shaw's commitments \
 come from his label's turns; every other label is a counterpart.
 - Identify which diarization label is Shaw and quote, verbatim from Shaw's own turn, the sentence \
-that proves it (a self-introduction, or being addressed by name).
+that proves it (a self-introduction, or being addressed by name). If no sentence proves it, still \
+give your best label but leave shaw_label_evidence empty; never quote a sentence that does not prove it.
 
 Return ONLY minified JSON, no prose and no code fences:
 {{"shaw_label":"<diarization label that is Shaw, e.g. SPEAKER_00>","shaw_label_evidence":"<verbatim \

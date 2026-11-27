@@ -112,7 +112,7 @@ def ground(call, extraction):
     that is not diarized (or has no turns) keeps the item with speaker "" and trust "unknown", the
     owner as the extractor gave it (design §2), and needs no Shaw-label evidence.
     Shaw is a diarized speaker in every recording (his standing fact, ~1 in 1000 exceptions), so a
-    diarized call whose Shaw label cannot be evidenced is an identification failure (failed_retry),
+    diarized call with items whose Shaw label cannot be evidenced is an identification failure (failed_retry),
     never evidence that he was absent."""
     raw_all = extraction.raw or {}
     call_turns = turns(call.transcript)
