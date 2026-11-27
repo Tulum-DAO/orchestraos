@@ -24,7 +24,7 @@
       "description": "Server-paired render-ready nodes: tool_result attached under its tool_use, empties dropped, spawn brief flagged. Clients render with a trivial node->view switch — NO client-side pairing or summarizing."
     },
     "has_older": { "type": "boolean", "description": "ADDITIVE v2 (paged chat): only on a page read with ?before=<cursor>; true when the chat has items older than this page. Absent without a cursor (the live window's envelope is unchanged)." },
-    "oldest_id": { "type": ["string", "null"], "description": "ADDITIVE v2 (paged chat): only on a page read with ?before=<cursor>; the cursor for the next older page (pass it back as before=), null when the page is empty. Opaque: '<session>~<uuid>', '<session>~#<n>' or a marker's uuid. A page never starts inside one log line's items, so pages chained by oldest_id neither repeat nor skip an item. A client may also pass an item's own uuid as before=." },
+    "oldest_id": { "type": ["string", "null"], "description": "ADDITIVE v2 (paged chat): only on a page read with ?before=<cursor>; the cursor for the next older page (pass it back as before=), null when the page is empty. Opaque: '<session>~@<byte offset of the item's log line>~<uuid>' (or '~#<index within the line>' for an item without a uuid; the server reads only a window of the log around it), a marker's uuid, or the older forms '<session>~<uuid>' and '<session>~#<n>', which still resolve. A cursor that names nothing (an offset past the end or not at a line start, another uuid at that offset, a rewritten log) is answered with error 'unknown cursor', never a page from the wrong place. A page never starts inside one log line's items, so pages chained by oldest_id neither repeat nor skip an item. A client may also pass an item's own uuid as before=." },
     "error": { "type": "string" }
   },
   "$defs": {
@@ -53,6 +53,7 @@
           "type": "boolean",
           "description": "ADDITIVE v2: true on the first user text when it is the spawn/system brief (server rule: first user text AND (length > 800 OR starts with 'You are'))."
         },
+        "reply_to": { "$ref": "#/$defs/ReplyTo", "description": "ADDITIVE v2 (reply threads P1): on the operator's own user text item, the message it answered: the transcript line's uuid when the server named it, and the quote. Set by the server from the reply_to the send carried (POST /api/agents/:id/send), matched to this item by the words sent. A client jumps by the uuid; the quote header itself is the first line of `text`. Absent when the message answered nothing, or the send predates the server keeping it. Older clients ignore it." },
         "queued": {
           "type": "boolean",
           "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): true when this user turn is a still-pending phone/watch message merged from the msg_store hold queue (B1) — render a 'queued' chip; it resolves to the real turn on delivery. Older clients ignore this flag and render a normal user bubble."
@@ -123,6 +124,15 @@
         "is_error": { "type": "boolean" },
         "ts": { "type": "string" },
         "uuid": { "type": "string" }
+      }
+    },
+    "ReplyTo": {
+      "type": "object",
+      "description": "ADDITIVE v2 (reply threads P1): the message a user text item answered.",
+      "required": ["excerpt"],
+      "properties": {
+        "uuid": { "type": "string", "description": "The answered transcript line's uuid, when the server named that line." },
+        "excerpt": { "type": "string", "description": "The quote, one line, at most 200 characters." }
       }
     },
     "ImageRef": {

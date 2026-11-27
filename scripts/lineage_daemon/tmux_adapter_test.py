@@ -113,3 +113,16 @@ def test_pipe_pane_refuses_unsafe_session_name():
         tmux.pipe_pane("gm; rm -rf ~", "/tmp/whatever.pipe")
     # nothing was executed for the unsafe name
     assert runner.calls == []
+
+
+def test_server_id_is_the_server_pid_and_start_time():
+    """The sweep's persisted {session-id: sink} map is only valid for one tmux server
+    (session-ids restart at $0). server_id() names the server: pid + start time."""
+    runner = FakeRunner([(0, "4242 1790000000\n4242 1790000000\n")])
+    assert Tmux(runner=runner).server_id() == "4242:1790000000"
+    assert runner.calls[0] == ["tmux", "list-sessions", "-F", "#{pid} #{start_time}"]
+
+
+def test_server_id_is_none_without_a_server():
+    assert Tmux(runner=FakeRunner([(1, "no server running\n")])).server_id() is None
+    assert Tmux(runner=FakeRunner([(0, "garbage\n")])).server_id() is None

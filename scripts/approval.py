@@ -3,6 +3,11 @@
   approval.py request "<question>" --from <agent> --worker-kind pane|node [--op-key K] [--thread-key T] [--options approve,deny,hold]
   approval.py get <id>
   approval.py ack <id> --from <agent>
+  approval.py pending [--json] [--grep WORD] [--mine AGENT]
+  approval.py note --id <id> --from <agent> --text "<correction>"
+  approval.py retire --id <id> --from <agent> --reason "<why>" [--superseded-by <id>]
+  approval.py reopen --id <id> --from gm --reason "<why the retire was wrong>"
+  approval.py close-menu --id <id> --from <agent> [--reason "<basis>"]
 On 'request' the agent should then PARK (end its turn) — it will be resumed when the operator answers."""
 import argparse, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +38,47 @@ def _lint_commitment_feature(store):
         c.close()
 
 
+def read_pane_menu(session):
+    """'menu' | 'none' | 'no-session' | 'error:<why>' for close-menu and a bridge menu retire.
+    READ-ONLY: tmux has-session + capture-pane on the EXACT target (=NAME), then the bridge's own
+    parser (agent-status.parse_status -> pending_menu). Never sends keys, never injects."""
+    import importlib
+    import subprocess
+    try:
+        hs = tmux_has_session(session)
+        if hs is False:
+            return "no-session"          # tmux's own "no such session" / "no server" answer only
+        if hs is None:
+            return "error:has-session could not tell"
+        cap = subprocess.run(["tmux", "capture-pane", "-t", f"={session}:", "-p", "-e"],
+                             capture_output=True, text=True, timeout=5)
+        if cap.returncode != 0:
+            return f"error:capture rc={cap.returncode}"
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        st = importlib.import_module("agent-status").parse_status(cap.stdout)
+        return "menu" if st.get("pending_menu") else "none"
+    except Exception as e:   # any failure to look = refuse (the caller treats non-none as refuse)
+        return f"error:{type(e).__name__}"
+
+
+def tmux_has_session(name):
+    """True | False | None for retire's dead-seat rule on a menu card. READ-ONLY: tmux has-session
+    on the EXACT name (=NAME). False only on tmux's own "no such session" / "no server" answers;
+    anything else (timeout, other error) is None = could not tell, which the caller treats as live."""
+    import subprocess
+    try:
+        r = subprocess.run(["tmux", "has-session", "-t", f"={name}"], capture_output=True, text=True,
+                           timeout=5)
+    except Exception:  # noqa: BLE001 — no tmux binary etc. => could not tell
+        return None
+    if r.returncode == 0:
+        return True
+    err = (r.stderr or "").lower()
+    if "can't find session" in err or "no server running" in err:
+        return False
+    return None
+
+
 def _store():
     # APPROVAL_DB_PATH env override (mirrors ORCHESTRA_DIR / REGISTRY_PATH): lets a
     # provider ADAPTER or a hermetic test drive the canonical service against a
@@ -58,6 +104,14 @@ def _canon(name):
     """Canonical seat name: strip a -genN rotation-alias suffix."""
     import re
     return re.sub(r"-gen\d+$", "", (name or "").strip())
+
+
+def _canon_author(name):
+    """Seat name with a rotation-alias suffix stripped, in BOTH spellings (-genN and -gN), for the
+    read-only `pending --mine` filter. Deliberately separate from _canon: widening _canon would
+    widen the authorship guard; a search filter may be generous."""
+    import re
+    return re.sub(r"-(?:gen|g)\d+$", "", (name or "").strip())
 
 
 def _caller_identities():
@@ -107,6 +161,22 @@ def _caller_identities():
                                        row.get("tmux_session"),
                                        row.get("lineage_root")) if v}
     return idents or None
+
+
+OPERATOR_IDENTITIES = {"operator"}   # the identity append_note lets past the author check
+
+
+def _ledger_has_card(rid):
+    """True | False for an outward-action ledger row naming this card; None when the ledger cannot be read."""
+    try:
+        import outward_ledger
+        c = outward_ledger._conn()
+        try:
+            return c.execute("SELECT 1 FROM outward_actions WHERE card_id=? LIMIT 1", [rid]).fetchone() is not None
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001 — could not tell = the caller refuses
+        return None
 
 
 def _authorship_guard(from_agent, advice=True):
@@ -487,7 +557,16 @@ def main(argv=None):
                      help="actually set status=expired + notify authors (default is dry-run)")
     pp = sub.add_parser("pending")
     pp.add_argument("--json", action="store_true",
-                    help="emit the canonical pending rows as a JSON list")
+                    help="emit the canonical pending rows as a JSON list (the default; "
+                         "explicit so a --grep/--mine caller can force JSON back on)")
+    pp.add_argument("--grep", metavar="WORD",
+                    help="HAS THE OPERATOR ALREADY BEEN ASKED? case-insensitive substring over id, "
+                         "author, question/title, summary, feature, task and blocks, printing ONE line "
+                         "per hit: id | from_agent | feature | question. Use this BEFORE asking the "
+                         "operator anything.")
+    pp.add_argument("--mine", metavar="AGENT",
+                    help="only cards authored by AGENT (rotation-alias tolerant: -gN/-genN "
+                         "collapse, so --mine gm matches gm-gen27). One line per hit.")
     pan = sub.add_parser("answer")
     pan.add_argument("--id", dest="rid", required=True)
     pan.add_argument("--answer", required=True,
@@ -522,6 +601,18 @@ def main(argv=None):
     rt.add_argument("--reason", required=True, help="plain words: why the card is no longer needed")
     rt.add_argument("--superseded-by", dest="superseded_by", default=None,
                     help="apr_/qnr_ id of the card that replaced it")
+    ro = sub.add_parser("reopen")  # undo a retire done in error: gm only
+    ro.add_argument("--id", required=True)
+    ro.add_argument("--from", dest="from_agent", required=True)
+    ro.add_argument("--reason", required=True, help="plain words: why the retire was wrong")
+    cm = sub.add_parser("close-menu")  # a menu card answered another way
+    cm.add_argument("--id", required=True)
+    cm.add_argument("--from", dest="from_agent", required=True)
+    cm.add_argument("--reason", default="", help="required for CLI-minted menu cards: the actual basis")
+    nt = sub.add_parser("note")   # author-only annotation, appended; never re-notifies
+    nt.add_argument("--id", required=True)
+    nt.add_argument("--from", dest="from_agent", required=True)
+    nt.add_argument("--text", required=True)
     args = p.parse_args(argv)
     try:
         # Outward-action ledger backstop: a lost claim becomes uncertain and an unreconciled asked row
@@ -807,14 +898,65 @@ def main(argv=None):
     if args.cmd == "retire":
         # A PENDING card that is no longer needed (superseded, done another way, obsolete):
         # status 'retired' with who/why/what replaced it, out of the pending feed, kept in
-        # history. Only the author, its current generation, or gm. Never a kind='menu' row.
+        # history. Only the author, its current generation, or gm. A kind='menu' row only once its
+        # menu is gone (approval_schema.menu_gone); never a safety-gate card.
         # Sends NO notification and resumes nothing: it is not an answer (operator ruling
         # 2026-10-10, gm msg_c16b5264 / msg_3f3a4d05).
         if args.id.startswith("qnr_"):
             qs = _qstore(); qs.migrate()     # applies the armed retire columns to questionnaires
             ok, why = qs.retire(args.id, args.from_agent, args.reason, args.superseded_by)
         else:
-            ok, why = store.retire(args.id, args.from_agent, args.reason, args.superseded_by)
+            ok, why = store.retire(args.id, args.from_agent, args.reason, args.superseded_by,
+                                   read_pane=read_pane_menu, has_session=tmux_has_session)
+        if ok:
+            print(args.id)
+            return 0
+        print(f"REFUSED: {why}", file=sys.stderr)
+        return 4
+    if args.cmd == "reopen":
+        # retired -> pending, retire columns cleared, a RE-OPENED history line; gm only. Sends NO
+        # notification (notified_at untouched) and resumes nothing.
+        if args.id.startswith("qnr_"):
+            print("REFUSED: re-open covers approval cards (apr_) only; a questionnaire is not re-opened",
+                  file=sys.stderr)
+            return 4
+        if not _authorship_guard(args.from_agent):
+            return 4
+        ok, why = store.reopen(args.id, args.from_agent, args.reason, ledger_has_card=_ledger_has_card)
+        if ok:
+            print(args.id)
+            return 0
+        print(f"REFUSED: {why}", file=sys.stderr)
+        return 4
+    if args.cmd == "close-menu":
+        # A PENDING kind='menu' card whose question was answered another way. Bridge rows: the
+        # owner pane is READ (capture only, never keys) and a menu still on screen refuses.
+        # CLI-minted rows: no pane read, --reason states the basis. -> 'resolved_elsewhere'.
+        if not _authorship_guard(args.from_agent):
+            return 4
+        ok, why, note = store.close_menu(args.id, args.from_agent, args.reason, read_pane_menu)
+        if ok:
+            print(f"{args.id} closed: {note}")
+            return 0
+        print(f"REFUSED: {why}", file=sys.stderr)
+        return 4
+    if args.cmd == "note":
+        # AUTHOR-ONLY timestamped annotation, appended. Works on apr_ (every kind) and qnr_.
+        # When a card's facts turn out wrong, the honest correction is a note that leaves the
+        # original visible beside it. (A card that is no longer NEEDED is retired instead.)
+        # Never re-notifies and never touches status or any answer.
+        if _canon(args.from_agent) in OPERATOR_IDENTITIES:
+            # the operator annotates from the dashboard; a seat typing --from operator would put
+            # words in the operator's name on any card
+            print(f"REFUSED: --from {args.from_agent}: the operator's identity is never taken from the CLI",
+                  file=sys.stderr)
+            return 4
+        if not _authorship_guard(args.from_agent):
+            return 4
+        if args.id.startswith("qnr_"):
+            ok, why = _qstore().append_note(args.id, args.from_agent, args.text)
+        else:
+            ok, why = store.append_note(args.id, args.from_agent, args.text)
         if ok:
             print(args.id)
             return 0
@@ -965,6 +1107,49 @@ def main(argv=None):
                 # The evidence JSON as stored (additive): the web reads evidence.action (the outward-action
                 # state) from the same column the phone and watch already decode.
                 "evidence": r.get("evidence")} for r in rows]
+        # --grep / --mine: the "has the operator already been asked" check. The default feed is a
+        # large JSON blob; a seat that free-text-greps it can miss the card it wants among many
+        # hits, conclude there is none, and ask the operator AGAIN. One line per hit is the point:
+        # the answer has to be readable without scrolling. The default JSON output is unchanged.
+        if args.grep or args.mine:
+            # EVERY pending kind: the approvals feed already carries approval / menu / human_task
+            # rows; pending questionnaires live in their own store and join here as search-only rows.
+            hits = list(out)
+            try:
+                for q in _qstore().list_pending():
+                    hits.append({"id": q.get("id"), "from_agent": q.get("from_agent"),
+                                 "question": q.get("title"), "summary": q.get("summary"),
+                                 "feature": q.get("feature"), "kind": "questionnaire"})
+            except Exception as e:  # noqa: BLE001 — say so rather than silently searching fewer kinds
+                print(f"[approval] questionnaires NOT searched ({e}); a qnr_ card would not show",
+                      file=sys.stderr)
+            if args.mine:
+                want = _canon_author(args.mine)
+                hits = [r for r in hits if _canon_author(r.get("from_agent") or "") == want]
+            if args.grep:
+                needle = args.grep.lower()
+                hits = [r for r in hits
+                        if needle in " ".join(str(r.get(k) or "")
+                                              for k in ("id", "from_agent", "question", "summary", "feature",
+                                                        "block_task", "blocks_what")).lower()]
+            if args.json:                    # the filtered hits, as JSON (never the whole feed)
+                print(json.dumps(hits, default=str))
+                return 0
+            for r in hits:
+                # collapse whitespace so a multi-line question stays ONE line; NOT truncated:
+                # truncating can hide the very phrase the caller searched for.
+                q = " ".join(str(r.get("question") or "").split())
+                print(f"{r['id']} | {r.get('from_agent') or '-'} | {r.get('feature') or '-'} | {q}")
+            if not hits:
+                print(f"[approval] no pending card matches "
+                      f"{'--mine ' + args.mine if args.mine else ''}"
+                      f"{' ' if args.mine and args.grep else ''}"
+                      f"{'--grep ' + args.grep if args.grep else ''}"
+                      f" -- the operator has NOT been asked this, as far as the pending feed shows"
+                      f" (searched pending approval, menu, human_task and questionnaire cards by id, author,"
+                      f" question/title, summary, feature, task and blocks)",
+                      file=sys.stderr)
+            return 0
         print(json.dumps(out, default=str))
         return 0
     if args.cmd == "answer" and args.on_behalf_of:

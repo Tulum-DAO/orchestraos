@@ -109,7 +109,7 @@ def test_a_failed_apply_is_closed_with_its_reason_never_silently(seat, monkeypat
     g = _get()
     assert g["pending"] is None
     assert g["last_switch"] == {"model": SONNET, "at": g["last_switch"]["at"], "outcome": "failed",
-                                "reason": "no confirming line"}
+                                "reason": "no confirming line", "by": "ios"}
 
 
 def test_a_rotation_before_the_turn_ends_closes_the_pick_with_a_reason(seat, monkeypatch):
@@ -687,7 +687,7 @@ def test_a_put_right_after_an_unrecorded_switch_decides_on_the_model_the_agent_i
     assert AMP.applied_mark(AMP.state_path(G.ORCH_DIR), "dev") is None
     g = _get()
     assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
-    assert g["last_switch"]["model"] == SONNET
+    assert g["last_switch"]["model"] == OPUS          # the PUT's own switch is the last one now (who made it is kept)
 
 
 # ------------------------------------------------------------------ codex R17 on #475
@@ -704,7 +704,8 @@ def test_the_applied_marker_is_shared_so_another_gateways_put_decides_on_the_rea
     assert status == 200 and seat["live"] == [OPUS]
     g = _get()
     assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
-    assert g["last_switch"]["model"] == SONNET and AMP.applied_mark(f, "dev") is None
+    # SONNET was settled "switched" first; the PUT's own switch to OPUS is the last one now, with who made it
+    assert g["last_switch"]["model"] == OPUS and AMP.applied_mark(f, "dev") is None
 
 
 def test_a_pass_after_a_restart_records_a_marked_pick_and_types_nothing(seat):

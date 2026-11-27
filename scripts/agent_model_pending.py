@@ -180,12 +180,22 @@ def resolve(path, session, since, outcome, *, model=None, reason=None, now=None)
             return False
         data["pending"].pop(session, None)
         rec = {"model": model or cur.get("model"), "at": _iso(ts), "outcome": outcome}
+        if cur.get("by"):
+            rec["by"] = cur["by"]
         if cur.get("effort"):
             rec["effort"] = cur["effort"]
         if reason:
             rec["reason"] = reason
         data["last"][session] = rec
         return True
+
+
+def note_switched(path, session, model, by, now=None):
+    """Record an immediate (not deferred) switch as the session's last one, with who made it: the Fable
+    watcher returns a seat only while its own drop is still the last switch (scripts/model_drop.py)."""
+    ts = time.time() if now is None else now
+    with _locked(path) as data:
+        data["last"][session] = {"model": model, "at": _iso(ts), "outcome": "switched", "by": by}
 
 
 def mark_reported(path, session, since):

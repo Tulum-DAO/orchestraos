@@ -29,16 +29,20 @@
  * Testable with a manual tick() + injectable resolver (no timers inside);
  * the route (transcript-stream.ts) owns the interval + per-agent registry.
  */
-import { readFileSync, statSync } from 'fs';
+import { statSync } from 'fs';
 import {
-  normalizeTranscript, buildRenderItems, dropWakeReplies, GRAMMAR_VERSION,
+  normalizeTranscript, normalizeTranscriptFile, buildRenderItems, dropWakeReplies, GRAMMAR_VERSION,
   mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
 } from '../routes/chat-transcript.js';
 import { storeRules } from './conversation-store.js';
 import { stampRefs } from '../lib/messageRef.js';
+import { stampReplyTo } from '../lib/reply-to-store.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
+let tailItemCap = TAIL_ITEM_CAP;
+/** Tests: a smaller cap, so a modest fixture shows the first read costing the cap's items, not the file. */
+export function tailerCapForTests(n: number | null): void { tailItemCap = n ?? TAIL_ITEM_CAP; }
 /** Beats in a row with no transcript and no tmux window before a tailer stops (about 30 s at the route's 1 s beat). */
 export const GONE_TICKS = 30;
 
@@ -76,11 +80,23 @@ export function alignShift(prev: any[], next: any[]): number | null {
   return null;
 }
 
+const READ_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG']);
+/** A failure to stat or read the log file (the file is gone, a directory, unreadable), as opposed to a failure to parse it.
+ *  Transient errors (EMFILE, EBUSY) are not here on purpose: out of tick() they propagate to the beat's catch and the next
+ *  beat retries with nothing sent, where a fallback would blank the chat with an empty reset snapshot for a beat. Out of
+ *  subscribe() (its refresh() on connect) they propagate to the SSE route after its 200 head: the socket is destroyed and
+ *  the client's EventSource reconnects after its retry delay. A failed connect, never an empty chat. */
+function isReadError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && READ_ERROR_CODES.has(code);
+}
+
 export class TranscriptTailer {
   private agentId: string;
   private resolve: Resolver;
   private limit: number;
-  private subs = new Set<Subscriber>();
+  /** Each subscriber with ITS OWN window (items per snapshot, and the most it is ever sent at once). */
+  private subs = new Map<Subscriber, number>();
 
   private sid: string | null = null;
   private path: string | null = null;
@@ -153,14 +169,24 @@ export class TranscriptTailer {
       return { rotated: false, grewFrom: null };
     }
 
-    let lines: string[] = [];
-    try { lines = readFileSync(path, 'utf-8').split('\n'); } catch { lines = []; }
-    // BOUNDED. This runs on a ~1 s poll, and codex rollouts reach 13-25 MB: normalizing an
-    // unbounded item list every tick is a self-inflicted load collapse (congruence
-    // DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
+    // Through the parsed-log cache (services/transcript-log-cache.ts): the file is parsed once, then on each tick
+    // that found it grown only the appended lines are read, with the Claude grammar's carried state. Before this,
+    // every tick that found a new line re-read and re-parsed the whole file (4 MB: seconds on a throttled box, on a
+    // ~1 s poll per live seat). An unreadable file is an empty log, as before.
+    // BOUNDED. Codex rollouts reach 13-25 MB: normalizing an unbounded item list every tick is a self-inflicted load
+    // collapse (congruence DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
-    const env = normalizeTranscript(
-      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'), false, null, true, this.keepSidechain);
+    let env: ReturnType<typeof normalizeTranscriptFile>;
+    try {
+      // Tail-first: the first read of a log is its last bytes, doubled until they hold the cap's items (chat-transcript.ts
+      // normalizeTranscriptFile); later ticks ride the kept chunk's appends. Never a whole-file parse of a big log per seat.
+      env = normalizeTranscriptFile(path, this.agentId, sid, tailItemCap, path.includes('antigravity-cli'), false, true, this.keepSidechain, true);
+    } catch (err) {
+      // Only the file being unreadable is an empty log (what readFileSync's catch gave before); a parser or store-rule
+      // error is a bug and still propagates out of tick(), as it did.
+      if (!isReadError(err)) throw err;
+      env = normalizeTranscript([], this.agentId, sid, tailItemCap, false, false, null, true, this.keepSidechain);
+    }
     let turns: InterruptedTurn[] = [];
     try { turns = this.interrupted.read(); } catch { turns = []; }
     env.items = mergeInterruptedTurns(env.items, turns);
@@ -171,6 +197,8 @@ export class TranscriptTailer {
     env.items = stampRefs(env.items, sid);
     // A reaction wake's silent or emoji answer (chat-transcript markWakeReplies): numbered like the poll route, never sent.
     env.items = dropWakeReplies(env.items);
+    // reply_to (reply threads P1): the same stamp the poll route's finishWindow gives its items. Fail-open.
+    env.items = stampReplyTo(env.items, this.agentId);
     // A cut-turn line new this beat and placed before the old tail: every later item moved, which
     // a delta (append only) cannot say. Sent as a snapshot.
     const sentUuids = new Set(this.items.map((it) => it?.uuid));
@@ -218,8 +246,13 @@ export class TranscriptTailer {
     return `${this.sidTag()}:${this.items.length}`;
   }
 
-  private snapshot(reset = false): TailEvent {
-    const windowed = this.items.slice(-this.limit);
+  /** The newest `limit` items as a snapshot. Built once per (limit, reset) within one broadcast: `memo` is the broadcast's
+   *  own map, so two subscribers with the same window share one render pass and never one from an earlier read. */
+  private snapshot(limit: number, reset = false, memo?: Map<string, TailEvent>): TailEvent {
+    const key = `${limit}:${reset ? 1 : 0}`;
+    const kept = memo?.get(key);
+    if (kept) return kept;
+    const windowed = this.items.slice(-limit);
     const ev: TailEvent = {
       type: 'snapshot',
       id: this.eventId(),
@@ -230,6 +263,7 @@ export class TranscriptTailer {
       render_items: buildRenderItems(windowed),
     };
     if (reset) ev.reset = true;
+    memo?.set(key, ev);
     return ev;
   }
 
@@ -245,11 +279,14 @@ export class TranscriptTailer {
   }
 
   /**
-   * Subscribe. With a valid `lastEventId` (`<sid>:<offset>`) the subscriber
-   * resumes: it immediately receives a delta of anything it missed (nothing if
-   * caught up). Otherwise it receives a full snapshot.
+   * Subscribe with a window of `limit` items (the tailer's default when not given). With a valid `lastEventId`
+   * (`<sid>:<offset>`) the subscriber resumes: it immediately receives a delta of anything it missed (nothing if
+   * caught up). Otherwise it receives a snapshot of its window. A subscriber is never sent more items at once than
+   * its window: a resume that missed more than `limit` items (an API restart under a busy seat drew a 1500-row
+   * delta) gets its snapshot instead, which holds the newest `limit` and says nothing older is missing.
    */
-  subscribe(cb: Subscriber, lastEventId?: string): () => void {
+  subscribe(cb: Subscriber, lastEventId?: string, limit?: number): () => void {
+    const window = Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : this.limit;
     this.refresh();
     let resumed = false;
     if (lastEventId) {
@@ -257,12 +294,15 @@ export class TranscriptTailer {
       const sid = i >= 0 ? lastEventId.slice(0, i) : '';
       const offset = i >= 0 ? Number(lastEventId.slice(i + 1)) : NaN;
       if (sid && sid === this.sidTag() && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
-        resumed = true;
-        if (offset < this.items.length) cb(this.delta(offset));
+        const missed = this.items.length - offset;
+        if (missed <= window) {
+          resumed = true;
+          if (missed > 0) cb(this.delta(offset));
+        }
       }
     }
-    if (!resumed) cb(this.snapshot());
-    this.subs.add(cb);
+    if (!resumed) cb(this.snapshot(window));
+    this.subs.set(cb, window);
     return () => { this.subs.delete(cb); };
   }
 
@@ -288,14 +328,18 @@ export class TranscriptTailer {
       return 'gone';
     }
     if (rotated || restated) {
-      // reset only for a new session or a shrunk log; a late usage update is a plain snapshot.
-      const ev = this.snapshot(rotated);
-      for (const cb of this.subs) cb(ev);
+      // reset only for a new session or a shrunk log; a late usage update is a plain snapshot. Each subscriber's own
+      // window; one render pass per distinct window.
+      const memo = new Map<string, TailEvent>();
+      for (const [cb, window] of this.subs) cb(this.snapshot(window, rotated, memo));
       return;
     }
     if (grewFrom !== null) {
+      // A growth that fits a subscriber's window is its delta; one that does not (a burst after a stall, a resumed
+      // seat) is its snapshot: the newest `window` items, never more than the window at once.
       const ev = this.delta(grewFrom);
-      for (const cb of this.subs) cb(ev);
+      const memo = new Map<string, TailEvent>();
+      for (const [cb, window] of this.subs) cb(ev.items.length <= window ? ev : this.snapshot(window, false, memo));
     }
   }
 }

@@ -1,4 +1,5 @@
 """limit_switch: each arming condition is a test (gm order msg_4dc56c81, 2026-11-25)."""
+import json
 import os
 import sys
 
@@ -74,16 +75,53 @@ def test_1_trigger_switches_to_the_login_with_headroom():
     assert done["from"] == "strategysimple" and done["to"] == "default" and done["window"] == "5-hour"
 
 
-@pytest.mark.parametrize("five,week", [(85.0, 10.0), (10.0, 80.0)])
-def test_1_other_login_at_or_over_80_percent_is_no_headroom(five, week):
+@pytest.mark.parametrize("five,week", [(85.0, 10.0), (10.0, 95.0)])
+def test_1_other_login_at_or_over_80_percent_5h_or_95_percent_weekly_is_no_headroom(five, week):
     d = Fake(usage={"default": {"as_of": NOW - 60, "windows": {"5h": {"used_pct": five}, "weekly": {"used_pct": week}}}})
     res, log, _ = _tick(_ep(), d)
     assert res == "refused" and d.switched == []
 
 
-def test_1_a_stale_usage_reading_is_no_headroom():
-    d = Fake(usage={"default": {"as_of": NOW - 3600, "windows": {"5h": {"used_pct": 1.0}, "weekly": {"used_pct": 1.0}}}})
+def test_1_a_reading_older_than_5_hours_counts_its_5_hour_window_as_reset_and_keeps_the_weekly():
+    """Review r1 #2: a cap on the reading's age brought the 11-26 miss back after a quiet night."""
+    old = lambda week: Fake(usage={"default": {"as_of": NOW - 9 * 3600,
+                                               "windows": {"5h": {"used_pct": 99.0}, "weekly": {"used_pct": week}}}})
+    assert _tick(_ep(), old(60.0))[0] == "switched"
+    assert _tick(_ep(), old(96.0))[0] == "refused"
+    d = Fake(usage={"default": {"windows": {"5h": {"used_pct": 1.0}, "weekly": {"used_pct": 1.0}}}})
+    assert _tick(_ep(), d)[0] == "refused"                     # a reading with no time is no headroom
+
+
+def test_1_11_26_miss_weekly_81_and_a_2_hour_old_reading_still_switch_and_gm_hears_it_is_stale():
+    """11-26 01:03Z: strategysimple out at 100%; default's last reading 5-hour 1% / weekly 81%, two hours
+    old (its parked token expired, usage_poll could not read it). The old rule refused; the operator switched
+    by hand."""
+    d = Fake(usage={"default": {"as_of": NOW - 2 * 3600,
+                                "windows": {"5h": {"used_pct": 1.0}, "weekly": {"used_pct": 81.0}}}})
+    st = {}
+    res, log, st = _tick(_ep(), d, st)
+    assert res == "switched" and d.switched == ["default"]
+    stale = [m for m in d.mails if "no fresh usage reading for default" in m[2]]
+    assert len(stale) == 1 and stale[0][1] == "medium"
+    assert "min old" in [r for r in log if r["kind"] == "switch_done"][0]["headroom"]
+
+
+def test_1_a_stale_reading_whose_5_hour_reset_passed_counts_as_0():
+    d = Fake(usage={"default": {"as_of": NOW - 4 * 3600,
+                                "windows": {"5h": {"used_pct": 99.0, "resets_at": NOW - 600},
+                                            "weekly": {"used_pct": 50.0}}}})
+    assert _tick(_ep(), d)[0] == "switched"
+    d = Fake(usage={"default": {"as_of": NOW - 4 * 3600,
+                                "windows": {"5h": {"used_pct": 99.0, "resets_at": NOW + 600},
+                                            "weekly": {"used_pct": 50.0}}}})
     assert _tick(_ep(), d)[0] == "refused"
+
+
+def test_1_codex_logins_in_the_profiles_file_are_never_a_claude_target():
+    doc = {"profiles": [{"id": "default", "enrolled": True}, {"id": "strategysimple", "enrolled": True},
+                        {"id": "codex-a", "provider": "codex", "enrolled": True},
+                        {"id": "x", "provider": "claude", "enrolled": True}, {"id": "off", "enrolled": False}]}
+    assert LS.claude_logins(doc) == ["default", "strategysimple", "x"]
 
 
 def test_1_no_trigger_for_a_closed_episode_another_login_or_a_passed_reset():
@@ -159,9 +197,10 @@ def test_6_no_headroom_is_refused_logged_and_mailed_high_once_per_episode():
     st = {}
     res, log, st = _tick(_ep(), d, st)
     assert res == "refused"
-    assert [m[1] for m in d.mails] == ["high"] and "REFUSED" in d.mails[0][2]
+    high = lambda: [m for m in d.mails if m[1] == "high"]
+    assert len(high()) == 1 and "REFUSED" in high()[0][2]
     _tick(_ep(), d, st)                                    # same episode, next run: no second mail
-    assert len(d.mails) == 1
+    assert len(high()) == 1 and len(d.mails) == 2          # + the one stale-reading line for default
 
 
 def test_a_failed_switch_is_mailed_and_parks_nothing():
@@ -236,16 +275,18 @@ def test_95_with_the_other_login_at_80_or_more_refuses_and_mails_high():
     assert [m[1] for m in d.mails] == ["high"]
 
 
-def test_95_a_fresh_reading_under_95_overrides_a_banner_episode():
+def test_95_a_banner_episode_switches_even_with_a_fresh_reading_under_95():
+    # reversed 2026-11-26 (gm order msg_f495a92c): the reading cannot see every limit (a model's credits
+    # cap), so a banner on the active login is the reactive leg and never waits for the reading
     d = _poll_fake(60.0)
-    assert _tick(_ep(), d)[0] is None and d.switched == []
+    assert _tick(_ep(), d)[0] == "switched" and d.switched == ["default"]
 
 
 def test_95_banner_episode_is_the_fallback_when_the_reading_is_stale():
     d = Fake(usage={"strategysimple": _reading(60.0, age=3600), "default": _reading(20.0)})
     res, log, _ = _tick(_ep(), d)
     assert res == "switched"
-    assert "fallback" in [r for r in log if r["kind"] == "switch_check"][0]["decision"]
+    assert "banner" in [r for r in log if r["kind"] == "switch_check"][0]["decision"]
 
 
 def test_95_refreshes_the_reading_every_run():
@@ -427,3 +468,453 @@ def test_rr3_a_switch_to_the_login_before_it_got_hot_does_not_hold():
     d = _poll_fake(96.0)
     d.last_switch_row = lambda: (NOW - 7200, "strategysimple")   # it was picked hours before it got hot
     assert _tick({}, d)[0] == "switched"
+
+
+# --- weekly-aware preference + warnings (gm order msg_50aa10b0, 2026-11-26) --------------------
+
+WEEK_RESET = NOW + 4 * 86400
+
+
+def _u(five, week, as_of=NOW - 60):
+    return {"as_of": as_of, "windows": {"5h": {"used_pct": five, "resets_at": RESET},
+                                        "weekly": {"used_pct": week, "resets_at": WEEK_RESET}}}
+
+
+def test_weekly_prefers_the_login_with_the_lower_weekly_when_both_have_5h_headroom():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    res, log, st = _tick({}, d, active="default")
+    assert res == "preferred" and d.switched == ["strategysimple"]
+    row = [r for r in log if r["kind"] == "switch_done"][0]
+    assert row["reason"].startswith("weekly preference") and row["from"] == "default"
+    assert "default" not in st.get("parked", {})              # the old login is not out: never parked
+    assert d.nudged == []                                     # nobody is stuck on a banner
+    assert any("weekly" in m[2] and "Undo" in m[3] for m in d.mails if m[0] == "gm")
+
+
+def test_weekly_preference_needs_a_real_margin():
+    d = Fake(usage={"default": _u(38.0, 64.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, active="default")[0] is None and d.switched == []
+
+
+@pytest.mark.parametrize("other", [_u(85.0, 10.0), _u(5.0, 61.0, as_of=NOW - 3600), None])
+def test_weekly_preference_never_moves_to_a_login_without_a_fresh_5h_headroom(other):
+    d = Fake(usage={"default": _u(38.0, 72.0), **({"strategysimple": other} if other else {})})
+    assert _tick({}, d, active="default")[0] is None and d.switched == []
+
+
+def test_weekly_preference_never_when_the_active_login_lacks_5h_headroom_itself():
+    # 85% on the active 5-hour: the 95% trigger owns that case, the preference stays out of it
+    d = Fake(usage={"default": _u(85.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, active="default")[0] is None
+
+
+def test_weekly_preference_at_most_once_per_hour_any_switch_counts():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    st = {"last_switch": NOW - 1800}
+    assert _tick({}, d, st, active="default")[0] is None and d.switched == []
+    st = {"last_switch": NOW - 3601}
+    assert _tick({}, d, st, active="default")[0] == "preferred"
+
+
+def test_weekly_preference_holds_for_a_typing_human_and_a_parked_target():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)}, typing={"gm"})
+    res, log, _ = _tick({}, d, active="default")
+    assert res == "held" and d.switched == []
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, {"parked": {"strategysimple": NOW + 600}}, active="default")[0] is None
+
+
+def test_weekly_preference_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("LIMIT_SWITCH_PREFER_WEEKLY", "0")
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick({}, d, active="default")[0] is None
+
+
+def test_weekly_warns_gm_once_per_login_per_week_at_70_then_85():
+    d = Fake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    st = {"last_switch": NOW - 60}                            # no preference switch in this test
+    _tick({}, d, st, active="default")
+    _tick({}, d, st, active="default", now=NOW + 120)
+    warn = [m for m in d.mails if "weekly" in m[2].lower() and "70%" in m[2]]
+    assert len(warn) == 1 and "default" in warn[0][2]
+    d._usage["default"] = _u(38.0, 86.0)
+    d._usage["strategysimple"] = _u(5.0, 71.0)
+    _tick({}, d, st, active="default", now=NOW + 240)
+    _tick({}, d, st, active="default", now=NOW + 360)
+    subj = sorted(m[2] for m in d.mails if "weekly" in m[2].lower() and "%" in m[2])
+    assert len(subj) == 3                                     # default 70, default 85, strategysimple 70
+    assert any("85%" in s and "default" in s for s in subj)
+    assert any("70%" in s and "strategysimple" in s for s in subj)
+
+
+def test_weekly_warning_comes_back_the_next_week():
+    d = Fake(usage={"default": _u(38.0, 72.0)})
+    st = {"last_switch": NOW - 60}
+    _tick({}, d, st, active="default")
+    LS.prune_told(st, {}, now=WEEK_RESET + 1)
+    d._usage["default"] = _u(38.0, 72.0, as_of=WEEK_RESET + 3000)
+    d._usage["default"]["windows"]["weekly"]["resets_at"] = WEEK_RESET + 7 * 86400
+    _tick({}, d, st, active="default", now=WEEK_RESET + 3060)
+    assert len([m for m in d.mails if "70%" in m[2]]) == 2
+
+
+# --- the reactive leg: a WINDOW banner on the active login switches (gm order msg_f495a92c, 2026-11-26);
+# a model's credits cap never does (operator 2026-11-26, apr_bafb66c3: the seat drops to Opus 5.5, model_drop.py)
+
+FABLE_PANE = "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n"
+
+
+class FableFake(Fake):
+    """gm's day: the active login's 5-hour reading is FRESH and LOW, yet its seats sit on the Fable banner."""
+
+    def __init__(self, *, attached=(), limited=(), **kw):
+        kw.setdefault("usage", {"default": _u(1.0, 73.0), "strategysimple": _u(5.0, 61.0)})
+        kw.setdefault("banners", ("gm", "pm-nod"))
+        super().__init__(**kw)
+        self._attached, self._limited = set(attached), set(limited)
+
+    def pane_text(self, s):
+        return FABLE_PANE if s in self._banners else "❯ \n"
+
+    def attached_sessions(self):
+        return set(self._attached)
+
+    def human_typing(self, s, attached=None):
+        return None
+
+    def limited_seats(self):
+        return set(self._limited)
+
+
+def _credits_ep(account="default", model="Fable", seats=("gm",), open_=True):
+    return {f"claude|{account}|credits|2026-11-26": {
+        "runtime": "claude", "window": "credits", "reset_at": None, "account": account, "model": model,
+        "spend_capped": False, "open": open_, "seats": list(seats)}}
+
+
+def _win_ep(account="default", window="5-hour", seats=("gm",), open_=True, reset_at=None):
+    return {f"claude|{account}|{window}|{reset_at or '2026-11-26'}": {
+        "runtime": "claude", "window": window, "reset_at": reset_at, "account": account, "model": None,
+        "spend_capped": False, "open": open_, "seats": list(seats)}}
+
+
+WIN_PANE = "  ⎿  You've hit your usage limit · resets 3pm (America/Cancun)\n"
+
+
+class WinFake(FableFake):
+    def pane_text(self, s):
+        return WIN_PANE if s in self._banners else "❯ \n"
+
+
+def test_a_credits_banner_never_switches_the_login():
+    d = FableFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})   # no weekly preference
+    res, log, st = _tick(_credits_ep(), d, active="default", state={"last_switch": NOW - 3601})
+    assert res is None and d.switched == [] and d.nudged == []
+    assert [r for r in log if r["kind"] == "switch_check"][0]["decision"].startswith("no switch")
+
+
+def test_a_credits_cap_is_not_a_trigger_window():
+    assert "credits" not in LS.TRIGGER_WINDOWS
+
+
+def test_reactive_a_window_banner_switches_even_with_a_fresh_low_5h_reading():
+    d = WinFake()
+    res, log, st = _tick(_win_ep(window="unknown"), d, active="default", state={"last_switch": NOW - 3601})
+    assert res == "switched" and d.switched == ["strategysimple"]
+    done = [r for r in log if r["kind"] == "switch_done"][0]
+    assert done["window"] == "unknown"
+    mail = [m for m in d.mails if m[0] == "gm"][-1]
+    assert "default" in mail[3] and "strategysimple" in mail[3] and "Undo" in mail[3]
+
+
+def test_reactive_banner_on_another_login_or_closed_does_not_switch():
+    d = WinFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick(_win_ep(account="strategysimple", window="unknown"), d, active="default")[0] != "switched"
+    assert _tick(_win_ep(window="unknown", open_=False), d, active="default")[0] != "switched"
+    assert d.switched == []
+
+
+def test_reactive_target_with_its_own_window_episode_is_refused():
+    d = WinFake()
+    eps = {**_win_ep(window="unknown"), **_win_ep(account="strategysimple", window="unknown")}
+    res, log, _ = _tick(eps, d, active="default")
+    assert res == "refused" and d.switched == []
+    assert any(m[1] == "high" and "REFUSED" in m[2] for m in d.mails)
+
+
+def test_reactive_safety_conditions_still_hold():
+    d = WinFake()
+    assert _tick(_win_ep(window="unknown"), d, {"last_switch": NOW - 300}, active="default")[0] == "held"
+    d = WinFake(typing={"gm"})
+    d.human_typing = lambda s, attached=None: f"{s}: attached and typing" if s == "gm" else None
+    assert _tick(_win_ep(window="unknown"), d, active="default")[0] == "held" and d.switched == []
+
+
+def test_nudges_only_unattached_bannered_seats():
+    d = WinFake(attached={"pm-nod"})
+    _tick(_win_ep(window="unknown", seats=("gm", "pm-nod")), d, active="default")
+    assert [s for s, _ in d.nudged] == ["gm"]
+    assert "strategysimple" in d.nudged[0][1]
+
+
+def test_after_the_switch_gm_hears_which_seats_resumed():
+    d = WinFake(banners=("gm",), limited={"gm"})
+    res, log, st = _tick(_win_ep(window="unknown"), d, active="default")
+    assert res == "switched" and st["verify"]["seats"] == ["gm"]
+    n = len(d.mails)
+    _tick({}, d, st, active="strategysimple", now=NOW + 120)              # gm still limited: nothing yet
+    assert len(d.mails) == n
+    d._limited = set()
+    _tick({}, d, st, active="strategysimple", now=NOW + 240)
+    assert "verify" not in st
+    assert any("resumed" in m[2] and "gm" in m[3] for m in d.mails[n:])
+
+
+def test_after_the_switch_no_resume_in_15_minutes_is_a_high_mail():
+    d = WinFake(banners=("gm",), limited={"gm"})
+    _, _, st = _tick(_win_ep(window="unknown"), d, active="default")
+    n = len(d.mails)
+    _tick({}, d, st, active="strategysimple", now=NOW + 16 * 60)
+    assert any(m[1] == "high" and "did not resume" in m[2] for m in d.mails[n:])
+    assert "verify" not in st
+
+
+def test_live_deps_reads_the_limited_seats_from_the_seat_rows(tmp_path):
+    class P:
+        seat_rows = str(tmp_path / "limits.json")
+    d = LS.LiveDeps(P(), None)
+    assert d.limited_seats() is None                                  # unreadable: the check waits
+    (tmp_path / "limits.json").write_text(json.dumps({"seats": {"gm": {}, "pm-nod": {}}}))
+    assert d.limited_seats() == {"gm", "pm-nod"}
+
+
+# --- codex gating review of #664+#666 (codex exec, 2026-11-26): findings 1, 2, 4 ---------------------------
+
+def test_f1_a_reset_less_episode_with_no_new_row_for_2h_no_longer_triggers():
+    eps = _win_ep(window="unknown")
+    next(iter(eps.values()))["last_seen"] = "2026-11-25T15:00:00+00:00"       # NOW is 18:00Z: 3 h quiet
+    d = WinFake(usage={"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick(eps, d, active="default")[0] is None and d.switched == []
+    next(iter(eps.values()))["last_seen"] = "2026-11-25T17:30:00+00:00"
+    assert _tick(eps, d, active="default")[0] == "switched"
+
+
+def test_f1_a_targets_reset_less_episode_older_than_12h_does_not_disqualify_it():
+    target = _win_ep(account="strategysimple", window="unknown")
+    next(iter(target.values()))["last_seen"] = "2026-11-25T04:00:00+00:00"    # 14 h old
+    d = WinFake()
+    assert _tick({**_win_ep(window="unknown"), **target}, d, active="default")[0] == "switched"
+
+
+def test_f2_weekly_preference_never_moves_to_a_login_with_a_live_window_episode():
+    d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    eps = _win_ep(account="strategysimple", window="unknown")
+    assert _tick(eps, d, active="default")[0] is None and d.switched == []
+
+
+def test_f2_weekly_preference_ignores_another_logins_credits_cap():
+    # a Fable credits cap is that model's: its seats drop to Opus 5.5; the login is still a fine target
+    d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    assert _tick(_credits_ep(account="strategysimple"), d, active="default")[0] == "preferred"
+
+
+def test_f2_our_own_switch_is_not_read_as_a_hand_switch_back():
+    d = Fake(usage={"strategysimple": _reading(97.0), "default": _reading(20.0)})
+    st = {"first_trigger": {f"poll|strategysimple|5-hour|{RESET}": NOW - 600}, "last_switch": NOW - 120,
+          "last_to": "strategysimple"}
+    d.last_switch_row = lambda: (NOW - 120, "strategysimple")                  # the log row of OUR switch
+    d.last_switch = lambda: NOW - 900
+    res, log, _ = _tick({}, d, st)
+    assert not any(r.get("reason") == "switched back by hand" for r in log)
+
+
+def test_f4_a_weekly_reading_taken_before_its_reset_does_not_warn_after_it():
+    d = Fake(usage={"default": _u(38.0, 86.0)})
+    d._usage["default"]["windows"]["weekly"]["resets_at"] = NOW - 60           # the week already turned over
+    st = {"last_switch": NOW - 60}
+    for i in range(3):
+        _tick({}, d, st, active="default", now=NOW + 120 * i)
+    assert not [m for m in d.mails if "weekly" in m[2].lower() and "%" in m[2]]
+
+
+# --- codex re-review at 3e38672 --------------------------------------------------------------------------
+
+def test_r2_a_hand_switch_back_60s_after_ours_is_still_a_hand_switch():
+    # we moved strategysimple -> default (last_to default); the operator put strategysimple back 60 s later
+    d = Fake(usage={"strategysimple": _reading(97.0), "default": _reading(20.0)})
+    st = {"first_trigger": {f"poll|strategysimple|5-hour|{RESET}": NOW - 600}, "last_switch": NOW - 120,
+          "last_to": "default"}
+    d.last_switch_row = lambda: (NOW - 60, "strategysimple")
+    d.last_switch = lambda: NOW - 60
+    res, log, _ = _tick({}, d, st)
+    assert res == "held" and d.switched == []
+    assert any(r.get("reason") == "switched back by hand" for r in log)
+
+
+def test_r2_a_window_trigger_may_move_to_a_login_whose_fable_credits_are_out():
+    d = FableFake(usage={"default": _u(96.0, 40.0), "strategysimple": _u(5.0, 30.0)})
+    res, log, _ = _tick(_credits_ep(account="strategysimple"), d, active="default")
+    assert res == "switched" and d.switched == ["strategysimple"]
+
+
+def test_r2_every_switch_records_where_it_went():
+    d = WinFake()
+    _, _, st = _tick(_win_ep(window="unknown"), d, active="default")
+    assert st["last_to"] == "strategysimple"
+    d = FableFake(usage={"default": _u(38.0, 72.0), "strategysimple": _u(5.0, 61.0)})
+    _, _, st = _tick({}, d, active="default")
+    assert st["last_to"] == "strategysimple"
+
+
+def test_the_check_row_carries_the_weekly_fable_reading_of_both_logins():
+    u = {"default": _u(1.0, 61.0), "strategysimple": _u(5.0, 61.0)}
+    u["default"]["windows"]["weekly-fable"] = {"used_pct": 86.0}
+    u["strategysimple"]["windows"]["weekly-fable"] = {"used_pct": 12.0}
+    _, log, _ = _tick({}, FableFake(usage=u), active="default")
+    row = [r for r in log if r["kind"] == "switch_check"][0]
+    assert row["active_weekly_fable"] == 86.0 and row["others"]["strategysimple"]["weekly-fable"] == 12.0
+
+
+def test_a_stale_other_login_is_logged_unknown_and_never_headroom():
+    u = {"default": _reading(97.0), "strategysimple": _reading(5.0, week=96.0, age=7 * 3600)}   # token expired
+    d = Fake(usage=u)
+    res, log, _ = _tick({}, d, active="default")
+    row = [r for r in log if r["kind"] == "switch_check"][0]
+    assert row["others"]["strategysimple"]["fresh"] is False
+    assert res == "refused" and d.switched == []
+    assert any("weekly 96%" in r.get("reason", "") for r in log if r["kind"] == "switch_refused")
+
+
+# --- 11-26 miss: a hand switch (dashboard) nudges the banner-stuck seats too ----------------------
+
+class SwitchLogFake(Fake):
+    def __init__(self, row=(0.0, None), **kw):
+        super().__init__(**kw)
+        self.row = row
+
+    def last_switch_row(self):
+        return self.row
+
+    def last_switch(self):
+        return self.row[0]
+
+
+def test_5_a_hand_switch_nudges_the_banner_seats_once_and_gm_hears_it():
+    d = SwitchLogFake(row=(NOW - 120, "default"))
+    st = {"seen_switch": NOW - 3600}
+    res, log, st = _tick({}, d, st, active="default")
+    assert [s for s, _ in d.nudged] == ["pm-nod"] and "switched to default" in d.nudged[0][1]
+    assert [r for r in log if r["kind"] == "hand_switch_seen"][0]["nudged"] == ["pm-nod"]
+    assert any("nudged 1 seat" in m[2] for m in d.mails)
+    assert st["verify"]["seats"] == ["pm-nod"] and st["seen_switch"] == NOW - 120
+    _tick({}, d, st, active="default", now=NOW + 120)            # the same row again: no second nudge
+    assert len(d.nudged) == 1
+
+
+def test_5_first_run_with_the_rule_and_old_rows_nudge_nobody():
+    d = SwitchLogFake(row=(NOW - 120, "default"))
+    st = {}
+    _tick({}, d, st, active="default")
+    assert d.nudged == [] and st["seen_switch"] == NOW - 120
+    d = SwitchLogFake(row=(NOW - 3600, "default"))               # a switch an hour ago is old news
+    _tick({}, d, {"seen_switch": NOW - 7200}, active="default")
+    assert d.nudged == []
+
+
+def test_5_our_own_switch_is_not_nudged_twice_as_a_hand_switch():
+    d = SwitchLogFake(row=(NOW - 7200, "strategysimple"))
+    st = {"seen_switch": NOW - 7200}
+    assert _tick(_ep(), d, st)[0] == "switched"
+    first = len(d.nudged)
+    d.row = (NOW + 5, "default")                                  # account_switch wrote its row after `now`
+    _tick({}, d, st, active="default", now=NOW + 120)
+    assert len(d.nudged) == first == 1
+
+
+# --- gm msg_9dca7384: replay of tonight's exact readings and switch row ---------------------------
+
+PROFILES_11_26 = {"active": "default", "profiles": [
+    {"id": "default", "enrolled": True}, {"id": "strategysimple", "enrolled": True},
+    {"id": "codex-a", "provider": "codex", "enrolled": True}, {"id": "codex-b", "provider": "codex", "enrolled": True}]}
+
+
+class Replay1126(SwitchLogFake):
+    def enrolled(self):
+        return LS.claude_logins(PROFILES_11_26)
+
+
+def test_replay_11_27_00_48z_the_refused_trigger_now_switches_to_default():
+    """limit-events 00:48:02Z: "trigger: strategysimple 5-hour at 96%" then switch_refused "default: usage
+    reading older than 30 min; codex-a: no usage reading; codex-b: no usage reading". default's last reading
+    (5-hour 1%, weekly 80%) went stale at 22:40Z, so it was taken about 22:10Z."""
+    now = 1795740482                                     # 2026-11-27T00:48:02Z
+    usage = {"strategysimple": {"as_of": now - 120, "windows": {
+                 "5h": {"used_pct": 96.0, "resets_at": 1795752600},
+                 "weekly": {"used_pct": 43.0, "resets_at": 1796119200}}},
+             "default": {"as_of": 1795731000, "windows": {   # 2026-11-26T22:10Z
+                 "5h": {"used_pct": 1.0}, "weekly": {"used_pct": 80.0, "resets_at": 1796072400}}}}
+    d = Replay1126(row=(1795720572.0, "strategysimple"), usage=usage)   # 19:16:12Z switch to strategysimple
+    res, log, st = _tick({}, d, {"seen_switch": 1795720572.0}, now=now)
+    assert res == "switched" and d.switched == ["default"]
+    assert not [r for r in log if r["kind"] == "switch_refused"]
+
+
+def test_replay_11_27_01_09z_the_operators_dashboard_switch_nudges_the_banner_seats(tmp_path):
+    """account-switch.jsonl 01:09:19Z: "*shared*" -> default, by operator (dashboard). The watcher's next run
+    (01:10:02Z) must nudge every unattached seat on the 2.1.284 banner."""
+    log_path = tmp_path / "account-switch.jsonl"
+    log_path.write_text("\n".join(json.dumps(r) for r in (
+        {"ts": "2026-11-26T19:16:12+00:00", "seat": "*shared*", "to": "strategysimple", "status": "switched",
+         "from": "default"},
+        {"ts": "2026-11-27T01:09:19+00:00", "seat": "*shared*", "to": "default", "seat_dir": "/x",
+         "followers": 70, "status": "switched", "from": "strategysimple", "source": "vault"})) + "\n")
+    banner = "  Usage limit reached · continuing automatically at 11:10pm · esc to cancel\n"
+
+    class D(Replay1126):
+        def last_switch_row(self):
+            return LS.last_fleet_switch_row(str(log_path))
+
+        def pane_text(self, s):
+            return banner if s != "gm" else "❯ \n"
+
+    d = D(usage={"default": _reading(0.0)})
+    st = {"seen_switch": 1795720572.0}
+    _tick({}, d, st, active="default", now=1795741802)   # 2026-11-27T01:10:02Z
+    assert [s for s, _ in d.nudged] == ["pm-nod", "orchestra-builder"]
+    assert st["verify"]["to"] == "default"
+
+
+def test_5_a_weekly_preference_switch_is_not_taken_for_a_hand_switch():
+    """Review r1 #3."""
+    d = SwitchLogFake(row=(NOW - 7200, "strategysimple"),
+                      usage={"strategysimple": _reading(20.0, week=70.0), "default": _reading(5.0, week=30.0)})
+    st = {"seen_switch": NOW - 7200}
+    assert _tick({}, d, st)[0] == "preferred"
+    d.row = (NOW + 5, "default")
+    _, log, _ = _tick({}, d, st, active="default", now=NOW + 120)
+    assert d.nudged == [] and not [r for r in log if r["kind"] == "hand_switch_seen"]
+
+
+def test_5_own_switch_is_marked_seen_before_the_nudges_run():
+    """Review r1 #4: a run killed mid-nudge must not leave our switch looking like a hand switch."""
+    saved = []
+
+    class Dies(SwitchLogFake):
+        def nudge(self, s, text):
+            raise SystemExit("cron timeout")
+
+    d = Dies(row=(NOW - 7200, "strategysimple"))
+    st = {"seen_switch": NOW - 7200}
+    with pytest.raises(SystemExit):
+        LS.tick(None, _ep(), "strategysimple", NOW, [].append, d, st, save=lambda s: saved.append(json.dumps(s)))
+    assert json.loads(saved[-1])["seen_switch"] >= NOW
+
+
+def test_5_a_hand_switch_onto_a_login_that_is_out_nudges_nobody():
+    """Review r1 #5."""
+    d = SwitchLogFake(row=(NOW - 120, "default"), usage={"default": _reading(97.0)})
+    _, log, _ = _tick({}, d, {"seen_switch": NOW - 3600}, active="default")
+    assert d.nudged == [] and [r for r in log if r["kind"] == "nudge_held"]
+    d = SwitchLogFake(row=(NOW - 120, "default"))
+    _, log, _ = _tick(_ep(account="default"), d, {"seen_switch": NOW - 3600}, active="default")
+    assert d.nudged == []

@@ -31,6 +31,10 @@ def _err_row(ts, quota, text="You've hit your org's monthly spend limit"):
             "quotaLimits": quota}
 
 
+def _prompt_row(ts, text="[MSG from gm | high] continue"):
+    return {"type": "user", "timestamp": ts, "sessionId": SID_C, "message": {"role": "user", "content": text}}
+
+
 def _ok_row(ts):
     return {"type": "assistant", "timestamp": ts, "sessionId": SID_C,
             "message": {"content": [{"type": "text", "text": "done"}]}}
@@ -129,7 +133,7 @@ def test_plain_five_hour_is_logged_and_on_the_seat_row_but_not_mailed(tree):
 def test_recovery_by_effect_clears_the_row_and_closes_the_episode(tree):
     _add(tree.transcript, _err_row("2026-11-25T18:00:00Z", WEEKLY_Q))
     _run(tree)
-    _add(tree.transcript, _ok_row("2026-11-25T18:10:00Z"))
+    _add(tree.transcript, _prompt_row("2026-11-25T18:09:00Z"), _ok_row("2026-11-25T18:10:00Z"))
     _run(tree)
     assert json.load(open(tree.seat_rows))["seats"] == {}
     kinds = [r["kind"] for r in _log(tree)]
@@ -258,3 +262,303 @@ def test_rr2_shared_holder_takes_the_first_shared_row_like_account_switch(tree):
         json.dump({"accounts": {"strategysimple": {"where": "shared", "at": "2026-11-25T10:00:00+00:00"},
                                 "default": {"where": "shared", "at": "2026-11-25T22:00:00+00:00"}}}, f)
     assert LW.shared_holder(tree) == "strategysimple"
+
+
+# --- 11-26 replay: gm sat on the Fable banner 09:55Z-19:16Z while default's 5-hour read 1% --------------
+
+def test_replay_11_26_the_fable_row_drops_the_seat_to_opus_and_keeps_the_login(tree, monkeypatch):
+    """The day itself (gm order msg_f495a92c): the run logged "no switch: default 5-hour 1% < 95%" and
+    the Fable seats sat dead for nine hours. The operator's rule (apr_bafb66c3): the seat drops to Opus 5.5."""
+    t = 1795658143                                                   # 2026-11-26T09:55:43Z
+    monkeypatch.setenv("LIMIT_SWITCH_PREFER_WEEKLY", "0")            # the banner leg alone must switch
+    _add(os.path.join(tree.orch, "logs", "account-switch.jsonl"),     # the real day: default since 22:58Z 11-25
+         {"ts": "2026-11-25T22:58:59+00:00", "seat": "*shared*", "to": "default", "status": "switched",
+          "from": "strategysimple"})
+    with open(os.path.join(tree.orch, "state", "account_locations.json"), "w") as f:
+        json.dump({"accounts": {"default": {"where": "shared"}, "strategysimple": {"where": "vault"}}}, f)
+    for acct, five, week in (("default", 1.0, 73.0), ("strategysimple", 5.0, 61.0)):
+        (lambda p: open(p, "w").write(json.dumps({"as_of": t - 60, "windows": {
+            "5h": {"used_pct": five, "resets_at": t + 3600}, "weekly": {"used_pct": week, "resets_at": t + 5 * 86400}}})))(
+            os.path.join(tree.usage_dir, f"api-claude-{acct}.json"))
+    _add(tree.transcript, {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+                           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-26T09:55:43Z",
+                           "sessionId": SID_C, "message": {"model": "<synthetic>", "content": [{"type": "text",
+                           "text": "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."}]}})
+
+    class D:
+        switched = []
+
+        def usage(self, a):
+            return json.load(open(os.path.join(tree.usage_dir, f"api-claude-{a}.json")))
+
+        def enrolled(self):
+            return ["default", "strategysimple"]
+
+        def claude_seats(self):
+            return [("pm-nod", "pm-nod")]
+
+        def attached_sessions(self):
+            return set()
+
+        def human_typing(self, s, attached=None):
+            return None
+
+        def pane_text(self, s):
+            return "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+
+        def switch(self, a):
+            D.switched.append(a)
+            return {"status": "switched", "followers": 1}
+
+        def nudge(self, s, text):
+            return 0
+
+        def mail(self, *a):
+            pass
+
+    class Drop:
+        switched, nudged, mails = [], [], []
+
+        def sessions(self):
+            return {"pm-nod": "pm-nod"}
+
+        def seat_model(self, session):
+            return "claude-fable-5-1[1m]"
+
+        def usage(self, account):
+            return None
+
+        def claude_seats(self):
+            return [("pm-nod", "pm-nod")]
+
+        def switch_model(self, session, model):
+            Drop.switched.append((session, model))
+            return 200, {"ok": True, "switching": "switched"}
+
+        def attached_sessions(self):
+            return set()
+
+        def pane_text(self, s):
+            return "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+
+        def nudge(self, s, text):
+            Drop.nudged.append(s)
+            return 0
+
+        def mail(self, *a):
+            Drop.mails.append(a)
+
+    LW.run_once(tree, now=t + 30, start_at_end=False, switch_deps=D(), drop_deps=Drop())
+    log = _log(tree)
+    assert any(r["kind"] == "episode_open" and r["window"] == "credits" for r in log)
+    assert D.switched == []                                          # the login stays (operator, apr_bafb66c3)
+    assert Drop.switched == [("pm-nod", "claude-opus-5-5[1m]")] and Drop.nudged == ["pm-nod"]
+    assert any(r["kind"] == "model_dropped" and r["seat"] == "pm-nod" for r in log)
+    assert any(m[0] == "gm" and "pm-nod" in m[3] for m in Drop.mails)
+    st = json.load(open(os.path.join(tree.state_dir, "model-drop.json")))
+    LW.run_once(tree, now=t + 150, start_at_end=False, switch_deps=D(), drop_deps=Drop())
+    assert Drop.switched == [("pm-nod", "claude-opus-5-5[1m]")]     # once per episode
+    assert st["drops"]
+
+
+def test_f7_a_second_credits_hit_the_same_day_reopens_the_episode(tree):
+    row = lambda ts: {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+                      "error": "rate_limit", "quotaLimits": None, "timestamp": ts, "sessionId": SID_C,
+                      "message": {"content": [{"type": "text", "text": "You've reached your Fable limit."}]}}
+    # all after the fixture's 17:46:32Z switch, so every row is on the same login
+    _add(tree.transcript, row("2026-11-25T17:47:00Z"))
+    _run(tree, now=NOW - 3000)
+    _add(tree.transcript, _ok_row("2026-11-25T17:52:00Z"))
+    _run(tree, now=NOW - 2400, backfill=False)
+    eps = json.load(open(tree.episodes))
+    assert not [e for k, e in eps.items() if not k.startswith("_") and e.get("open")]
+    _add(tree.transcript, row("2026-11-25T17:58:00Z"))
+    _run(tree, now=NOW, backfill=False)
+    eps = json.load(open(tree.episodes))
+    ep = [e for k, e in eps.items() if not k.startswith("_") and e.get("window") == "credits"][0]
+    assert ep["open"] is True and ep["last_seen"] == "2026-11-25T17:58:00Z"
+
+
+def test_f1_a_reset_less_seat_row_expires_after_12h_without_a_new_row(tree):
+    _add(tree.transcript, {"type": "assistant", "isApiErrorMessage": True, "apiError": "model_requires_usage_credits",
+                           "error": "rate_limit", "quotaLimits": None, "timestamp": "2026-11-25T17:00:00Z",
+                           "sessionId": SID_C, "message": {"content": [{"type": "text", "text": "x"}]}})
+    assert _run(tree, now=NOW)["limited_seats"] == ["pm-nod"]
+    assert _run(tree, now=NOW + 13 * 3600, backfill=False)["limited_seats"] == []
+
+
+# --- 11-26 miss: Claude Code 2.1.284 limit notes, grace allowance, row order ---------------------
+
+def _note_row(ts):
+    return {"type": "user", "isMeta": True, "usageLimitNote": "wrap_up", "timestamp": ts, "sessionId": SID_C,
+            "message": {"role": "user", "content": "[Usage limit reached; a short grace allowance remains, "
+                                                   "then this turn is cut off without warning.]"}}
+
+
+def _info_row(ts, when="4:20pm"):
+    return {"type": "system", "subtype": "informational", "level": "notice", "isMeta": False, "timestamp": ts,
+            "sessionId": SID_C, "content": f"Usage limit reached · continuing automatically at {when} · esc to cancel"}
+
+
+@pytest.fixture
+def ny(monkeypatch):
+    import time
+    monkeypatch.setenv("TZ", "America/New_York")        # the CLI and the watcher share the host zone
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def _five_hour_full(tree):
+    (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
+        {"as_of": NOW - 60, "windows": {"5h": {"used_pct": 100.0, "resets_at": FIVE_Q["resetsAt"]},
+                                        "weekly": {"used_pct": 44.0, "resets_at": NOW + 5 * 86400}}}))
+
+
+def test_g1_a_wrap_up_note_and_the_informational_row_are_a_5_hour_limit(tree, ny):
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    seats = json.load(open(tree.seat_rows))["seats"]
+    assert seats["pm-nod"]["key"] == f"claude|strategysimple|5-hour|{FIVE_Q['resetsAt']}"
+    opened = [r for r in _log(tree) if r["kind"] == "episode_open"]
+    assert len(opened) == 1 and opened[0]["window"] == "5-hour"
+
+
+def test_g2_without_a_usage_reading_the_note_is_an_unknown_window_with_the_rows_reset(tree, ny):
+    _add(tree.transcript, _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    row = json.load(open(tree.seat_rows))["seats"]["pm-nod"]
+    assert row["window"] == "unknown" and row["reset_at"] == FIVE_Q["resetsAt"]
+
+
+def test_g3_grace_allowance_rows_are_not_a_recovery_a_reply_to_a_new_prompt_is(tree, ny):
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _ok_row("2026-11-25T17:55:05Z"),
+         _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    _add(tree.transcript, _ok_row("2026-11-25T17:56:00Z"))       # still the grace turn's tail
+    _run(tree)
+    assert "pm-nod" in json.load(open(tree.seat_rows))["seats"]
+    _add(tree.transcript, _prompt_row("2026-11-25T18:06:24Z", "The shared Claude login was switched. Continue."),
+         _ok_row("2026-11-25T18:06:30Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    assert [r["how"] for r in _log(tree) if r["kind"] == "seat_recovered"] == ["healthy record"]
+
+
+def test_g4_a_healthy_row_before_the_limit_row_in_the_same_run_is_no_recovery(tree):
+    _add(tree.transcript, _ok_row("2026-11-25T17:59:00Z"), _err_row("2026-11-25T18:00:00Z", FIVE_Q))
+    _run(tree)
+    assert "pm-nod" in json.load(open(tree.seat_rows))["seats"]
+    assert not [r for r in _log(tree) if r["kind"] == "seat_recovered"]
+
+
+def test_g5_other_informational_rows_and_meta_rows_are_no_limit(tree):
+    _add(tree.transcript,
+         {"type": "system", "subtype": "informational", "timestamp": "2026-11-25T17:55:00Z", "sessionId": SID_C,
+          "content": "Auto-update installed · restart to apply"},
+         _release_row("2026-11-25T17:55:01Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    assert not [r for r in _log(tree) if r["kind"] == "episode_open"]
+
+
+def _release_row(ts):
+    """2.1.284's row when the limit is over (real shape, arturo-receipt-dev 2026-11-27T02:06:26Z)."""
+    return {"type": "user", "isMeta": True, "turnCompanion": True, "usageLimitNote": "release",
+            "timestamp": ts, "sessionId": SID_C, "message": {"role": "user", "content":
+            "[Earlier usage-limit notes no longer apply. Continue working normally. Don't mention this to the user.]"}}
+
+
+def test_g7_a_seat_resuming_after_a_switch_recovers_on_the_release_row_and_opens_nothing(tree, ny):
+    """Review r1 #1: the release note was read as a new limit on the NEW login (a false trigger)."""
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    _add(tree.switch_log,
+         {"ts": "2026-11-25T17:58:00+00:00", "seat": "*shared*", "to": "default", "status": "switched",
+          "from": "strategysimple"})
+    _add(tree.transcript, _prompt_row("2026-11-25T17:59:00Z", "The shared Claude login was switched. Continue."),
+         _release_row("2026-11-25T17:59:00.5Z"), _ok_row("2026-11-25T17:59:10Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    opened = [r["key"] for r in _log(tree) if r["kind"] == "episode_open"]
+    assert opened == [f"claude|strategysimple|5-hour|{FIVE_Q['resetsAt']}"]
+
+
+def test_g8_a_prompt_that_quotes_the_markers_is_still_a_prompt(tree, ny):
+    """Review r1 #6 (guard, not a regression: JSON escapes the quotes inside a prompt, so the old substring
+    filter could not see them either): routing is on the parsed fields, a quoting prompt is a prompt."""
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    _add(tree.transcript, _prompt_row("2026-11-25T18:01:00Z",
+                                      'informational limit rows: "isMeta":true and "tool_use_id" quoted'),
+         _ok_row("2026-11-25T18:01:10Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+
+
+def test_g9_odd_rows_never_wedge_the_watcher(tree, ny):
+    """Review r1 #7: a non-dict message or a non-numeric reading must not stop every later run."""
+    (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
+        {"as_of": NOW - 60, "windows": {"5h": {"used_pct": "n/a", "resets_at": FIVE_Q["resetsAt"]}}}))
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"))         # in grace: the next prompt row is parsed
+    with open(tree.transcript, "a") as f:
+        f.write(json.dumps({"type": "user", "sessionId": SID_C, "message": "a string, not a dict"}) + "\n")
+        f.write(json.dumps(["not", "a", "row"]) + "\n")
+    _add(tree.transcript, _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"]["pm-nod"]["window"] == "unknown"
+    assert [r["kind"] for r in _log(tree) if r["kind"] == "row_error"] == ["row_error"]
+
+
+def test_g11_an_unknown_note_value_is_logged_and_opens_nothing(tree, ny):
+    """Review r2 #3: a future note (an early warning, say) is no limit until this watcher knows it."""
+    row = _note_row("2026-11-25T17:55:00Z")
+    row["usageLimitNote"] = "early_warning"
+    _add(tree.transcript, row)
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    assert [r["note"] for r in _log(tree) if r["kind"] == "note_unknown"] == ["early_warning"]
+
+
+def test_g10_a_note_with_no_timestamp_keeps_its_grace_for_the_next_run(tree, ny):
+    """Review r1 #8."""
+    row = _note_row(None)
+    row.pop("timestamp")
+    _add(tree.transcript, row)
+    _run(tree)
+    assert SID_C in json.load(open(tree.episodes))["_grace"]
+
+
+def test_g6_replay_11_27_the_three_invisible_seats_exact_rows(tree, ny):
+    """gm msg_9dca7384: tonight's exact wrap_up + informational rows (cwd neutralised) for the three seats
+    main never saw. Each seat also writes a grace-allowance reply between its note and its banner row."""
+    fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "limit_notes_2026-11-27.jsonl")
+    rows = [json.loads(l) for l in open(fx)]
+    db = sqlite3.connect(tree.registry_db)
+    for seat, sid in {(r["_seat"], r["sessionId"]) for r in rows}:
+        db.execute("INSERT INTO generations (root, session_id) VALUES (?, ?)", (seat, sid))
+    db.commit()
+    db.close()
+    reset = 1795752600                                   # 2026-11-27T04:10Z, the strategysimple 5-hour reset
+    now = 1795741560                                     # 2026-11-27T01:06Z
+    (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
+        {"as_of": now - 120, "windows": {"5h": {"used_pct": 100.0, "resets_at": reset},
+                                         "weekly": {"used_pct": 44.0, "resets_at": now + 4 * 86400}}}))
+    proj = os.path.dirname(str(tree.transcript))
+    for r in rows:
+        path = os.path.join(proj, r["sessionId"] + ".jsonl")
+        _add(path, {k: v for k, v in r.items() if k != "_seat"})
+        if r["type"] == "user":                          # the seat keeps working on its grace allowance
+            _add(path, {"type": "assistant", "timestamp": r["timestamp"], "sessionId": r["sessionId"],
+                        "message": {"content": [{"type": "text", "text": "stopping: usage limit"}]}})
+        os.utime(path, (now - 60, now - 60))
+    _run(tree, now=now)
+    seats = json.load(open(tree.seat_rows))["seats"]
+    assert sorted(seats) == ["arturo-latency-dev", "arturo-receipt-dev", "avatar-escape-dev"]
+    assert {s["key"] for s in seats.values()} == {f"claude|strategysimple|5-hour|{reset}"}
+    assert not [r for r in _log(tree) if r["kind"] == "seat_recovered"]

@@ -89,6 +89,7 @@ struct TextItem: Codable, Equatable {
     let role: String
     let text: String
     let is_system: Bool?
+    let reply_to: ReplyTo?
     let queued: Bool?
     let mid_turn: Bool?
     let machine: String?
@@ -138,6 +139,11 @@ struct ToolResultItem: Codable, Equatable {
     let is_error: Bool?
     let ts: String?
     let uuid: String?
+}
+
+struct ReplyTo: Codable, Equatable {
+    let uuid: String?
+    let excerpt: String
 }
 
 struct ImageRef: Codable, Equatable {

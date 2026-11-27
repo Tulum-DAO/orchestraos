@@ -192,6 +192,81 @@ def describe(runtime: str | None, current: str | None, catalog: list[dict], off:
     }
 
 
+# --- the model a seat is on now ---------------------------------------------------------------
+# The registry's stored model is what the NEXT spawn passes as --model; it can lag a live switch (its
+# projection is rewritten later) or a person's own /model. What the seat runs is in its transcript:
+# every assistant line carries the model that answered (measured 2026-11-26: after the first Fable
+# drop the transcript said claude-opus-5-5 while registry.json still said claude-fable-5-1[1m]).
+
+TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
+
+
+def transcript_model(path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
+    """The newest model evidence in this transcript: ("model", id, ts) from the last assistant line (the
+    model that answered), or ("set", display, ts) when the CLI's "Set model to `<display>`" line is newer
+    (a switch the seat has not answered on yet). None when there is neither. The CLI's own stand-in lines
+    ("<synthetic>") answer for no model and are skipped."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - tail_bytes))
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for raw in reversed(lines):
+        if b'"assistant"' not in raw and b"Set model to" not in raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if row.get("type") == "assistant":
+            model = (row.get("message") or {}).get("model")
+            if isinstance(model, str) and model and not model.startswith("<"):
+                return "model", model, row.get("timestamp")
+        elif row.get("type") == "user":
+            m = _SET_MODEL.search(_entry_text(row))
+            if m:
+                return "set", m.group(1).strip(), row.get("timestamp")
+    return None
+
+
+def _base(model) -> str:
+    return re.sub(r"\[[^\]]*\]$", "", model or "")
+
+
+def live_model(stored, seen, last_switch, catalog_ids=None):
+    """The model id the seat is on now, from its own transcript (`seen` = transcript_model()), so a
+    switch record left by an earlier occupant of the pane never counts by itself. The transcript names
+    the model without its context suffix (an answer) or by display name (a "Set model to" line); the
+    exact id is taken from the gateway's last confirmed switch or the stored model when either names
+    that model, else from the catalog (`catalog_ids`: ids, or a callable returning them, read only
+    then). A confirmation nothing resolves is None (unknown), never a model it contradicts. No
+    evidence: the stored model (what this process was spawned with)."""
+    if not seen:
+        return stored or None
+    kind, value, _ts = seen
+    switched = last_switch.get("model") if (isinstance(last_switch, dict)
+                                            and last_switch.get("outcome") == "switched") else None
+    cands = [c for c in (switched, stored) if isinstance(c, str) and c]
+    if kind == "set":
+        hit = next((c for c in cands if display_matches(value, c)), None)
+        if hit:
+            return hit
+        try:
+            ids = list(catalog_ids() if callable(catalog_ids) else (catalog_ids or ()))
+        except Exception:  # noqa: BLE001 — an unreadable catalog resolves nothing
+            ids = []
+        wide = "1m" in value.lower()             # "Opus 5.5 (1M context)" is the [1m] id, "Opus 5.5" not
+        return next((i for i in ids if isinstance(i, str) and i.endswith("[1m]") == wide
+                     and display_matches(value, i)), None)
+    return next((c for c in cands if _base(c) == value), value)
+
+
 # --- the host settings key -------------------------------------------------------------------
 
 def claude_settings_path(env=None) -> Path:

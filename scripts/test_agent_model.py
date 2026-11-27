@@ -815,3 +815,287 @@ def test_a_single_version_id_matches_its_own_display_and_not_a_point_release():
     assert AM.display_matches("Opus 5.5 (1M context)", "claude-opus-5-5[1m]", None)
     assert not AM.display_matches("Opus 5", "claude-opus-5-5", None)
     assert not AM.display_matches("Sonnet 5", "claude-opus-5", None)
+
+
+# --- the one automation allowed: limit-watch drops a Fable-limited seat to Opus 5.5 (operator 2026-11-26) ----
+
+FABLE, OPUS1M = "claude-fable-5-1[1m]", "claude-opus-5-5[1m]"
+
+
+@pytest.fixture
+def fable(gw, monkeypatch, tmp_path):
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", FABLE))
+    monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [
+        {"id": FABLE, "title": "Fable 5.1 (1M)"}, {"id": OPUS1M, "title": "Opus 5.5 (1M)"},
+        {"id": "claude-sonnet-5-5", "title": "Sonnet 5.5"}])
+    (tmp_path / "state" / "usage").mkdir(parents=True)
+
+    def limited(row):
+        (tmp_path / "state" / "usage" / "limits.json").write_text(json.dumps({"seats": {"dev": row} if row else {}}))
+    limited({"runtime": "claude", "window": "credits", "model": "Fable"})
+    return limited
+
+
+def _drop(model=OPUS1M, actor="automation:limit-watch"):
+    return _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": model}, actor=actor)))
+
+
+def test_limit_watch_drops_a_fable_limited_seat_to_opus_5_5(gw, fable):
+    r = _drop()
+    assert r.status == 200 and _body(r)["switching"] == "switched"
+    assert gw["live"] == [OPUS1M] and gw["stored"] == [("dev", {"model": OPUS1M})]
+
+
+def test_limit_watch_may_switch_to_nothing_but_opus_5_5(gw, fable):
+    r = _drop(model="claude-sonnet-5-5")
+    assert r.status == 403 and gw["live"] == []
+
+
+def test_limit_watch_leaves_a_seat_not_on_fable_alone(gw, fable, monkeypatch):
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", "claude-opus-5[1m]"))
+    r = _drop()
+    assert r.status == 409 and _body(r)["reason"] == "not_fable" and gw["live"] == []
+
+
+def test_limit_watch_needs_a_fable_limit_on_record_for_that_seat(gw, fable):
+    for row in (None, {"window": "5-hour"}, {"window": "credits", "model": "Opus"}):
+        fable(row)
+        r = _drop()
+        assert r.status == 409 and _body(r)["reason"] == "no_limit"
+    assert gw["live"] == []
+
+
+def test_any_other_automation_actor_is_still_refused(gw, fable):
+    for actor in ("automation:bot", "automation", None, "automation:limit-watch-x"):
+        r = _drop(actor=actor)
+        assert r.status == 403
+    assert gw["live"] == []
+
+
+def test_limit_watch_passes_the_protected_sessions_choke_point(gw, fable, monkeypatch):
+    monkeypatch.setattr(G, "_protected_cfg", lambda: {"enabled": True})
+    monkeypatch.setattr(G, "_session_is_protected", lambda s, cfg: True)
+    assert _drop().status == 200
+    r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": OPUS1M}, actor="automation:bot")))
+    assert r.status == 403
+
+
+def test_r1_the_fable_conditions_are_rechecked_under_the_switch_lock(gw, fable, monkeypatch):
+    # a person switched the seat off Fable while this request waited for the lock: the fresh read refuses it
+    reads = iter([("dev", {}, "claude", FABLE), ("dev", {}, "claude", "claude-sonnet-5-5")])
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: next(reads))
+    r = _drop()
+    assert r.status == 409 and _body(r)["reason"] == "not_fable" and gw["live"] == []
+
+
+def test_r1_a_persons_waiting_pick_is_never_replaced_by_the_drop(gw, fable, monkeypatch):
+    from scripts import agent_model_pending as AMP
+    monkeypatch.setattr(AMP, "get", lambda f, s: {"model": "claude-sonnet-5-5", "by": "app:ios"})
+    r = _drop()
+    assert r.status == 409 and _body(r)["reason"] == "person_pick_waiting" and gw["live"] == []
+
+
+# --- the weekly Fable window: proactive drop at 95% and the way back after its reset (gm order msg_514c57ad) ---
+
+import time as _t
+
+
+def _reading(tmp_path, pct, as_of=None, reset=None, login="strategysimple"):
+    (tmp_path / "state" / "account_locations.json").write_text(json.dumps(
+        {"accounts": {login: {"where": "shared"}, "default": {"where": "vault"}}}))
+    (tmp_path / "state" / "usage" / f"api-claude-{login}.json").write_text(json.dumps(
+        {"as_of": _t.time() - 60 if as_of is None else as_of,
+         "windows": {"weekly-fable": {"used_pct": pct, "resets_at": reset}}}))
+
+
+def _dropped(tmp_path, rec):
+    (tmp_path / "state" / "limit_watch").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "limit_watch" / "model-drop.json").write_text(json.dumps({"dropped": {"dev": rec}}))
+
+
+def test_w_proactive_drop_needs_no_banner_when_the_shared_login_reads_95(gw, fable, tmp_path):
+    fable(None)                                                             # no banner row
+    _reading(tmp_path, 95.0)
+    r = _drop()
+    assert r.status == 200 and gw["live"] == [OPUS1M]
+
+
+def test_w_proactive_drop_refused_under_95_or_on_a_stale_reading(gw, fable, tmp_path):
+    fable(None)
+    for pct, age in ((94.0, 60), (99.0, 31 * 60)):
+        _reading(tmp_path, pct, as_of=_t.time() - age)
+        r = _drop()
+        assert r.status == 409 and _body(r)["reason"] == "no_limit"
+    assert gw["live"] == []
+
+
+def _ours(by="limit-watch", model=OPUS1M):
+    from scripts import agent_model_pending as AMP
+    AMP.note_switched(AMP.state_path(G.ORCH_DIR), "dev", model, by)
+
+
+def _back(monkeypatch, current=OPUS1M):
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", current))
+    return _drop(model=FABLE)
+
+
+def test_w_return_to_the_recorded_fable_model_after_the_reset(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
+    _reading(tmp_path, 3.0, as_of=_t.time() - 60, reset=reset + 7 * 86400)
+    _ours()
+    r = _back(monkeypatch)
+    assert r.status == 200 and gw["live"] == [FABLE]
+
+
+def test_w_return_refusals(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    cases = [
+        ({"from": FABLE, "resets_at": reset}, (3.0, _t.time() - 60), "claude-opus-5[1m]", "not_dropped"),
+        (None, (3.0, _t.time() - 60), OPUS1M, "no_drop"),
+        ({"from": "claude-fable-9[1m]", "resets_at": reset}, (3.0, _t.time() - 60), OPUS1M, "no_drop"),
+        ({"from": FABLE, "resets_at": reset}, (96.0, _t.time() - 60), OPUS1M, "not_reset"),
+        ({"from": FABLE, "resets_at": reset}, (3.0, reset - 60), OPUS1M, "not_reset"),        # read before the reset
+        ({"from": FABLE, "resets_at": _t.time() + 600}, (3.0, _t.time() - 60), OPUS1M, "not_reset"),
+    ]
+    _ours()
+    for rec, (pct, as_of), current, reason in cases:
+        _dropped(tmp_path, rec) if rec else _dropped(tmp_path, {})
+        _reading(tmp_path, pct, as_of=as_of)
+        r = _back(monkeypatch, current)
+        assert r.status == 409 and _body(r)["reason"] == reason, (rec, pct, current, _body(r))
+    assert gw["live"] == []
+
+
+def test_w_limit_watch_may_not_switch_to_any_other_model(gw, fable, monkeypatch):
+    for m in ("claude-sonnet-5-5", "claude-opus-5[1m]", "claude-fable-5-1; rm", "gpt-5"):
+        r = _drop(model=m)
+        assert r.status == 403, m
+    assert gw["live"] == []
+
+
+def test_w_the_return_is_rechecked_under_the_lock(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
+    _reading(tmp_path, 3.0)
+    _ours()
+    reads = iter([("dev", {}, "claude", OPUS1M), ("dev", {}, "claude", "claude-opus-5[1m]")])
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: next(reads))
+    r = _drop(model=FABLE)
+    assert r.status == 409 and _body(r)["reason"] == "not_dropped" and gw["live"] == []
+
+
+
+def test_r1_a_person_switch_after_the_drop_blocks_the_return(gw, fable, tmp_path, monkeypatch):
+    reset = _t.time() - 600
+    _dropped(tmp_path, {"from": FABLE, "resets_at": reset})
+    _reading(tmp_path, 3.0)
+    _ours(by="ios", model=OPUS1M)                                          # the person picked Opus again
+    r = _back(monkeypatch)
+    assert r.status == 409 and _body(r)["reason"] == "moved_since" and gw["live"] == []
+
+
+def test_r1_every_immediate_switch_records_who_made_it(gw, fable):
+    from scripts import agent_model_pending as AMP
+    assert _drop().status == 200
+    assert AMP.last(AMP.state_path(G.ORCH_DIR), "dev") == {**AMP.last(AMP.state_path(G.ORCH_DIR), "dev"),
+                                                          "model": OPUS1M, "by": "limit-watch", "outcome": "switched"}
+
+
+# --- the model a seat is on NOW (gm 2026-11-26): the live transcript, not the registry's stored model -------
+# The first proactive Fable drop switched gm to Opus 5.5, but
+# GET /agent-model kept reading registry.json, which still said claude-fable-5-1[1m].
+
+def _transcript(path, *rows):
+    """rows: (model, ts) for an answer, or ("set:<display>", ts) for the CLI's switch confirmation."""
+    with open(path, "w") as f:
+        for model, ts in rows:
+            if model.startswith("set:"):
+                f.write(json.dumps({"type": "user", "timestamp": ts, "message": {"role": "user", "content":
+                        f"<local-command-stdout>Set model to `{model[4:]}` and saved</local-command-stdout>"}}) + "\n")
+                continue
+            f.write(json.dumps({"type": "assistant", "timestamp": ts, "message": {"model": model}}) + "\n")
+            f.write(json.dumps({"type": "user", "timestamp": ts, "message": {"content": "x"}}) + "\n")
+    return path
+
+
+DROP = {"model": "claude-opus-5-5[1m]", "at": "2026-11-26T23:10:20+00:00", "outcome": "switched"}
+
+
+def test_m1_the_newest_evidence_in_the_transcript_is_read(tmp_path):
+    p = _transcript(tmp_path / "t.jsonl", ("claude-fable-5-1", "2026-11-26T22:00:00.000Z"),
+                    ("claude-opus-5-5", "2026-11-26T23:11:00.000Z"), ("<synthetic>", "2026-11-26T23:11:00.000Z"))
+    assert AM.transcript_model(p) == ("model", "claude-opus-5-5", "2026-11-26T23:11:00.000Z")
+    q = _transcript(tmp_path / "q.jsonl", ("claude-fable-5-1", "2026-11-26T22:00:00.000Z"),
+                    ("set:Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z"))
+    assert AM.transcript_model(q) == ("set", "Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z")
+    assert AM.transcript_model(tmp_path / "missing.jsonl") is None
+    assert AM.transcript_model(None) is None
+
+
+def test_m2_a_dropped_seat_reads_opus_with_its_exact_id_though_the_registry_says_fable():
+    seen = ("model", "claude-opus-5-5", "2026-11-26T23:11:00.000Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-opus-5-5"
+
+
+def test_m3_the_stored_id_is_kept_when_the_transcript_agrees_with_it():
+    seen = ("model", "claude-fable-5-1", "2026-11-26T22:00:00.000Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None) == "claude-fable-5-1[1m]"
+
+
+def test_m4_a_switch_the_seat_has_not_answered_on_yet_counts_by_its_own_confirmation_line():
+    seen = ("set", "Opus 5.5 (1M context)", "2026-11-26T23:10:19.000Z")
+    assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) == "claude-opus-5-5[1m]"
+    # codex R2 on #672: a fresh occupant switched before its first answer is on the new model
+    assert AM.live_model("claude-fable-5-1[1m]", seen, DROP) != "claude-fable-5-1[1m]"
+    # a person switched it back after the drop, and the seat has answered since: the transcript wins
+    seen2 = ("model", "claude-fable-5-1", "2026-11-26T23:20:00.000Z")
+    assert AM.live_model("claude-opus-5-5[1m]", seen2, DROP) == "claude-fable-5-1"
+    # a switch that did not happen supplies no id
+    failed = dict(DROP, outcome="failed")
+    assert AM.live_model("claude-fable-5-1[1m]", ("model", "claude-fable-5-1", "t"), failed) == "claude-fable-5-1[1m]"
+
+
+def test_m5_no_evidence_is_the_stored_model_never_an_earlier_occupants_switch():
+    # codex R1 on #672: the switch record is keyed by tmux name only; a fresh spawn in that pane with
+    # nothing in its transcript yet runs its stored model, so the previous occupant's switch never counts.
+    fable_switch = dict(DROP, model="claude-fable-5-1[1m]")
+    assert AM.live_model("claude-opus-5-5[1m]", None, fable_switch) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", None, None) == "claude-fable-5-1[1m]"
+    assert AM.live_model(None, None, None) is None
+
+
+def test_m6_the_gateway_seat_lookup_reports_the_live_model_for_a_dropped_seat(monkeypatch, tmp_path):
+    t = _transcript(tmp_path / "t.jsonl", ("claude-opus-5-5", "2026-11-26T23:11:00.000Z"))
+    meta = {"runtime": "claude", "model": "claude-fable-5-1[1m]"}
+    monkeypatch.setattr(G, "_load_json", lambda p: {"agents": {"gm": meta}})
+    monkeypatch.setattr(G, "_resolve_sess_meta", lambda agents: {"gm": ("gm", meta)})
+    monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
+        lambda s: {"process": {"runtime": "claude"}})})())
+    monkeypatch.setattr(G, "_seat_transcript_path", lambda s, m=None: t)
+    monkeypatch.setattr(G, "_last_switch", lambda s: DROP)
+    assert G._seat_for_session("gm") == ("gm", meta, "claude", "claude-opus-5-5[1m]")
+    # a Codex seat has no Claude transcript: its stored model stands
+    monkeypatch.setattr(G, "_agent_status", lambda: type("S", (), {"get_agent_status": staticmethod(
+        lambda s: {"process": {"runtime": "codex"}})})())
+    assert G._seat_for_session("gm")[3] == "claude-fable-5-1[1m]"
+
+
+def test_m7_a_persons_own_switch_resolves_by_the_catalog_never_to_a_model_it_contradicts():
+    # codex R3 on #672: registry Fable, no gateway switch, the person re-picks Opus by /model
+    seen = ("set", "Opus 5.5 (1M context)", "2026-11-26T23:30:00.000Z")
+    ids = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5-5[1m]", "claude-sonnet-5-5"]
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, ids) == "claude-opus-5-5[1m]"
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5", "t"), None, lambda: ids) == "claude-opus-5-5"
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, None) is None        # unknown, not Fable
+    boom = lambda: (_ for _ in ()).throw(OSError("catalog"))
+    assert AM.live_model("claude-fable-5-1[1m]", seen, None, boom) is None
+
+
+def test_m8_the_catalog_fallback_never_reports_the_other_context_variant():
+    # codex R4 on #672: the live catalog may hold only the 1M Opus; "Opus 5.5" is the 200k one
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5", "t"), None, ["claude-opus-5-5[1m]"]) is None
+    assert AM.live_model("claude-fable-5-1[1m]", ("set", "Opus 5.5 (1M context)", "t"), None,
+                         ["claude-opus-5-5"]) is None

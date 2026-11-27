@@ -531,3 +531,112 @@ def test_slow_tick_picks_up_seats_spawned_after_boot(tmp_path):
     assert [s.session for s in d.seats] == ["gm", "planner"]
     snap = read_status_snapshot(str(tmp_path))
     assert snap is not None and "planner" in snap["seats"]
+
+
+# --- an unbound pipe is never guessed idle -----------------------------------
+
+class UnboundSweep(FakeSweep):
+    """A sweep that reports some sessions' pipes as UNBOUND (piped somewhere this
+    seat's ring does not read, e.g. a renamed green's old sink)."""
+    def __init__(self, unbound):
+        super().__init__()
+        self._unbound = set(unbound)
+    def is_unbound(self, name):
+        return name in self._unbound
+
+
+def test_unbound_pipe_reads_unknown_never_idle(tmp_path):
+    """A seat whose screen-output pipe is unbound has NO bytes signal: its silent ring
+    proves nothing, so idle/stalled/computing are guesses. It must read "unknown". A
+    bound seat on the same tick still reads idle, and a dead pane still reads offline."""
+    seats = [_seat("gm", 100, ring=FakeRing()), _seat("planner", 200, ring=FakeRing()),
+             _seat("gone", 300, ring=FakeRing())]
+    sampler = FakeSampler({100: IDLE_PROC, 200: IDLE_PROC, 300: DEAD_PROC})
+    d = _mk(tmp_path, seats, sampler, sweep=UnboundSweep({"gm", "gone"}), clock=lambda: 0.0)
+    d.tick(now=0.0)
+    snap = read_status_snapshot(str(tmp_path))["seats"]
+    assert snap["gm"]["status"] == "unknown"
+    assert snap["planner"]["status"] == "idle"
+    assert snap["gone"]["status"] == "offline_crashed"   # a real death is never masked
+
+
+def test_unbound_pipe_with_working_hook_reads_unknown_not_stalled(tmp_path):
+    hook = {"state": "working"}
+    d = _mk(tmp_path, [_seat("gm", 100, ring=FakeRing())], FakeSampler({100: IDLE_PROC}),
+            sweep=UnboundSweep({"gm"}), clock=lambda: 0.0,
+            live_resolver=lambda s: {"gm": _live(pid=100, hooks=hook)})
+    d.tick(now=0.0)
+    assert read_status_snapshot(str(tmp_path))["seats"]["gm"]["status"] == "unknown"
+
+
+def test_renamed_green_streams_through_the_root_seat_ring_end_to_end(tmp_path):
+    """The live bug, end to end through the REAL sweep and tailer: the green `gm-g6` is
+    piped into gm-g6.pipe, then renamed `gm`. The `gm` seat's ring (opened by name) must
+    read the green's output as streaming, not sit idle on a gm.pipe that never grows. The
+    first read after the rebind reopens from the end (drops the backlog), then streams."""
+    from .pane_sink_tailer import PaneSinkTailer
+    from .realtime.pipe_pane import AttachSweep
+    from .realtime.pipe_pane_test import FileTmux
+    d = tmp_path / "panes"; d.mkdir()
+    tmux = FileTmux([("gm", "$1"), ("gm-g6", "$5")])
+    sweep = AttachSweep(tmux, sink_dir=str(d), writers=tmux.writers)
+    seat = _seat("gm", 100, ring=PaneSinkTailer(str(d / "gm.pipe")))
+    dd = _mk(tmp_path, [seat], FakeSampler({100: IDLE_PROC}), sweep=sweep)
+    dd.tick(now=0.0)                                  # slow: both piped, gm idle
+    tmux.pipe_out("$1", b"blue output")
+    dd.tick(now=1.0)                                  # the ring has read blue's file
+    tmux.sessions = [("gm", "$5")]                    # swap
+    tmux.pipe_out("$5", b"backlog before the rebind")
+    dd.tick(now=SLOW_POLL_S + 1.0)                    # slow: sweep rebinds gm.pipe
+    dd.tick(now=SLOW_POLL_S + 1.5)                    # reopen from the end
+    tmux.pipe_out("$5", b"the green writes new tokens")
+    dd.tick(now=SLOW_POLL_S + 2.0)
+    snap = read_status_snapshot(str(tmp_path))["seats"]["gm"]
+    assert snap["status"] == "streaming"
+    tmux.close()
+
+
+# --- (c) status.json carries only the current seat set -----------------------
+
+def test_a_seat_dropped_from_the_seat_set_leaves_status_json(tmp_path):
+    """A seat the registry refresh drops (retired, or a green alias gone at its swap)
+    must leave status.json, not be re-stamped fresh on every write forever."""
+    wal = tmp_path / "wal"; wal.mkdir()
+    gm, green = _seat("gm", 100), _seat("gm-g6", 200)
+    sampler = FakeSampler({100: IDLE_PROC, 200: IDLE_PROC})
+    sets = iter([None, [gm]])
+    d = TelemetryDaemon(
+        seats=[gm, green], mux=FakeMux(), sweep=FakeSweep(), sampler=sampler,
+        flag_store=FakeFlags(), snapshot_base=str(tmp_path), wal_dir=str(wal),
+        lock_path=str(tmp_path / "t.lock"), clock=lambda: 0.0,
+        seats_refresh=lambda: next(sets))
+    d.tick(now=0.0)
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm", "gm-g6"}
+    d.tick(now=SLOW_POLL_S + 1.0)                      # refresh drops the green alias
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm"}
+
+
+class RetiringSweep(FakeSweep):
+    def __init__(self, retired):
+        super().__init__()
+        self.retired = set(retired)
+    def is_retired(self, name):
+        return name in self.retired
+
+
+def test_a_renamed_away_alias_is_trimmed_and_its_sink_not_drained(tmp_path):
+    """The seat set can lag the swap (it refreshes on a registry change). A green alias
+    the sweep reports retired (its pane now runs as the root) is dropped from status.json
+    at once, and its ring is NOT drained: it reads the very file the root's ring now
+    resolves to, and draining it would steal the root's output."""
+    alias_ring = FakeRing()
+    seats = [_seat("gm", 100, ring=FakeRing()), _seat("gm-g6", 200, ring=alias_ring)]
+    sweep = RetiringSweep(())
+    d = _mk(tmp_path, seats, FakeSampler({100: IDLE_PROC, 200: IDLE_PROC}), sweep=sweep)
+    d.tick(now=0.0)
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm", "gm-g6"}
+    sweep.retired = {"gm-g6"}                          # the swap renamed gm-g6 -> gm
+    alias_ring.feed(b"the root's output")
+    d.tick(now=SLOW_POLL_S + 1.0)
+    assert set(read_status_snapshot(str(tmp_path))["seats"]) == {"gm"}
+    assert alias_ring.read_all() == b"the root's output"   # left for the root's ring

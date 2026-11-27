@@ -48,11 +48,18 @@ from .wal.multiplexer import LivenessLock
 FAST_POLL_S = 0.5           # sub-second FAST lane (the operator-ordered): status transitions
                             # (streaming/idle/offline) land <1s. Cheap pipe-pane
                             # drains + B1 novelty only — no subprocess, no /proc.
+MUX_REFRESH_S = 60.0       # re-resolve capture paths (rotations, new seats) at most once a minute
 SLOW_POLL_S = 5.0           # == MIN_POLL_S CPU floor for the /proc-touching lane;
                             # the "computing" axis stays on this floor (may lag)
 MIN_SLOW_POLL_S = 5.0
 
 _STREAMING_SAMPLE = {"bytes_flowing": True}
+# Verdicts that rest on the ABSENCE of screen output. A seat whose pipe is unbound (its pane
+# is piped into a sink its ring never reads, e.g. a renamed green's old sink) has no output
+# signal at all, so these would be guesses: it reads "unknown" instead. offline_crashed and
+# waiting_permission rest on /proc and hooks, not on the pipe, and stand.
+_OUTPUT_DEPENDENT = frozenset({"idle", "stalled", "computing"})
+UNKNOWN = "unknown"
 # C1 corroboration window (DEC-1788493111 §9.2.2): recent NOVEL bytes within this
 # span count a resident child's cpu/io as delegated work (the hookless
 # blocked-on-resident-MCP mid-tool-call case); a working hook corroborates
@@ -65,7 +72,8 @@ class TelemetryDaemon:
                  wal_dir=None, lock_path=None,
                  fast_poll_s=FAST_POLL_S, slow_poll_s=SLOW_POLL_S,
                  bytes_recency_s=None, clock=time.time, sleep=time.sleep,
-                 live_resolver=None, turn_resolver=None, seats_refresh=None):
+                 live_resolver=None, turn_resolver=None, seats_refresh=None, mux_refresher=None,
+                 mux_refresh_s=MUX_REFRESH_S):
         if slow_poll_s < MIN_SLOW_POLL_S:
             raise ValueError(f"slow poll {slow_poll_s}s below CPU floor {MIN_SLOW_POLL_S}s")
         if bytes_recency_s is None:
@@ -80,6 +88,13 @@ class TelemetryDaemon:
         # started (a fresh install's first `orchestra spawn`) is picked up on the next slow
         # tick instead of never; a retired seat drops out the same way.
         self._seats_refresh = seats_refresh
+        # Capture-path refresh (rotation-following, 10-09): () -> ([MuxSeat], considered roots)
+        # re-resolved from the live stores. Without it each seat's transcript path stayed FROZEN at
+        # boot, so every seat rotated since the boot went uncaptured by the durable lane. Every
+        # mux_refresh_s, never every slow tick (it reads the stores).
+        self._mux_refresher = mux_refresher
+        self._mux_refresh_s = mux_refresh_s
+        self._last_mux_refresh = None
         self.mux = mux
         self.sweep = sweep
         self.sampler = sampler
@@ -178,6 +193,43 @@ class TelemetryDaemon:
         errored) falls back to the frozen seat.hooks (never worse than pre-fix)."""
         entry = live.get(seat.session)
         return entry.get("hooks") if entry else seat.hooks
+
+    def _pipe_unbound(self, session):
+        """True when the attach sweep says `session`'s pipe is unbound. A sweep without the
+        method, or one that raises, reads as bound (the classic behaviour)."""
+        fn = getattr(self.sweep, "is_unbound", None)
+        if fn is None:
+            return False
+        try:
+            return bool(fn(session))
+        except Exception:
+            return False
+
+    def _retired(self, session):
+        """True when the attach sweep says `session` was renamed away (a green alias after
+        its swap: its pane is the root seat now). Absent method / error => not retired."""
+        fn = getattr(self.sweep, "is_retired", None)
+        if fn is None:
+            return False
+        try:
+            return bool(fn(session))
+        except Exception:
+            return False
+
+    def _active_seats(self):
+        """The current seat set minus renamed-away aliases. The seat list can lag a swap
+        (it refreshes on a registry change); an alias's ring reads the very file the
+        root's ring now resolves to, so it must not be drained, classified or published."""
+        return [s for s in self.seats if not self._retired(s.session)]
+
+    def _trim(self):
+        """status.json carries only the active seat set: a row whose seat is gone (dropped
+        by the refresh, or a retired alias) is removed, never re-stamped fresh."""
+        keep = {s.session for s in self._active_seats()}
+        for cache in (self._status, self._last_bytes_ts, self._tails, self._last_novel_ts,
+                      self._degraded):
+            for k in [k for k in cache if k not in keep]:
+                del cache[k]
 
     def _log_e1_divergence(self, seat, classic, e1, age_s, hook_ts, now):
         """E1_SHADOW: append one JSONL record where the E1 verdict differs from the
@@ -279,7 +331,7 @@ class TelemetryDaemon:
         content also drives the token delta + the C1 corroboration timestamp.
         PER-SEAT CONTAINED: one seat's ring/classify/append error is logged +
         marked degraded + skipped — never crashes the tick."""
-        for seat in self.seats:
+        for seat in self._active_seats():
             if seat.ring is None:
                 continue
             try:
@@ -302,6 +354,20 @@ class TelemetryDaemon:
                 _LOG.warning("telemetry fast: seat %s failed (%s); continuing",
                              seat.session, type(e).__name__)
 
+    def _maybe_refresh_capture(self, now):
+        if self._mux_refresher is None or self.mux is None:
+            return
+        if self._last_mux_refresh is not None and (now - self._last_mux_refresh) < self._mux_refresh_s:
+            return
+        self._last_mux_refresh = now
+        try:
+            # () -> (fresh MuxSeats, considered lineage roots); the mux logs one line per change.
+            seats, considered = self._mux_refresher()
+            self.mux.refresh(seats, considered_roots=considered)
+        except Exception as e:  # noqa: BLE001 -- a refresh failure keeps the current seats
+            _LOG.warning("telemetry: capture refresh failed (%s); keeping current seats",
+                         type(e).__name__)
+
     def _slow(self, now):
         """Authoritative full classification for EVERY seat + the durable lane.
         PER-SEAT CONTAINED; the durable mux.tick is itself per-seat-contained."""
@@ -312,6 +378,7 @@ class TelemetryDaemon:
                     self.seats = list(fresh)
             except Exception as e:  # noqa: BLE001 — a refresh failure keeps the last seat set
                 _LOG.warning("telemetry seats refresh failed (%s); keeping %d seats", type(e).__name__, len(self.seats))
+        self._maybe_refresh_capture(now)
         try:
             self.sweep.sweep()
         except Exception as e:
@@ -320,15 +387,16 @@ class TelemetryDaemon:
         # time fields) in ONE batched call, then sample the resolved pids so a rotated
         # seat is scanned at its new live pid and does not falsely read offline_crashed
         # on the dead old pid.
+        seats = self._active_seats()
         live = self._resolve_live()
-        live_pids = {seat.session: self._pick_pid(seat, live) for seat in self.seats}
+        live_pids = {seat.session: self._pick_pid(seat, live) for seat in seats}
         try:
-            proc = self.sampler.sample([live_pids[s.session] for s in self.seats])
+            proc = self.sampler.sample([live_pids[s.session] for s in seats])
         except Exception as e:
             _LOG.warning("telemetry /proc sample failed (%s); slow classify skipped",
                          type(e).__name__)
             proc = {}
-        for seat in self.seats:
+        for seat in seats:
             try:
                 ps = proc[live_pids[seat.session]]
                 hooks = self._pick_hooks(seat, live)     # live hook, not frozen seat.hooks
@@ -379,6 +447,8 @@ class TelemetryDaemon:
                                                 hooks.get("ts") if hooks else None, now)
                 else:
                     verdict = derive_status(sample, profile=prof, hooks=hooks)   # classic (default)
+                if verdict in _OUTPUT_DEPENDENT and self._pipe_unbound(seat.session):
+                    verdict = UNKNOWN                    # no output signal: never guess idle
                 self._status[seat.session] = self._record(seat, verdict)
                 self._degraded.pop(seat.session, None)   # recovered -> clear runtime degrade
             except Exception as e:
@@ -393,7 +463,7 @@ class TelemetryDaemon:
         # merge the durable lane's per-seat degrade (lineage_root -> session)
         deg_lin = getattr(self.mux, "degraded_lineages", None) or {}
         if deg_lin:
-            lin2sess = {s.lineage_root: s.session for s in self.seats}
+            lin2sess = {s.lineage_root: s.session for s in seats}
             for root, reason in deg_lin.items():
                 sess = lin2sess.get(root)
                 if sess:
@@ -419,6 +489,7 @@ class TelemetryDaemon:
             self._last_slow = now
             self._slow(now)
             did_slow = True
+        self._trim()
         # Sub-second FAST (the operator amend) writes status.json every 0.5s. Writing the
         # WHOLE cache unconditionally at 2Hz over-costs CPU at fleet scale, so a
         # FAST tick writes ONLY when a status/degraded transition actually

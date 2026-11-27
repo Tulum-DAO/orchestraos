@@ -20,11 +20,12 @@ import {
 } from './agent-send.js';
 import { resolveMsgStorePath } from './messages.js';
 
-function req(opts: { params?: any; body?: any; headers?: Record<string, string> } = {}): Request {
+function req(opts: { params?: any; body?: any; headers?: Record<string, string>; query?: Record<string, string> } = {}): Request {
   return {
     params: opts.params || { id: 'gm' },
     body: opts.body || {},
     headers: opts.headers || {},
+    query: opts.query || {},
   } as unknown as Request;
 }
 
@@ -436,4 +437,235 @@ test('other refusals keep their durable-first fallback', async () => {
   assert.equal(calls.json.state, 'queued');
   assert.equal(calls.json.message_id, 'msg_q9');
   assert.equal(wrote, true);
+});
+
+
+// ── reply_to on the turn (reply threads P1, the API half) ───────────────────
+
+const REPLY = { uuid: 'abc-123', excerpt: 'The folded header could carry the count' };
+const PREFIXED = '[Replying to gm 21:42 Local: "The folded header could carry the count"] yes, and the time too';
+
+test('reply_to: kept at every 2xx with the words as sent and the message id when there is one', async () => {
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  // delivered: no message id
+  await handleAgentSend(deps({ recordReplyTo: keep }), req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  // gateway-held: the gateway's message id
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h1' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  // durable-first (gateway unreachable): the store's id
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 0, ok: false, unreachable: true, error: 'down' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  assert.equal(kept.length, 3);
+  for (const r of kept) {
+    assert.equal(r.agent, 'gm');
+    assert.equal(r.sent_text, PREFIXED, 'the words as sent, prefix included');
+    assert.deepEqual(r.reply_to, REPLY);
+    assert.ok(!Number.isNaN(Date.parse(r.ts)));
+  }
+  assert.equal('message_id' in kept[0], false);
+  assert.equal(kept[1].message_id, 'msg_h1');
+  assert.equal(kept[2].message_id, 'msg_test1');
+});
+
+test('reply_to: not kept on a refusal (409 composer text, 502 unknown, 404, 400)', async () => {
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working', composer_text: 'draft' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'unverified_submit' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(deps({ recordReplyTo: keep, agentExists: () => false }), req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(deps({ recordReplyTo: keep }), req({ body: { text: '', reply_to: REPLY } }), fakeRes().res);
+  assert.deepEqual(kept, []);
+});
+
+test('reply_to: never part of what the agent receives, and no second quote header is added', async () => {
+  const sent: string[] = [];
+  const d = deps({ recordReplyTo: () => {}, gatewayInject: async (_s, text) => { sent.push(text); return { httpStatus: 200, ok: true, delivered: true }; } });
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: REPLY } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'plain words', reply_to: REPLY } }), fakeRes().res);
+  assert.equal(sent[0], PREFIXED);
+  assert.equal(sent[1], 'plain words', 'the server adds no header of its own');
+  for (const s of sent) assert.equal(s.includes('abc-123'), false, 'the uuid never reaches the agent');
+});
+
+test('reply_to: a bad uuid is dropped and the excerpt kept; no excerpt drops the field; a bad shape is ignored', async () => {
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  const d = deps({ recordReplyTo: keep });
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: { uuid: 'has space!', excerpt: 'q' } } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: { uuid: 'abc' } } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: PREFIXED, reply_to: 'abc' } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: PREFIXED } }), fakeRes().res);
+  assert.equal(kept.length, 1);
+  assert.deepEqual(kept[0].reply_to, { excerpt: 'q' });
+});
+
+test('reply_to: a store that throws never fails the send', async () => {
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps({ recordReplyTo: () => { throw new Error('disk full'); } }),
+    req({ body: { text: PREFIXED, reply_to: REPLY, client_caps: ['send-states'] } }), res);
+  assert.equal(calls.status, 200);
+  assert.equal(calls.json.state, 'delivered');
+});
+
+test('reply_to: without the dep nothing is kept and the send is unchanged', async () => {
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps(), req({ body: { text: PREFIXED, reply_to: REPLY } }), res);
+  assert.equal(calls.status, 200);
+  assert.equal(calls.json.sent_text, PREFIXED);
+});
+
+test('reply_to and interrupt on one send: the reply is kept and the answer carries the outcome and the Escape facts', async () => {
+  // The two halves meet on every answer shape (#652 + #656 resolved together): a held answer after an Escape keeps the
+  // reply under the gateway's message id AND says held / escape_sent; a delivered answer keeps it AND says its outcome.
+  const kept: any[] = [];
+  const keep = (r: any) => { kept.push(r); };
+  let r = fakeRes();
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h9', outcome: 'held', escape_sent: true, turn_stopped: false }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY, client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.state, 'held');
+  assert.equal(r.calls.json.outcome, 'held');
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].message_id, 'msg_h9');
+  assert.deepEqual(kept[0].reply_to, REPLY);
+  r = fakeRes();
+  await handleAgentSend(deps({ recordReplyTo: keep, gatewayInject: async () => ({ httpStatus: 200, ok: true, delivered: true, outcome: 'interrupted', interrupted: true, state: 'working' }) }),
+    req({ body: { text: PREFIXED, reply_to: REPLY, client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.state, 'delivered');
+  assert.equal(r.calls.json.outcome, 'interrupted');
+  assert.equal(r.calls.json.interrupted, true);
+  assert.equal(kept.length, 2);
+  assert.equal('message_id' in kept[1], false);
+  assert.deepEqual(kept[1].reply_to, REPLY);
+});
+
+// ── interrupt send + honest outcome ─────────────────────────────────────────
+
+test('interrupt: body interrupt:true reaches the gateway; absent, false or a truthy non-boolean does not', async () => {
+  const seen: any[] = [];
+  const d = deps({ gatewayInject: async (_s, _t, force, interrupt) => { seen.push({ force, interrupt }); return { httpStatus: 200, ok: true, delivered: true }; } });
+  await handleAgentSend(d, req({ body: { text: 'now', interrupt: true } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'later' } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'later', interrupt: 'true' } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'later', interrupt: 1 } }), fakeRes().res);
+  assert.deepEqual(seen.map(x => x.interrupt), [true, false, false, false]);
+});
+
+test('interrupt: the ?interrupt=1 query flag is the same ask', async () => {
+  const seen: any[] = [];
+  const d = deps({ gatewayInject: async (_s, _t, _f, interrupt) => { seen.push(interrupt); return { httpStatus: 200, ok: true, delivered: true }; } });
+  await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: '1' } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: 'yes' } }), fakeRes().res);
+  await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: ' 1 ' } }), fakeRes().res);      // trimmed, as the gateway does
+  await handleAgentSend(d, req({ body: { text: 'now' }, query: { interrupt: ['1', '1'] as any } }), fakeRes().res);  // repeated flag
+  assert.deepEqual(seen, [true, false, true, true]);
+});
+
+test('outcome: only the four known words pass the gateway parser; anything else is dropped, not forwarded', async () => {
+  const { asOutcome, SEND_OUTCOMES } = await import('./agent-send.js');
+  assert.deepEqual([...SEND_OUTCOMES], ['delivered-now', 'delivered-steer', 'interrupted', 'held']);
+  for (const w of SEND_OUTCOMES) assert.equal(asOutcome(w), w);
+  const warned: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: any[]) => { warned.push(args.join(' ')); };
+  try {
+    for (const bad of ['Delivered-Now', 'typed', 3, {}]) assert.equal(asOutcome(bad), undefined, String(bad));
+    assert.equal(warned.length, 4, 'every unknown word is warned about');
+    for (const empty of ['', undefined, null]) assert.equal(asOutcome(empty), undefined);
+    assert.equal(warned.length, 4, 'an absent outcome is not a warning');
+  } finally { console.warn = origWarn; }
+});
+
+test('escape_sent + turn_stopped ride every answer shape the gateway can give after an Escape', async () => {
+  // durable-first fallback (a refusal the gateway could not hold, e.g. a stranded chip after Escape)
+  let r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working', escape_sent: true, turn_stopped: true }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.status, 200);
+  assert.equal(r.calls.json.state, 'queued');
+  assert.equal(r.calls.json.outcome, 'held');
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(r.calls.json.turn_stopped, true);
+  // gateway-held: turn_stopped carried too
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h4', outcome: 'held', escape_sent: true, turn_stopped: false }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(r.calls.json.turn_stopped, false);
+  // the 502 "unknown" answer (Enter unconfirmed after an Escape) keeps the facts too, for both client shapes
+  for (const caps of [['send-states'], undefined]) {
+    r = fakeRes();
+    await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'unverified_submit', escape_sent: true, turn_stopped: true }) }),
+      req({ body: { text: 'hi', ...(caps ? { client_caps: caps } : {}), interrupt: true } }), r.res);
+    assert.equal(r.calls.status, 502);
+    assert.equal(r.calls.json.escape_sent, true);
+    assert.equal(r.calls.json.turn_stopped, true);
+  }
+  // without an Escape neither key appears on the durable-first answer
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working' }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'] } }), r.res);
+  assert.equal('escape_sent' in r.calls.json, false);
+  assert.equal('turn_stopped' in r.calls.json, false);
+});
+
+test('escape_sent: a held or 409 answer after an interrupt says the agent\'s step was stopped', async () => {
+  let r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h2', outcome: 'held', escape_sent: true }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'], interrupt: true } }), r.res);
+  assert.equal(r.calls.json.state, 'held');
+  assert.equal(r.calls.json.escape_sent, true);
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'working', composer_text: 'restored draft', escape_sent: true }) }),
+    req({ body: { text: 'hi', interrupt: true } }), r.res);
+  assert.equal(r.calls.status, 409);
+  assert.equal(r.calls.json.escape_sent, true);
+  assert.equal(r.calls.json.composer_text, 'restored draft');
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h3', outcome: 'held' }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'] } }), r.res);
+  assert.equal('escape_sent' in r.calls.json, false);
+});
+
+test('outcome: a delivered answer carries the gateway\'s outcome and the interrupt facts', async () => {
+  for (const [gw, want] of [
+    [{ outcome: 'delivered-now', state: 'idle' }, { outcome: 'delivered-now' }],
+    [{ outcome: 'delivered-steer', state: 'working' }, { outcome: 'delivered-steer' }],
+    [{ outcome: 'interrupted', interrupted: true, state: 'working' }, { outcome: 'interrupted', interrupted: true }],
+    [{ outcome: 'delivered-steer', interrupt_failed: 'the turn did not stop within 3 s after Escape', state: 'working' },
+     { outcome: 'delivered-steer', interrupt_failed: 'the turn did not stop within 3 s after Escape' }],
+  ] as const) {
+    const { res, calls } = fakeRes();
+    await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, delivered: true, attempts: 1, ...gw }) }),
+      req({ body: { text: 'hi', client_caps: ['send-states'] } }), res);
+    assert.equal(calls.status, 200);
+    assert.equal(calls.json.state, 'delivered');
+    for (const [k, v] of Object.entries(want)) assert.equal(calls.json[k], v, k);
+    if (!('interrupted' in want)) assert.equal('interrupted' in calls.json, false);
+  }
+});
+
+test('outcome: a gateway-held answer and a durable-first fallback both say held', async () => {
+  let r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, held: true, message_id: 'msg_h1', outcome: 'held' }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'] } }), r.res);
+  assert.equal(r.calls.json.state, 'held');
+  assert.equal(r.calls.json.outcome, 'held');
+  r = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 0, ok: false, unreachable: true, error: 'down' }) }),
+    req({ body: { text: 'hi', client_caps: ['send-states'] } }), r.res);
+  assert.equal(r.calls.json.state, 'queued');
+  assert.equal(r.calls.json.outcome, 'held');
+});
+
+test('outcome: a legacy client (no caps) gets the outcome beside ok:true', async () => {
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps({ gatewayInject: async () => ({ httpStatus: 200, ok: true, delivered: true, outcome: 'delivered-now' }) }),
+    req({ body: { text: 'hi' } }), res);
+  assert.equal(calls.json.ok, true);
+  assert.equal(calls.json.outcome, 'delivered-now');
+  assert.equal('state' in calls.json, false);
 });

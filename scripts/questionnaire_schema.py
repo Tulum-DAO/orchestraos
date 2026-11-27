@@ -237,6 +237,47 @@ class QuestionnaireStore:
         finally:
             c.close()
 
+    # ---- annotate ----
+    def append_note(self, qid, author, text, now_iso=None):
+        """Same contract as ApprovalStore.append_note, for qnr_ containers. Appends to the
+        container summary; never rewrites it, never touches status or any answer.
+        Returns (ok, reason); a refusal always says why."""
+        text = (text or "").strip()
+        if not text:
+            return False, "empty note: nothing to append"
+        c = self._conn()
+        try:
+            try:
+                row = c.execute(
+                    "SELECT from_agent, summary, title FROM questionnaires WHERE id=?",
+                    [qid]).fetchone()
+            except sqlite3.OperationalError as e:
+                if "no such table" in str(e):
+                    return False, f"no questionnaire {qid}"   # fresh store: nothing was ever created
+                raise
+            if not row:
+                return False, f"no questionnaire {qid}"
+            # The author, its own seat across rotations (a successor annotating a predecessor's
+            # card, by POSITIVE registry evidence; seat_identity), or the operator, who owns every
+            # surface.
+            why = None
+            if author != "operator":
+                import seat_identity
+                same, why = seat_identity.may_annotate(
+                    seat_identity.registry_beside(self.db_path), author, row["from_agent"])
+                if not same:
+                    return False, why or (f"{author} is not the author of {qid} "
+                                          f"(authored by {row['from_agent']}); only the author, "
+                                          f"its current successor, or the operator may annotate it")
+            stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            who = f"{author} (orphan steward)" if why == "orphan-steward" else author
+            c.execute("UPDATE questionnaires SET summary=COALESCE(summary, title, '') || ? WHERE id=?",
+                      [f"\n\n— NOTE {stamp} by {who}: {text}", qid])
+            c.commit()
+            return True, None
+        finally:
+            c.close()
+
     # ---- read ----
     def get(self, qid):
         """Full container: questionnaire fields + ordered questions (menus parsed) +

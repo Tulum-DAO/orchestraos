@@ -104,7 +104,7 @@ test('the default first page is 40 items and says there is more above', async ()
     const env = (await get('')).body;
     assert.equal(env.items.length, 40);
     assert.equal(env.has_older, true, 'the first page tells the client the log goes on above it');
-    assert.equal(env.oldest_id, `${SID}~u160`, 'oldest_id is the cursor of the first item shown');
+    assert.match(env.oldest_id, new RegExp(`^${SID}~@\\d+~u160$`), 'oldest_id is the cursor of the first item shown: its line\'s byte offset, then its uuid');
     assert.deepEqual(uuids(env).slice(-2), ['u198', 'a199'], 'the newest items');
     assert.equal(env.items[0].uuid, 'u160');
     // The next page from that cursor continues without a gap or a repeat.
@@ -123,7 +123,7 @@ test('?limit=150 still gives 150, and a page that reaches the start says so', as
     const whole = (await get('?limit=500')).body;
     assert.equal(whole.items.length, 200);
     assert.equal(whole.has_older, false, 'the window reached the start of the log');
-    assert.equal(whole.oldest_id, `${SID}~u0`);
+    assert.equal(whole.oldest_id, `${SID}~@0~u0`);
   });
 });
 
@@ -133,7 +133,7 @@ test('a before= page is unchanged by the new default', async () => {
     assert.equal(page.items.length, 100, 'a cursor page still defaults to 100');
     assert.deepEqual(uuids(page).slice(-1), ['a99']);
     assert.equal(page.has_older, false);
-    assert.equal(page.oldest_id, `${SID}~u0`);
+    assert.equal(page.oldest_id, `${SID}~@0~u0`);
   });
 });
 

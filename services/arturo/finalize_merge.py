@@ -12,6 +12,9 @@
 # the server vc id [secondary — verified on real call vc_client_2f140442c137 -> vc_e91877ed787b1316],
 # (c) [started_at, ended_at] time-window overlap [fallback].
 import json as _json
+import logging as _logging
+
+log = _logging.getLogger(__name__)
 
 
 def extract_surface_server_ids(surface_lines):
@@ -130,3 +133,43 @@ def summarize(merged_turns):
     last_arturo = next((t.get("text", "") for t in reversed(merged_turns)
                         if t.get("role") == "arturo"), "")
     return f"Voice call: {n_turns} turns, {n_tools} tool runs.\n{last_arturo}"
+
+
+def native_tool_turns(conv_id, ledger_path):
+    """A native call's tool runs as journal tool turns, read from the native tool ledger (tool_calls, by
+    conversation_id). The native server writes no journal of its own, so finalize had no tool turns to fold in and the
+    summary said "0 tool runs" on a call with three questions to gm (2026-11-26). Read-only; [] for any other call,
+    a missing ledger or a read error."""
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+    if not conv_id or not str(conv_id).startswith("native-") or not _Path(ledger_path).exists():
+        return []
+    try:
+        con = _sqlite3.connect(f"file:{ledger_path}?mode=ro", uri=True, timeout=2)
+        try:
+            rows = con.execute("SELECT tool_call_id, name, args_json, result_json, created FROM tool_calls "
+                               "WHERE conversation_id = ? ORDER BY created", (conv_id,)).fetchall()
+        finally:
+            con.close()
+    except _sqlite3.Error as e:
+        log.warning("native tool ledger unreadable for %s (%s): its tool runs are not in the journal", conv_id, e)
+        return []
+    out = []
+    for call_id, name, args_json, result_json, created in rows:
+        try:
+            args = _json.loads(args_json or "{}")
+        except ValueError:
+            args = {}
+        try:
+            res = _json.loads(result_json or "{}")
+        except ValueError:
+            res = {}
+        res = res if isinstance(res, dict) else {}
+        text = res.get("result")
+        if text is None and res.get("error"):             # a failed run carries error/detail, not result
+            text = ": ".join(str(x) for x in (res.get("error"), res.get("detail")) if x)
+        # the run's own outcome: a gm_command that only promised "gm has it" is ok:false, not done
+        out.append({"role": "tool", "tool": name, "input": args if isinstance(args, dict) else {},
+                    "result": ("" if text is None else str(text))[:300], "status": "done" if res.get("ok") is True else "not_ok",
+                    "ts": float(created), "call_id": call_id, "source": "native"})
+    return out

@@ -14,9 +14,9 @@ import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, cl
 import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems, queuedStateSig } from '../services/queued-merge.js';
-import { tagAudience, tagSynthetics } from '../lib/audience.js';
+import { tagAudience, tagSynthetics, openerKind } from '../lib/audience.js';
 import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
-import { refable, partAt } from '../lib/messageRef.js';
+import { refable, partAt, messageRef } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices, storePath } from '../services/conversation-store.js';
 import { listAgentCalls, mergeCallMarkers, readHandoffs, showHandoff, CALL_ID_RE } from '../lib/agentCalls.js';
 import { buildCallContext, readJournals, clampBudget, shawTz, operatorName, redact } from '../lib/callContext.js';
@@ -29,7 +29,7 @@ import { agentScopeParam, canPrincipalSeeAgent, defaultResolveTags } from '../li
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
 import { sessionOwners, predecessorOf, lineageChainOf, getCanonicalAgents, identityStoreSig } from '../services/identity-store-reader.js';
-import { cachedLog } from '../services/transcript-log-cache.js';
+import { cachedLog, cachedLogTail, logRange, type LogParser } from '../services/transcript-log-cache.js';
 import { firstPage } from '../services/transcript-first-page-cache.js';
 import { callsDir } from '../lib/agentCalls.js';
 import { dataDir } from '../lib/config.js';
@@ -40,6 +40,7 @@ import { principal } from '../lib/principal.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { findImagePaths, imagePathsInToolUse } from '../lib/imageRefs.js';
 import { defaultImageRefsFor, windowFor, type RefsFor } from '../lib/mediaStore.js';
+import { stampReplyTo } from '../lib/reply-to-store.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -321,6 +322,22 @@ export function looksLikeGrok(lines: string[]): boolean {
 
 /** Codex rollout lines are self-describing, so the SSE tail and the poll path cannot disagree
  *  about which parser to use (they call normalizeTranscript independently). */
+/** Positive evidence of the Claude Code grammar: at least one well-formed user/assistant/attachment/system line with a
+ *  uuid. Used only to decide whether a parse may be RESUMED (transcript-log-cache.ts); detection of the other grammars
+ *  stays as it is. A log that so far holds only lines without a uuid (summary carries leafUuid; file-history-snapshot,
+ *  queue-operation) stays on a full parse per change until its first user line: slower for those reads, never wrong. */
+export function looksLikeClaude(lines: string[]): boolean {
+  for (const l of lines) {
+    if (!l.trim()) continue;
+    try {
+      const d = JSON.parse(l);
+      if (d && (d.type === 'user' || d.type === 'assistant' || d.type === 'attachment' || d.type === 'system')
+        && typeof d.uuid === 'string') return true;
+    } catch { /* torn or foreign line */ }
+  }
+  return false;
+}
+
 export function looksLikeCodex(lines: string[]): boolean {
   for (const l of lines.slice(0, 40)) {
     if (!l.trim()) continue;
@@ -912,20 +929,97 @@ export function dropWarmup(items: readonly any[], mark: WarmupMark | null): any[
 }
 
 /** A generation's items as the chat shows them, plus the first position of each uuid in them, and the text of each
- *  user message by uuid (what carriedOver compares). */
-interface SegmentView { items: readonly any[]; firstAt: Map<string, number>; userTexts: Map<string, string> }
+ *  user message by uuid (what carriedOver compares). `start`/`end`: the bytes of the log this view was read from
+ *  (start 0 and end null = the whole file; a tail read has start > 0; a cursor page's middle read has both). */
+interface SegmentView {
+  items: readonly any[]; firstAt: Map<string, number>; userTexts: Map<string, string>;
+  start: number; end: number | null;
+  /** The view reaches the file's end (a tail or whole read always does; a middle read may not). */
+  eof: boolean;
+}
+
+// ---- Tail-first pages ---------------------------------------------------------------------------
+// A page costs the bytes of the page: the newest page reads the last TAIL_WANT0 bytes of the log (a line start at or
+// under it), an older page reads a window around its cursor, and either is widened until it holds the page AND a
+// PERSON turn opener older than the page's oldest item (the audience pass carries the person's exchange across the
+// machine turns after it, and only a person turn makes the newest reply fold) AND, for a cursor page, a person opener
+// newer than the cursor that is a real turn and not the real turn of a queued copy (isDrainedOpener: the turn the
+// cursor is in ends there, with its closing reply, and every queued copy before the cursor has its real turn, written
+// after it, inside the window to be deduped against). So the whole-array passes (audience, queued dedupe, wake
+// replies) see the same turns the whole-file build does. A widening is sized from the lines read so far (bytesFor:
+// the rest of the page, or one more opener's worth) and the cache parses only the lines it adds, so a log of 100 KiB
+// lines costs about the bytes of its page too. The cache keeps the newest page's chunk and grows it by appends or by
+// widening; a cursor page's window is kept once and grown either way. Never on the whole file unless the file is that
+// small (or has no person turn), a cursor is in an old form, or the grammar cannot be read from a chunk.
+let TAIL_WANT0 = 256 * 1024;
+/** Bytes read past a cursor's line: the turn after it, so a queued copy and the real turn that landed after it meet. */
+const TAIL_LOOKAHEAD = 64 * 1024;
+/** Tests: TAIL_WANT0 = Infinity is the whole-file build (the oracle every tail-first page must equal). */
+export function tailFirstForTests(o: { want0?: number }): void {
+  if (o.want0 !== undefined) TAIL_WANT0 = o.want0;
+}
+
+/** What of a log a view reads: the last `want` bytes, a middle window, or the whole file. */
+type Range = { want: number } | { lo: number; hi: number } | 'whole';
+
+const isPartial = (v: SegmentView | null | undefined): boolean => !!v && v.start > 0;
+
+/** The same range reaching further back (never past the file's start): by `need` more bytes (at least TAIL_WANT0)
+ *  when the caller can size the rest of its page from the lines it has seen, else twice as far. The cache parses
+ *  only the lines a widening adds (transcript-log-cache.ts prefixed/extended), so a small step costs its own bytes. */
+function widened(r: Range, need = 0): Range {
+  if (r === 'whole') return r;
+  if ('want' in r) {
+    if (!Number.isFinite(r.want)) return r;
+    return { want: need > 0 ? r.want + Math.max(need, TAIL_WANT0) : r.want * 2 };
+  }
+  const back = need > 0 ? Math.max(need, TAIL_WANT0) : Math.max(r.hi - r.lo, TAIL_WANT0);
+  return { lo: Math.max(0, r.lo - back), hi: r.hi };
+}
+
+/** The bytes a view still needs for `missing` more of what it holds `have` of (items, or person openers), from the
+ *  bytes per one in the view, and a quarter over. 0 when there is nothing to size from (the caller doubles). */
+function bytesFor(r: Range, have: number, missing: number): number {
+  if (r === 'whole' || have <= 0 || missing <= 0) return 0;
+  const bytes = 'want' in r ? r.want : r.hi - r.lo;
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  return Math.ceil((bytes / have) * missing * 1.25);
+}
+
+/** A middle range reaching twice as far forward. */
+function widenedForward(r: Range): Range {
+  if (r === 'whole' || 'want' in r) return r;
+  return { lo: r.lo, hi: r.hi + Math.max(r.hi - r.lo, TAIL_LOOKAHEAD) };
+}
 
 const isUserText = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !!it.uuid;
+const isTurnOpener = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !it.mid_turn;
+/** A turn the operator opened (lib/audience.ts): what the audience pass anchors an exchange on. */
+const isPersonOpener = (it: any): boolean => isTurnOpener(it) && openerKind(it) === 'person';
+/** On a real user turn: a queued copy of it was dropped (dedupeQueuedCommands). Not enumerable, so no copy or
+ *  comparison of the item carries it. */
+const CONSUMED_QUEUED = Symbol('consumedQueued');
+/** A person opener past which the queue the operator filled mid-turn is drained: a real turn (not a queued copy,
+ *  which the real turn written after it dedupes), and not one such real turn (CONSUMED_QUEUED: more may follow it,
+ *  one per copy). The harness writes every queued message as a real turn before any message typed after them, so the
+ *  first opener that is neither ends the turn a cursor is in, with every copy before the cursor matched. */
+const isDrainedOpener = (it: any): boolean => isPersonOpener(it) && !it.queued && it[CONSUMED_QUEUED] !== true;
 
-function segmentView(agentId: string, seg: Segment): SegmentView | null {
+function segmentView(agentId: string, seg: Segment, range: Range = 'whole'): SegmentView | null {
   const path = seg.file();
   if (!path) return null;
-  let log;
-  try { log = cachedLog(path, (lines) => logItems(lines, path.includes('antigravity-cli'))); } catch { return null; }
+  const parser = logParser(path.includes('antigravity-cli'));
+  let log: { items: readonly any[]; memo: Map<string, unknown>; start: number; end?: number; eof?: boolean };
+  try {
+    if (range === 'whole') log = cachedLog(path, parser);
+    else if ('want' in range) log = cachedLogTail(path, parser, range.want);
+    else log = logRange(path, parser, range.lo, range.hi);
+  } catch { return null; }
+  const end = log.end === undefined ? null : log.end;
   const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
   // What a session only saw (the earlier-conversation block, seed rows) is never shown (services/conversation-store.ts).
   const rules = storeRules(seg.session || null);
-  const key = `view:${seg.session}:${sig}:${rules.sig}`;
+  const key = `view:${seg.session}:${sig}:${rules.sig}:${log.start}:${end ?? ''}`;
   const memo = log.memo.get(key) as SegmentView | undefined;
   if (memo) return memo;
   const items = applyStoreRules(dropWarmup(log.items, mark), rules);
@@ -935,7 +1029,7 @@ function segmentView(agentId: string, seg: Segment): SegmentView | null {
     if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i);
     if (isUserText(it) && !userTexts.has(String(it.uuid))) userTexts.set(String(it.uuid), String(it.text ?? ''));
   });
-  const view = { items, firstAt, userTexts };
+  const view: SegmentView = { items, firstAt, userTexts, start: log.start, end, eof: log.eof ?? true };
   // One view per file: an older warm-up signature is never asked for again.
   for (const k of [...log.memo.keys()]) if (k.startsWith('view:')) log.memo.delete(k);
   log.memo.set(key, view);
@@ -955,17 +1049,47 @@ function rotationMarker(older: Segment, newer: Segment): Record<string, unknown>
 /** One chat position, newest to oldest: an item of a generation, or the marker above one. */
 interface Unit { item: any; seg: number; at: number }   // at = -1: the marker above segment `seg`
 
+/** The views of one window build: each generation's view over its range, made as the walk reaches it, and the WHOLE
+ *  view of a generation when a pass needs every item of it (carriedOver). */
+class Views {
+  readonly ranges: Range[];
+  private readonly made: (SegmentView | null | undefined)[];
+  private readonly wholes: (SegmentView | null | undefined)[];
+  constructor(private readonly agentId: string, readonly segs: Segment[], range: Range) {
+    this.ranges = segs.map(() => range);
+    this.made = segs.map(() => undefined);
+    this.wholes = segs.map(() => undefined);
+  }
+  get(i: number): SegmentView | null {
+    if (this.made[i] === undefined) this.made[i] = segmentView(this.agentId, this.segs[i], this.ranges[i]);
+    return this.made[i] ?? null;
+  }
+  /** Every item of generation `i`: the whole file (a retired generation's is parsed once and kept). */
+  whole(i: number): SegmentView | null {
+    if (this.ranges[i] === 'whole') return this.get(i);
+    if (this.wholes[i] === undefined) this.wholes[i] = segmentView(this.agentId, this.segs[i], 'whole');
+    return this.wholes[i] ?? null;
+  }
+  /** The view of `i` read again over `range` (a widened one). */
+  reset(i: number, range: Range): void {
+    this.ranges[i] = range;
+    this.made[i] = undefined;
+  }
+}
+
 /** The positions in generation `s` that a newer generation carried over: a user message that was being answered when
  *  the CLI went down is written again, with the same uuid and text, into the rebuilt conversation, and answered there.
  *  The chat shows it once, at the newer copy. Only user messages, and only on the same text too, because some logs
  *  number their ids per file (a codex ordinal, an antigravity step) and those repeat between generations by chance.
- *  Positions keep their index, so a cursor naming a hidden entry still resolves. */
-function carriedOver(s: number, count: number, view: (i: number) => SegmentView | null | undefined): Set<number> {
+ *  Positions keep their index, so a cursor naming a hidden entry still resolves. The newer generations are read
+ *  WHOLE here: the carried copy sits at the start of the rebuilt conversation, which a tail read does not reach. */
+function carriedOver(s: number, views: Views): Set<number> {
   const out = new Set<number>();
-  const v = view(s);
+  const v = views.get(s);
+  const count = views.segs.length;
   if (!v || !v.userTexts.size || s >= count - 1) return out;
   const newer: SegmentView[] = [];
-  for (let j = s + 1; j < count; j++) { const w = view(j); if (w?.userTexts.size) newer.push(w); }
+  for (let j = s + 1; j < count; j++) { const w = views.whole(j); if (w?.userTexts.size) newer.push(w); }
   if (!newer.length) return out;
   v.items.forEach((it, k) => {
     if (!isUserText(it)) return;
@@ -977,32 +1101,39 @@ function carriedOver(s: number, count: number, view: (i: number) => SegmentView 
 }
 
 /** Everything older than position (seg, at), newest first; markers only between two generations
- *  that both show something. Views are made only as the walk reaches them, and the newer ones a
- *  carried-over check needs. */
-function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[],
-                    seg: number, at: number): Generator<Unit> {
-  const view = (i: number) => {
-    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
-    return views[i];
-  };
+ *  that both show something. Views are made only as the walk reaches them. The walk STOPS at the start of a
+ *  partial view (a tail or middle read): what is older is in the same file, below the chunk, and the caller widens. */
+function* olderThan(views: Views, seg: number, at: number): Generator<Unit> {
+  const segs = views.segs;
   const hiddenMemo = new Map<number, Set<number>>();
   const hidden = (i: number) => {
     let h = hiddenMemo.get(i);
-    if (!h) { h = carriedOver(i, segs.length, view); hiddenMemo.set(i, h); }
+    if (!h) { h = carriedOver(i, views); hiddenMemo.set(i, h); }
     return h;
   };
+  // A generation shows something when its view has an item the newer generations did not carry over. A PARTIAL view
+  // that shows nothing (a retired log ending in sidechain rows, or more seed than the chunk) is widened until it shows
+  // something or reaches the file's start: a chunk that happens to hold nothing is not an empty generation.
   const shows = (i: number) => {
-    const v = view(i);
-    return !!v && v.items.length > hidden(i).size;
+    for (let round = 0; round < 64; round++) {
+      const v = views.get(i);
+      if (!v) return false;
+      if (v.items.length > hidden(i).size) return true;
+      if (!isPartial(v)) return false;
+      hiddenMemo.delete(i);
+      views.reset(i, widened(views.ranges[i]));
+    }
+    return false;
   };
   let s = seg;
   let i = at;
   for (;;) {
-    const v = view(s);
+    const v = views.get(s);
     if (i > 0 && v) {
       const h = hidden(s);
       for (let k = Math.min(i, v.items.length) - 1; k >= 0; k--) if (!h.has(k)) yield { item: v.items[k], seg: s, at: k };
     }
+    if (isPartial(v)) return;                   // the rest of this generation is below the chunk
     // Above the start of segment s: the next older generation that shows anything, if any.
     let t = s - 1;
     while (t >= 0 && !shows(t)) t--;
@@ -1013,36 +1144,41 @@ function* olderThan(agentId: string, segs: Segment[], views: (SegmentView | null
   }
 }
 
-/** The cursor for a unit: the marker's own uuid, `<session>~<uuid>`, or `<session>~#<index>` for
- *  an item with no uuid. Sessions are plain ids, so '~' never appears in one. */
+/** The cursor for a unit: the marker's own uuid; `<session>~@<line offset>~<uuid>` (or `~#<part in line>` for an item
+ *  with no uuid) for an item whose line the cache located; `<session>~<uuid>` / `<session>~#<index>` otherwise (a
+ *  whole-file grammar). Sessions are plain ids, so '~' never appears in one. */
 function cursorOf(u: Unit, segs: Segment[]): string {
   if (u.at < 0) return String(u.item.uuid);
   const s = segs[u.seg].session;
+  if (typeof u.item?.line_off === 'number') {
+    return u.item?.uuid ? `${s}~@${u.item.line_off}~${u.item.uuid}` : `${s}~@${u.item.line_off}~#${u.item.line_part}`;
+  }
   return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${u.at}`;
 }
 
 /** A unit's item as a shallow copy (the cache keeps the originals), with the server's message ref
- *  `cursorOf(u) + '#' + part` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a
- *  generation with a known session. part is counted from the uuid's first position in that generation's view, NOT
- *  in the window, so a block has the same ref in the newest window, an older page and every re-read. */
-function withRef(u: Unit, segs: Segment[], views: (SegmentView | null | undefined)[]): any {
-  const copy = { ...u.item };
-  const v = u.at >= 0 ? views[u.seg] : null;
-  if (v && segs[u.seg]?.session && refable(u.item)) {
+ *  `<session>~<uuid>#<part>` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a generation
+ *  with a known session. part is counted from the uuid's first position in that generation's view, NOT in the window,
+ *  so a block has the same ref in the newest window, an older page and every re-read (a chunk never starts inside one
+ *  uuid's lines). The line fields are the cache's: the envelope's items never carry them. */
+function withRef(u: Unit, views: Views): any {
+  const { line_off: _off, line_part: _part, ...copy } = u.item;
+  const v = u.at >= 0 ? views.get(u.seg) : null;
+  const session = views.segs[u.seg]?.session;
+  if (v && session && refable(u.item)) {
     const from = v.firstAt.get(String(u.item.uuid)) ?? 0;
-    copy.ref = `${cursorOf(u, segs)}#${partAt(v.items, u.at, from)}`;
+    copy.ref = messageRef(session, String(u.item.uuid), partAt(v.items, u.at, from));
   }
   return copy;
 }
 
-/** Where a cursor points: (segment, index), or null for one this chat does not have. A bare uuid
- *  is looked for from the newest generation back. */
-function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null | undefined)[], cursor: string):
-    { seg: number; at: number } | null {
-  const view = (i: number) => {
-    if (views[i] === undefined) views[i] = segmentView(agentId, segs[i]);
-    return views[i];
-  };
+const OFFSET_CURSOR = /^@(\d+)~(.*)$/;
+
+/** Where a cursor points: (segment, index), or null for one this chat does not have. An `@<offset>` cursor is looked
+ *  for in a window just under its line (the view's range is set here; the caller widens it); the older forms read the
+ *  whole file (cached), as they did; a bare uuid is looked for from the newest generation back. */
+function cursorAt(views: Views, cursor: string): { seg: number; at: number } | null {
+  const segs = views.segs;
   if (cursor.startsWith('rot:')) {
     const s = segs.findIndex((g) => g.session && `rot:${g.session}` === cursor);
     return s > 0 ? { seg: s, at: -1 } : null;
@@ -1050,8 +1186,23 @@ function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null |
   const tilde = cursor.indexOf('~');
   if (tilde >= 0) {
     const s = segs.findIndex((g) => g.session === cursor.slice(0, tilde));
+    if (s < 0) return null;
     const rest = cursor.slice(tilde + 1);
-    const v = s >= 0 ? view(s) : null;
+    const m = OFFSET_CURSOR.exec(rest);
+    if (m) {
+      const off = Number(m[1]);
+      if (!Number.isSafeInteger(off)) return null;
+      const r = views.ranges[s];
+      if (r === 'whole' || 'want' in r) views.reset(s, { lo: Math.max(0, off - TAIL_WANT0), hi: off + TAIL_LOOKAHEAD });
+      const v = views.get(s);
+      if (!v) return null;
+      const want = m[2];
+      const at = v.items.findIndex((it) => it?.line_off === off
+        && (want.startsWith('#') ? it.line_part === Number(want.slice(1)) : String(it.uuid) === want));
+      return at < 0 ? null : { seg: s, at };
+    }
+    if (views.ranges[s] !== 'whole') views.reset(s, 'whole');
+    const v = views.get(s);
     if (!v) return null;
     if (/^#\d+$/.test(rest)) {
       const n = Number(rest.slice(1));
@@ -1061,73 +1212,128 @@ function cursorAt(agentId: string, segs: Segment[], views: (SegmentView | null |
     return at === undefined ? null : { seg: s, at };
   }
   for (let s = segs.length - 1; s >= 0; s--) {
-    const at = view(s)?.firstAt.get(cursor);
+    if (views.ranges[s] !== 'whole') views.reset(s, 'whole');
+    const at = views.get(s)?.firstAt.get(cursor);
     if (at !== undefined) return { seg: s, at };
   }
   return null;
 }
 
+/** Throws when this generation's own log cannot be opened (the route answers an error envelope, outside the fail-open
+ *  views). A probe, not a parse: the page reads the log tail-first. */
+function readableLog(path: string): void {
+  closeSync(openSync(path, 'r'));
+}
+
 /** A window of the stitched chat: the newest `limit` positions (no cursor), or the `limit`
  *  positions just older than `before`. A page never starts inside one log line's items, so the
- *  next page, read from its `oldest_id`, neither repeats nor skips any. */
+ *  next page, read from its `oldest_id`, neither repeats nor skips any. Read tail-first: see TAIL_WANT0. */
 export function chatWindow(agentId: string, segs: Segment[], limit: number, before: string | null):
     { items: any[]; has_older: boolean; oldest_id: string | null; cursor_ts: string | null } | null {
-  const views: (SegmentView | null | undefined)[] = segs.map(() => undefined);
+  const views = new Views(agentId, segs, { want: TAIL_WANT0 });
   const last = segs.length - 1;
-  let from = { seg: last, at: Number.POSITIVE_INFINITY };
-  let cursorTs: string | null = null;
-  if (before !== null) {
-    const at = cursorAt(agentId, segs, views, before);
-    if (!at) return null;
-    from = at;
-    const v = views[at.seg];
-    cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
-  }
-  const walk = olderThan(agentId, segs, views, from.seg, from.at);
-  const units: Unit[] = [];
-  // Never one step past `limit` without a cursor: a window the current log fills must not look
-  // for, or read, an older generation's file.
-  while (units.length < limit) {
-    const got = walk.next();
-    if (got.done) break;
-    units.push(got.value);
-  }
-  let hasOlder = false;
-  if (before === null) {
-    // Without reading further (an older generation's file above all): the window is full and its
-    // oldest position has log lines below it in its own generation, or a generation above it in
-    // the chain. The chain's file may turn out unreadable; the next page then says has_older false.
-    // Keep one line's items together here too: a window that landed inside a line (an assistant's
-    // text and its tool call share a uuid) takes the rest of that line, so oldest_id names a whole
-    // line and the next page continues from it without losing an item. Only while the edge has
-    // lines below it in its own segment (edge.at > 0): no step into an older generation's file.
-    let edge = units.length >= limit ? units[units.length - 1] : undefined;
-    while (edge && edge.at > 0 && edge.item?.uuid) {
-      const next = walk.next();
-      if (next.done) break;
-      if (next.value.seg !== edge.seg || next.value.item?.uuid !== edge.item.uuid) break;
-      units.push(next.value);
-      edge = next.value;
+  // Each round reads over the ranges so far; a round that ran out of chunk, or whose page has no turn opener below
+  // it in its chunk, widens that generation's range and builds again. Ranges only widen, so this ends.
+  for (let round = 0; round <= 64; round++) {
+    // The rounds ran out (sized steps too small for the gap to the next opener): the last round reads every
+    // generation whole, which always ends.
+    if (round === 64) for (let i = 0; i <= last; i++) if (views.ranges[i] !== 'whole') views.reset(i, 'whole');
+    let from = { seg: last, at: Number.POSITIVE_INFINITY };
+    let cursorTs: string | null = null;
+    if (before !== null) {
+      const at = cursorAt(views, before);
+      if (!at) return null;
+      from = at;
+      const v = views.get(at.seg);
+      cursorTs = at.at >= 0 && v ? (v.items[at.at]?.ts ?? null) : (segs[at.seg].promotedAt ?? null);
+      // The turn the cursor is in must end inside the window (a person opener after the cursor, or the file's end):
+      // its closing reply is the last assistant text of the turn, and a queued copy before the cursor is deduped
+      // against the real turn written after it. A copy after the cursor is not that opener, and neither is the real
+      // turn of a copy (isDrainedOpener): two copies with the page break between them would otherwise leave the
+      // older one on the page (its real turn past the window) while the newer one closed the search.
+      if (v && at.at >= 0 && !v.eof) {
+        let closed = false;
+        for (let k = at.at + 1; k < v.items.length && !closed; k++) if (isDrainedOpener(v.items[k])) closed = true;
+        if (!closed) {
+          views.reset(at.seg, widenedForward(views.ranges[at.seg]));
+          continue;
+        }
+      }
     }
-    hasOlder = !!edge && (edge.at > 0 || edge.seg > 0);
-  } else {
-    let next = walk.next();
-    // Keep one line's items together: take the rest of the oldest item's line too.
-    const edge = units[units.length - 1];
-    while (edge && edge.at >= 0 && edge.item?.uuid && !next.done
-           && next.value.seg === edge.seg && next.value.item?.uuid === edge.item.uuid) {
-      units.push(next.value);
-      next = walk.next();
+    const walk = olderThan(views, from.seg, from.at);
+    const units: Unit[] = [];
+    let done = false;
+    // Never one step past `limit` without a cursor: a window the current log fills must not look
+    // for, or read, an older generation's file.
+    while (units.length < limit) {
+      const got = walk.next();
+      if (got.done) { done = true; break; }
+      units.push(got.value);
     }
-    hasOlder = !next.done;
+    const stopSeg = units.length ? units[units.length - 1].seg : from.seg;
+    if (done && isPartial(views.get(stopSeg))) {
+      // The chunk ran out before the page was full: what is older is in the same file, below it. Sized from the
+      // lines read so far: the rest of the page, one more line, and a quarter over.
+      const r = views.ranges[stopSeg];
+      const need = bytesFor(r, views.get(stopSeg)?.items.length ?? 0, limit - units.length + 2);
+      views.reset(stopSeg, widened(r, need));
+      continue;
+    }
+    let hasOlder = false;
+    if (before === null) {
+      // Without reading further (an older generation's file above all): the window is full and its
+      // oldest position has log lines below it in its own generation (or below its chunk), or a
+      // generation above it in the chain. The chain's file may turn out unreadable; the next page then says
+      // has_older false. Keep one line's items together here too: a window that landed inside a line (an
+      // assistant's text and its tool call share a uuid) takes the rest of that line, so oldest_id names a
+      // whole line and the next page continues from it without losing an item. Only while the edge has
+      // lines below it in its own segment (edge.at > 0): no step into an older generation's file.
+      let edge = units.length >= limit ? units[units.length - 1] : undefined;
+      while (edge && edge.at > 0 && edge.item?.uuid) {
+        const next = walk.next();
+        if (next.done) break;
+        if (next.value.seg !== edge.seg || next.value.item?.uuid !== edge.item.uuid) break;
+        units.push(next.value);
+        edge = next.value;
+      }
+      hasOlder = !!edge && (edge.at > 0 || isPartial(views.get(edge.seg)) || edge.seg > 0);
+    } else {
+      let next = walk.next();
+      // Keep one line's items together: take the rest of the oldest item's line too.
+      const edge = units[units.length - 1];
+      while (edge && edge.at >= 0 && edge.item?.uuid && !next.done
+             && next.value.seg === edge.seg && next.value.item?.uuid === edge.item.uuid) {
+        units.push(next.value);
+        next = walk.next();
+      }
+      hasOlder = !next.done || (!!edge && edge.at >= 0 && isPartial(views.get(edge.seg)));
+    }
+    // The whole-array passes saw the turn the page starts in only if a PERSON opener lies below the page's oldest
+    // item inside its chunk (or the chunk is the file's start). Otherwise: wider.
+    const oldest = units[units.length - 1];
+    if (oldest && oldest.at >= 0) {
+      const v = views.get(oldest.seg);
+      if (isPartial(v)) {
+        let opened = false;
+        for (let k = oldest.at - 1; k >= 0 && !opened; k--) if (isPersonOpener(v!.items[k])) opened = true;
+        if (!opened) {
+          // Sized by the person openers the chunk holds: about one more opener's worth of lines (or doubled).
+          const r = views.ranges[oldest.seg];
+          const need = bytesFor(r, v!.items.filter(isPersonOpener).length, 1);
+          views.reset(oldest.seg, widened(r, need));
+          continue;
+        }
+      }
+    }
+    units.reverse();
+    return {
+      items: units.map((u) => withRef(u, views)),  // shallow copies (the cache keeps the originals), with refs
+      has_older: hasOlder,
+      oldest_id: units.length ? cursorOf(units[0], segs) : null,
+      cursor_ts: cursorTs,
+    };
   }
-  units.reverse();
-  return {
-    items: units.map((u) => withRef(u, segs, views)),  // shallow copies (the cache keeps the originals), with refs
-    has_older: hasOlder,
-    oldest_id: units.length ? cursorOf(units[0], segs) : null,
-    cursor_ts: cursorTs,
-  };
+  return null;
 }
 
 function cleanArgs(args: any): Record<string, unknown> {
@@ -1378,15 +1584,31 @@ export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
  * harness's own content and position.
  */
 export function dedupeQueuedCommands(items: any[]): any[] {
-  const realUserText = new Set<string>();
+  // POSITIONAL: a copy is dropped for a real turn with its words written AFTER it (the harness writes the queued
+  // message as a real turn when the turn ends), never for one before it (the same words sent twice are two
+  // messages). So a chunk that holds the copy and what follows it decides the same as the whole file.
+  const isUser = (it: any) => it?.kind === 'text' && it.role === 'user';
+  const isCopy = (it: any) => isUser(it) && (it.queued || it.mid_turn);
+  const isReal = (it: any) => isUser(it) && !it.queued && !it.mid_turn;
+  const words = (it: any) => String(it.text || '').trim();
+  if (!items.some(isCopy)) return items;
+  // The real turn a copy is dropped for is marked (not enumerable: never sent, never compared): a tail-first page
+  // whose cursor is before the copy must read past that turn to the ones after it (chatWindow isDrainedOpener).
+  const pending = new Set<string>();
   for (const it of items) {
-    if (it.kind === 'text' && it.role === 'user' && !it.queued && !it.mid_turn) {
-      const t = (it.text || '').trim();
-      if (t) realUserText.add(t);
+    if (isCopy(it)) { const t = words(it); if (t) pending.add(t); }
+    else if (isReal(it) && pending.has(words(it))) {
+      Object.defineProperty(it, CONSUMED_QUEUED, { value: true, enumerable: false, configurable: true });
     }
   }
-  if (!realUserText.size) return items;
-  return items.filter((it) => !((it.queued || it.mid_turn) && it.kind === 'text' && realUserText.has((it.text || '').trim())));
+  const after = new Set<string>();
+  const drop = new Set<any>();
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (isReal(it)) { const t = words(it); if (t) after.add(t); }
+    else if (isCopy(it) && after.has(words(it))) drop.add(it);
+  }
+  return drop.size ? items.filter((it) => !drop.has(it)) : items;
 }
 
 // keepSidechain: a subagent's own log (<sid>/subagents/agent-<id>.jsonl) is sidechain on every row; its
@@ -1662,8 +1884,15 @@ function capInput(input: Record<string, unknown>): { capped: Record<string, unkn
 // v2 enrichment pass over the flat v1 items (mutating a fresh copy):
 // summary (from FULL input) -> cap input -> input_full, and is_system on the
 // first user text (spawn brief rule shared with web buildRenderList).
-function enrichItems(items: any[]): any[] {
-  let firstUserSeen = false;
+/** The line fields a tail read stamps (services/transcript-log-cache.ts), carried onto a rebuilt item. */
+function withLine(out: any, it: any): any {
+  if (typeof it?.line_off === 'number') { out.line_off = it.line_off; out.line_part = it.line_part; }
+  return out;
+}
+
+function enrichItems(items: any[], atStart = true): any[] {
+  // The log's first user text can be the spawn brief: only when these items start at the file's first line.
+  let firstUserSeen = !atStart;
   return items.map((it) => {
     if (it.kind === 'tool_use') {
       const input = (it.input && typeof it.input === 'object') ? it.input : {};
@@ -1676,13 +1905,13 @@ function enrichItems(items: any[]): any[] {
       if (it.model) out.model = it.model;      // the model that made the call (additive)
       if (it.usage) out.usage = it.usage;      // tokens its reply spent, OTel terms (additive)
       withTs(out, it.ts);
-      return out;
+      return withLine(out, it);
     }
     if (it.kind === 'text' && it.role === 'user' && !firstUserSeen) {
       firstUserSeen = true;
       const text = (it.text || '').trim();
       if (text.length > 800 || /^You are\b/.test(text)) {
-        return withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts);
+        return withLine(withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts), it);
       }
     }
     return it;
@@ -1937,57 +2166,110 @@ export function parseGrokUpdates(lines: string[]): any[] {
   return items;
 }
 
+/** What the Claude grammar carries from one line to the next, so a log read in pieces (services/transcript-log-cache.ts:
+ *  the whole file once, then only the appended lines) parses exactly as the whole file would. */
+export interface ClaudeParseState {
+  /** Replies (message.id) whose usage already went on an item. */
+  counted: Set<string>;
+  /** A reply whose lines drew nothing so far: its tokens wait for its own or the next reply's first drawn item. */
+  waiting?: { id: string; usage: TokenUsage };
+  /** Tokens of replies that drew nothing, to go on the next drawn assistant item. */
+  carried?: TokenUsage;
+}
+
+/** Claude Code lines -> items, continuing `state`. Claude Code writes each block of one API reply as its own line,
+ *  every line repeating the reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
+ *  not last: the SSE tailer only appends, and an item already sent never moves its usage. A reply none of whose lines
+ *  drew anything carries its tokens to the next reply's first item. */
+function parseClaudeLines(lines: string[], keepSidechain: boolean, state: ClaudeParseState): any[] {
+  const items: any[] = [];
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    if (!line.trim()) continue;
+    try {
+      const o = JSON.parse(line);
+      const got = normalizeClaudeEntry(o, keepSidechain);
+      for (const it of got) it.li = li;   // which line: the cache turns it into the line's byte offset (line_off/line_part)
+      const msg = o?.message;
+      const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
+      const first = got.find((it) => it.role === 'assistant');
+      // A new assistant line from another reply ends the waiting reply: its tokens are carried.
+      if (state.waiting && o?.type === 'assistant' && state.waiting.id !== id) {
+        state.carried = addUsage(state.carried, state.waiting.usage);
+        state.waiting = undefined;
+      }
+      const usage = id && !state.counted.has(id) ? usageFromClaude(msg.usage) : undefined;
+      if (first && (usage || state.carried)) {
+        first.usage = usage ? addUsage(state.carried, usage) : state.carried;
+        state.carried = undefined;
+        if (usage) { state.counted.add(id); state.waiting = undefined; }
+      } else if (usage) state.waiting = { id, usage };
+      items.push(...got);
+    } catch { /* skip bad line */ }
+  }
+  return items;
+}
+
+/** One log's grammar for the parsed-log cache (services/transcript-log-cache.ts): `full` reads whole lines by the
+ *  grammar they show and hands back the state only the Claude grammar can resume from (`append` parses just the new
+ *  lines with it; the other grammars are whole-file parsers, so the cache re-parses them in full on every change);
+ *  `finish` is every whole-array pass, run over all raw items each time. The grammar is detected from the lines
+ *  themselves, NOT from a caller-passed hint: transcript-tail.ts (SSE) and this route (poll) read independently, and
+ *  a hint only one of them passes is how the two lanes drift apart. */
+export function logParser(antigravityHint: boolean, keepSidechain = false): LogParser<ClaudeParseState> {
+  return {
+    // the cache keeps one entry per (key, file): both flags change the items a file yields
+    key: `${antigravityHint ? 'antigravity' : 'auto'}:${keepSidechain ? 'sidechain' : 'main'}`,
+    full(lines) {
+      const isAntigravity = antigravityHint ||
+        lines.some((l) => {
+          try {
+            const parsed = JSON.parse(l);
+            return parsed.type === 'USER_INPUT' || parsed.type === 'PLANNER_RESPONSE' || parsed.source === 'MODEL';
+          } catch { return false; }
+        });
+      if (isAntigravity) return { items: normalizeAntigravity(lines), state: null };
+      if (looksLikeGrok(lines)) return { items: parseGrokUpdates(lines), state: null };
+      if (looksLikeCodex(lines)) return { items: parseCodexRollout(lines), state: null };
+      const state: ClaudeParseState = { counted: new Set<string>() };
+      const items = parseClaudeLines(lines, keepSidechain, state);
+      // A resumable state only on POSITIVE Claude evidence. An empty or torn first read (a session file the tailer saw
+      // the second it was created; a codex session_meta line half-written) shows no grammar at all: handing back a
+      // Claude state then would lock the file to the Claude parser, and every later codex/grok/antigravity line would
+      // be appended into nothing until the API restarted. Without evidence the cache re-detects on every change.
+      return { items, state: looksLikeClaude(lines) ? state : null };
+    },
+    append(lines, state) {
+      return { items: parseClaudeLines(lines, keepSidechain, state), state };
+    },
+    // Nothing waits to ride on a later item: the lines after this point parse the same from a fresh state (counted ids
+    // never span a chunk edge: a reply's lines are kept together, services/transcript-log-cache.ts chunkStartAt).
+    clean: (state) => !state.waiting && !state.carried,
+    finish(raw, state, atStart) {
+      // On COPIES of the raw items: the whole-array passes (tagAudience above all) stamp audience/exchange in place and
+      // never clear them, and `raw` is kept by the cache for the next append. Tagging raw itself left a reply with the
+      // exchange of a queued opener that dedupeQueuedCommands dropped on a later pass (append != whole-file parse).
+      // `li` (which line) is the cache's to turn into line_off/line_part; a whole-array parse outside the cache drops it.
+      const items = raw.map(({ li: _li, ...it }) => it);
+      // Whole-file pass (Claude): a queued message the log later recorded as a real user turn must
+      // show ONCE, and the real turn is the one that wins (dedupeQueuedCommands, inside finishLogItems after the
+      // text rewrites: the mark it leaves must sit on the item the page sees).
+      return finishLogItems(items, atStart, !!state);
+    },
+  };
+}
+
 // One log's items: parsed by the grammar its lines show, whole-file passes applied, then tagged
 // (audience/exchange) on the WHOLE log.
-function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
-  const isAntigravity = antigravityHint ||
-    lines.some((l) => {
-      try {
-        const parsed = JSON.parse(l);
-        return parsed.type === 'USER_INPUT' || parsed.type === 'PLANNER_RESPONSE' || parsed.source === 'MODEL';
-      } catch { return false; }
-    });
+export function logItems(lines: string[], antigravityHint: boolean, keepSidechain = false): any[] {
+  const parser = logParser(antigravityHint, keepSidechain);
+  const got = parser.full(lines);
+  return parser.finish(got.items, got.state, true);
+}
 
-  let items: any[] = [];
-  if (isAntigravity) {
-    items = normalizeAntigravity(lines);
-  } else if (looksLikeGrok(lines)) {
-    items = parseGrokUpdates(lines);
-  } else if (looksLikeCodex(lines)) {
-    // Detected from the lines themselves, NOT from a caller-passed hint: transcript-tail.ts (SSE)
-    // and this route (poll) call normalizeTranscript independently, and a hint only one of them
-    // passes is how the two lanes drift apart.
-    items = parseCodexRollout(lines);
-  } else {
-    // Claude Code writes each block of one API reply as its own line, every line repeating the
-    // reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
-    // not last: the SSE tailer only appends, and an item already sent never moves its usage.
-    const counted = new Set<string>();
-    // A reply none of whose lines drew anything carries its tokens to the next reply's first item.
-    let waiting: { id: string; usage: TokenUsage } | undefined, carried: TokenUsage | undefined;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const o = JSON.parse(line);
-        const got = normalizeClaudeEntry(o, keepSidechain);
-        const msg = o?.message;
-        const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
-        const first = got.find((it) => it.role === 'assistant');
-        // A new assistant line from another reply ends the waiting reply: its tokens are carried.
-        if (waiting && o?.type === 'assistant' && waiting.id !== id) { carried = addUsage(carried, waiting.usage); waiting = undefined; }
-        const usage = id && !counted.has(id) ? usageFromClaude(msg.usage) : undefined;
-        if (first && (usage || carried)) {
-          first.usage = usage ? addUsage(carried, usage) : carried;
-          carried = undefined;
-          if (usage) { counted.add(id); waiting = undefined; }
-        } else if (usage) waiting = { id, usage };
-        items.push(...got);
-      } catch { /* skip bad line */ }
-    }
-    // Whole-file pass: a queued message the log later recorded as a real user turn must
-    // show ONCE, and the real turn is the one that wins.
-    items = dedupeQueuedCommands(items);
-  }
+/** The whole-array passes every grammar's raw items get, in order, then the audience/exchange tags. `atStart` false
+ *  for a tail chunk: its first user text is not the log's first message (never the spawn brief by position). */
+function finishLogItems(items: any[], atStart = true, dedupeQueued = false): any[] {
   // The quiet page line, on every runtime's user turns: what the agent read, never what the person said.
   // Kept as the turn's opener (audience/exchange tagging and the interrupted-turn merge need it), flagged, words only;
   // drawing skips it (buildRenderItems here, buildRenderList in the dashboard).
@@ -1998,13 +2280,16 @@ function logItems(lines: string[], antigravityHint: boolean, keepSidechain = fal
   // before (dashboard lib/transcript.ts afterReaction, view.ts withReactions).
   items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
     && hasReactionWake(it.text) ? { ...it, text: stripPageContext(it.text), reaction_wake: true } : it));
+  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
+    && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
+    ? { ...it, text: stripPageContext(it.text) } : it));
+  // A queued copy against the real turn written after it (Claude): on the rewritten items, so the mark the dedupe
+  // leaves on that real turn (CONSUMED_QUEUED, not enumerable: a spread drops it) is on the item the page sees.
+  if (dedupeQueued) items = dedupeQueuedCommands(items);
   // The agent's answer to that wake when it is not a message (NO_REPLY, "(no reply needed)", one emoji): marked here,
   // dropped from what the chat is sent (finishWindow, the tailer after its refs). chatItemsFor keeps them marked: the
   // wake watcher (services/reaction-wake.ts) turns an emoji answer into a real reaction.
   items = markWakeReplies(items);
-  items = items.map((it) => (it?.kind === 'text' && it.role === 'user' && typeof it.text === 'string'
-    && (it.text.includes('<page-context>') || it.text.includes('<voice-call-live>'))
-    ? { ...it, text: stripPageContext(it.text) } : it));
   // A call handed to the agent (lib/agentCalls.ts handoffMessage): the agent read the transcript, the chat shows the
   // call's card on this line, where the call ended.
   items = items.map((it) => {
@@ -2015,7 +2300,7 @@ function logItems(lines: string[], antigravityHint: boolean, keepSidechain = fal
   });
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
-  return tagAudience(enrichItems(items));
+  return tagAudience(enrichItems(items, atStart));
 }
 
 /** The assistant text answering a reaction wake (after a reaction_wake turn, before the next user text) that is not a
@@ -2131,10 +2416,63 @@ export function normalizeTranscript(
   keepWakeReplies = false,
   keepSidechain = false,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+  return windowFromLog(logItems(lines, antigravityHint, keepSidechain), agentId, sessionId, limit, includeQueued, previous, keepWakeReplies, keepSidechain);
+}
+
+/** normalizeTranscript for a log FILE, through the parsed-log cache (services/transcript-log-cache.ts): the file is
+ *  parsed once, then only its appended lines; the poll route's windows and the SSE tailer share that one parse. The
+ *  previous-generation stitch is the poll route's (chatWindow), not this path's. */
+export function normalizeTranscriptFile(
+  path: string,
+  agentId: string,
+  sessionId: string | null,
+  limit = 150,
+  antigravityHint = false,
+  includeQueued = false,
+  keepWakeReplies = false,
+  keepSidechain = false,
+  tailFirst = false,
+): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+  const parser = logParser(antigravityHint, keepSidechain);
+  if (!tailFirst) {
+    const log = cachedLog(path, parser);
+    return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+  }
+  // Tail-first (the SSE tailer's first read of a log): the last TAIL_WANT0 bytes, doubled until they hold `limit` shown
+  // items with a PERSON turn opener below the oldest of them (the same rule as the poll route's pages: the audience pass
+  // sees the turn the window starts in), or the whole file. Later ticks hit the kept chunk and ride its appends.
+  const ruleSession = keepSidechain ? null : sessionId;
+  const mark = warmupMarkFor(agentId, ruleSession).mark;
+  const rules = storeRules(ruleSession);
+  let want = TAIL_WANT0;
+  for (let round = 0; round < 64; round++) {
+    const log = cachedLogTail(path, parser, want);
+    if (log.start === 0) break;
+    const shown = applyStoreRules(dropWarmup(log.items, mark), rules);
+    const oldest = shown.length - limit;
+    let opened = false;
+    for (let k = oldest - 1; k >= 0 && !opened; k--) if (isPersonOpener(shown[k])) opened = true;
+    if (shown.length >= limit && opened) return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+    want *= 2;
+  }
+  const log = cachedLog(path, parser);
+  return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+}
+
+function windowFromLog(
+  logged: readonly any[],
+  agentId: string,
+  sessionId: string | null,
+  limit: number,
+  includeQueued: boolean,
+  previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null,
+  keepWakeReplies: boolean,
+  keepSidechain: boolean,
+): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
   // A subagent's own log (keepSidechain) shares the seat's session id but none of the seat's window rules:
   // the store's seen-only/seed rows and the warmup mark name the seat's entries, so they never apply to it.
   const ruleSession = keepSidechain ? null : sessionId;
-  let all = applyStoreRules(dropWarmup(logItems(lines, antigravityHint, keepSidechain), warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
+  let all = applyStoreRules(dropWarmup(logged, warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
@@ -2151,8 +2489,19 @@ export function normalizeTranscript(
     session_id: sessionId,
     grammar_version: GRAMMAR_VERSION,
     // keepWakeReplies: the tailer stamps refs first (parts numbered as the poll route numbers them), then drops them.
-    ...finishWindow(all.slice(-limit), agentId, includeQueued, null, keepWakeReplies),
+    // The line fields are the cache's (what a byte cursor names): the window's items never carry them.
+    ...finishWindow(windowItems(all, limit).map((it) => (typeof it?.line_off === 'number' ? (({ line_off: _o, line_part: _p, ...rest }) => rest)(it) : it)),
+      agentId, includeQueued, null, keepWakeReplies),
   };
+}
+
+/** The newest `limit` items, extended back to the start of the oldest one's log line (an assistant's text and its tool
+ *  call share a uuid): a window never starts inside a line, so its refs are numbered from the line as the poll route's
+ *  pages number them (chatWindow), whatever the window's size. */
+function windowItems(all: readonly any[], limit: number): any[] {
+  let from = Math.max(0, all.length - limit);
+  while (from > 0 && all[from]?.uuid && all[from - 1]?.uuid === all[from].uuid) from--;
+  return all.slice(from);
 }
 
 /** The merges and tags every window gets once its log items are chosen. `olderPage` is set for a
@@ -2181,6 +2530,9 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
     windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
   windowed = stampImages(tagSynthetics(settleIngestedQueuedCommands(windowed)), agentId);
+  // reply_to (reply threads P1): the operator's message whose words are a recorded send carries the uuid and excerpt
+  // of the message it answered (lib/reply-to-store.ts). The SSE tailer stamps its own items the same way. Fail-open.
+  windowed = stampReplyTo(windowed, agentId);
   return { items: windowed, render_items: buildRenderItems(windowed) };
 }
 
@@ -2288,7 +2640,7 @@ export function pageItemsFor(agentId: string, limit = 300): any[] {
     const { path, sid } = resolveTranscriptPath(agentId);
     if (!path) return [];
     const current = path;
-    cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+    readableLog(current);
     let segs: Segment[];
     try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
     const win = chatWindow(agentId, segs, limit, null);
@@ -2406,7 +2758,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     const read = new Set<string>();
     const missing: Segment[] = [];
     const build = (): Record<string, unknown> | null => {
-      cachedLog(current, (lines) => logItems(lines, current.includes('antigravity-cli')));
+      readableLog(current);
       let segs: Segment[];
       try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
       segs = segs.map((s) => ({ ...s, file: () => { const f = s.file(); if (f && f !== current) read.add(f); else if (!f && s.refind) missing.push(s); return f; } }));
