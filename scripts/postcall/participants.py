@@ -1,11 +1,15 @@
 """Participants: who was on a call and how far each identity is trusted (design §2a, §3 rule 3).
 
-Two sources are combined:
+Three sources are combined:
+
+  * Pocket's own speaker names (Shaw, 2026-11-27): a diarized recording whose label is a person's
+    name ("Dana Reyes", not SPEAKER_02) identifies that speaker by itself. It is mapped and VERIFIED
+    with no calendar at all, and neither the extractor nor the calendar can rename it;
 
   * the calendar: the event the recording falls in (calendar_ics.match_call) gives the INVITED SET,
     i.e. its attendees minus Shaw and anyone who declined. Invitees come with an email address,
     which is what makes an identity verifiable;
-  * the transcript: Pocket only has diarization labels (SPEAKER_00, SPEAKER_01, ...). The extractor
+  * the transcript: for generic diarization labels (SPEAKER_00, SPEAKER_01, ...) the extractor
     proposes label -> name mappings with a quoted evidence sentence ("Hi Dana, thanks ...").
 
 Code accepts a proposed mapping only when the evidence really is in the transcript AND the name is
@@ -13,11 +17,13 @@ someone we already know of (an invitee or a contact). The one exception is the t
 a call with exactly two labels whose event invited exactly one person besides Shaw needs no
 evidence, because once Shaw's label is known the other voice can only be that invitee.
 
-A name is VERIFIED when it is mapped to a label and is an invitee of the matched event. Everything
-else stays unverified, and nothing here raises on missing or malformed input: an unknown stays
+A name is VERIFIED when it is a Pocket-named label, or when it is mapped to a label and is an invitee of
+the matched event. A Pocket name that is also an invitee gets that invitee's email. Everything else
+stays unverified, and nothing here raises on missing or malformed input: an unknown stays
 unknown and the card shows it.
 """
 import datetime as dt
+import re
 from dataclasses import dataclass, field, replace
 from zoneinfo import ZoneInfo
 
@@ -49,6 +55,14 @@ class _Person:
     email: str | None
     invited: bool
     keys: set = field(default_factory=set)              # normalized names/aliases it answers to
+
+
+_GENERIC = re.compile(r"(speaker|spk|unknown|guest|participant)?[\s_-]*\d*", re.I)
+
+
+def _pocket_named(label):
+    """True for a label Pocket gave a person's name to, False for SPEAKER_02, "Unknown", "Speaker 3"."""
+    return isinstance(label, str) and any(c.isalpha() for c in label) and not _GENERIC.fullmatch(label.strip())
 
 
 def _norm(name):
@@ -149,8 +163,17 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
         invitees = []
     people = _directory(invitees, contacts)
 
-    pairs = list(_proposed(raw, call, labels, shaw_label, people))
-    shortcut = _shortcut(event, invitees, labels, shaw_label, people)
+    # Pocket-named labels first: the name is the identity (an invitee of that name lends its email).
+    named = {}
+    for label in labels:
+        if label != shaw_label and _pocket_named(label):
+            named[label] = _lookup(people, label) or _Person(name=label.strip(), email=None, invited=False,
+                                                              keys={_norm(label)})
+    named_ids = {id(p) for p in named.values()}
+    generic = tuple(l for l in labels if l not in named)
+
+    pairs = [(l, p) for l, p in _proposed(raw, call, generic, shaw_label, people) if id(p) not in named_ids]
+    shortcut = _shortcut(event, invitees, labels, shaw_label, people) if len(generic) == len(labels) else None
     if shortcut:
         pairs.append(shortcut)
 
@@ -160,7 +183,7 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
     for label, person in pairs:
         by_label.setdefault(label, set()).add(id(person))
         by_person.setdefault(id(person), set()).add(label)
-    mapped = {}
+    mapped = dict(named)
     for label, person in pairs:
         if len(by_label[label]) == 1 and len(by_person[id(person)]) == 1:
             mapped[label] = person
@@ -172,7 +195,7 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
             continue
         roster.label_names[label] = person.name
         roster.participants.append(Participant(person.name, person.email, label, "spoke"))
-        if person.invited:
+        if person.invited or label in named:
             roster.verified_names.add(person.name)
     spoken_ids = {id(p) for p in mapped.values()}
     for person in people:           # invited but never mapped to a voice
@@ -194,9 +217,10 @@ def with_line(roster):
 
 
 def _shaw_side_verified(roster):
-    """Conservative: a Shaw item is verified only when the call matched an event, Shaw's label is
-    one of the transcript's voices, and every OTHER voice is a verified invitee."""
-    if roster.event is None or roster.shaw_label not in roster.labels:
+    """Conservative: a Shaw item is verified only when Shaw's label is one of the transcript's voices
+    and every OTHER voice is verified (a Pocket-named speaker or a verified invitee). No calendar
+    event is required."""
+    if roster.shaw_label not in roster.labels:
         return False
     others = [l for l in roster.labels if l != roster.shaw_label]
     return bool(others) and all(roster.label_names.get(l) in roster.verified_names for l in others)
