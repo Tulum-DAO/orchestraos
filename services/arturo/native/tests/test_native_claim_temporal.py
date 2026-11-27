@@ -33,6 +33,8 @@ BARE = [
     "After all, that's handled.",
     "Just like before it is saved.",
     "As before it is done.",
+    "For once it's done on time.",
+    "It went through all at once it's done.",
 ]
 
 
