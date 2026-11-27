@@ -825,3 +825,56 @@ def test_5_our_own_switch_is_not_nudged_twice_as_a_hand_switch():
     d.row = (NOW + 5, "default")                                  # account_switch wrote its row after `now`
     _tick({}, d, st, active="default", now=NOW + 120)
     assert len(d.nudged) == first == 1
+
+
+# --- gm msg_9dca7384: replay of tonight's exact readings and switch row ---------------------------
+
+PROFILES_11_26 = {"active": "default", "profiles": [
+    {"id": "default", "enrolled": True}, {"id": "strategysimple", "enrolled": True},
+    {"id": "shawcole", "provider": "codex", "enrolled": True}, {"id": "shaw", "provider": "codex", "enrolled": True}]}
+
+
+class Replay1126(SwitchLogFake):
+    def enrolled(self):
+        return LS.claude_logins(PROFILES_11_26)
+
+
+def test_replay_11_27_00_48z_the_refused_trigger_now_switches_to_default():
+    """limit-events 00:48:02Z: "trigger: strategysimple 5-hour at 96%" then switch_refused "default: usage
+    reading older than 30 min; shawcole: no usage reading; shaw: no usage reading". default's last reading
+    (5-hour 1%, weekly 80%) went stale at 22:40Z, so it was taken about 22:10Z."""
+    now = 1795740482                                     # 2026-11-27T00:48:02Z
+    usage = {"strategysimple": {"as_of": now - 120, "windows": {
+                 "5h": {"used_pct": 96.0, "resets_at": 1795752600},
+                 "weekly": {"used_pct": 43.0, "resets_at": 1796119200}}},
+             "default": {"as_of": 1795731000, "windows": {   # 2026-11-26T22:10Z
+                 "5h": {"used_pct": 1.0}, "weekly": {"used_pct": 80.0, "resets_at": 1796072400}}}}
+    d = Replay1126(row=(1795720572.0, "strategysimple"), usage=usage)   # 19:16:12Z switch to strategysimple
+    res, log, st = _tick({}, d, {"seen_switch": 1795720572.0}, now=now)
+    assert res == "switched" and d.switched == ["default"]
+    assert not [r for r in log if r["kind"] == "switch_refused"]
+
+
+def test_replay_11_27_01_09z_shaws_dashboard_switch_nudges_the_banner_seats(tmp_path):
+    """account-switch.jsonl 01:09:19Z: "*shared*" -> default, by operator (dashboard). The watcher's next run
+    (01:10:02Z) must nudge every unattached seat on the 2.1.284 banner."""
+    log_path = tmp_path / "account-switch.jsonl"
+    log_path.write_text("\n".join(json.dumps(r) for r in (
+        {"ts": "2026-11-26T19:16:12+00:00", "seat": "*shared*", "to": "strategysimple", "status": "switched",
+         "from": "default"},
+        {"ts": "2026-11-27T01:09:19+00:00", "seat": "*shared*", "to": "default", "seat_dir": "/x",
+         "followers": 70, "status": "switched", "from": "strategysimple", "source": "vault"})) + "\n")
+    banner = "  Usage limit reached · continuing automatically at 11:10pm · esc to cancel\n"
+
+    class D(Replay1126):
+        def last_switch_row(self):
+            return LS.last_fleet_switch_row(str(log_path))
+
+        def pane_text(self, s):
+            return banner if s != "gm" else "❯ \n"
+
+    d = D(usage={"default": _reading(0.0)})
+    st = {"seen_switch": 1795720572.0}
+    _tick({}, d, st, active="default", now=1795741802)   # 2026-11-27T01:10:02Z
+    assert [s for s, _ in d.nudged] == ["pm-nod", "orchestra-builder"]
+    assert st["verify"]["to"] == "default"

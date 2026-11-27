@@ -463,3 +463,33 @@ def test_g5_other_informational_rows_and_meta_rows_are_no_limit(tree):
           "message": {"role": "user", "content": "[Earlier usage-limit notes no longer apply.]"}})
     _run(tree)
     assert json.load(open(tree.seat_rows))["seats"] == {}
+
+
+def test_g6_replay_11_27_the_three_invisible_seats_exact_rows(tree, ny):
+    """gm msg_9dca7384: tonight's exact wrap_up + informational rows (cwd neutralised) for the three seats
+    main never saw. Each seat also writes a grace-allowance reply between its note and its banner row."""
+    fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "limit_notes_2026-11-27.jsonl")
+    rows = [json.loads(l) for l in open(fx)]
+    db = sqlite3.connect(tree.registry_db)
+    for seat, sid in {(r["_seat"], r["sessionId"]) for r in rows}:
+        db.execute("INSERT INTO generations (root, session_id) VALUES (?, ?)", (seat, sid))
+    db.commit()
+    db.close()
+    reset = 1795752600                                   # 23:10 Tulum, the strategysimple 5-hour reset
+    now = 1795741560                                     # 2026-11-27T01:06Z
+    (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
+        {"as_of": now - 120, "windows": {"5h": {"used_pct": 100.0, "resets_at": reset},
+                                         "weekly": {"used_pct": 44.0, "resets_at": now + 4 * 86400}}}))
+    proj = os.path.dirname(str(tree.transcript))
+    for r in rows:
+        path = os.path.join(proj, r["sessionId"] + ".jsonl")
+        _add(path, {k: v for k, v in r.items() if k != "_seat"})
+        if r["type"] == "user":                          # the seat keeps working on its grace allowance
+            _add(path, {"type": "assistant", "timestamp": r["timestamp"], "sessionId": r["sessionId"],
+                        "message": {"content": [{"type": "text", "text": "stopping: usage limit"}]}})
+        os.utime(path, (now - 60, now - 60))
+    _run(tree, now=now)
+    seats = json.load(open(tree.seat_rows))["seats"]
+    assert sorted(seats) == ["arturo-latency-dev", "arturo-receipt-dev", "avatar-escape-dev"]
+    assert {s["key"] for s in seats.values()} == {f"claude|strategysimple|5-hour|{reset}"}
+    assert not [r for r in _log(tree) if r["kind"] == "seat_recovered"]
