@@ -54,6 +54,11 @@ _STATE_RES = [
 # "I've started it"); every other state claim needs a finished result.
 # "started" is NOT progress: "the agent has been started" claims a finished start (start-class evidence, codex on #698).
 _PROGRESS = re.compile(r"^(?:running|queued|on its way|under ?way)$", re.I)
+# ...and an utterance with ANY completion word anywhere is never progress, however it is joined ("it's running and
+# saved", "under way; that's already saved": codex round 2 on #698). Conservative on purpose: it then needs a result.
+# A completion word right after "be"/"being" is the future or ongoing ("it'll be done in a minute"), not a claim.
+_COMPLETION = re.compile(r"(?<!\bbe )(?<!\bbeing )\b(?:done|finished|complete[d]?|saved|sent|started|created|"
+                         r"launched|noted|stored|added|handled|fixed|updated|set up|taken care of)\b", re.I)
 
 
 def claim_kind(text):
@@ -63,7 +68,7 @@ def claim_kind(text):
             return ("action", cls)
     words = [m.group("word") for m in _STATE_RES[0].finditer(text or "")]
     other = any(r.search(text or "") for r in _STATE_RES[1:])
-    if words and not other and all(_PROGRESS.match(w) for w in words):   # EVERY claim in it is progress (codex: "it's
+    if words and not other and all(_PROGRESS.match(w) for w in words) and not _COMPLETION.search(text):   # EVERY claim in it is progress (codex: "it's
         return ("state", "progress")                                      # running and the note is saved" is not)
     if words or other:
         return ("state", None)

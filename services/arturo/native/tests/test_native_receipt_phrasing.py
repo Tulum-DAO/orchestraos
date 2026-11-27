@@ -62,11 +62,14 @@ def test_the_live_prompt_asks_for_varied_receipts_not_one_line():
 
 
 def test_progress_claims_are_their_own_kind():
-    for said in ("That's running now.", "It's now running in the background.", "It's under way.", "That's queued."):
+    for said in ("That's running now.", "It's now running in the background.", "It's under way.", "That's queued.",
+                 "It's running, it'll be done in a minute.", "That's running now and being saved."):
         assert claim_gate.claim_kind(said) == ("state", "progress"), said
     for said in ("That's done.", "It's saved.", "All done!", "It's running. Done.",
                  "It's running and the note is saved.", "It's running; it's done now.",   # codex on #698: mixed
-                 "The agent has been started.", "It's started."):                         # a finished start
+                 "The agent has been started.", "It's started.",                          # a finished start
+                 "It's running and saved.", "It's running and done now.",                 # codex round 2: shared
+                 "It's under way; that's already saved."):                                # subject, adverbs
         assert claim_gate.claim_kind(said) == ("state", None), said
     for said in ("I'm pulling that up.", "On it, it'll take a moment."):
         assert claim_gate.claim_kind(said) is None, said
