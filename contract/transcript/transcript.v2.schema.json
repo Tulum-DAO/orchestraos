@@ -44,7 +44,7 @@
       "type": "object",
       "required": ["kind", "role", "text"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "text" },
         "role": { "enum": ["user", "assistant"] },
@@ -71,7 +71,7 @@
       "type": "object",
       "required": ["kind", "role", "text"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "thinking" },
         "role": { "const": "assistant" },
@@ -86,7 +86,7 @@
       "type": "object",
       "required": ["kind", "role", "tool", "input", "summary"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "tool_use" },
         "role": { "const": "assistant" },
@@ -115,7 +115,7 @@
       "type": "object",
       "required": ["kind", "role", "text"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "tool_result" },
         "role": { "const": "user" },
@@ -173,7 +173,7 @@
       "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): one processed batch of agent-bound queued mail (B2). Collapsed-by-default, expands to the entries list (newest→oldest). Older clients: unknown kind is skipped gracefully (buildRows default:continue), so the batch simply doesn't render — no blank, no crash.",
       "required": ["kind", "count", "entries", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "queued_batch" },
         "count": { "type": "integer", "description": "Number of entries (== entries.length)." },
@@ -191,7 +191,7 @@
       "description": "ADDITIVE v2 (stitched chat): ONE quiet marker where one generation took over from the one before. The poll route stitches the seat's whole lineage, oldest first, every generation whose log this box can read, and emits one marker between each two that both show items (a generation it cannot read is passed over: the marker then spans it). Items above it are the older generation's. A rotation's warm-up exchange is never in the chat. audience is always user (drawn in the conversation, never inside a strip) and it has no exchange. Older clients: unknown kind is skipped.",
       "required": ["kind", "role", "uuid", "from_generation", "to_generation", "from_session", "to_session"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "rotation" },
         "role": { "const": "system" },
@@ -257,7 +257,7 @@
       "type": "object",
       "required": ["kind", "text", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "user" },
         "text": { "type": "string" },
@@ -272,7 +272,7 @@
       "type": "object",
       "required": ["kind", "text", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "assistant" },
         "text": { "type": "string" },
@@ -285,7 +285,7 @@
       "type": "object",
       "required": ["kind", "text", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "thinking" },
         "text": { "type": "string" },
@@ -297,7 +297,7 @@
       "type": "object",
       "required": ["kind", "tool", "summary", "input", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "tool" },
         "tool": { "type": "string" },
@@ -316,7 +316,7 @@
       "description": "Server-paired render node for a processed queued batch (B2). Same data as QueuedBatchItem; clients render with a trivial node->view switch (expandable, entries newest→oldest).",
       "required": ["kind", "count", "entries", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, the first and the closing reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "queued_batch" },
         "count": { "type": "integer" },
@@ -333,7 +333,7 @@
       "description": "Server-paired render node for the stitched chat's marker. Same data as RotationItem; draw it as one quiet line, like a date line (\"Rotated · gen 36 → 37 · 12:05 AM\"), never a divider block.",
       "required": ["kind", "from_generation", "to_generation", "from_session", "to_session", "key"],
       "properties": {
-        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, every reply of a turn he opened, and the closing reply of a job he set off); agent = folded into the strip between his message and the reply (tools, thinking, a job's replies before its closing one, every turn mail/hooks/lineage/init opened). The closing reply of a job's turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
         "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "rotation" },
         "ts": { "type": "string", "description": "When the newer generation took over (its promoted_at, ISO 8601)." },
