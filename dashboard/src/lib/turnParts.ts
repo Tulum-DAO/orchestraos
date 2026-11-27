@@ -101,3 +101,13 @@ export function foldToolTurns<T extends { role: string; text: string; parts?: Tu
   }
   return out;
 }
+
+/** Arturo's tools that hand the work to a background job (services/arturo: async_task and the tools built on it). */
+const JOB_TOOLS = new Set(['async_task', 'research', 'deep_query', 'deep_think', 'ask_gm', 'spawn_agent']);
+
+/** Whether a turn's tool group gets the "Background job · open" chip: a job tool started from the turn, never a
+ *  call's own tool runs (`callTools`: a saved call_tool row, or the live call's tool turn), which are no job in
+ *  Arturo's tray. */
+export function jobChip(turn: { callTools?: boolean }, tools: { name: string }[]): boolean {
+  return !turn.callTools && tools.some((t) => JOB_TOOLS.has(t.name));
+}

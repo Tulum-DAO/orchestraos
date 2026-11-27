@@ -75,7 +75,7 @@ test("a call card's tool header counts every row: used 3 tools, 1 failed", () =>
   const rows = [part('a', 'list_agents', 'ok'), part('b', 'gm_command', 'failed'), part('c', 'research', 'ok')];
   assert.equal(callRunSummary(rows).headline, 'used 3 tools, 1 failed');
   assert.equal(runSummary(rows).headline, 'used 2 tools, 1 failed');   // kit-wide count unchanged
-  assert.equal(callRunSummary(rows).lead, runSummary(rows).lead);
+  assert.equal(callRunSummary(rows).lead, 'Finished');                 // a failure: not "Worked" (below)
   assert.equal(callRunSummary([part('a', 'list_agents', 'ok'), part('b', 'research', 'ok')]).headline, 'used 2 tools');
   assert.equal(callRunSummary([part('a', 'gm_command', 'failed'), part('b', 'research', 'failed')]).headline, 'used 2 tools, 2 failed');
   assert.equal(callRunSummary([part('a', 'list_agents', 'ok'), part('b', 'research', 'running')]).headline, 'used 2 tools, 1 running');
@@ -125,4 +125,24 @@ test("a run's times: when it started, and when it ended if it took more than a m
     { start: '2026-11-02T10:12:00Z' });
   // a runtime that gives no per-call times: none, never a guess
   assert.equal(runTimes([c('a'), c('b')]), null);
+});
+
+// gm on the live call card (2026-11-27): "Worked — used 3 tools, 1 failed" read as all-good. With any failure a call
+// card's header says it finished, not that it worked; all ok keeps "Worked". The kit's other groups are unchanged.
+test("a call card's header with a failure says Finished, not Worked; all ok keeps Worked", () => {
+  const part = (callId: string, name: string, status: 'ok' | 'failed') =>
+    fromPart({ kind: 'tool', callId, name, argsSummary: '', status, summary: '' });
+  const ok = [part('a', 'list_agents', 'ok'), part('b', 'research', 'ok')];
+  const mixed = [part('a', 'gm_command', 'ok'), part('b', 'research', 'failed'), part('c', 'list_agents', 'ok')];
+  assert.equal(callRunSummary(ok).lead, 'Worked');
+  assert.equal(callRunSummary(mixed).lead, 'Finished');
+  assert.doesNotMatch(callRunSummary(mixed).lead, /Worked/);
+  assert.equal(runSummary(mixed).lead, 'Worked');                       // kit unchanged
+  const timed = (callId: string, status: 'ok' | 'failed', ts: string, resultTs: string) =>
+    ({ ...fromPart({ kind: 'tool', callId, name: 'research', argsSummary: '', status, summary: '' }), ts, resultTs });
+  const t = [timed('a', 'ok', '2026-11-27T10:00:00Z', '2026-11-27T10:00:04Z'),
+             timed('b', 'failed', '2026-11-27T10:00:05Z', '2026-11-27T10:00:09Z')];
+  assert.match(runSummary(t).lead, /^Worked for \d+s$/);                // with a duration: "Finished in 5s"
+  assert.equal(callRunSummary(t).lead, runSummary(t).lead.replace(/^Worked for /, 'Finished in '));
+  assert.equal(callRunSummary(t.slice(0, 1)).lead, runSummary(t.slice(0, 1)).lead);   // one ok call: unchanged
 });

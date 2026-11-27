@@ -342,7 +342,7 @@ export default function ThreadView({ rows, skin = 'modern', by, lastUserKey, cal
       {rows.map((r) => {
         if (r.kind === 'call') {
           return (
-            <CallCard key={r.key} skin={skin === 'bubbles' ? 'modern' : skin} callId={r.callId} turns={r.turns.map((t) => ({ role: t.role, text: t.text, ...(t.parts ? { parts: t.parts } : {}), ...(t.id !== undefined ? { key: String(t.id) } : {}) }))}
+            <CallCard key={r.key} skin={skin === 'bubbles' ? 'modern' : skin} callId={r.callId} turns={r.turns.map((t) => ({ role: t.role, text: t.text, ...(t.parts ? { parts: t.parts } : {}), ...(t.id !== undefined ? { key: String(t.id) } : {}), ...(t.callTools ? { callTools: true } : {}) }))}
               live={r.live} startTs={r.startTs} endTs={r.endTs}
               liveSince={r.live ? call?.liveSince : null} liveUser={r.live ? call?.liveUser : undefined}
               liveArturo={r.live ? call?.liveArturo : undefined} connecting={r.live && !!call?.connecting}
