@@ -9011,6 +9011,11 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
             log.warning(f"call {call_id}: thread {thread_id[:24]} refused for {principal or 'anonymous'}: "
                         "no call card written")
             return False
+        # Once per (thread, call): the journal's thread_card_written flag does not survive a repeated call-ended
+        # POST (the gateway rewrites the journal whole, same call id), so the thread itself is asked.
+        if _THREADS.has_call_end(thread_id, call_id):
+            log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
+            return True
         owner = _THREADS.started_by(thread_id) or _thread_key(principal)
         ct = _call_threads.CallThreads(_THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card)
         if not ct.archive(call_id, thread_id, turns, principal=owner):
