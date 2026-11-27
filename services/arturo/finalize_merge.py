@@ -165,8 +165,11 @@ def native_tool_turns(conv_id, ledger_path):
         except ValueError:
             res = {}
         res = res if isinstance(res, dict) else {}
+        text = res.get("result")
+        if text is None and res.get("error"):             # a failed run carries error/detail, not result
+            text = ": ".join(str(x) for x in (res.get("error"), res.get("detail")) if x)
         # the run's own outcome: a gm_command that only promised "gm has it" is ok:false, not done
         out.append({"role": "tool", "tool": name, "input": args if isinstance(args, dict) else {},
-                    "result": str(res.get("result", ""))[:300], "status": "done" if res.get("ok") is True else "not_ok",
+                    "result": ("" if text is None else str(text))[:300], "status": "done" if res.get("ok") is True else "not_ok",
                     "ts": float(created), "call_id": call_id, "source": "native"})
     return out
