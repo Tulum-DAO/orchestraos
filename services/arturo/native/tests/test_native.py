@@ -1516,6 +1516,7 @@ def _rejected_backend_call(tmp_path, monkeypatch):
     s = _server(tmp_path, monkeypatch)
     call = srv.NativeCall(s, None, "fleet", "iphone")
     call.mode, call.driver = "live", _SendLog()
+    call.backend_fallback = "sent"              # these cases: the default-config retry was rejected as well
     closed = []
 
     async def close(reason):
@@ -1541,7 +1542,7 @@ def test_a_rejected_backend_config_ends_the_call_with_a_spoken_and_visible_notic
     notices = [m for m in out if isinstance(m, dict) and m.get("type") == "notice"]
     assert [n.get("code") for n in notices] == ["backend_rejected"]
     said = [f for f in call.driver.sent if f["type"] == "session.thinking.append"]
-    assert len(said) == 1 and "end" in said[0]["content"].lower()
+    assert len(said) == 1 and "lost my connection to my tools; please call back" in said[0]["content"]
     assert call.backend_rejected.startswith("responses_validation_failed")
     assert not _run(_tick_fatal(call, 0.0)) and closed == []          # Arturo gets to say it first
     call._end_utterance(time.monotonic())                             # ... and once he has, the call ends
@@ -1576,6 +1577,7 @@ def test_the_report_says_the_backend_was_rejected(tmp_path, monkeypatch):
         call.spend.start()
         call.driver = _SendLog()
         call.driver.disconnected = True
+        call.backend_fallback = "sent"
         s.calls[call.binding.conversation_id] = call
         call.on_frame("in", REJECTED)
         call._end_utterance(time.monotonic())
@@ -1585,6 +1587,7 @@ def test_the_report_says_the_backend_was_rejected(tmp_path, monkeypatch):
     rep = _run(go())
     assert rep["reason"] == srv.BACKEND_REJECTED_REASON
     assert rep["backend_rejected"].startswith("responses_validation_failed: Responses configuration validation failed")
+    assert rep["backend_fallback"] == "rejected"
 
 
 def test_an_utterance_already_under_way_does_not_count_as_the_notice(tmp_path, monkeypatch):
@@ -1613,3 +1616,88 @@ def test_the_digital_silence_between_utterances_does_not_start_one(tmp_path, mon
     call.on_frame("in", {"type": "session.output_audio.delta", "delta": base64.b64encode(_pcm(0.1)).decode()})
     call._end_utterance(time.monotonic())                             # the notice ends: the call ends now
     assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def _fallback_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(native_config, "BACKEND_MODEL", "gpt-6-luna-override")   # an override the provider rejects
+    s = _server(tmp_path, monkeypatch)
+    call = srv.NativeCall(s, None, "fleet", "iphone")
+    call.mode = "live"
+    first = FakeProvider()
+    call.transport, call.driver = first, srv.Driver(call.session, first, srv._Observer(call))
+    call._start_args = ([], "")
+    return call, first
+
+
+def _drain(call):
+    out = []
+    while not call.out.empty():
+        out.append(call.out.get_nowait())
+    return out
+
+
+def _appends(*providers):
+    return [f for p in providers for f in p.sent if f["type"].endswith(".append") and f["type"] != "session.input_audio.append"]
+
+
+def test_a_rejected_backend_falls_back_once_to_the_default_config_and_the_caller_never_hears_it(tmp_path, monkeypatch):
+    # Shaw 2026-11-27 on #683: "Arturo's tool calls should never be 'down'". A rejected setting (reasoning 'minimal'
+    # on gpt-6-luna, probe 11-26) is retried once on a fresh session with the default delegation config.
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call.on_frame("in", REJECTED)
+        call.on_frame("in", REJECTED)                                  # the old session repeats itself: one retry
+        await call._fallback_task
+        second = call.transport
+        starts = [f for f in second.sent if f["type"] == "session.start"]
+        call.on_frame("in", {"type": "session.started", "session": {}})
+        return call, first, second, starts
+
+    call, first, second, starts = _run(go())
+    assert second is not first and first.down and len(FakeProvider.instances) == 2
+    assert len(starts) == 1
+    assert starts[0]["session"]["delegation"]["responses"]["model"] == native_config.DEFAULT_BACKEND_MODEL
+    assert call.backend_fallback == "ok" and call.backend_rejected.startswith("responses_validation_failed")
+    assert not [m for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"]
+    assert _appends(first, second) == []                               # nothing is said about it
+    assert not _run(call._check_backend_rejected(time.monotonic() + 60)) and not call.closed
+
+
+def test_a_fallback_rejected_too_says_the_connection_to_the_tools_was_lost_and_ends(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        closed = []
+
+        async def close(reason):
+            closed.append(reason)
+        call.close = close
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        call.on_frame("in", REJECTED)                                  # the default config is rejected as well
+        call._end_utterance(time.monotonic())
+        await call._check_backend_rejected(time.monotonic())
+        return call, first, closed
+
+    call, first, closed = _run(go())
+    said = [f["content"] for f in _appends(call.transport)]
+    assert len(said) == 1 and "lost my connection to my tools" in said[0] and "call back" in said[0]
+    assert "down" not in said[0].lower() and "down" not in srv.BACKEND_REJECTED_REASON.lower()
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
+    assert call.backend_fallback == "rejected" and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def test_a_fallback_that_cannot_connect_takes_the_notice_path(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+
+        def refuse():
+            raise OSError("connect refused")
+        call.server.transport_factory = refuse
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call, first
+
+    call, first = _run(go())
+    assert call.backend_fallback == "failed" and call.transport is first
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
+    assert len(_appends(first)) == 1

@@ -11,7 +11,8 @@ from . import protocol
 FLAG = "ARTURO_NATIVE_GPTLIVE"
 CLAIM_GATE_FLAG = "ARTURO_NATIVE_CLAIM_GATE"
 PROMPT_FILE = Path(__file__).with_name("native_prompt.md")
-BACKEND_MODEL = os.environ.get("ARTURO_NATIVE_BACKEND_MODEL", "gpt-6-luna")   # answered E2 (10-14): available
+DEFAULT_BACKEND_MODEL = "gpt-6-luna"                                          # answered E2 (10-14): available
+BACKEND_MODEL = os.environ.get("ARTURO_NATIVE_BACKEND_MODEL", DEFAULT_BACKEND_MODEL)
 VOICE = os.environ.get("ARTURO_NATIVE_VOICE", "marin")
 
 
@@ -84,10 +85,12 @@ def backend_context(ctx, budget):
     return "\n".join(head + [f"({dropped} older line(s) not shown)"] + keep + lines[-1:])
 
 
-def session_start_frame(tools, voice=None, context=""):
+def session_start_frame(tools, voice=None, context="", fallback=False):
     """`context`: the thread above this call (call_context.opening). After the rules, but in LIVE before the closing
     START paragraph: the greet only fires when START is the last thing in the instructions (10-16 probe; the
-    2026-11-25 probe with the thread after it never greeted), and only when the thread is fenced as over (fenced())."""
+    2026-11-25 probe with the thread after it never greeted), and only when the thread is fenced as over (fenced()).
+    `fallback`: the known-good delegation config, for the one retry after the provider rejects ours: the default backend
+    model and only the baseline delegation keys. Any delegation override added later must be dropped here too."""
     p = prompts()
     live, backend = p["live"], p["backend"]
     if context and context.strip():
@@ -101,7 +104,8 @@ def session_start_frame(tools, voice=None, context=""):
         if cut:
             backend = f"{backend}\n\n{cut}"
     return protocol.validate_client(protocol.session_start(
-        instructions=live, tools=tools, backend_model=BACKEND_MODEL, backend_instructions=backend,
+        instructions=live, tools=tools, backend_model=DEFAULT_BACKEND_MODEL if fallback else BACKEND_MODEL,
+        backend_instructions=backend,
         voice=voice or VOICE, tool_choice="auto", parallel_tool_calls=False))
 
 
