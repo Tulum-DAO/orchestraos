@@ -3,7 +3,7 @@
 // so no build is needed; importing dist/ made this file fail on every clean checkout).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyNoSession, RELIC_SELF_STATES } from '../src/services/agent-status.js';
+import { classifyNoSession, RELIC_SELF_STATES, DECOMMISSIONED_SELF_STATES } from '../src/services/agent-status.js';
 
 test('always_on agent whose blob claims alive -> crashed (needs attention)', () => {
   for (const s of ['running', 'active', 'working', 'ready', 'spawning', '']) {
@@ -42,6 +42,11 @@ test('pathological blob status (free-text diary) is not a relic marker', () => {
   const essay = 'RETIRING ~81% ctx (gen-7 ...) HANDOFF WRITTEN: ...';
   const r = classifyNoSession(true, essay);
   assert.equal(r.status, 'crashed');   // unknown text = claims-alive default
+});
+
+test('decommissioned set is exactly retired + archived (a subset of the relic set)', () => {
+  assert.deepEqual([...DECOMMISSIONED_SELF_STATES].sort(), ['archived', 'retired']);
+  for (const s of DECOMMISSIONED_SELF_STATES) assert.ok(RELIC_SELF_STATES.has(s), `${s} is also a relic state`);
 });
 
 test('relic set matches the gateway rule exactly', () => {

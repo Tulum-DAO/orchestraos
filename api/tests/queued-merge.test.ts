@@ -127,6 +127,9 @@ test('interleave: a batch sits between log items by its time; a pending turn goe
   const iBatchEntryA = out.findIndex((i: any) => i.kind === 'queued_batch');
   const iPhone = texts.indexOf('hello from phone');
   const iLate = texts.indexOf('late reply');
+  for (const [name, i] of [['early reply', iEarly], ['batch', iBatchEntryA], ['phone turn', iPhone], ['late reply', iLate]] as const) {
+    assert.ok(i >= 0, `${name} is in the merged output`);
+  }
   assert.ok(iEarly < iBatchEntryA, 'early reply before batch');
   assert.ok(iBatchEntryA < iLate, 'batch before the late reply: it sits between the two replies by its time');
   assert.ok(iBatchEntryA < iPhone, 'batch before pending phone turn');
