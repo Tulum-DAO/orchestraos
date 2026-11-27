@@ -174,7 +174,8 @@ function lineStartAt(path: string, pos: number): number {
 }
 
 /** The uuid and message id of the JSON line starting at `off`, or null when that line is not one JSON value with a uuid. */
-function keysOfLineAt(path: string, off: number, size: number): { uuid: string; mid: string | null; next: number } | null {
+function keysOfLineAt(path: string, off: number, size: number):
+    { uuid: string; mid: string | null; reply: boolean; next: number } | null {
   let end = off;
   let text = '';
   let next = size;
@@ -191,8 +192,9 @@ function keysOfLineAt(path: string, off: number, size: number): { uuid: string; 
     const u = o?.uuid;
     if (typeof u !== 'string' || !u) return null;
     const m = o?.message?.id;
-    // `next`: where the line after it starts (read on the way: a long line is never read twice).
-    return { uuid: u, mid: typeof m === 'string' && m ? m : null, next };
+    // `reply`: a line of the seat's own replies (what parseClaudeLines counts usage on). `next`: where the line after it
+    // starts (read on the way: a long line is not read again going forward).
+    return { uuid: u, mid: typeof m === 'string' && m ? m : null, reply: o?.type === 'assistant' && o?.isSidechain !== true, next };
   } catch {
     return null;
   }
@@ -451,26 +453,30 @@ function chunkStartAt(path: string, pos: number, size: number): number {
  *  (one message.id) written as tool_use, its result, an attachment, the next tool_use. The reply's usage goes on its
  *  first drawn item (chat-transcript.ts parseClaudeLines), so a chunk that started after that block would put it on a
  *  later one. `start` (a record group's first line) moves back to the reply's first block when the nearest reply above
- *  it goes on below it. Measured on real logs: 3 to 5 lines split a reply's blocks. 0 when a scan runs past its guard
+ *  it goes on below it. Measured on real logs: 3 to 5 lines split a reply's blocks. Past a scan's guard the start stays
+ *  (no reply line within it: no reply's middle), except inside a reply known to straddle the start: then 0
  *  (the whole file, never a start inside a reply). */
 function replyStart(path: string, start: number, size: number,
-                    atStart: { mid: string | null; next: number } | null): number {
-  // The nearest assistant line above, over the lines that are not one (results, attachments, user turns).
+                    atStart: { mid: string | null; reply: boolean; next: number } | null): number {
+  // The nearest reply line above, over the lines that are not one (results, attachments, user turns, sidechain rows).
+  // None within the scan: the start stays (a reply's blocks are 3 to 5 lines apart; a long run of other lines is no
+  // reply's middle).
+  const replyMid = (k: { mid: string | null; reply: boolean } | null): string | null => (k?.reply ? k.mid : null);
   let at = start;
   let mid: string | null = null;
   for (let guard = 0; !mid; guard++) {
-    if (at <= 0) return start;                // no reply above: nothing to straddle
-    if (guard >= BACK_SCAN_MAX) return 0;
+    if (at <= 0 || guard >= BACK_SCAN_MAX) return start;
     at = lineStartAt(path, at - 1);
-    mid = keysOfLineAt(path, at, size)?.mid ?? null;
+    mid = replyMid(keysOfLineAt(path, at, size));
   }
   // Does that reply go on at or below the start? Its next assistant line says (usually the start line or the next).
   let off = start;
   let goesOn = false;
   for (let guard = 0; off < size; guard++) {
-    if (guard >= BACK_SCAN_MAX) { goesOn = true; break; }   // not known within the scan: the start that is safe either way
+    if (guard >= BACK_SCAN_MAX) break;        // no reply line within the scan: that reply has ended
     const k = guard === 0 && atStart ? atStart : keysOfLineAt(path, off, size);
-    if (k?.mid) { goesOn = k.mid === mid; break; }
+    const m = replyMid(k);
+    if (m) { goesOn = m === mid; break; }
     off = k ? k.next : lineEndAt(path, off, size);
   }
   if (!goesOn) return start;
@@ -479,9 +485,9 @@ function replyStart(path: string, start: number, size: number,
   for (let guard = 0; at > 0; guard++) {
     if (guard >= BACK_SCAN_MAX) return 0;
     at = lineStartAt(path, at - 1);
-    const k = keysOfLineAt(path, at, size);
-    if (k?.mid === mid) first = at;
-    else if (k?.mid) break;
+    const m = replyMid(keysOfLineAt(path, at, size));
+    if (m === mid) first = at;
+    else if (m) break;
   }
   return first;
 }

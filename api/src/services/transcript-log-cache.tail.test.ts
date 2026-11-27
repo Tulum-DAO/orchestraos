@@ -406,11 +406,40 @@ test('a reply whose blocks other lines split (parallel tool calls): a chunk neve
     const range = logRange(path, parser, offsetOf(path, at), size);
     assert.deepEqual(usageOf(range.items), usageOf(whole), `a cursor window from ${at}`);
   }
+  // A sidechain row between the blocks (an old log's subagent line, with its own message id) is no reply of the seat's.
+  const { path: p2 } = fresh();
+  const side = JSON.stringify({ type: 'assistant', uuid: 's-side', isSidechain: true, timestamp: T(++seq),
+    message: { id: 'msg_side', role: 'assistant', content: [{ type: 'text', text: 'subagent' }], usage: { input_tokens: 1, output_tokens: 1 } } });
+  const withSide = lines.flatMap((l) => (l.includes('"uuid":"x-par-1"') ? [l, side] : [l]));
+  writeFileSync(p2, withSide.join('\n') + '\n');
+  const size2 = readFileSync(p2).length;
+  const whole2 = oracle(p2);
+  for (const at of ['s-side', 'a-par-2']) {
+    clearLogCache();
+    const tail = cachedLogTail(p2, parser, size2 - offsetOf(p2, at));
+    assert.deepEqual(usageOf(tail.items), usageOf(whole2), `with a sidechain row, a start at ${at}`);
+  }
   // A start after the reply's last block, or before its first, is not moved.
   clearLogCache();
   assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'r-par-2')).start, offsetOf(path, 'r-par-2'));
   clearLogCache();
   assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'u-par')).start, offsetOf(path, 'u-par'));
+});
+
+test('a long run of lines that are no reply above a start (attachments, results): the start stays, no whole-file parse', () => {
+  const { path, parser } = fresh();
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  for (let i = 0; i < 400; i++) lines.push(JSON.stringify({ type: 'attachment', uuid: `x-run-${i}`, timestamp: T(++seq), attachment: { type: 'hook_success', content: 'z'.repeat(1000) } }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const full0 = logCacheFullParses();
+  const tail = cachedLogTail(path, parser, 64 * 1024);
+  assert.ok(tail.start > 0, `a 64 KiB tail starts at ${tail.start}`);
+  assert.equal(logCacheFullParses(), full0, 'no whole-file parse');
+  clearLogCache();
+  const size = readFileSync(path).length;
+  const range = logRange(path, parser, size - 64 * 1024, size - 32 * 1024);
+  assert.ok(range.start > 0, `a cursor window starts at ${range.start}`);
 });
 
 test('a reply of more lines than the back-scan guard: the chunk still starts outside it (the whole file, never inside)', () => {
