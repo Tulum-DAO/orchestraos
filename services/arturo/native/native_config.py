@@ -48,6 +48,42 @@ def fenced(ctx):
     return ctx
 
 
+# The backend's copy of the thread (probes 2026-11-26): a 2,463-token opening added ~5.8k backend input tokens per
+# delegation, about twice its size, because GPT-Live hands the backend its own context as well. The backend keeps the
+# newest lines (what "that" or "it" points at); the live copy stays whole. "full" restores the whole copy, "0" none.
+BACKEND_OPENING_ENV = "ARTURO_NATIVE_BACKEND_OPENING_TOKENS"
+BACKEND_OPENING_TOKENS = 500
+
+
+def backend_opening_budget():
+    """Tokens of the thread the backend gets: an int >= 0, or None for the whole thread."""
+    raw = os.environ.get(BACKEND_OPENING_ENV, "").strip().lower()
+    if raw == "full":
+        return None
+    return int(raw) if raw.isascii() and raw.isdecimal() else BACKEND_OPENING_TOKENS   # "²" is a digit, not an int
+
+
+def backend_context(ctx, budget):
+    """The fenced thread cut to its header and the newest lines that fit `budget` tokens (at least the newest one)."""
+    from services.arturo import thread_context as tc
+    if budget is None or tc.estimate_tokens(ctx) <= budget:
+        return ctx
+    if budget == 0:
+        return ""
+    lines = ctx.split("\n")
+    head, body = lines[:2], lines[2:-1]                 # PAST_OPEN + the THREAD header; PAST_CLOSE is lines[-1]
+    keep, used = [], tc.estimate_tokens("\n".join(head + lines[-1:]))
+    for line in reversed(body):
+        used += tc.estimate_tokens(line) + 1
+        if used > budget and keep:                       # the newest line always stays, even over budget
+            break
+        keep.insert(0, line)
+    dropped = len(body) - len(keep)
+    if not dropped:                                     # nothing to cut by line (one long line): keep it whole
+        return ctx
+    return "\n".join(head + [f"({dropped} older line(s) not shown)"] + keep + lines[-1:])
+
+
 def session_start_frame(tools, voice=None, context=""):
     """`context`: the thread above this call (call_context.opening). After the rules, but in LIVE before the closing
     START paragraph: the greet only fires when START is the last thing in the instructions (10-16 probe; the
@@ -61,7 +97,9 @@ def session_start_frame(tools, voice=None, context=""):
             live = "\n\n".join(paras[:-1] + [ctx, paras[-1]])
         else:
             live = f"{live}\n\n{ctx}"
-        backend = f"{backend}\n\n{ctx}"
+        cut = backend_context(ctx, backend_opening_budget())
+        if cut:
+            backend = f"{backend}\n\n{cut}"
     return protocol.validate_client(protocol.session_start(
         instructions=live, tools=tools, backend_model=BACKEND_MODEL, backend_instructions=backend,
         voice=voice or VOICE, tool_choice="auto", parallel_tool_calls=False))
