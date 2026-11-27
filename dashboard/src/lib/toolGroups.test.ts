@@ -454,3 +454,13 @@ test('codex plumbing and the spawn boot line render as system, never as the oper
   const users = buildRenderList(items).filter((n): n is Extract<RenderNode, { kind: 'user' }> => n.kind === 'user');
   assert.deepEqual(users.map((u) => !!u.isSystem), [true, true, true, false]);
 });
+
+// A call's tool group (review of the call tool chips, 2026-11-27): "used 2 tools, 1 failed" over three rows read as a
+// miscount. It is not: a verb counts what worked, "N failed" what did not (S7), and the two together are every row.
+test('a tool group header accounts for every row it opens to: worked + failed = rows', () => {
+  const rows = [ok('list_agents'), failed('research'), ok('gm_command')];
+  const s = summarizeTurn(rows);
+  assert.equal(s.headline, 'used 2 tools, 1 failed');
+  const counted = [...s.headline.matchAll(/(\d+)/g)].reduce((n, m) => n + Number(m[1]), 0);
+  assert.equal(counted, rows.length);
+});
