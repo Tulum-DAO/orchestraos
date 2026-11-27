@@ -70,7 +70,8 @@ import { initStatusStream, addStatusSSEClient } from './services/status-stream.j
 import { setupTerminalWebSocket } from './routes/terminal.js';
 import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket, createVoiceLiveReadyRouter } from './routes/voice-live.js';
 import { setupVoiceNativeWebSocket, createVoiceNativeRouter } from './routes/voice-native.js';
-import { loadConfig } from './lib/config.js';
+import { loadConfig, dataDir } from './lib/config.js';
+import { operatorZoneFor } from './lib/operatorZone.js';
 import { principal, installRole } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
@@ -191,6 +192,10 @@ app.get('/api/status/stream', (_req, res) => {
 app.get('/api/me', (req, res) => {
   const p = principal(req);
   if (!p) { res.status(401).json({ error: 'unauthenticated' }); return; }
+  // The operator's current zone (lib/operatorZone.ts), read per request, for the install admin only: their client
+  // labels the times it shows with it. ADDITIVE; absent for a client-scoped caller or a member, and when the install
+  // keeps no location file.
+  const zone = operatorZoneFor(req, dataDir());
   res.json({
     username: p.username,
     role: p.role,
@@ -198,6 +203,7 @@ app.get('/api/me', (req, res) => {
     allowed_agents: p.allowedAgents,
     client_scope: p.clientScope,
     trusted: p.trusted,
+    ...(zone ? { zone } : {}),
   });
 });
 
