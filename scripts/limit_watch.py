@@ -222,14 +222,31 @@ def _norm_ts(ts):
 
 # --- one pass ----------------------------------------------------------------------------------
 
-def _claude_line_kind(line):
-    """Cheap pre-filter before json.loads: "assistant" | "note" | "prompt" | None."""
+def _maybe_relevant(line):
+    """Cheap pre-filter: may this line be an assistant row, a limit note or a prompt? Routing is on the
+    PARSED fields (_route), never on these substrings: a prompt that quotes them is still a prompt."""
     if '"type":"assistant"' in line or '"type": "assistant"' in line:
+        return True
+    if '"usageLimitNote"' in line or '"informational"' in line:
+        return True
+    if '"type":"user"' in line or '"type": "user"' in line:
+        # a tool result is never a prompt; the content list opens with it (cheap, and only a skip)
+        return '"content":[{"tool_use_id"' not in line and '"content":[{"type":"tool_result"' not in line
+    return False
+
+
+def _route(row):
+    """"assistant" | "release" | "note" | "prompt" | None, from the parsed row."""
+    t = row.get("type")
+    if t == "assistant":
         return "assistant"
-    if '"usageLimitNote"' in line or ('"informational"' in line and "imit" in line):
+    if t == "user" and row.get("usageLimitNote"):
+        # 2.1.284: "wrap_up" = the limit (grace allowance), "release" = "earlier usage-limit notes no
+        # longer apply" (the seat is working again)
+        return "release" if row.get("usageLimitNote") == "release" else "note"
+    if t == "system" and row.get("subtype") == "informational":
         return "note"
-    if (('"type":"user"' in line or '"type": "user"' in line) and '"tool_use_id"' not in line
-            and '"isMeta":true' not in line and '"isMeta": true' not in line):
+    if t == "user":
         return "prompt"
     return None
 
@@ -255,12 +272,46 @@ def _infer_window(paths, ev, now):
     w = u.get("windows") or {}
     for name, window, at in (("5h", "5-hour", 95.0), ("weekly", "weekly", 100.0)):
         pct, reset = (w.get(name) or {}).get("used_pct"), (w.get(name) or {}).get("resets_at")
-        if pct is None or float(pct) < at or not reset or now >= float(reset):
-            continue
+        try:
+            if pct is None or float(pct) < at or not reset or now >= float(reset):
+                continue
+        except (TypeError, ValueError):
+            continue                     # an odd reading names no window
         if ev.reset_at and abs(int(ev.reset_at) - int(reset)) > 15 * 60:
             continue                     # the note names another reset: not this window
         ev.window, ev.reset_at = window, int(reset)
         return
+
+
+def _scan_claude_row(paths, row, now, events, recovered, grace):
+    kind = _route(row)
+    if kind is None:
+        return
+    sid = row.get("sessionId") or row.get("session_id")
+    if kind == "prompt":
+        if sid in grace and _is_prompt(row):
+            grace[sid]["prompted"] = True
+        return
+    if kind == "release":                   # the CLI itself says the limit is over: a recovery
+        grace.pop(sid, None)
+        recovered.add(("claude", sid))
+        return
+    ev = LE.from_claude_row(row) if kind == "assistant" else LE.from_claude_limit_note(row)
+    if ev is None:
+        if kind == "assistant" and not row.get("isApiErrorMessage"):
+            g = grace.get(sid)
+            if g is None or g.get("prompted"):
+                grace.pop(sid, None)
+                recovered.add(("claude", sid))
+        return
+    if ev.window != "credits":              # a model's credits cap has no grace allowance (model_drop moves it)
+        since = ev.ts or datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
+        grace[sid] = {"since": since, "prompted": False}
+        recovered.discard(("claude", sid))
+    ev.account = claude_account_at(paths, ev.ts)
+    _infer_window(paths, ev, now)
+    ev.seat = seat_for_session(paths, sid) or f"session {str(sid)[:8]}"
+    events.append(ev)
 
 
 def scan(paths, now, cursors, *, start_at_end=True, grace=None):
@@ -272,33 +323,14 @@ def scan(paths, now, cursors, *, start_at_end=True, grace=None):
     grace = {} if grace is None else grace
     for p in _fresh_files(os.path.join(paths.claude_projects, "*", "*.jsonl"), now):
         for line in new_lines(p, cursors, start_at_end=start_at_end):
-            kind = _claude_line_kind(line)
-            if kind is None:
+            if not _maybe_relevant(line):
                 continue
             try:
                 row = json.loads(line)
-            except ValueError:
-                continue
-            sid = row.get("sessionId") or row.get("session_id")
-            if kind == "prompt":
-                if sid in grace and _is_prompt(row):
-                    grace[sid]["prompted"] = True
-                continue
-            ev = LE.from_claude_row(row) if kind == "assistant" else LE.from_claude_limit_note(row)
-            if ev is None:
-                if kind == "assistant" and not row.get("isApiErrorMessage"):
-                    g = grace.get(sid)
-                    if g is None or g.get("prompted"):
-                        grace.pop(sid, None)
-                        recovered.add(("claude", sid))
-                continue
-            if ev.window != "credits":      # a model's credits cap has no grace allowance (model_drop moves it)
-                grace[sid] = {"since": ev.ts or "", "prompted": False}
-                recovered.discard(("claude", sid))
-            ev.account = claude_account_at(paths, ev.ts)
-            _infer_window(paths, ev, now)
-            ev.seat = seat_for_session(paths, sid) or f"session {str(sid)[:8]}"
-            events.append(ev)
+                if isinstance(row, dict):
+                    _scan_claude_row(paths, row, now, events, recovered, grace)
+            except (ValueError, TypeError, AttributeError, KeyError):
+                continue                    # one odd row never wedges the watcher (its cursor already moved)
     cutoff = datetime.fromtimestamp(now - 86400, timezone.utc).isoformat()
     for sid in [s for s, g in grace.items() if str(g.get("since") or "") < cutoff[:19]]:
         del grace[sid]

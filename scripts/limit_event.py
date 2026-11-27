@@ -213,11 +213,12 @@ def from_claude_limit_note(row: dict) -> LimitEvent | None:
     """Claude Code 2.1.284+ hits a limit WITHOUT an API-error row: a meta user row carrying
     usageLimitNote ("wrap_up": a short grace allowance, then the turn is cut off) and, when the turn
     ends, a system/informational row "Usage limit reached · continuing automatically at 11:10pm".
+    usageLimitNote "release" ("earlier usage-limit notes no longer apply") is the END of a limit: None.
     Either one -> a Claude limit (window unknown; the informational row gives the reset), else None."""
     if not isinstance(row, dict):
         return None
     ev = None
-    if row.get("type") == "user" and row.get("usageLimitNote"):
+    if row.get("type") == "user" and row.get("usageLimitNote") and row.get("usageLimitNote") != "release":
         ev = LimitEvent("claude", "unknown", None, text=_row_text(row)[:300])
     elif row.get("type") == "system" and row.get("subtype") == "informational":
         text = row.get("content") if isinstance(row.get("content"), str) else ""

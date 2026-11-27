@@ -8,8 +8,9 @@ test (test_limit_switch.py):
      window (or its weekly window is used up), BEFORE seats hit the banner; REACTIVE, any open limit
      banner episode on the active login (5-hour, weekly, spend, or a limit with no window named),
      whatever the usage reading says. AND the other login has headroom: 5-hour under 80% and weekly
-     under 95%, by a reading up to 6 h old (a parked login is not spent by the fleet, and usage_poll
-     cannot read it once its access token expires; a window whose reset passed counts as 0). Only
+     under 95%, by its last reading however old (a parked login is not spent by the fleet, and
+     usage_poll cannot read it once its access token expires; a window whose reset passed counts as 0,
+     and a 5-hour window read over 5 h ago counts as 0). Only
      Claude logins are targets: the Codex logins enrolled in the same profiles file never are;
      A model's credits cap ("You've reached your Fable limit") is NOT a login limit and never
      switches the login (operator, 2026-11-26, apr_bafb66c3): the seat that shows it drops to
@@ -53,7 +54,7 @@ OWN_SWITCH_SLACK_S = 120          # a switch-log row this close to our own switc
 SWITCH_AT_5H_PCT = 95.0       # the operator's rule: switch at 95% of the 5-hour window, before the banner
 HEADROOM_PCT = 80.0           # a target's 5-hour window must be under this (and the weekly preference's both)
 WEEKLY_HEADROOM_PCT = 95.0    # ... and its weekly under this: 81% weekly beats a login that is out (11-26 miss)
-STALE_TARGET_S = 6 * 3600     # a target's last reading still counts this long: an idle login's use only falls
+STALE_TARGET_S = 6 * 3600     # gm hears once per this long that a target's reading is old
 MIN_GAP_S = 600
 USAGE_FRESH_S = 30 * 60
 NUDGE_BUDGET_S = 60           # all nudges of one run together; the cron run is killed at 300 s
@@ -246,13 +247,14 @@ def _park_until(ep, now):
 
 def _headroom(u, now):
     """(ok, why) for a TARGET login's usage_poll reading. The target is not the active login, so nothing
-    on the fleet spends it: a reading up to STALE_TARGET_S old still counts (usage_poll cannot read a
-    parked login whose access token expired, 11-26), and a window whose reset passed since counts as 0."""
+    on the fleet spends it and its use can only fall: an old reading still counts (usage_poll cannot
+    read a parked login whose access token expired, 11-26). A window whose reset passed since counts as
+    0, and so does a 5-hour window read more than 5 hours ago (it has reset whatever the reading says)."""
     if not u:
         return False, "no usage reading"
+    if not u.get("as_of"):
+        return False, "usage reading has no time"
     age = now - float(u.get("as_of") or 0)
-    if age > STALE_TARGET_S:
-        return False, f"usage reading older than {STALE_TARGET_S // 3600} h"
     w = u.get("windows") or {}
     five, week = (w.get("5h") or {}).get("used_pct"), (w.get("weekly") or {}).get("used_pct")
     if five is None or week is None:
@@ -264,6 +266,8 @@ def _headroom(u, now):
                 five = 0.0
             else:
                 week = 0.0
+    if age > _PARK_FALLBACK["5-hour"]:
+        five = 0.0
     ok = five < HEADROOM_PCT and week < WEEKLY_HEADROOM_PCT
     why = f"5-hour {five:.0f}%, weekly {week:.0f}%"
     return ok, why + (f" (reading {age / 60:.0f} min old)" if age > USAGE_FRESH_S else "")
@@ -418,6 +422,7 @@ def _prefer_weekly(active, now, log, deps, state, save, stamp, episodes=None):
                   f"{why}\nThe switch returned {json.dumps(res)[:400]}. It retries after an hour.\n")
         return "failed"
     state["last_switch"], state["last_to"] = now, target
+    _mark_own_switch(state, deps, now)
     if save:
         save(state)
     undo = f"python3 {_account_switch_cmd()} --shared {active}"
@@ -439,7 +444,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
     state["parked"] = parked
     key = None
     _check_resumed(state, now, log, deps, stamp)
-    _after_any_switch(active, now, log, deps, state, save, stamp)
+    _after_any_switch(active, now, log, deps, state, save, stamp, episodes)
 
     def once(tag, row, mail=None):
         if tag in told:
@@ -589,6 +594,7 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
         return "failed"
     state["last_switch"], state["last_to"] = now, target
     parked[active] = _park_until(ep, now)
+    _mark_own_switch(state, deps, now)
     if save:
         save(state)
     undo = f"python3 {_account_switch_cmd()} --shared {active}"
@@ -600,9 +606,6 @@ def tick(paths, episodes, active, now, log, deps, state, save=None):
             + (f" ({ep['model']})" if ep.get("model") else "")
             + f" ({LE.reset_label(ep.get('reset_at'))}); it is now {target}. Continue where you left off.")
     nudged = _nudge_banner_seats(seats, attached, text, key, now, target, line, log, deps, state, save, stamp)
-    # our own row in account-switch.jsonl is written during deps.switch, after `now`: mark it seen
-    own_ts = deps.last_switch_row()[0] if hasattr(deps, "last_switch_row") else 0
-    state["seen_switch"] = max(float(state.get("seen_switch") or 0), float(own_ts or 0), now + OWN_SWITCH_SLACK_S)
     deps.mail("gm", "high", f"auto-switch: Claude login {active} -> {target}",
               f"Switched the shared Claude login {active} -> {target} ({line}; {target} {reasons[-1].split(': ', 1)[-1]}). "
               f"{res.get('followers', len(seats))} seats follow; nudged {', '.join(nudged) or 'none'} "
@@ -632,7 +635,13 @@ def _nudge_banner_seats(seats, attached, text, key, now, target, line, log, deps
     return nudged
 
 
-def _after_any_switch(active, now, log, deps, state, save, stamp):
+def _mark_own_switch(state, deps, now):
+    """Our own row in account-switch.jsonl (written during deps.switch, after `now`) is no hand switch."""
+    own_ts = deps.last_switch_row()[0] if hasattr(deps, "last_switch_row") else 0
+    state["seen_switch"] = max(float(state.get("seen_switch") or 0), float(own_ts or 0), now + OWN_SWITCH_SLACK_S)
+
+
+def _after_any_switch(active, now, log, deps, state, save, stamp, episodes=None):
     """Rule 5 for a switch this module did NOT make (the dashboard button, the CLI): the first run that
     sees its row in account-switch.jsonl nudges the banner-stuck seats onto the new login (11-26: Shaw
     switched by hand at 20:09 Tulum and 8 seats sat on the banner for an hour)."""
@@ -648,6 +657,10 @@ def _after_any_switch(active, now, log, deps, state, save, stamp):
     state["seen_switch"] = ts
     if now - ts > 30 * 60 or to != active:
         return                           # old news, or already switched again: the next row decides
+    tw = _fresh_windows(deps.usage(to), now)
+    if _login_limited(episodes, to, now) or (tw is not None and tw[0] >= SWITCH_AT_5H_PCT):
+        log({"ts": stamp, "kind": "nudge_held", "reason": f"{to} is out or at {SWITCH_AT_5H_PCT:.0f}%", "to": to})
+        return                           # a nudge would only re-hit the limit on the new login
     seats = deps.claude_seats()
     attached = deps.attached_sessions() if hasattr(deps, "attached_sessions") else ()
     if seats is None or attached is None:
@@ -679,7 +692,7 @@ def _stale_targets(others, now, told, log, deps, stamp):
         deps.mail("gm", "medium", f"limit watch: no fresh usage reading for {acct}",
                   f"usage_poll has no reading of the Claude login {acct} from the last 30 min (a parked "
                   f"login's access token expires until Claude Code uses it again). The auto-switch uses its "
-                  f"last reading for up to {STALE_TARGET_S // 3600} h; after that {acct} is no target.\n")
+                  f"last reading (a 5-hour window read over 5 h ago counts as reset).\n")
 
 
 def load_state(path):

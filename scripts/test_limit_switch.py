@@ -82,10 +82,14 @@ def test_1_other_login_at_or_over_80_percent_5h_or_95_percent_weekly_is_no_headr
     assert res == "refused" and d.switched == []
 
 
-def test_1_a_reading_older_than_6_hours_is_no_headroom():
-    d = Fake(usage={"default": {"as_of": NOW - 6 * 3600 - 60,
-                                "windows": {"5h": {"used_pct": 1.0}, "weekly": {"used_pct": 1.0}}}})
-    assert _tick(_ep(), d)[0] == "refused"
+def test_1_a_reading_older_than_5_hours_counts_its_5_hour_window_as_reset_and_keeps_the_weekly():
+    """Review r1 #2: a cap on the reading's age brought the 11-26 miss back after a quiet night."""
+    old = lambda week: Fake(usage={"default": {"as_of": NOW - 9 * 3600,
+                                               "windows": {"5h": {"used_pct": 99.0}, "weekly": {"used_pct": week}}}})
+    assert _tick(_ep(), old(60.0))[0] == "switched"
+    assert _tick(_ep(), old(96.0))[0] == "refused"
+    d = Fake(usage={"default": {"windows": {"5h": {"used_pct": 1.0}, "weekly": {"used_pct": 1.0}}}})
+    assert _tick(_ep(), d)[0] == "refused"                     # a reading with no time is no headroom
 
 
 def test_1_11_26_miss_weekly_81_and_a_2_hour_old_reading_still_switch_and_gm_hears_it_is_stale():
@@ -772,13 +776,13 @@ def test_the_check_row_carries_the_weekly_fable_reading_of_both_logins():
 
 
 def test_a_stale_other_login_is_logged_unknown_and_never_headroom():
-    u = {"default": _reading(97.0), "strategysimple": _reading(5.0, age=7 * 3600)}   # token expired: no new reading
+    u = {"default": _reading(97.0), "strategysimple": _reading(5.0, week=96.0, age=7 * 3600)}   # token expired
     d = Fake(usage=u)
     res, log, _ = _tick({}, d, active="default")
     row = [r for r in log if r["kind"] == "switch_check"][0]
     assert row["others"]["strategysimple"]["fresh"] is False
     assert res == "refused" and d.switched == []
-    assert any("older than 6 h" in r.get("reason", "") for r in log if r["kind"] == "switch_refused")
+    assert any("weekly 96%" in r.get("reason", "") for r in log if r["kind"] == "switch_refused")
 
 
 # --- 11-26 miss: a hand switch (dashboard) nudges the banner-stuck seats too ----------------------
@@ -878,3 +882,39 @@ def test_replay_11_27_01_09z_shaws_dashboard_switch_nudges_the_banner_seats(tmp_
     _tick({}, d, st, active="default", now=1795741802)   # 2026-11-27T01:10:02Z
     assert [s for s, _ in d.nudged] == ["pm-nod", "orchestra-builder"]
     assert st["verify"]["to"] == "default"
+
+
+def test_5_a_weekly_preference_switch_is_not_taken_for_a_hand_switch():
+    """Review r1 #3."""
+    d = SwitchLogFake(row=(NOW - 7200, "strategysimple"),
+                      usage={"strategysimple": _reading(20.0, week=70.0), "default": _reading(5.0, week=30.0)})
+    st = {"seen_switch": NOW - 7200}
+    assert _tick({}, d, st)[0] == "preferred"
+    d.row = (NOW + 5, "default")
+    _, log, _ = _tick({}, d, st, active="default", now=NOW + 120)
+    assert d.nudged == [] and not [r for r in log if r["kind"] == "hand_switch_seen"]
+
+
+def test_5_own_switch_is_marked_seen_before_the_nudges_run():
+    """Review r1 #4: a run killed mid-nudge must not leave our switch looking like a hand switch."""
+    saved = []
+
+    class Dies(SwitchLogFake):
+        def nudge(self, s, text):
+            raise SystemExit("cron timeout")
+
+    d = Dies(row=(NOW - 7200, "strategysimple"))
+    st = {"seen_switch": NOW - 7200}
+    with pytest.raises(SystemExit):
+        LS.tick(None, _ep(), "strategysimple", NOW, [].append, d, st, save=lambda s: saved.append(json.dumps(s)))
+    assert json.loads(saved[-1])["seen_switch"] >= NOW
+
+
+def test_5_a_hand_switch_onto_a_login_that_is_out_nudges_nobody():
+    """Review r1 #5."""
+    d = SwitchLogFake(row=(NOW - 120, "default"), usage={"default": _reading(97.0)})
+    _, log, _ = _tick({}, d, {"seen_switch": NOW - 3600}, active="default")
+    assert d.nudged == [] and [r for r in log if r["kind"] == "nudge_held"]
+    d = SwitchLogFake(row=(NOW - 120, "default"))
+    _, log, _ = _tick(_ep(account="default"), d, {"seen_switch": NOW - 3600}, active="default")
+    assert d.nudged == []

@@ -459,10 +459,67 @@ def test_g5_other_informational_rows_and_meta_rows_are_no_limit(tree):
     _add(tree.transcript,
          {"type": "system", "subtype": "informational", "timestamp": "2026-11-25T17:55:00Z", "sessionId": SID_C,
           "content": "Auto-update installed · restart to apply"},
-         {"type": "user", "isMeta": True, "timestamp": "2026-11-25T17:55:01Z", "sessionId": SID_C,
-          "message": {"role": "user", "content": "[Earlier usage-limit notes no longer apply.]"}})
+         _release_row("2026-11-25T17:55:01Z"))
     _run(tree)
     assert json.load(open(tree.seat_rows))["seats"] == {}
+    assert not [r for r in _log(tree) if r["kind"] == "episode_open"]
+
+
+def _release_row(ts):
+    """2.1.284's row when the limit is over (real shape, arturo-receipt-dev 2026-11-27T02:06:26Z)."""
+    return {"type": "user", "isMeta": True, "turnCompanion": True, "usageLimitNote": "release",
+            "timestamp": ts, "sessionId": SID_C, "message": {"role": "user", "content":
+            "[Earlier usage-limit notes no longer apply. Continue working normally. Don't mention this to the user.]"}}
+
+
+def test_g7_a_seat_resuming_after_a_switch_recovers_on_the_release_row_and_opens_nothing(tree, ny):
+    """Review r1 #1: the release note was read as a new limit on the NEW login (a false trigger)."""
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    _add(tree.switch_log,
+         {"ts": "2026-11-25T17:58:00+00:00", "seat": "*shared*", "to": "default", "status": "switched",
+          "from": "strategysimple"})
+    _add(tree.transcript, _prompt_row("2026-11-25T17:59:00Z", "The shared Claude login was switched. Continue."),
+         _release_row("2026-11-25T17:59:00.5Z"), _ok_row("2026-11-25T17:59:10Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    opened = [r["key"] for r in _log(tree) if r["kind"] == "episode_open"]
+    assert opened == [f"claude|strategysimple|5-hour|{FIVE_Q['resetsAt']}"]
+
+
+def test_g8_a_prompt_that_quotes_the_markers_is_still_a_prompt(tree, ny):
+    """Review r1 #6 (guard, not a regression: JSON escapes the quotes inside a prompt, so the old substring
+    filter could not see them either): routing is on the parsed fields, a quoting prompt is a prompt."""
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    _add(tree.transcript, _prompt_row("2026-11-25T18:01:00Z",
+                                      'informational limit rows: "isMeta":true and "tool_use_id" quoted'),
+         _ok_row("2026-11-25T18:01:10Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+
+
+def test_g9_odd_rows_never_wedge_the_watcher(tree, ny):
+    """Review r1 #7: a non-dict message or a non-numeric reading must not stop every later run."""
+    (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
+        {"as_of": NOW - 60, "windows": {"5h": {"used_pct": "n/a", "resets_at": FIVE_Q["resetsAt"]}}}))
+    with open(tree.transcript, "a") as f:
+        f.write(json.dumps({"type": "user", "sessionId": SID_C, "message": "a string, not a dict"}) + "\n")
+        f.write(json.dumps(["not", "a", "row"]) + "\n")
+    _add(tree.transcript, _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"]["pm-nod"]["window"] == "unknown"
+
+
+def test_g10_a_note_with_no_timestamp_keeps_its_grace_for_the_next_run(tree, ny):
+    """Review r1 #8."""
+    row = _note_row(None)
+    row.pop("timestamp")
+    _add(tree.transcript, row)
+    _run(tree)
+    assert SID_C in json.load(open(tree.episodes))["_grace"]
 
 
 def test_g6_replay_11_27_the_three_invisible_seats_exact_rows(tree, ny):
