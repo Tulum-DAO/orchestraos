@@ -14,6 +14,7 @@ class CostRecorder:
         self.live_seconds = 0.0          # latest cumulative value, never summed
         self.closed_seconds = None
         self.response_usage = []         # nested usage blobs as reported (UNKNOWN U7)
+        self.prior_seconds = 0.0         # earlier provider sessions of this call (the backend fallback opens a second)
 
     def on_frame(self, frame):
         t = frame.get("type")
@@ -27,9 +28,13 @@ class CostRecorder:
             if usage:
                 self.response_usage.append(usage)
 
+    def new_session(self):
+        """A second provider session in the same call: its cumulative counter restarts at 0."""
+        self.prior_seconds, self.live_seconds, self.closed_seconds = self.billed_seconds, 0.0, None
+
     @property
     def billed_seconds(self):
-        return self.closed_seconds if self.closed_seconds is not None else self.live_seconds
+        return self.prior_seconds + (self.closed_seconds if self.closed_seconds is not None else self.live_seconds)
 
     @property
     def live_usd(self):
