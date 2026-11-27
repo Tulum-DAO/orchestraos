@@ -140,6 +140,14 @@ def test_arturo_persona_no_third_person_gm():
         assert "i'll" in low or "let me" in low or "i " in low, "must speak in the first person"
 
 
+def test_ask_gm_tool_lets_arturo_say_he_asked_gm():
+    # gm ruling, 2026-11-27 (ASKING GM in the relay prompt): he MAY say he asked gm, and never claims a result early.
+    # The D4 templates above stay first person: may, not must.
+    desc = dp.ASK_GM_DEF["function"]["description"]
+    assert "first person only" not in desc and "deeper self" not in desc
+    assert "asked gm" in desc and "never claim" in desc.lower()
+
+
 def test_tier2_degrade_to_tier3_spoken_line(monkeypatch, tmp_path):
     """Residual (orchestra-builder vote): when deep_query times out / degrades, the spoken text
     is the first-person D4 template and async_task actually fired."""
