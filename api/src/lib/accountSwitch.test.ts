@@ -580,3 +580,27 @@ test('Codex usage note: a window at 90% or more says so with its reset in Shaw\'
   writeFileSync(join(h.od, 'state', 'usage', 'api-codex-shaw.json'), '{not json');
   assert.equal(codexUsageNote(h.od, 'shaw', now), null, 'unreadable');
 });
+
+// ---- Codex pool v2: accounts.switching while codex_respawn restarts the panes (orchestra-codex-pool-dev) ---------
+
+test('Codex view carries switching {to, done, total} only while a fresh run is in flight', async () => {
+  const h = new Host();
+  const now = new Date('2026-11-27T12:00:00Z');
+  const t = now.getTime() / 1000;
+  const prog = (o: object) => writeFileSync(join(h.od, 'state', 'codex-switch-progress.json'), JSON.stringify({
+    provider: 'codex', from: 'shawcole', to: 'shaw', started: t - 120, updated: t - 5, total: 15, done: 4,
+    current: 'codex-gm', deferred: [], failed: [], finished: null, ...o }));
+  assert.equal(codexAccountsView({ dataDir: h.od, holders: CH(), now })!.switching, undefined, 'no file: no field');
+  prog({});
+  assert.deepEqual(codexAccountsView({ dataDir: h.od, holders: CH(), now })!.switching, { to: 'shaw', done: 4, total: 15 });
+  prog({ finished: t - 1 });
+  assert.equal(codexAccountsView({ dataDir: h.od, holders: CH(), now })!.switching, undefined, 'finished: gone');
+  prog({ updated: t - 3600 });
+  assert.equal(codexAccountsView({ dataDir: h.od, holders: CH(), now })!.switching, undefined, 'stale (runner died): gone');
+  for (const bad of [{ to: '../x' }, { done: 16 }, { done: -1 }, { total: 1.5 }, { provider: 'claude' }]) {
+    prog(bad);
+    assert.equal(codexAccountsView({ dataDir: h.od, holders: CH(), now })!.switching, undefined, JSON.stringify(bad));
+  }
+  writeFileSync(join(h.od, 'state', 'codex-switch-progress.json'), '{not json');
+  assert.equal(codexAccountsView({ dataDir: h.od, holders: CH(), now })!.switching, undefined, 'unreadable: gone');
+});

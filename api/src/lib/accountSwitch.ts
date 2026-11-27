@@ -498,6 +498,25 @@ export interface CodexAccountsView {
   terms_ack: boolean;
   terms_text: string;
   accounts: CodexAccountCard[];
+  /** Present only while codex_respawn (pool v2) is restarting the running Codex panes onto the new login. */
+  switching?: CodexSwitching;
+}
+
+export interface CodexSwitching { to: string; done: number; total: number }
+
+/** A run this quiet is dead, not slow: codex_respawn writes its progress at every pane and every 30 s sweep. */
+const SWITCHING_STALE_S = 10 * 60;
+
+/** state/codex-switch-progress.json (written by agent-orchestra's codex_respawn.py) as {to, done, total}, only
+ *  while its run is in flight (finished null) and fresh. Anything malformed reads as no run. */
+export function codexSwitching(dataDir: string, now: Date = new Date()): CodexSwitching | undefined {
+  const p = readJson(join(dataDir, 'state', 'codex-switch-progress.json'));
+  if (!p || typeof p !== 'object' || p.provider !== 'codex' || p.finished != null) return undefined;
+  const { to, done, total, updated } = p;
+  if (typeof to !== 'string' || !LABEL_RE.test(to)) return undefined;
+  if (!Number.isInteger(done) || !Number.isInteger(total) || done < 0 || total < 0 || done > total) return undefined;
+  if (typeof updated !== 'number' || now.getTime() / 1000 - updated > SWITCHING_STALE_S) return undefined;
+  return { to, done, total };
 }
 
 const CODEX_UNREADABLE = 'Where each login is cannot be read right now.';
@@ -535,8 +554,10 @@ export function codexAccountsView(opts: { dataDir: string; holders: Holders | nu
     current = { account: sc.id, name: sc.name, email: sc.email, since,
       since_text: since ? timeText(since, shawZone(opts.dataDir), opts.now) : null, by: switchedBy(opts.dataDir, sc.id, since, 'codex') };
   }
+  const switching = codexSwitching(opts.dataDir, opts.now);
   return { provider: 'codex', shared: sc?.id ?? null, current, seats: {}, followers: sc?.agents ?? 0,
-    terms_ack: termsAcknowledged(opts.dataDir, 'codex'), terms_text: CODEX_TERMS_LINE, accounts };
+    terms_ack: termsAcknowledged(opts.dataDir, 'codex'), terms_text: CODEX_TERMS_LINE, accounts,
+    ...(switching ? { switching } : {}) };
 }
 
 /** The Codex cards, as GET /api/usage/accounts?provider=codex serves them. */
