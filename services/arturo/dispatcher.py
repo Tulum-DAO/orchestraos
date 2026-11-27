@@ -101,10 +101,11 @@ ASK_GM_DEF = {
     "type": "function",
     "function": {
         "name": "ask_gm",
-        "description": ("Hand an EXECUTIVE ACTION to your own deeper self to execute in the background "
+        "description": ("Hand an EXECUTIVE ACTION to gm to execute in the background "
                         "(deploys, file writes, git operations, reprioritizations, multi-step tasks). "
                         "Returns instantly; the result is texted to the operator on Telegram with verified "
-                        "delivery. Speak in the first person only ('On it, I'll text you')."),
+                        "delivery. You may say you asked gm ('On it, I asked gm, I'll text you'); never claim "
+                        "it is done before that text says so."),
         "parameters": {
             "type": "object",
             "properties": {

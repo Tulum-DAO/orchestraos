@@ -1,5 +1,7 @@
 """A dashboard (browser) voice call: full tools minus run_command / async_task (the voice safety boundary;
 kill_agent is back on, the operator 2026-10-24, and never stops Arturo itself). ask_gm and deep_query still reach the deep brain through their own nested async_task."""
+from pathlib import Path
+
 import pytest
 
 from services.arturo.test_text_turn_brain import P  # noqa: F401 — the shared fixture
@@ -57,8 +59,12 @@ def test_ask_gm_still_reaches_the_deep_brain(P, monkeypatch):
 
 
 def test_the_browser_voice_prompt_points_deep_questions_at_ask_gm(P):
-    out = P._browser_voice_prompt("Any deep question you can't answer instantly, you route to your own deep brain "
-                                  "via async_task (which guarantees a Telegram answer back to the operator).")
+    # The prompt's own ASKING GM line, read from the source (the fixture stubs build_context), so a rewording of its
+    # deep-question sentence cannot slip past the swap unnoticed.
+    src = (Path(__file__).parent / "arturo-proxy.py").read_text()
+    line = src[src.index("ASKING GM (critical)"):].split("\n")[0]
+    assert "via async_task" in line
+    out = P._browser_voice_prompt(line)
     assert "via ask_gm" in out and "via async_task" not in out
     assert "run_command and async_task are not available" in out
 
