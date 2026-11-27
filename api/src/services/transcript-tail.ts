@@ -50,6 +50,12 @@ export function tailerCapForTests(n: number | null): void { tailItemCap = n ?? T
 /** This process's mark in an epoch (see TranscriptTailer.epoch), and the numberings started so far. */
 const BOOT = Math.random().toString(36).slice(2, 6);
 let epochs = 0;
+/** The version of the chat a stream's event ids count in (sidTag). Bumped when what a log builds to changes under a
+ *  running client: the head cut (chat-transcript.ts liveFrom) left the hold phase out, so every count below the cap
+ *  moved, and an id from a server without it would resume at a count that names another item. Such an id gets a
+ *  snapshot, never a delta. */
+const STREAM_CUT = 'h1';
+
 /** Beats in a row with no transcript and no tmux window before a tailer stops (about 30 s at the route's 1 s beat). */
 export const GONE_TICKS = 30;
 
@@ -286,7 +292,7 @@ export class TranscriptTailer {
    *  plus a revision once an already-sent item changed (late usage), so a client resuming from an older id is no longer
    *  "caught up" and gets a snapshot. Ids stay opaque to clients (they only echo Last-Event-ID). */
   private sidTag(): string {
-    return `${this.sid ?? ''}${this.epoch ? `~${this.epoch}` : ''}${this.rev ? `~${this.rev}` : ''}`;
+    return `${this.sid ?? ''}~${STREAM_CUT}${this.epoch ? `~${this.epoch}` : ''}${this.rev ? `~${this.rev}` : ''}`;
   }
 
   /** `<tag>:<sequence number of the newest item>`. Below the cap that is the item count, as it always was; at the cap

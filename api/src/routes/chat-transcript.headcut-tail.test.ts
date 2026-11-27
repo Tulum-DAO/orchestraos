@@ -13,7 +13,7 @@
 import { testTmpDir } from '../lib/testTmp.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 
@@ -237,4 +237,44 @@ test('cursor forms: a position cursor is versioned; a bare one is from before th
     assert.equal((await get(`?before=${encodeURIComponent(`${s.sid}~#3`)}&limit=5`)).error, 'unknown cursor');
     assert.equal((await get(`?before=${encodeURIComponent(`${s.sid}~#h0.3`)}&limit=5`)).error, 'unknown cursor');
   });
+});
+
+test('a stream id from before the head cut gets a snapshot, never a delta at a count the cut moved', async () => {
+  const { TranscriptTailer } = await import('../services/transcript-tail.js');
+  const s = SEATS.inside;
+  fresh();
+  const make = () => new TranscriptTailer({
+    agentId: s.seat, resolve: () => ({ path: paths.inside, sid: s.sid }),
+    interrupted: { read: () => [], sig: () => '' }, windowGone: () => false,
+  });
+  const first: any[] = [];
+  make().subscribe((ev) => first.push(ev));
+  assert.equal(first.length, 1);
+  assert.equal(first[0].type, 'snapshot');
+  const id = String(first[0].id);
+  const seq = Number(id.slice(id.lastIndexOf(':') + 1));
+  assert.ok(id.startsWith(`${s.sid}~`), `an id names the cut it counts in: ${id}`);
+  // An id this server sent resumes (nothing missed: no event).
+  const again: any[] = [];
+  make().subscribe((ev) => again.push(ev), id);
+  assert.equal(again.length, 0);
+  // The same count in the form a server without the cut sent (`<sid>:<n>`, counting the hold phase too): its count
+  // names another place, so it is a snapshot, whatever the number.
+  let renewed = '';
+  for (const n of [seq, seq - 3, seq + 30]) {
+    const old: any[] = [];
+    make().subscribe((ev) => old.push(ev), `${s.sid}:${n}`);
+    assert.equal(old.length, 1, `pre-cut id ${n}`);
+    assert.equal(old[0].type, 'snapshot', `pre-cut id ${n}`);
+    renewed = String(old[0].id);
+  }
+  // That snapshot is the only one: the client resumes with the id it carries, and gets deltas from then on.
+  assert.equal(renewed, id, 'the snapshot carries the new form');
+  appendFileSync(paths.inside, [user('p-new', at('2026-11-20T12:00:00Z', 0), `a new question ${filler}`),
+    say('p-newc', at('2026-11-20T12:00:00Z', 1), 'A new answer.')].join('\n') + '\n');
+  const next: any[] = [];
+  make().subscribe((ev) => next.push(ev), renewed);
+  assert.equal(next.length, 1, 'one event on the resume');
+  assert.equal(next[0].type, 'delta', 'a delta, not a second snapshot');
+  assert.deepEqual(ids(next[0].items), ['p-new', 'p-newc']);
 });
