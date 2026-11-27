@@ -505,12 +505,24 @@ def test_g9_odd_rows_never_wedge_the_watcher(tree, ny):
     """Review r1 #7: a non-dict message or a non-numeric reading must not stop every later run."""
     (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
         {"as_of": NOW - 60, "windows": {"5h": {"used_pct": "n/a", "resets_at": FIVE_Q["resetsAt"]}}}))
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"))         # in grace: the next prompt row is parsed
     with open(tree.transcript, "a") as f:
         f.write(json.dumps({"type": "user", "sessionId": SID_C, "message": "a string, not a dict"}) + "\n")
         f.write(json.dumps(["not", "a", "row"]) + "\n")
     _add(tree.transcript, _info_row("2026-11-25T17:55:15Z"))
     _run(tree)
     assert json.load(open(tree.seat_rows))["seats"]["pm-nod"]["window"] == "unknown"
+    assert [r["kind"] for r in _log(tree) if r["kind"] == "row_error"] == ["row_error"]
+
+
+def test_g11_an_unknown_note_value_is_logged_and_opens_nothing(tree, ny):
+    """Review r2 #3: a future note (an early warning, say) is no limit until this watcher knows it."""
+    row = _note_row("2026-11-25T17:55:00Z")
+    row["usageLimitNote"] = "early_warning"
+    _add(tree.transcript, row)
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    assert [r["note"] for r in _log(tree) if r["kind"] == "note_unknown"] == ["early_warning"]
 
 
 def test_g10_a_note_with_no_timestamp_keeps_its_grace_for_the_next_run(tree, ny):

@@ -207,7 +207,7 @@ def claude_account_at(paths, ts_iso):
                     r = json.loads(line)
                 except ValueError:
                     continue
-                if r.get("status") == "switched" and r.get("seat") == "*shared*" and (
+                if isinstance(r, dict) and r.get("status") == "switched" and r.get("seat") == "*shared*" and (
                         not ts_iso or str(r.get("ts", "")) <= _norm_ts(ts_iso)):
                     best = r.get("to")
     except OSError:
@@ -243,7 +243,8 @@ def _route(row):
     if t == "user" and row.get("usageLimitNote"):
         # 2.1.284: "wrap_up" = the limit (grace allowance), "release" = "earlier usage-limit notes no
         # longer apply" (the seat is working again)
-        return "release" if row.get("usageLimitNote") == "release" else "note"
+        note = row.get("usageLimitNote")
+        return "release" if note == "release" else "note" if note == "wrap_up" else "note_unknown"
     if t == "system" and row.get("subtype") == "informational":
         return "note"
     if t == "user":
@@ -292,6 +293,10 @@ def _scan_claude_row(paths, row, now, events, recovered, grace):
         if sid in grace and _is_prompt(row):
             grace[sid]["prompted"] = True
         return
+    if kind == "note_unknown":              # a note value this watcher does not know: log it, act on nothing
+        _append(paths.log, {"ts": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                            "kind": "note_unknown", "note": str(row.get("usageLimitNote"))[:40], "session": sid})
+        return
     if kind == "release":                   # the CLI itself says the limit is over: a recovery
         grace.pop(sid, None)
         recovered.add(("claude", sid))
@@ -329,8 +334,13 @@ def scan(paths, now, cursors, *, start_at_end=True, grace=None):
                 row = json.loads(line)
                 if isinstance(row, dict):
                     _scan_claude_row(paths, row, now, events, recovered, grace)
-            except (ValueError, TypeError, AttributeError, KeyError):
-                continue                    # one odd row never wedges the watcher (its cursor already moved)
+            except ValueError:
+                continue
+            except (TypeError, AttributeError, KeyError) as e:
+                # one odd row never wedges the watcher (its cursor already moved), and never silently
+                _append(paths.log, {"ts": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                                    "kind": "row_error", "file": os.path.basename(p),
+                                    "error": f"{type(e).__name__}: {e}"[:200]})
     cutoff = datetime.fromtimestamp(now - 86400, timezone.utc).isoformat()
     for sid in [s for s, g in grace.items() if str(g.get("since") or "") < cutoff[:19]]:
         del grace[sid]

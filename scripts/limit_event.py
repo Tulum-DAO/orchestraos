@@ -218,7 +218,7 @@ def from_claude_limit_note(row: dict) -> LimitEvent | None:
     if not isinstance(row, dict):
         return None
     ev = None
-    if row.get("type") == "user" and row.get("usageLimitNote") and row.get("usageLimitNote") != "release":
+    if row.get("type") == "user" and row.get("usageLimitNote") == "wrap_up":
         ev = LimitEvent("claude", "unknown", None, text=_row_text(row)[:300])
     elif row.get("type") == "system" and row.get("subtype") == "informational":
         text = row.get("content") if isinstance(row.get("content"), str) else ""
