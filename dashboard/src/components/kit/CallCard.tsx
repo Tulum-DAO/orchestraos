@@ -30,7 +30,7 @@ import { MessageText } from './Message';
 import { AgentTurn, UserTurn } from './Turns';
 import type { Skin } from './Markdown';
 import { fromPart } from '../../lib/toolCalls';
-import { groupParts, hasToolParts, type TurnPart } from '../../lib/turnParts';
+import { foldToolTurns, groupParts, hasToolParts, type TurnPart } from '../../lib/turnParts';
 import { fetchVoiceCall } from '../../lib/api';
 import { fmtClock, recordLines, transcriptText, type CallLine, type CallRecord } from '../../lib/threadKit/calls';
 import { assistantName } from '../../lib/assistantName';
@@ -277,7 +277,7 @@ function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSin
             ))}
             {agentTurns.length === 0 && <p className="call-note">No words were kept for this call.</p>}
           </>
-        ) : turns.length ? turns.map((t, i) => t.role === 'user'
+        ) : turns.length ? foldToolTurns(turns).map((t, i) => t.role === 'user'
           ? <div key={t.key ?? i} className={bubble('user')}>{withRefs(t.text, skin)}</div>
           : hasToolParts(t.parts)
             ? groupParts(t.parts!).map((g, gi) => g.kind === 'tools'

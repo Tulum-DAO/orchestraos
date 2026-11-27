@@ -74,3 +74,24 @@ test('consecutive tool parts group into one run; text breaks the run', () => {
   assert.deepEqual(g.map((x) => x.kind), ['tools', 'text', 'tools']);
   assert.equal((g[0] as any).tools.length, 2);
 });
+
+test('back-to-back tool-only turns of a call fold into one run; words between them break it', async () => {
+  const { foldToolTurns } = await import('./turnParts');
+  const tool = (id: string) => ({ kind: 'tool' as const, callId: id, name: id, argsSummary: '', status: 'ok' as const });
+  const turns = [
+    { role: 'user', text: 'do three things', key: 'u' },
+    { role: 'arturo', text: '', parts: [tool('a')], key: 'a' },
+    { role: 'arturo', text: '', parts: [tool('b')], key: 'b' },
+    { role: 'arturo', text: '', parts: [tool('c')], key: 'c' },
+    { role: 'arturo', text: 'done', key: 'w' },
+    { role: 'arturo', text: '', parts: [tool('d')], key: 'd' },
+  ];
+  const out = foldToolTurns(turns);
+  assert.deepEqual(out.map((t) => [t.key, (t.parts || []).map((p) => p.callId)]),
+                   [['u', []], ['a', ['a', 'b', 'c']], ['w', []], ['d', ['d']]]);
+  assert.deepEqual(foldToolTurns(out), out);                              // folding again changes nothing
+  assert.equal(turns.length, 6);                                          // the input is never changed
+  assert.equal(turns[1].parts!.length, 1);
+  const twins = foldToolTurns([{ role: 'arturo', text: '', parts: [tool('tool')] }, { role: 'arturo', text: '', parts: [tool('tool')] }]);
+  assert.deepEqual(twins[0].parts!.map((p) => p.callId), ['tool', 'tool#1']);   // one card never repeats a row id
+});

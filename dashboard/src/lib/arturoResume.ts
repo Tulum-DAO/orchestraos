@@ -8,7 +8,7 @@
  */
 import { isPageOpener, type ChoiceCard } from './arturo';
 import type { ThreadTurn } from './arturoThreads';
-import type { TurnPart } from './turnParts';
+import type { ToolPart, TurnPart } from './turnParts';
 import { jobResultParts, jobToolParts, type ArturoJob } from './arturoJobs';
 import { jobResult, type FinishedResult } from './threadKit/results';
 import { splitAttachmentPreamble } from './arturoUpload';
@@ -37,15 +37,38 @@ export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: T
   cardEcho?: boolean;
   /** Spoken on a live call (the thread stores mode "voice"): the feed groups these into the call's card. */
   voice?: boolean;
+  /** A tool the call ran (meta kind "call_tool"): drawn as the kit's tool chip inside the call's card. */
+  callTools?: boolean;
   /** The call-ended line for this call id: closes the call's card. */
   callEnd?: string;
   /** When it was said (epoch seconds): the card's call length. */
   ts?: number }
 
+/** call_tool_lines.py's outcome words for a run that did not work (a row without meta.ok falls back on them). */
+const FAILED_OUTCOMES = new Set(['refused', "didn't finish", "didn't reach gm"]);
+
+/** A call's tool-run row (services/arturo/call_tool_lines.py writes "<Asked gm|name>: <ask> · <outcome>", or
+ *  "<name> · <outcome>") as the tool chip the live call drew: the tool's name, the ask, and the outcome. */
+export function callToolPart(x: ThreadTurn): ToolPart {
+  const text = x.content || '';
+  const cut = text.lastIndexOf(' · ');
+  const head = cut >= 0 ? text.slice(0, cut) : text;
+  const colon = head.indexOf(': ');
+  const outcome = cut >= 0 ? text.slice(cut + 3) : '';
+  return { kind: 'tool', callId: x.meta?.tool_call_id || `tool${x.seq ?? x.ts ?? ''}`, name: x.meta?.tool || 'tool',
+           argsSummary: colon >= 0 ? head.slice(colon + 2) : '',
+           status: (x.meta?.ok ?? !FAILED_OUTCOMES.has(outcome)) ? 'ok' : 'failed', summary: outcome };
+}
+
 /** A stored thread as the feed shows it: the page's own opener hidden, context lines stripped. */
 export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
   return turns
-    .map((x) => {
+    .map((x): HydratedTurn => {
+      if (x.role !== 'user' && x.meta?.kind === 'call_tool') {
+        // Not speech: the call's tool chip, kept in the call's card by its callTools flag (threadKit/calls.ts).
+        return { role: 'arturo', text: '', callTools: true, parts: [callToolPart(x)],
+                 ...(typeof x.ts === 'number' ? { ts: x.ts } : {}), ...(typeof x.seq === 'number' ? { seq: x.seq } : {}) };
+      }
       const parts = x.role === 'user' ? undefined : jobResultParts(x.meta, x.content);
       const result = x.role === 'user' ? null : jobResult(x.meta, x.content, {
         key: `job:${x.meta?.job_id || x.ts || ''}`, ts: x.ts,

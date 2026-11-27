@@ -119,3 +119,63 @@ test('a stored turn read a page at a time keeps its seq (its identity when older
   const out = hydrateTurns([{ role: 'user', content: 'q', seq: 7 }, { role: 'assistant', content: 'a', seq: 8 }, { role: 'assistant', content: 'b' }]);
   assert.deepEqual(out.map((t) => t.seq), [7, 8, undefined]);
 });
+
+// A tool a voice call ran is a row of its own in the call's thread (services/arturo/call_tool_lines.py, meta kind
+// "call_tool"): after a reload it is the kit's tool chip inside the call's card, the way the live call drew it, never
+// an Arturo speech bubble (Shaw, 2026-11-26: the tool runs "weren't logged in the chat").
+test("a call's tool run comes back as the call's tool chip, not a line Arturo said", () => {
+  const turns = hydrateTurns([
+    { role: 'user', content: 'there is latency', mode: 'voice', ts: 10 },
+    { role: 'assistant', content: 'Asked gm: why the latency? · gm has it', mode: 'voice', ts: 13, seq: 41,
+      meta: { kind: 'call_tool', tool: 'gm_command', ok: true, tool_call_id: 'call_0' } },
+    { role: 'assistant', content: 'research: GPT-Live turn latency · didn\'t finish', mode: 'voice', ts: 15,
+      meta: { kind: 'call_tool', tool: 'research', ok: false, tool_call_id: 'call_1' } },
+    { role: 'assistant', content: 'list_agents · done', mode: 'voice', ts: 16,
+      meta: { kind: 'call_tool', tool: 'list_agents', ok: true, tool_call_id: '' } },
+    { role: 'assistant', content: "I've passed that to gm.", mode: 'voice', ts: 20 },
+  ]);
+  const [, gm, research, list] = turns;
+  assert.equal(gm.text, '');
+  assert.equal(gm.callTools, true);
+  assert.equal(gm.voice, undefined);
+  assert.equal(gm.ts, 13);
+  assert.equal(gm.seq, 41);
+  assert.deepEqual(gm.parts, [{ kind: 'tool', callId: 'call_0', name: 'gm_command', argsSummary: 'why the latency?',
+                                status: 'ok', summary: 'gm has it' }]);
+  assert.deepEqual(research.parts, [{ kind: 'tool', callId: 'call_1', name: 'research',
+                                      argsSummary: 'GPT-Live turn latency', status: 'failed', summary: "didn't finish" }]);
+  assert.deepEqual(list.parts, [{ kind: 'tool', callId: 'tool16', name: 'list_agents', argsSummary: '', status: 'ok',
+                                  summary: 'done' }]);
+  assert.equal(turns[4].text, "I've passed that to gm.");
+});
+
+test('a tool chip stays inside its call card', async () => {
+  const { groupCalls } = await import('./threadKit/calls');
+  const turns = hydrateTurns([
+    { role: 'user', content: 'hi', mode: 'voice', ts: 10 },
+    { role: 'assistant', content: 'Asked gm: q · gm has it', mode: 'voice', ts: 11,
+      meta: { kind: 'call_tool', tool: 'gm_command', ok: true, tool_call_id: 'c' } },
+    { role: 'assistant', content: 'ok', mode: 'voice', ts: 12 },
+    { role: 'assistant', content: 'Call ended (vc_client_1). [voice-call: vc_client_1 /x.json]', mode: 'voice', ts: 13,
+      meta: { kind: 'call_end', call_id: 'vc_client_1' } },
+  ]);
+  const items = groupCalls(turns, false);
+  assert.equal(items.length, 1);
+  const call = items[0] as { kind: string; turns: typeof turns };
+  assert.equal(call.kind, 'call');
+  assert.equal(call.turns.length, 3);                                    // hi, the tool chip, ok (the end line closes it)
+  assert.ok(call.turns.some((t) => t.callTools && t.parts?.length === 1));
+});
+
+test("a tool row's ask keeps its own ': ' and ' · ', and a row without ok falls back on its outcome word", async () => {
+  const { callToolPart } = await import('./arturoResume');
+  const p = callToolPart({ role: 'assistant', content: 'Asked gm: a: b · c · gm has it',
+                           meta: { kind: 'call_tool', tool: 'gm_command', ok: true, tool_call_id: 'x' } });
+  assert.equal(p.argsSummary, 'a: b · c');
+  assert.equal(p.summary, 'gm has it');
+  const bare = (content: string) => callToolPart({ role: 'assistant', content, meta: { kind: 'call_tool', tool: 'research' } });
+  assert.equal(bare("research: q · didn't finish").status, 'failed');
+  assert.equal(bare('research: q · refused').status, 'failed');
+  assert.equal(bare('research: q · done').status, 'ok');
+  assert.equal(bare('spending_month_summary · done').argsSummary, '');
+});
