@@ -1701,3 +1701,73 @@ def test_a_fallback_that_cannot_connect_takes_the_notice_path(tmp_path, monkeypa
     assert call.backend_fallback == "failed" and call.transport is first
     assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
     assert len(_appends(first)) == 1
+
+
+def test_the_fallback_session_starts_clean_and_keeps_the_first_sessions_seconds(tmp_path, monkeypatch):
+    # review of d88f04e: the swap kept session.started (appends before the new session started), the context the
+    # rejected session was told was never re-sent, and the usage counter restarting at 0 dropped its seconds.
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call.session.started = True
+        call._context, call._host = "ctx-key", "host-page"
+        call.session.cost.on_frame({"type": "session.usage.updated", "usage": {"seconds": 2}})
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call
+
+    call = _run(go())
+    assert call.session.started is False
+    assert (call._context, call._context_pending) == (None, "ctx-key")
+    assert (call._host, call._host_pending) == (None, "host-page")
+    call.session.cost.on_frame({"type": "session.usage.updated", "usage": {"seconds": 5}})
+    assert call.session.cost.billed_seconds == 7.0
+
+
+def test_a_call_that_ends_while_the_fallback_connects_never_keeps_the_new_session(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+
+        def slow():
+            time.sleep(0.3)
+            return FakeProvider()
+        call.server.transport_factory = slow
+        call.on_frame("in", REJECTED)
+        await asyncio.sleep(0.05)
+        call.closed = True                                             # the caller hung up mid-connect
+        await call._fallback_task
+        return call, first
+
+    call, first = _run(go())
+    late = FakeProvider.instances[-1]
+    assert late is not first and late.down and late.sent == []         # closed, never started
+    assert call.transport is first
+
+
+def test_a_rejection_later_in_the_call_does_not_restart_the_conversation(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call.t0 = time.monotonic() - srv.BACKEND_FALLBACK_WINDOW_S - 1
+        call.on_frame("in", REJECTED)
+        return call, first
+
+    call, first = _run(go())
+    assert call._fallback_task is None and call.backend_fallback == "too_late" and len(FakeProvider.instances) == 1
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]
+
+
+def test_the_rejected_sessions_greeting_is_cut_and_muted_so_the_caller_hears_one_greeting(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        fed = []
+        call.gate.feed_audio = lambda pcm, now: fed.append(len(pcm))
+        greet = base64.b64encode(_pcm(0.1)).decode()
+        call.on_frame("in", {"type": "session.output_audio.delta", "delta": greet})   # the old greeting began
+        call.on_frame("in", REJECTED)
+        call.on_frame("in", {"type": "session.output_audio.delta", "delta": greet})   # ... and keeps coming
+        n_during = len(fed)
+        await call._fallback_task
+        return call, n_during
+
+    call, n_during = _run(go())
+    assert n_during == 1                                               # only the frame before the rejection played
+    assert {"type": "barge", "cut": True} in _drain(call)

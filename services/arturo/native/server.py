@@ -69,6 +69,7 @@ MAX_CALLS = int(os.environ.get("ARTURO_NATIVE_MAX_CALLS", "2"))   # review M7: c
 # the call retries ONCE on a fresh session with the default delegation config, unheard by the caller. Only if that is
 # rejected too does Arturo say he lost his tools and the call ends, at most this long after.
 BACKEND_REJECTED_SAY_S = 8.0
+BACKEND_FALLBACK_WINDOW_S = 15.0   # a fresh session only at the start: later it would forget the conversation (review)
 BACKEND_REJECTED_REASON = "Arturo lost his connection to his tools: please call back"
 BACKEND_REJECTED_LINE = ("The connection to your tools was lost in this call. Say exactly this, once, and nothing else: "
                          "\"I've lost my connection to my tools; please call back.\"")
@@ -425,7 +426,7 @@ class NativeCall:
                 from services.arturo import openai_live
                 if openai_live.is_speech(pcm):
                     self._out_speech_t = now
-                if not self._force_muted:                 # a forced barge: the rest of this utterance never plays
+                if not self._force_muted and self.backend_fallback != "trying":   # forced barge / rejected session
                     self.gate.feed_audio(pcm, now)
             speaking = self.session.assistant_speaking
             if self._was_speaking and not speaking:
@@ -491,8 +492,11 @@ class NativeCall:
         of that retry (or a retry that cannot connect): tell the caller once, then _check_backend_rejected ends the call."""
         if self.backend_rejected is None:
             self.backend_rejected = f"{err.get('code')}: {str(err.get('message') or '')[:200]}"
-        if self.backend_fallback is None and self.mode == "live":
-            self.backend_fallback = "trying"
+        fresh = (self.t0 is None or now - self.t0 <= BACKEND_FALLBACK_WINDOW_S) and not self.session.delegations
+        if self.backend_fallback is None and self.mode == "live" and fresh:
+            self.backend_fallback = "trying"            # its audio is muted from here (on_frame): no double greeting
+            if self._utterance_t0 is not None:
+                self.emit({"type": "barge", "cut": True})   # a greeting already playing stops; the new one follows
             log.warning(f"native {self.binding.conversation_id}: BACKEND-REJECTED {self.backend_rejected!r}; "
                         f"retrying once with the default delegation config")
             self._fallback_task = asyncio.ensure_future(self._fall_back())
@@ -501,6 +505,8 @@ class NativeCall:
             return
         if self.backend_fallback == "sent":
             self.backend_fallback = "rejected"
+        elif self.backend_fallback is None:
+            self.backend_fallback = "too_late" if self.mode == "live" else None
         self._give_up(now)
 
     async def _fall_back(self):
@@ -513,8 +519,17 @@ class NativeCall:
             self.backend_fallback = "failed"
             self._give_up(time.monotonic())
             return
+        if self.closed:                                  # the call ended while we connected: never leak a billed session
+            await asyncio.get_running_loop().run_in_executor(self.server.connect_pool, new.close)
+            return
         old, self.transport = self.transport, new
         self.driver = Driver(self.session, new, _Observer(self))
+        self.session.started = False                     # the new session's appends wait for ITS session.started
+        self.session.cost.new_session()                  # its usage counter starts at 0: keep the first one's seconds
+        if self._context is not None:                    # what the rejected session was told, the new one is told again
+            self._context_pending, self._context = self._context, None
+        if self._host is not None:
+            self._host_pending, self._host = self._host, None
         tools, opening = self._start_args
         self.backend_fallback = "sent"
         try:
@@ -1004,6 +1019,8 @@ class NativeCall:
         await asyncio.shield(self._close_task)
 
     async def _finalize_close(self, reason):
+        if self._fallback_task is not None and not self._fallback_task.done():
+            self._fallback_task.cancel()                 # _connect closes a socket that arrives after the cancel
         if self.provider is not None:
             self.provider.interrupt()
         if self.driver is not None and self.mode == "live":
