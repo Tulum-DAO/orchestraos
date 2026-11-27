@@ -74,8 +74,10 @@ test('a tail chunk read: a reply’s empty block and its text never part at the 
   for (let i = 0; i < 40; i++) lines.push(user(`u${i}`, `question ${i} ${filler}`), block(`e${i}`, `msg_${i}`, think('')),
     block(`n${i}`, `msg_${i}`, think(`narrated ${i}`)), block(`t${i}`, `msg_${i}`, { ...tool, id: `toolu_${i}` }));
   writeFileSync(path, lines.join('\n') + '\n');
-  // An edge inside the last reply's lines: n39's line is in the chunk, its empty block's line (e39) only via the move back.
-  const tail = cachedLogTail(path, logParser(false), Buffer.byteLength(lines.slice(-2).join('\n') + '\n') + 1);
+  // An edge inside the last reply's lines: the want lands on n39's own line start, so n39's line is in the chunk and its
+  // empty block's line (e39) only via chunkStartAt's move back over the reply's lines (one byte more lands on e39's
+  // newline, whose line start is e39's own: no move back at all).
+  const tail = cachedLogTail(path, logParser(false), Buffer.byteLength(lines.slice(-2).join('\n') + '\n'));
   assert.ok(tail.start > 0, 'a chunk, not the whole file');
   const got = said(tail.items as any[]);
   assert.ok(got.length > 0);

@@ -234,7 +234,8 @@ export class TranscriptTailer {
     }
 
     // The raw lines for turn(): the appended bytes only (a fresh tail read for a new or replaced file).
-    try { this.raw.update(path); } catch { this.raw.reset(); }
+    // A read that fails is no turn marks at all (fail: not known, so no step), never an empty tail that looks known.
+    try { this.raw.update(path); } catch { this.raw.fail(); }
     // Through the parsed-log cache (services/transcript-log-cache.ts): the file is parsed once, then on each tick
     // that found it grown only the appended lines are read, with the Claude grammar's carried state. Before this,
     // every tick that found a new line re-read and re-parsed the whole file (4 MB: seconds on a throttled box, on a

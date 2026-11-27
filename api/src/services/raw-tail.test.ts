@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { appendFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { testTmpDir } from '../lib/testTmp.js';
-import { RAW_TAIL_LINES, RawTail, rawTailBytesRead } from './raw-tail.js';
+import { RAW_TAIL_LINES, RawTail, rawTailBytesRead, rawTailBytesScanned } from './raw-tail.js';
 import { TranscriptTailer } from './transcript-tail.js';
 import { finalReplyUuids, turnEndFromLines } from './live-step.js';
 
@@ -188,4 +188,41 @@ test('a line still being written that ends inside a UTF-8 character: its bytes a
   t.update(f);
   assert.equal(t.lines.length, 4);
   assert.ok(t.lines[3].endsWith('B'), t.lines[3]);
+});
+
+// Gate round 1 on #706 (fenced reviewer): a failed read, and the first read's cost.
+test('a raw read that fails while the parse succeeds is not known (no step), never an empty tail that looks known', () => {
+  const f = join(dir, 'read-fails.jsonl');
+  writeFileSync(f, [asked('go'), said('All done.')].join('\n') + '\n');
+  const real = RawTail.prototype.update;
+  let fails = 1;
+  RawTail.prototype.update = function (this: RawTail, p: string) {
+    if (fails-- > 0) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+    return real.call(this, p);
+  };
+  try {
+    const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'e' }) });
+    const off = t.subscribe(() => {});
+    assert.ok(t.recentItems().length > 0, 'the parse read the log');
+    assert.equal(t.turn().known, false);
+    appendFileSync(f, asked('next') + '\n');                    // the log grows: read again, fresh
+    t.tick();
+    assert.equal(t.turn().known, true);
+    off();
+  } finally {
+    RawTail.prototype.update = real;
+  }
+});
+
+test('the first read counts each byte\'s newlines once, not the growing buffer again per block', () => {
+  const f = join(dir, 'wide.jsonl');
+  const lines = Array.from({ length: 300 }, (_, i) => said(`wide ${i} ${'w'.repeat(18 * 1024)}`));
+  writeFileSync(f, lines.join('\n') + '\n');                     // the last 200 lines are about 3.6 MiB
+  const r0 = rawTailBytesRead(), s0 = rawTailBytesScanned();
+  const t = new RawTail();
+  t.update(f);
+  const read = rawTailBytesRead() - r0, scanned = rawTailBytesScanned() - s0;
+  assert.equal(t.lines.length, RAW_TAIL_LINES);
+  assert.ok(read > 3 * 1024 * 1024, `read ${read}`);
+  assert.ok(scanned <= read, `scanned ${scanned} of ${read} read`);
 });
