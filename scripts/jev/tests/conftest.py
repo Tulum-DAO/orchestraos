@@ -18,13 +18,14 @@ if SCRIPTS not in sys.path:
 JEV_ENV = ("JEV_BACKEND", "JEV_LIVE", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "JEV_DOTENV", "JEV_LOG",
            "JEV_STATE_DIR", "JEV_GUARD_GATES", "JEV_WRITE_ROOTS", "JEV_GUARD_FAIL", "JEV_COMPACT_LINES",
            "JEV_CONTEXT_WINDOW", "JEV_KEEP_RECENT_TOKENS", "JEV_HOOKS_DISABLED", "JEV_HOOK_ALLOW_MOCK",
-           "JEV_HOOK_TIMEOUT_MS")
+           "JEV_HOOK_TIMEOUT_MS", "JEV_GUARD_FAIL_HEADLESS")
 
 
 @pytest.fixture(autouse=True)
 def jev_fence(monkeypatch, tmp_path):
     for k in JEV_ENV:
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")    # an interactive seat unless a test says headless
     monkeypatch.setenv("JEV_DOTENV", str(tmp_path / "no-such.env"))
     monkeypatch.setenv("JEV_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("JEV_LOG", str(tmp_path / "jev.jsonl"))

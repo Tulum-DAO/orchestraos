@@ -21,7 +21,7 @@ def env(tmp_path):
          if not k.startswith("JEV_") and k not in ("TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "PYTEST_CURRENT_TEST")}
     e.update({"ORCHESTRA_DIR": str(tmp_path / "orch"), "JEV_DOTENV": str(tmp_path / "no.env"),
               "JEV_STATE_DIR": str(tmp_path / "state"), "JEV_LOG": str(tmp_path / "jev.jsonl"),
-              "HOME": str(tmp_path / "home")})
+              "HOME": str(tmp_path / "home"), "CLAUDE_CODE_ENTRYPOINT": "cli"})
     return e
 
 
@@ -60,6 +60,22 @@ def test_hook_without_credentials_fails_closed_when_configured(env):
     env["JEV_GUARD_FAIL"] = "closed"
     p = run([HOOK, "pre-tool-use"], env, bash_event("ls"))
     assert json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_headless_run_without_credentials_fails_closed_by_default(env):
+    """apr_e0fff9c7: an unattended sdk-cli run blocks when the guard cannot judge; an interactive seat
+    in the same outage is let through; JEV_GUARD_FAIL_HEADLESS=open undoes it; explicit JEV_GUARD_FAIL wins."""
+    env["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"
+    p = run([HOOK, "pre-tool-use"], env, bash_event("ls"))
+    assert json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    env["JEV_GUARD_FAIL_HEADLESS"] = "open"
+    assert run([HOOK, "pre-tool-use"], env, bash_event("ls")).stdout == ""
+    del env["JEV_GUARD_FAIL_HEADLESS"]
+    env["JEV_GUARD_FAIL"] = "open"
+    assert run([HOOK, "pre-tool-use"], env, bash_event("ls")).stdout == ""
+    env.pop("JEV_GUARD_FAIL")
+    env["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+    assert run([HOOK, "pre-tool-use"], env, bash_event("ls")).stdout == ""
 
 
 def test_kill_switches(env, tmp_path):
