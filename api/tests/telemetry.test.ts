@@ -128,18 +128,57 @@ test('fail-CLOSED when the flag store is absent/corrupt', async () => {
 });
 
 // --- BLOCKING-3: per-session tenant scoping ----------------------------------
+//
+// Scope comes from lib/principal.ts, which honours x-orchestra-* headers ONLY when
+// ORCHESTRA_API_TRUST_IDENTITY_HEADERS is on (an authenticating proxy in front), and
+// then only for a request that names its user (x-orchestra-user). Without the env,
+// every caller is the configured operator and the headers are ignored by design.
+// trustsIdentityHeaders() reads the env per call, so a test can switch it.
 
-test('tenant scoping: admin sees all; a client scope is filtered', async () => {
+async function withTrustedHeaders(fn: () => Promise<void> | void): Promise<void> {
+  const saved = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
+  try {
+    await fn();
+  } finally {
+    if (saved === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+    else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = saved;
+  }
+}
+
+// Proxy-asserted requesters, shaped as principal() reads them.
+const ADMIN_H = { 'x-orchestra-user': 'op', 'x-orchestra-role': 'admin', 'x-orchestra-allowed-agents': '*' };
+const SCOPED_H = { 'x-orchestra-user': 'eve', 'x-orchestra-client': 'no-such-client' };
+const LISTED_H = { 'x-orchestra-user': 'bob', 'x-orchestra-allowed-agents': '["gm"]' };
+
+test('tenant scoping (trusted proxy): admin sees all; a client scope is filtered', async () => {
   const scope = await import('../src/services/telemetry-scope.js');
-  const admin = { headers: {} } as any;                  // no client scope => '*'
-  assert.equal(scope.canAccessSession(admin, 'gm'), true);
-  // A client-scoped requester for a session with NO matching client tag => deny.
-  const scoped = { headers: { 'x-orchestra-client': 'no-such-client' } } as any;
-  assert.equal(scope.canAccessSession(scoped, 'gm'), false);
-  // scopeSeats drops the out-of-scope seats
   const seats = { gm: { session: 'gm' }, 'codex-x': { session: 'codex-x' } };
-  assert.deepEqual(scope.scopeSeats(scoped, seats), {});
-  assert.deepEqual(Object.keys(scope.scopeSeats(admin, seats)).sort(), ['codex-x', 'gm']);
+  await withTrustedHeaders(() => {
+    const admin = { headers: ADMIN_H } as any;
+    assert.equal(scope.canAccessSession(admin, 'gm'), true);
+    assert.deepEqual(Object.keys(scope.scopeSeats(admin, seats)).sort(), ['codex-x', 'gm']);
+    // A client-scoped requester for a session with NO matching client tag => deny.
+    const scoped = { headers: SCOPED_H } as any;
+    assert.equal(scope.canAccessSession(scoped, 'gm'), false);
+    assert.deepEqual(scope.scopeSeats(scoped, seats), {});
+    // An explicit allowlist sees only its own sessions.
+    const listed = { headers: LISTED_H } as any;
+    assert.equal(scope.canAccessSession(listed, 'gm'), true);
+    assert.equal(scope.canAccessSession(listed, 'codex-x'), false);
+    // No asserted user => no principal => deny (never admin).
+    const anon = { headers: { 'x-orchestra-client': 'no-such-client' } } as any;
+    assert.equal(scope.canAccessSession(anon, 'gm'), false);
+    assert.equal(scope.canAccessSession({ headers: {} } as any, 'gm'), false);
+  });
+});
+
+test('tenant scoping (no proxy): scope headers are ignored, the caller is the operator', async () => {
+  const scope = await import('../src/services/telemetry-scope.js');
+  assert.ok(!process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS, 'run without trusted headers');
+  // principal() ignores every x-orchestra-* header here: nothing vouches for them.
+  assert.equal(scope.canAccessSession({ headers: {} } as any, 'gm'), true);
+  assert.equal(scope.canAccessSession({ headers: SCOPED_H } as any, 'gm'), true);
 });
 
 // --- BLOCKING-3 at the HTTP boundary (real Express route) --------------------
@@ -154,18 +193,25 @@ test('HTTP: stream + status endpoints 403 a scoped user before any relay', async
   const port = (server.address() as any).port;
   const base = `http://127.0.0.1:${port}/api/telemetry`;
   try {
-    // scoped user with no matching client tag => 403 on BOTH the delta stream
-    // and the per-agent status, before any court bridge / log relay.
-    const scoped = { 'x-orchestra-client': 'no-such-client' };
-    const s1 = await fetch(`${base}/transcript/gm/stream`, { headers: scoped });
-    assert.equal(s1.status, 403);
-    assert.equal((await s1.json()).error, 'forbidden');
-    const s2 = await fetch(`${base}/status/gm`, { headers: scoped });
-    assert.equal(s2.status, 403);
-    // admin (no scope) sees the clean seat's status
-    const a = await fetch(`${base}/status/gm`);
-    assert.equal(a.status, 200);
-    assert.equal((await a.json()).lineage_root, 'clean-root');
+    await withTrustedHeaders(async () => {
+      // scoped user with no matching client tag => 403 on BOTH the delta stream
+      // and the per-agent status, before any court bridge / log relay.
+      const s1 = await fetch(`${base}/transcript/gm/stream`, { headers: SCOPED_H });
+      assert.equal(s1.status, 403);
+      assert.equal((await s1.json()).error, 'forbidden');
+      const s2 = await fetch(`${base}/status/gm`, { headers: SCOPED_H });
+      assert.equal(s2.status, 403);
+      // the fleet list drops the seat for the scoped user
+      const l = await fetch(`${base}/status`, { headers: SCOPED_H });
+      assert.deepEqual((await l.json()).seats, {});
+      // no asserted user => 403, never admin
+      const n = await fetch(`${base}/status/gm`, { headers: { 'x-orchestra-client': 'no-such-client' } });
+      assert.equal(n.status, 403);
+      // admin sees the clean seat's status
+      const a = await fetch(`${base}/status/gm`, { headers: ADMIN_H });
+      assert.equal(a.status, 200);
+      assert.equal((await a.json()).lineage_root, 'clean-root');
+    });
   } finally {
     server.close();
   }
