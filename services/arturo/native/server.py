@@ -64,6 +64,12 @@ OPENING_WAIT_S = 6.0          # the thread above the call loads while the provid
 HOST_CONTEXT_MAX_SENDS = 12
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_CALLS = int(os.environ.get("ARTURO_NATIVE_MAX_CALLS", "2"))   # review M7: concurrent calls share one daily cap
+# A start whose backend config the provider rejects leaves a session with NO backend that still promises to check things
+# (probe 2026-11-26, reasoning 'minimal' on gpt-6-luna). Arturo says so once, then the call ends; at most this long.
+BACKEND_REJECTED_SAY_S = 8.0
+BACKEND_REJECTED_REASON = "Arturo's tools are not available: the voice service rejected the backend setup"
+BACKEND_REJECTED_LINE = ("Your backend is not available in this call, so you cannot check or do anything. Tell Shaw in one "
+                         "short sentence that his tools are not working right now and that you are ending the call.")
 NO_INPUT_S = 6.0           # gm msg_5b124db0: a live call this old with no input tells the client why it is silent
 DOWNLINK_WARN_S = float(os.environ.get("ARTURO_NATIVE_DOWNLINK_WARN_S", "2.0"))
 
@@ -93,6 +99,11 @@ def verified_principal(headers, orchestra_dir=ORCHESTRA_DIR, verify=None):
 
 # ---- audio cadence (per call) ------------------------------------------------------------------------------------
 TURN_GAP_S = 1.5            # a longer gap between audio frames is a turn boundary, not a stutter: not counted
+
+
+def _backend_rejected(err):
+    """The provider refused the Responses delegation config (DOC_PRIMARY_WS error {code, param}): the call has no backend."""
+    return err.get("code") == "responses_validation_failed" or str(err.get("param") or "").startswith("session.delegation")
 
 
 def _gap(gaps, last):
@@ -324,6 +335,10 @@ class NativeCall:
         self.up_first_s = None
         self.no_input = None             # None | "no_audio" | "provider_not_ready" | "provider_not_hearing"
         self._no_input_checked = False
+        self.backend_rejected = None     # "<code>: <message>" once the provider rejected the delegation config
+        self._backend_rejected_at = None
+        self._backend_rejected_said = False
+        self._utterance_t0 = None        # first output audio delta (any level) since the last utterance ended
         self._final_stats = None
         # ios msg_82c61732: phone underruns 157-653 ms. Provider delta arrival vs our send to the phone, per call.
         self._in_t = self._out_t = None
@@ -393,6 +408,10 @@ class NativeCall:
                 pcm = base64.b64decode(frame.get("delta") or "")
             except Exception:  # noqa: BLE001
                 pcm = b""
+            # GPT-Live streams digital silence between utterances (probes 11-26: 70-90% of deltas are all zeros); any
+            # non-zero sample, however quiet, is an utterance starting.
+            if self._utterance_t0 is None and pcm.strip(b"\x00"):
+                self._utterance_t0 = now
             if pcm:
                 from services.arturo import openai_live
                 if openai_live.is_speech(pcm):
@@ -430,7 +449,11 @@ class NativeCall:
             self.spend.activity()
             self.emit({"type": "transcript", "who": "user", "text": self.user_text.strip(), "new": fresh})
         elif t == "error":
-            self.emit({"type": "notice", "text": f"provider error: {(frame.get('error') or {}).get('code')}"})
+            err = frame.get("error") or {}
+            if _backend_rejected(err):
+                self._reject_backend(err, now)
+            else:
+                self.emit({"type": "notice", "text": f"provider error: {err.get('code')}"})
         reason = self.spend.on_frame(frame) if self.mode == "live" else None
         if reason:
             asyncio.ensure_future(self.close(reason))
@@ -441,12 +464,41 @@ class NativeCall:
         self.emit({"type": "audio_end"})                  # ios item 1: the client's turn-end signal
         self._force_muted = False
         self._arturo_row_done = True
+        began, self._utterance_t0 = self._utterance_t0, None
+        if self._backend_rejected_at is not None:
+            if began is not None and began < self._backend_rejected_at:
+                self._backend_rejected_at = now          # an utterance under way at the rejection (the greeting) is not
+            else:                                        # the notice: the notice's own time starts when it ends
+                self._backend_rejected_said = True
         line = self.gate.take_correction()
         if line and self.driver is not None:
             try:
                 self.driver.send(protocol.commentary_append(line))
             except TransportDown:
                 pass
+
+    def _reject_backend(self, err, now):
+        """Once: tell the caller (visible notice + one spoken line), then _check_backend_rejected ends the call."""
+        if self.backend_rejected is not None:
+            return
+        self.backend_rejected = f"{err.get('code')}: {str(err.get('message') or '')[:200]}"
+        self._backend_rejected_at = now
+        log.warning(f"native {self.binding.conversation_id}: BACKEND-REJECTED {self.backend_rejected!r}")
+        self.emit({"type": "notice", "code": "backend_rejected", "text": BACKEND_REJECTED_REASON})
+        if self.driver is not None:
+            try:
+                self.driver.send(protocol.thinking_append(BACKEND_REJECTED_LINE))
+            except TransportDown:
+                pass
+
+    async def _check_backend_rejected(self, now):
+        """End a backend-less call once Arturo has said so, or BACKEND_REJECTED_SAY_S after the rejection."""
+        if self._backend_rejected_at is None or self.closed:
+            return False
+        if not self._backend_rejected_said and now - self._backend_rejected_at < BACKEND_REJECTED_SAY_S:
+            return False
+        await self.close(BACKEND_REJECTED_REASON)
+        return True
 
     def tools_snapshot(self):
         conv = self.binding.conversation_id
@@ -814,6 +866,8 @@ class NativeCall:
                 self.emit(pcm)
             self._check_barge()
             self._check_no_input()
+            if await self._check_backend_rejected(time.monotonic()):
+                break
             self._flush_context()
             self._flush_chat_feed()
             self._flush_host_context()
@@ -927,6 +981,7 @@ class NativeCall:
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
+                   backend_rejected=self.backend_rejected,
                    cadence=self.cadence_report(),
                    thread={"chat": self.chat_agent if self.chat_named else None, "thread_id": self.page_thread,
                            "opening_tokens": self.opening_tokens, "feed_sent": self.feed_sent,

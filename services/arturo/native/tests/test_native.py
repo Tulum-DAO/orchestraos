@@ -1500,3 +1500,116 @@ def test_a_tool_on_a_page_thread_call_is_tagged_with_that_thread(tmp_path, monke
             await c.close()
     _run(go())
     assert ex.call_seen["thread_id"] == "web_test1"
+
+
+class _SendLog:
+    disconnected = False
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, frame):
+        self.sent.append(frame)
+
+
+def _rejected_backend_call(tmp_path, monkeypatch):
+    s = _server(tmp_path, monkeypatch)
+    call = srv.NativeCall(s, None, "fleet", "iphone")
+    call.mode, call.driver = "live", _SendLog()
+    closed = []
+
+    async def close(reason):
+        closed.append(reason)
+    call.close = close
+    return call, closed
+
+
+REJECTED = {"type": "error", "event_id": "event_x", "error": {
+    "type": "invalid_request_error", "code": "responses_validation_failed", "param": "session.delegation.responses",
+    "message": "Responses configuration validation failed: Unsupported value: 'minimal' is not supported with the "
+               "'gpt-6-luna' model.", "client_event_id": "evt_start_000001"}}
+
+
+def test_a_rejected_backend_config_ends_the_call_with_a_spoken_and_visible_notice(tmp_path, monkeypatch):
+    # live probe 2026-11-26 (reasoning 'minimal' on gpt-6-luna): the start was rejected by an error frame, the session
+    # kept running with NO backend, and Arturo still said "I'm getting the GM to check on that". Nothing was checked.
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    call.on_frame("in", REJECTED)
+    out = []
+    while not call.out.empty():
+        out.append(call.out.get_nowait())
+    notices = [m for m in out if isinstance(m, dict) and m.get("type") == "notice"]
+    assert [n.get("code") for n in notices] == ["backend_rejected"]
+    said = [f for f in call.driver.sent if f["type"] == "session.thinking.append"]
+    assert len(said) == 1 and "end" in said[0]["content"].lower()
+    assert call.backend_rejected.startswith("responses_validation_failed")
+    assert not _run(_tick_fatal(call, 0.0)) and closed == []          # Arturo gets to say it first
+    call._end_utterance(time.monotonic())                             # ... and once he has, the call ends
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
+    call.on_frame("in", REJECTED)                                     # a repeat never notices or speaks twice
+    assert len([f for f in call.driver.sent if f["type"] == "session.thinking.append"]) == 1
+
+
+def test_a_rejected_backend_ends_the_call_by_the_deadline_even_if_arturo_never_speaks(tmp_path, monkeypatch):
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    call.on_frame("in", REJECTED)
+    assert not _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S - 0.5))
+    assert _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S + 0.1)) and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def test_other_provider_errors_do_not_end_the_call(tmp_path, monkeypatch):
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    call.on_frame("in", {"type": "error", "error": {"code": "rate_limit_exceeded", "param": None, "message": "slow"}})
+    assert call.backend_rejected is None
+    assert not _run(_tick_fatal(call, 60.0)) and closed == []
+
+
+async def _tick_fatal(call, later_s):
+    return await call._check_backend_rejected(time.monotonic() + later_s)
+
+
+def test_the_report_says_the_backend_was_rejected(tmp_path, monkeypatch):
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        call = srv.NativeCall(s, None, "fleet", "iphone")
+        call.mode, call.t0 = "live", time.monotonic()
+        call.spend.start()
+        call.driver = _SendLog()
+        call.driver.disconnected = True
+        s.calls[call.binding.conversation_id] = call
+        call.on_frame("in", REJECTED)
+        call._end_utterance(time.monotonic())
+        assert await call._check_backend_rejected(time.monotonic())
+        return json.loads((tmp_path / "native" / "calls" / f"{call.binding.conversation_id}.json").read_text())
+
+    rep = _run(go())
+    assert rep["reason"] == srv.BACKEND_REJECTED_REASON
+    assert rep["backend_rejected"].startswith("responses_validation_failed: Responses configuration validation failed")
+
+
+def test_an_utterance_already_under_way_does_not_count_as_the_notice(tmp_path, monkeypatch):
+    # the rejection lands ~1.4 s after start, about when the greeting begins (its first deltas may be quiet): the
+    # greeting ending is not Arturo saying the tools are down, and the notice gets its full time from that end.
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    quiet = base64.b64encode(_pcm(0.1, rms=40)).decode()             # far below speech level, but not silence
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": quiet})     # the greeting is under way
+    call.on_frame("in", REJECTED)
+    call._utterance_t0 -= 6.0                                         # it began 6 s ago, 1 s before the rejection,
+    call._backend_rejected_at -= 5.0                                  # ... and runs 5 s past the rejection
+    call._end_utterance(time.monotonic())                             # the greeting ends
+    assert not _run(_tick_fatal(call, srv.BACKEND_REJECTED_SAY_S - 0.5)) and closed == []
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": quiet})     # the notice line
+    call._end_utterance(time.monotonic())
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
+
+
+def test_the_digital_silence_between_utterances_does_not_start_one(tmp_path, monkeypatch):
+    # Claude review of 47a66fa: GPT-Live streams all-zero audio between utterances; counted as an utterance start, it
+    # made the notice look older than the rejection and pushed the close back by up to 8 s.
+    call, closed = _rejected_backend_call(tmp_path, monkeypatch)
+    zeros = base64.b64encode(b"\x00" * 3200).decode()
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": zeros})     # silence before the rejection
+    call.on_frame("in", REJECTED)
+    call.on_frame("in", {"type": "session.output_audio.delta", "delta": base64.b64encode(_pcm(0.1)).decode()})
+    call._end_utterance(time.monotonic())                             # the notice ends: the call ends now
+    assert _run(_tick_fatal(call, 0.0)) and closed == [srv.BACKEND_REJECTED_REASON]
