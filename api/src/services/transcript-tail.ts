@@ -172,15 +172,15 @@ export class TranscriptTailer {
   }
 
   /** The turn as the log's newest raw lines mark it (live-step): when it ended (else null), which lines are final
-   *  replies, and whether those lines can say (`known` false: Claude Code lines cut short by their size, none of which
-   *  decides the turn; the step is then none, never a guess. Another CLI's lines carry no turn marks: known). Kept for
-   *  the same lines, so the quarter-second step beat parses nothing new while the log is still. */
+   *  replies, and whether those lines can say (`known` false: lines cut short by their size, none of which decides the
+   *  turn, or none kept at all; the step is then none, never a guess. Kept lines of another CLI carry no turn marks:
+   *  known). Kept for the same lines, so the quarter-second step beat parses nothing new while the log is still. */
   turn(): TurnMarks {
     const m = this.turnMemo;
     if (m && m.version === this.raw.version) return m.turn;
     const lines = this.raw.lines;
     const scan = turnScan(lines);
-    const turn = { ended: scan.ended, finals: finalReplyUuids(lines), known: scan.decided || !scan.claude || !this.raw.cut };
+    const turn = { ended: scan.ended, finals: finalReplyUuids(lines), known: scan.decided || !this.raw.cut || (lines.length > 0 && !scan.claude) };
     this.turnMemo = { version: this.raw.version, turn };
     return turn;
   }
