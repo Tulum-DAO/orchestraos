@@ -158,6 +158,44 @@ def test_fail_closed_when_configured(monkeypatch):
     assert "fail closed" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+@pytest.mark.parametrize("entry,fail,headless,blocked", [
+    ("sdk-cli", None, None, True),          # unattended: fail closed by default
+    ("sdk-cli", None, "open", False),       # the undo
+    ("sdk-cli", "open", None, False),       # explicit JEV_GUARD_FAIL wins
+    ("cli", None, None, False),             # interactive seat: unchanged
+    ("cli", "closed", None, True),
+    (None, None, None, False),              # no entrypoint at all: interactive default
+])
+def test_fail_mode_by_entrypoint(monkeypatch, tmp_path, entry, fail, headless, blocked):
+    for k, v in (("CLAUDE_CODE_ENTRYPOINT", entry), ("JEV_GUARD_FAIL", fail), ("JEV_GUARD_FAIL_HEADLESS", headless)):
+        if v is None:
+            monkeypatch.delenv(k, raising=False)
+        else:
+            monkeypatch.setenv(k, v)
+    out = guard.pre_tool_use(bash_event("ls"), raising(JevTransportError("down")))
+    assert (out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny") is blocked
+    w = {"tool_name": "Write", "tool_input": {"file_path": str(tmp_path / "a.txt"), "content": "x"}, "cwd": str(tmp_path)}
+    out = guard.pre_tool_use(w, raising(JevTransportError("down")))
+    assert (out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny") is blocked
+
+
+@pytest.mark.parametrize("entry,fail,stops", [
+    ("sdk-cli", None, True), ("sdk-cli", "open", False), ("cli", None, False), ("cli", "closed", True)])
+def test_screen_failure_stops_a_fail_closed_run(monkeypatch, entry, fail, stops):
+    """Gate C runs after the tool: fail closed = "continue": false (verified on a real `claude -p` run:
+    the run stops after that tool; without it the next tool runs)."""
+    monkeypatch.setenv("JEV_GUARD_GATES", "C")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", entry)
+    if fail:
+        monkeypatch.setenv("JEV_GUARD_FAIL", fail)
+    ev = {"tool_name": "Read", "tool_input": {"file_path": "/x"}, "tool_response": {"content": "hello"}}
+    out = guard.post_tool_use(ev, raising(JevTransportError("down")))
+    if stops:
+        assert out["continue"] is False and "fail closed" in out["stopReason"]
+    else:
+        assert out is None
+
+
 def test_path_check_holds_even_when_jev_is_down(tmp_path):
     ev = {"tool_name": "Write", "tool_input": {"file_path": "/etc/x", "content": "a"}, "cwd": str(tmp_path)}
     out = guard.pre_tool_use(ev, raising(JevTransportError("down")))

@@ -17,8 +17,13 @@ Numbers and paths stay in code; Jev only answers the semantic questions.
 Environment:
   JEV_GUARD_GATES   which gates run, default "A,B,C"
   JEV_WRITE_ROOTS   extra allowed write roots (os.pathsep separated) besides the hook cwd
-  JEV_GUARD_FAIL    "open" (default) or "closed": what A/B do when Jev itself errors.
+  JEV_GUARD_FAIL    "open" or "closed": what the gates do when Jev itself errors, for every run.
+                    Closed: A/B deny the call; C (which runs after the tool) stops the run
+                    ("continue": false), so nothing acts on output nobody screened.
+                    Unset: "closed" for an unattended headless run (CLAUDE_CODE_ENTRYPOINT=sdk-cli,
+                    nobody in the loop to notice an unscreened call), "open" for everything else.
                     The path check in B is code and is enforced either way.
+  JEV_GUARD_FAIL_HEADLESS  "open" turns the headless default back to fail-open (the one-line undo).
 """
 from __future__ import annotations
 
@@ -184,8 +189,18 @@ def enabled_gates() -> set:
     return {g.strip().upper() for g in raw.split(",") if g.strip()}
 
 
+HEADLESS_ENTRYPOINTS = {"sdk-cli"}   # Claude Code started by a script or cron with no person attached
+
+
 def _fail_closed() -> bool:
-    return (os.environ.get("JEV_GUARD_FAIL") or "open").strip().lower() == "closed"
+    """Explicit JEV_GUARD_FAIL wins for every run. Unset: unattended headless runs fail CLOSED (operator,
+    2026-11-27, apr_e0fff9c7), interactive seats stay open. JEV_GUARD_FAIL_HEADLESS=open undoes it."""
+    mode = (os.environ.get("JEV_GUARD_FAIL") or "").strip().lower()
+    if mode in ("open", "closed"):
+        return mode == "closed"
+    if (os.environ.get("CLAUDE_CODE_ENTRYPOINT") or "").strip() in HEADLESS_ENTRYPOINTS:
+        return (os.environ.get("JEV_GUARD_FAIL_HEADLESS") or "closed").strip().lower() != "open"
+    return False
 
 
 def write_target(tool: str, tool_input: Dict[str, Any]) -> tuple:
@@ -274,6 +289,10 @@ def post_tool_use(event: Dict[str, Any], decide: Decide = default_decide) -> Opt
         d = screen_tool_result(tool, text, decide)
     except JevError as err:  # a screen that cannot run adds nothing; the output is already there
         audit.record("error", {**base, "gate": "C", "error": f"{type(err).__name__}: {err}"})
+        if _fail_closed():   # unattended (or set closed): stop the run rather than act on unscreened output
+            why = (f"jev-guard could not screen this {tool} output ({type(err).__name__}) and is set to fail "
+                   f"closed, so this run stops here. {BLOCK_NOTICE}")
+            return {"continue": False, "stopReason": why}
         return None
     if d["_result"] is not None:
         audit.record("screen", {**base, "gate": "C", "flag": d["flag"], "noul": d["noul"],
