@@ -46,7 +46,11 @@ _CLAIM_RE = re.compile(r"\b(done|finished|completed|it'?s (all )?set|taken care 
 # a request is SWALLOWED when: the caller began a NEW utterance (input transcript after a UTTERANCE_GAP_S pause) while
 # a delegation was still out (created before that utterance began, its calls not all answered), and no delegation was
 # created in the DROP_AFTER_S after the caller's last words. Logged once per utterance with the call id, the timings,
-# the busy delegations and what Arturo said instead; never acted on. Small talk with no delegation out is never one.
+# the busy delegations and the lengths of what was heard / said (the words, redacted, go to the call report only);
+# never acted on. Small talk with no delegation out is never one. It is a SIGNAL to investigate, not a verdict: an
+# "ok, thanks" while a tool is held, a pause > UTTERANCE_GAP_S inside one request, or a request's own delegation
+# created before its first transcript delta can each be reported; any new delegation clears the watch, even one that
+# answers an earlier request.
 UTTERANCE_GAP_S = 1.0
 DROP_AFTER_S = 6.0          # normal: delegation 1.3-2.0 s after the caller stops (B1 l1a 1.3 s, C_def l1b 2.0 s)
 
@@ -256,13 +260,16 @@ class NativeSession:
         if w is None or self._last_user_t is None or now - self._last_user_t < DROP_AFTER_S:
             return
         self._drop_watch = None
+        from services.arturo.thread_context import _redact
+        heard, said = " ".join(w["heard"].split()), " ".join(self.output_text[w["said"]:].split())
         rec = {"at_s": round(w["since"] - (self.m.started_at or w["since"]), 2), "busy": w["busy"],
-               "heard": " ".join(w["heard"].split())[:160], "said": " ".join(self.output_text[w["said"]:].split())[:160],
+               "heard": _redact(heard)[:160], "said": _redact(said)[:160],
                "no_delegation_s": round(now - self._last_user_t, 2)}
         self.m.dropped_requests.append(rec)
+        # the log carries no words (G6: a caller's words can carry amounts and merchants); the report has them, redacted
         log.warning(f"native {self.binding.conversation_id}: DROPPED-REQUEST the caller spoke {rec['at_s']} s into the "
                     f"call while delegation(s) {rec['busy']} were out; no delegation {rec['no_delegation_s']} s after "
-                    f"their last words. heard={rec['heard'][:120]!r} arturo={rec['said'][:120]!r}")
+                    f"their last words (heard {len(heard)} chars, Arturo said {len(said)} chars)")
 
     def _release(self, now):
         frames = []

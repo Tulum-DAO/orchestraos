@@ -425,12 +425,13 @@ class NativeCall:
         ACCEPTED is never a success: "it's done" / "I've saved it" wait for the real result."""
         if self.toolset.backed(self.binding.conversation_id, self.session.turn_started_epoch, kind):
             return True
-        # a late result backs like a receipt from the moment it ARRIVED (the ledger dates a call by its start: a 90 s
+        # a late result backs like a receipt from the moment it ARRIVED (gm's answer never does: "gm says: that needs a
+        # card" is an answer, not a success, and the ledger never counted it either) (the ledger dates a call by its start: a 90 s
         # spawn_agent's result would otherwise be older than RECENT_RECEIPT_S when it lands)
         since = min(self.session.turn_started_epoch, time.time() - RECENT_RECEIPT_S)
         backers = CLAIM_BACKERS.get(kind[1], frozenset()) if kind[0] == "action" else None
         for name, ok, _text, at in list(self._late_raw.values()):
-            if ok and at >= since and (backers is None or name in backers):
+            if ok and name not in DETACH_TOOLS and at >= since and (backers is None or name in backers):
                 return True
         running = getattr(self.session.orchestra, "accepted_running", None)
         return kind == ("action", "start") and running is not None and running(CLAIM_BACKERS["start"])
@@ -786,7 +787,7 @@ class NativeCall:
         except Exception as e:  # noqa: BLE001 — a stamp/timezone failure must not lose the result
             log.warning(f"native {conv}: the late note for {name} could not be built: {e!r}")
             notes = [f"The {name} you handed over earlier in this call just "
-                     + ("finished; its result is in the chat." if ok else "ended without finishing.")]
+                     + ("finished." if ok else "ended without finishing.")]
         try:
             with self._late_lock:
                 self._late_raw[call_id] = (name, ok, text, time.time())
@@ -1080,6 +1081,12 @@ class NativeCall:
                 await asyncio.get_running_loop().run_in_executor(self.server.connect_pool, self.transport.close)
             except Exception:  # noqa: BLE001
                 pass
+        fut = getattr(self, "_end_late_fut", None)
+        if fut is not None:                                        # the report shows where each late result went
+            try:
+                await asyncio.wait_for(asyncio.wrap_future(fut), 5)
+            except Exception:  # noqa: BLE001 — a slow archive never holds the report
+                pass
         billed = self.session.cost.billed_seconds
         try:
             if self.mode == "live":
@@ -1141,6 +1148,8 @@ class NativeServer:
         self.thread_loader = call_context.opening                   # (agent) -> that agent's chat + Arturo's calls
         self.page_thread_loader = lambda tid, principal: call_context.opening_thread(tid, principal=principal)
         self.calls_loader = call_context.opening_calls              # () -> Arturo's own calls, no chat
+        self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
+        self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
         self._thread_store = None
 
     def thread_store(self):
@@ -1149,8 +1158,6 @@ class NativeServer:
             from services.arturo.thread_store import ThreadStore
             self._thread_store = ThreadStore(call_context.thread_context.threads_db_path())
         return self._thread_store
-        self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
-        self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
 
     def _spoken(self, conversation_id):
         call = self.calls.get(conversation_id)

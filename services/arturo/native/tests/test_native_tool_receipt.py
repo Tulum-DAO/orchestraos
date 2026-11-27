@@ -344,8 +344,9 @@ def test_a_request_the_provider_swallows_while_a_delegation_runs_is_logged_as_dr
     assert len(sess.m.dropped_requests) == 1                           # once
     d = sess.m.dropped_requests[0]
     assert d["busy"] == ["d1"] and "ask the GM" in d["heard"] and d["no_delegation_s"] >= srv_session().DROP_AFTER_S
-    assert any("DROPPED-REQUEST" in r.getMessage() and sess.binding.conversation_id in r.getMessage()
-               for r in caplog.records)
+    msgs = [r.getMessage() for r in caplog.records if "DROPPED-REQUEST" in r.getMessage()]
+    assert len(msgs) == 1 and sess.binding.conversation_id in msgs[0]
+    assert "ask the GM" not in msgs[0]                                  # the log carries no words (G6)
     gates["read_screen_context"].set()
 
 
@@ -496,3 +497,23 @@ def test_only_a_running_start_class_tool_backs_i_started(tmp_path, monkeypatch):
     r.execute(_B(), "s1", "spawn_agent", "{}")
     assert r.accepted_running(srv.CLAIM_BACKERS["start"])
     gate.set()
+
+
+# ---- Claude review round 2 --------------------------------------------------------------------------------------
+def test_a_new_server_has_its_chat_feeds(tmp_path, monkeypatch):
+    # 81e40b7 stranded both factory assignments after a return: every threaded call lost its live chat feed, and the
+    # suite stayed green because every test sets them itself
+    from services.arturo.native import call_context
+    s = srv.NativeServer(tmp_path / "native", executor=FakeExecutor(), transport_factory=FakeProvider,
+                         usage_store=__import__("services.arturo.native.tests.test_native",
+                                                fromlist=["FakeUsage"]).FakeUsage(), verify=lambda h: True)
+    assert s.page_feed_factory is call_context.ThreadFeed and s.chat_feed_factory is call_context.ChatFeed
+
+
+def test_gms_late_answer_backs_no_claim(tmp_path, monkeypatch):
+    # "gm says: that needs a card" is an answer, not a success: "I've fixed it" / "I've sent it" stay unbacked
+    call = _ended_call(tmp_path, monkeypatch)
+    call.session.turn_started_epoch = time.time()
+    call._late("g1", "gm_command", True, "that needs a card, I can't restart it")
+    for kind in (("action", "fix"), ("action", "message"), ("action", "start"), ("state", None)):
+        assert not call.gate.is_backed(kind), kind
