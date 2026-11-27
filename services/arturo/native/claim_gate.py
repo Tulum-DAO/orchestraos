@@ -49,10 +49,12 @@ _STATE_RES = [
 # on #698, parent msg_00c4361e). Only the clause itself is set aside, so "It's done, I'll tell you when the next one
 # is" and "When you asked, it's done" stay claims. It is a prefix of the words, so it holds while they stream in.
 # Adverbs that claim are not openers: "just like before it is saved" (no "before"), "for once it's done on time" and
-# "at once" (codex rounds 1-2 on #705).
+# "at once" (codex rounds 1-2 on #705). A clause followed by "already" / "fine" / "anyway" says it is so now ("why
+# restart it when it's running fine?"), so it stays a claim (review round 3).
 _TEMPORAL_RE = re.compile(
     rf"\b(?:when(?:ever)?|(?<!for )(?<!at )once|after|until|till|as soon as)\s+"
-    rf"(?:{_STATE_SUBJ}(?:'s|\s+is|\s+has been|\s+gets|\s+will be|'ll be)\s+)?(?:all\s+)?(?:{_STATE_WORD}|finished)\b",
+    rf"(?:{_STATE_SUBJ}(?:'s|\s+is|\s+has been|\s+gets|\s+will be|'ll be)\s+)?(?:all\s+)?(?:{_STATE_WORD}|finished)\b"
+    r"(?!,?\s+(?:already|fine|anyway)\b)",
     re.I)
 # NOT claims, by design: progress/announcement tense ("I'm starting a seat called X to ..." is how the spawn read-back
 # is said BEFORE the call), the future ("I'll start ..."), capability ("I can start one"), questions, other people's

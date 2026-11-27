@@ -35,6 +35,9 @@ BARE = [
     "As before it is done.",
     "For once it's done on time.",
     "It went through all at once it's done.",
+    "Why restart it when it's running fine?",
+    "There's nothing to do when it's done already.",
+    "No need to redo it once it's saved anyway.",
 ]
 
 
