@@ -9093,6 +9093,14 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
             if not ct.archive(call_id, thread_id, turns, principal=owner):
                 log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
                 return False
+            lines, card = ct.archived
+            if not card and not lines:
+                # Nothing landed (a store that took no write): the card is still owed, and a retry repeats nothing.
+                log.warning(f"call {call_id}: nothing was written to thread {thread_id[:24]}: the card is still owed")
+                return False
+            if not card:
+                # Some lines landed but not the card: a retry would write them twice, so this call is done as it is.
+                log.warning(f"call {call_id}: {lines} line(s) but no call card reached thread {thread_id[:24]}")
         log.info(f"call {call_id}: lines + call card written to thread {thread_id[:24]}")
         _maybe_gist(thread_id, force=True)       # a call ended: its conversation's summary catches up
         return True
