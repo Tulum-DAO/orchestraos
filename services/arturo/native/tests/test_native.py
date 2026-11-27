@@ -1771,3 +1771,53 @@ def test_the_rejected_sessions_greeting_is_cut_and_muted_so_the_caller_hears_one
     call, n_during = _run(go())
     assert n_during == 1                                               # only the frame before the rejection played
     assert {"type": "barge", "cut": True} in _drain(call)
+
+
+def test_the_cut_greeting_leaves_nothing_held_and_its_words_are_not_shown(tmp_path, monkeypatch):
+    # review of 9ff4f71: the barge reached the client but the claim gate still released what it held, and the
+    # rejected session's transcript kept arriving as rows.
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        barged = []
+        call.gate.barge = lambda: barged.append(1) or []
+        greet = base64.b64encode(_pcm(0.1)).decode()
+        call.on_frame("in", {"type": "session.output_audio.delta", "delta": greet})
+        call.on_frame("in", REJECTED)
+        _drain(call)
+        call.on_frame("in", {"type": "session.output_transcript.delta", "delta": "Hey! How's"})
+        rows = [m for m in _drain(call) if isinstance(m, dict) and m.get("type") == "transcript"]
+        await call._fallback_task
+        return barged, rows
+
+    barged, rows = _run(go())
+    assert barged == [1] and rows == []
+
+
+def test_a_newer_pending_context_is_not_replaced_by_the_one_already_sent(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+        call._context, call._context_pending = "old-page", "new-page"
+        call._host, call._host_pending = "old-host", "new-host"
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call
+
+    call = _run(go())
+    assert (call._context, call._context_pending) == (None, "new-page")
+    assert (call._host, call._host_pending) == (None, "new-host")
+
+
+def test_a_fallback_start_that_raises_takes_the_notice_path(tmp_path, monkeypatch):
+    async def go():
+        call, first = _fallback_call(tmp_path, monkeypatch)
+
+        def boom(*a, **k):
+            raise ValueError("bad frame")
+        monkeypatch.setattr(native_config, "session_start_frame", boom)
+        call.on_frame("in", REJECTED)
+        await call._fallback_task
+        return call
+
+    call = _run(go())
+    assert call.backend_fallback == "failed"
+    assert [m.get("code") for m in _drain(call) if isinstance(m, dict) and m.get("type") == "notice"] == ["backend_rejected"]

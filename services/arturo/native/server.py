@@ -433,6 +433,8 @@ class NativeCall:
                 self._end_utterance(now)
             self._was_speaking = speaking
         elif t == "session.output_transcript.delta":
+            if self.backend_fallback == "trying":       # the rejected session's words are never shown either
+                return
             fresh = not self.session.assistant_speaking and self._arturo_row_done
             if fresh:
                 self.arturo_text = ""
@@ -496,6 +498,7 @@ class NativeCall:
         if self.backend_fallback is None and self.mode == "live" and fresh:
             self.backend_fallback = "trying"            # its audio is muted from here (on_frame): no double greeting
             if self._utterance_t0 is not None:
+                self.gate.barge()                       # what the claim gate still holds never plays (review)
                 self.emit({"type": "barge", "cut": True})   # a greeting already playing stops; the new one follows
             log.warning(f"native {self.binding.conversation_id}: BACKEND-REJECTED {self.backend_rejected!r}; "
                         f"retrying once with the default delegation config")
@@ -527,14 +530,17 @@ class NativeCall:
         self.session.started = False                     # the new session's appends wait for ITS session.started
         self.session.cost.new_session()                  # its usage counter starts at 0: keep the first one's seconds
         if self._context is not None:                    # what the rejected session was told, the new one is told again
-            self._context_pending, self._context = self._context, None
+            self._context_pending = self._context_pending or self._context   # (a newer pending one wins)
+            self._context = None
         if self._host is not None:
-            self._host_pending, self._host = self._host, None
+            self._host_pending = self._host_pending or self._host
+            self._host = None
         tools, opening = self._start_args
         self.backend_fallback = "sent"
         try:
             self.driver.send(native_config.session_start_frame(tools, context=opening, fallback=True))
-        except TransportDown:
+        except Exception as e:  # noqa: BLE001 — any failure here is a call without tools: say so, never go silent
+            log.warning(f"native {self.binding.conversation_id}: BACKEND-FALLBACK start failed: {e!r}")
             self.backend_fallback = "failed"
             self._give_up(time.monotonic())
         if old is not None:
