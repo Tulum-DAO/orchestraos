@@ -333,9 +333,9 @@ def status(facts_path=None, index_path=None):
 def fts_match(text, df=None, total=0):
     """An FTS5 OR-query over the topic words of `text` (each quoted, so no word is read as an operator), or ''.
 
-    With the word counts (`df`: word -> facts holding it; `total`: facts indexed), only words some fact holds are
-    kept, words held by more than DF_MAX_FRAC of facts are dropped (a short question keeps its MIN_FTS_TERMS
-    rarest), and the MAX_FTS_TERMS rarest remain. Measured 2026-11-27 on 30 real voice questions: up to 32 words,
+    With the word counts (`df`: word -> facts holding it; `total`: facts indexed), words held by more than
+    DF_MAX_FRAC of facts are dropped (a short question keeps its MIN_FTS_TERMS rarest), the rest go rarest first,
+    then words no fact holds in that form, and the first MAX_FTS_TERMS remain. Measured 2026-11-27 on 30 real voice questions: up to 32 words,
     common ones included ("make", "get"), put the bm25 sort at p95 133 ms; the rare words carry the match, and
     the vectors carry the meaning."""
     words = terms(text)
@@ -345,6 +345,9 @@ def fts_match(text, df=None, total=0):
         words = [w for w in held if df[w] <= cap]
         if len(words) < MIN_FTS_TERMS:
             words = held[:MIN_FTS_TERMS]
+        # a word no fact holds in this exact form may still match another form of it ("invoice" / "invoices"):
+        # counts are per raw word, the match is per stem. Searched after the known rare words.
+        words += [w for w in terms(text) if df.get(w, 0) == 0]
     return " OR ".join(f'"{t}"' for t in words[:MAX_FTS_TERMS])
 
 
@@ -371,10 +374,10 @@ class _Snap:
     counts, and the sidecar's generation and completeness. Never changed once published; refresh publishes a new
     one. An incremental refresh shares the FTS copy and appends to it (under mlock): an older view that sees the
     newer rows there only sees more real facts."""
-    __slots__ = ("gen", "complete", "top", "ids", "mat", "mem", "mlock", "df")
+    __slots__ = ("gen", "complete", "top", "src_mark", "ids", "mat", "mem", "mlock", "df")
 
-    def __init__(self, gen, complete, top, ids, mat, mem, mlock, df):
-        self.gen, self.complete, self.top, self.ids, self.mat = gen, complete, top, ids, mat
+    def __init__(self, gen, complete, top, src_mark, ids, mat, mem, mlock, df):
+        self.gen, self.complete, self.top, self.src_mark, self.ids, self.mat = gen, complete, top, src_mark, ids, mat
         self.mem, self.mlock, self.df = mem, mlock, df
 
 
@@ -405,9 +408,10 @@ class _Matrix:
         return (st.st_dev, st.st_ino)
 
     def refresh(self, max_inline=None):
-        """Publish a snapshot with every row the sidecar holds. A lookup (max_inline set) only appends up to
-        max_inline new rows; it returns False when a full reload is due (more rows waiting, rows removed, the file
-        replaced) so the caller hands that to the loader. A lookup never waits behind another refresh."""
+        """Publish a snapshot with every row the sidecar holds. Runs on the loader thread (search never calls it:
+        appending 1,500 rows copies the whole matrix, ~0.5-1 s CPU measured on 50k rows). With max_inline set it
+        refuses (False) when more than that many rows wait or a full reload is due. Never waits behind another
+        refresh."""
         if not self.rlock.acquire(blocking=max_inline is None):
             return True
         try:
@@ -428,7 +432,8 @@ class _Matrix:
             full = old is None or ident != self.ident or gen != old.gen or top < old.top
             if not full and top == old.top:
                 if complete != old.complete:
-                    self.snap = _Snap(gen, complete, old.top, old.ids, old.mat, old.mem, old.mlock, old.df)
+                    self.snap = _Snap(gen, complete, old.top, old.src_mark, old.ids, old.mat, old.mem, old.mlock,
+                                      old.df)
                 return True
             base = 0 if full else old.top
             n_new = con.execute("SELECT COUNT(*) FROM doc WHERE rowid > ?", (base,)).fetchone()[0]
@@ -438,6 +443,8 @@ class _Matrix:
                 mem, mlock, df = _new_mem(), threading.Lock(), dict(con.execute("SELECT term, n FROM df"))
             else:
                 mem, mlock, df = old.mem, old.mlock, dict(old.df)
+            src_mark = con.execute("SELECT COALESCE(MAX(src_rowid), 0) FROM doc WHERE rowid <= ?",
+                                   (top,)).fetchone()[0]
             cur = con.execute("SELECT doc.rowid, doc.fact_id, doc.vec, fts.text FROM doc JOIN fts "
                               "ON fts.rowid = doc.rowid WHERE doc.rowid > ? ORDER BY doc.rowid", (base,))
             # streamed in chunks into one preallocated block: the first load is 50k rows, and holding every row
@@ -456,7 +463,8 @@ class _Matrix:
                         for t in terms(r[3]):
                             df[t] = df.get(t, 0) + 1
                 with mlock:
-                    mem.executemany("INSERT INTO m(rowid, text, fid) VALUES (?, ?, ?)",
+                    # OR REPLACE: a refresh that died after this insert left its rows in the shared copy
+                    mem.executemany("INSERT OR REPLACE INTO m(rowid, text, fid) VALUES (?, ?, ?)",
                                     ((r[0], r[3] or "", r[1]) for r in chunk))
                 last = chunk[-1][0]
         finally:
@@ -470,7 +478,7 @@ class _Matrix:
         # a fact_id re-indexed under a new rowid can leave its old row here until the next full load; search
         # drops duplicates, and the live facts.db row decides what is served
         self.ident = ident
-        self.snap = _Snap(gen, complete, last, all_ids, mat, mem, mlock, df)
+        self.snap = _Snap(gen, complete, last, src_mark, all_ids, mat, mem, mlock, df)
         if full:
             _trim_heap()
         return True
@@ -497,15 +505,15 @@ def _snap_fts(snap, text, depth, keywords=None):
 
 
 _lock = threading.Lock()
-_state = {"embed": None, "matrix": None, "loading": False, "failed": None}
-MAX_INLINE_ROWS = 2000       # a turn absorbs at most this many freshly synced vectors; more go to the loader
+_state = {"embed": None, "matrix": None, "loading": False, "failed": None, "failed_at": None}
+RETRY_AFTER_S = 300.0        # after a failed load, lookups wait this long before trying the model again
 REFRESH_EVERY_S = 30.0       # how often a lookup checks the sidecar for newly synced rows
 NEVER = float("-inf")        # "not checked yet": 0.0 is a real monotonic time on a freshly booted host
 
 
 def _reset_for_tests():
     with _lock:
-        _state.update(embed=None, matrix=None, loading=False, failed=None)
+        _state.update(embed=None, matrix=None, loading=False, failed=None, failed_at=None)
 
 
 def _loader(index_path, embed_factory):
@@ -516,11 +524,11 @@ def _loader(index_path, embed_factory):
         m = _state["matrix"] if (_state["matrix"] and _state["matrix"].path == index_path) else _Matrix(index_path)
         m.refresh()
         with _lock:
-            _state.update(embed=embed, matrix=m, failed=None)
+            _state.update(embed=embed, matrix=m, failed=None, failed_at=None)
         log.info(f"facts-index: ready, {len(m.snap.ids) if m.snap else 0} vectors")
     except Exception as e:                           # noqa: BLE001 — absent model / index = keyword recall
         with _lock:
-            _state["failed"] = str(e)
+            _state["failed"], _state["failed_at"] = str(e), time.monotonic()
         log.error(f"facts-index loader failed, recall stays keyword-only until the next try: {e}")
     finally:
         with _lock:
@@ -528,8 +536,11 @@ def _loader(index_path, embed_factory):
 
 
 def _start_loader(index_path, embed_factory):
+    """Load (or refresh) on a daemon thread. The same thread serves the first load and every later refresh."""
     with _lock:
         if _state["loading"]:
+            return
+        if _state["failed_at"] is not None and time.monotonic() - _state["failed_at"] < RETRY_AFTER_S:
             return
         _state["loading"] = True
     threading.Thread(target=_loader, args=(index_path, embed_factory), daemon=True,
@@ -550,7 +561,9 @@ def min_cos():
 
 
 def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None):
-    """The two ranked lists for `text`: (fts_fact_ids, vector_fact_ids), each up to `depth` long, best first.
+    """(fts_fact_ids, vector_fact_ids, src_mark) for `text`: two ranked lists, each up to `depth` long, best first,
+    and the highest facts.db rowid the snapshot holds (rows above it are not indexed yet; facts_recall covers
+    them with a keyword pass).
     A vector hit below min_cos() is left out: the nearest neighbours of an unrelated question are not answers.
     The FTS list is the FTS_POOL best bm25 rows re-ranked by how many of `keywords` (default: the topic words
     of `text`) each one holds, bm25 breaking ties: keyword recall's own signal, over a better candidate set.
@@ -571,10 +584,7 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None
     now = time.monotonic()
     if now - m.checked >= REFRESH_EVERY_S:           # new facts land twice a day; no need to look on every turn
         m.checked = now
-        if not m.refresh(max_inline=MAX_INLINE_ROWS):
-            m.checked = NEVER
-            _start_loader(index_path, embed_factory)
-            return None
+        _start_loader(index_path, embed_factory)     # refreshes off the turn; this lookup uses the snapshot it has
     snap = m.snap
     if snap is None or not snap.complete or not snap.ids:
         return None                                  # a partial index would miss facts keyword recall finds
@@ -594,7 +604,7 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None
             vec_ids.append(fid)
         if len(vec_ids) >= depth:
             break
-    return fts_job.result(), vec_ids
+    return fts_job.result(), vec_ids, snap.src_mark
 
 
 _pool = []

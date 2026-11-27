@@ -175,7 +175,7 @@ def test_hybrid_never_serves_superseded_or_noise_rows(store, monkeypatch):
     fi.sync(store["db"], store["index"], embed=fake_embed)
     _ready(store["index"])
     q = "automobile mechanic quoted dollars"
-    fts, vec = fi.search(q, index_path=store["index"])
+    fts, vec, _ = fi.search(q, index_path=store["index"])
     assert "f-old" in fts + vec and "f-noise" in fts + vec
     got = _ids(fr.query_sources(fr.extract_keywords(q), text=q))
     assert "f-old" not in got and "f-noise" not in got
@@ -198,7 +198,7 @@ def test_unrelated_question_gets_no_vector_filler(store, monkeypatch):
     monkeypatch.setenv(fi.FLAG, "1")
     fi.sync(store["db"], store["index"], embed=fake_embed)
     _ready(store["index"])
-    fts, vec = fi.search("quantum chromodynamics lattice", index_path=store["index"])
+    fts, vec, _ = fi.search("quantum chromodynamics lattice", index_path=store["index"])
     assert fts == [] and vec == []
     assert fr.query_sources(["quantum", "chromodynamics"], text="quantum chromodynamics lattice") == []
 
@@ -231,9 +231,10 @@ def test_sync_is_incremental_and_picked_up_without_reload(store, monkeypatch):
 
 
 def test_sync_resumes_after_a_partial_run(store):
-    assert fi.sync(store["db"], store["index"], embed=fake_embed, batch=2, max_rows=3)["indexed"] == 3
+    first = fi.sync(store["db"], store["index"], embed=fake_embed, batch=2, max_rows=3)
+    assert first["indexed"] == 3 and not first["complete"]
     out = fi.sync(store["db"], store["index"], embed=fake_embed, batch=2)
-    assert out["added"] == len(ROWS) - 3 and out["indexed"] == len(ROWS)
+    assert out["added"] == len(ROWS) - 3 and out["indexed"] == len(ROWS) and out["complete"]
 
 
 def test_sync_walks_back_over_rows_the_store_lost(store):
@@ -284,7 +285,11 @@ def test_a_partial_index_serves_keyword_recall(store, monkeypatch):
     assert fi.search(q, index_path=store["index"]) is None
     assert fr.query_sources(kws, text=q) == fr._query_sources_keyword(kws)
     assert fi.sync(store["db"], store["index"], embed=fake_embed)["complete"]
-    assert fi.search(q, index_path=store["index"]) is not None
+    for _ in range(200):                                 # the loader refreshes in the background
+        if fi.search(q, index_path=store["index"]) is not None:
+            return
+        time.sleep(0.01)
+    raise AssertionError("the completed index was never served")
 
 
 def test_an_emptied_index_serves_keyword_recall(store, monkeypatch):
@@ -321,7 +326,7 @@ def test_a_lookup_reads_one_snapshot_while_the_index_is_rebuilt(store, monkeypat
             assert m.snap.ids == ["f-zebra"]
         return fake_embed(texts)
     monkeypatch.setitem(fi._state, "embed", rebuilding_embed)
-    fts, vec = fi.search("the northwind invoice", index_path=store["index"])
+    fts, vec, _ = fi.search("the northwind invoice", index_path=store["index"])
     assert "f-bill" in vec and "f-zebra" not in vec + fts
 
 
@@ -384,7 +389,7 @@ def test_each_rankers_best_answer_is_served(store, monkeypatch):
     _add(con, [(f"x{i}", "fact", f"filler fact number {i}", "active") for i in range(6)])
     con.close()
     both = [f"x{i}" for i in range(6)]
-    monkeypatch.setattr(fi, "search", lambda text, index_path=None, keywords=None: (["f-bill"] + both, both))
+    monkeypatch.setattr(fi, "search", lambda text, index_path=None, keywords=None: (["f-bill"] + both, both, 10 ** 9))
     got = _ids(fr.query_hybrid("anything at all", ["anything"], dbpath=store["db"], jsonpath=store["json"]))
     assert len(got) == fr.K and got[0] == "f-bill"
 
@@ -395,7 +400,8 @@ def test_a_short_question_keeps_its_rarest_three_words(store, monkeypatch):
     monkeypatch.setattr(fi, "DF_MAX_FRAC", 0.0)          # every word counts as common
     df = dict(sqlite3.connect(store["index"]).execute("SELECT term, n FROM df"))
     assert fi.fts_match("luna dog vet appointment", df, len(ROWS)).count('"') == 2 * fi.MIN_FTS_TERMS
-    assert fi.fts_match("luna zzzunknownzzz", df, len(ROWS)) == '"luna"'   # a word no fact holds is never searched
+    # a word no fact holds in that form is searched last (its stem may still match: "invoice" / "invoices")
+    assert fi.fts_match("zzzunknownzzz luna", df, len(ROWS)) == '"luna" OR "zzzunknownzzz"'
 
 
 def test_word_counts_follow_sync(store):
@@ -440,7 +446,107 @@ def test_lookups_check_for_new_rows_at_most_every_interval(store, monkeypatch):
     fi.sync(store["db"], store["index"], embed=fake_embed)
     assert "f-boat" not in fi.search("sailboat regatta", index_path=store["index"])[0]
     fi._state["matrix"].checked = fi.NEVER               # as after a failed refresh
-    assert "f-boat" in fi.search("sailboat regatta", index_path=store["index"])[0]
+    fi.search("sailboat regatta", index_path=store["index"])     # hands the refresh to the loader
+    for _ in range(200):
+        if "f-boat" in fi.search("sailboat regatta", index_path=store["index"])[0]:
+            return
+        time.sleep(0.01)
+    raise AssertionError("the background refresh never published the synced row")
+
+
+def test_a_fact_ingested_since_the_last_sync_is_served(store, monkeypatch):
+    """gating review #1: the index lags facts.db between ingest and sync (or for good if sync fails); keyword
+    recall over the rows past the index keeps those facts in."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-boat", "fact", "The sailboat needs new sails before the regatta", "active"),
+               ("f-old2", "fact", "The sailboat regatta was moved to May", "superseded")])
+    con.close()
+    q = "sailboat regatta"
+    kws = fr.extract_keywords(q)
+    assert "f-boat" in _ids(fr._query_sources_keyword(kws))
+    got = _ids(fr.query_sources(kws, text=q))
+    assert "f-boat" in got and "f-old2" not in got
+
+
+def test_an_index_far_behind_serves_keyword_recall(store, monkeypatch):
+    monkeypatch.setenv(fi.FLAG, "1")
+    monkeypatch.setattr(fr, "TAIL_LIMIT", 1)
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-boat", "fact", "The sailboat needs new sails before the regatta", "active"),
+               ("f-kite", "fact", "The kite festival is on the beach", "active")])
+    con.close()
+    q = "sailboat regatta"
+    kws = fr.extract_keywords(q)
+    assert fr.query_hybrid(q, kws) is None
+    assert fr.query_sources(kws, text=q) == fr._query_sources_keyword(kws)
+
+
+def test_a_lookup_never_refreshes_on_its_own_thread(store, monkeypatch):
+    """gating review #2: appending synced rows copies the whole matrix (~0.5-1 s CPU on 50k rows)."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    seen = []
+    real = fi._Matrix.refresh
+
+    def spy(self, max_inline=None):
+        seen.append(threading.current_thread().name)
+        return real(self, max_inline)
+    monkeypatch.setattr(fi._Matrix, "refresh", spy)
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-boat", "fact", "The sailboat needs new sails before the regatta", "active")])
+    con.close()
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    for _ in range(200):
+        fi.search("sailboat regatta", index_path=store["index"])
+        if seen:
+            break
+        time.sleep(0.01)
+    assert seen and "MainThread" not in seen
+
+
+def test_facts_preamble_with_the_flag_on(store, monkeypatch):
+    monkeypatch.setenv(fi.FLAG, "1")
+    monkeypatch.setenv(fr.FLAG, "1")
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    block = fr.facts_preamble("did the mechanic fix my automobile", budget_ms=2000)
+    assert "repaired now" in block and "quoted four hundred" not in block
+
+
+def test_a_refresh_that_died_halfway_does_not_wedge_the_next(store, monkeypatch):
+    """Its rows were already in the shared FTS copy; the next refresh re-inserts them."""
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    m = fi._state["matrix"]
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-boat", "fact", "The sailboat needs new sails before the regatta", "active")])
+    con.close()
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    real = np.vstack                                     # dies after the rows went into the shared FTS copy
+    monkeypatch.setattr(np, "vstack", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("died")))
+    with pytest.raises(RuntimeError):
+        m.refresh()
+    monkeypatch.setattr(np, "vstack", real)
+    assert m.refresh() and "f-boat" in m.snap.ids
+
+
+def test_a_failed_load_is_not_retried_on_every_turn(store, monkeypatch):
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    tries = []
+
+    def broken():
+        tries.append(1)
+        raise RuntimeError("no model")
+    for _ in range(20):
+        assert fi.search("luna", index_path=store["index"], embed_factory=broken) is None
+        time.sleep(0.01)
+    assert len(tries) == 1
 
 
 def test_a_lookup_sees_a_row_that_replaced_the_top_one(store, monkeypatch):
