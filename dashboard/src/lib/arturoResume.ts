@@ -44,6 +44,9 @@ export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: T
   /** When it was said (epoch seconds): the card's call length. */
   ts?: number }
 
+/** call_tool_lines.py's outcome words for a run that did not work (a row without meta.ok falls back on them). */
+const FAILED_OUTCOMES = new Set(['refused', "didn't finish", "didn't reach gm"]);
+
 /** A call's tool-run row (services/arturo/call_tool_lines.py writes "<Asked gm|name>: <ask> · <outcome>", or
  *  "<name> · <outcome>") as the tool chip the live call drew: the tool's name, the ask, and the outcome. */
 export function callToolPart(x: ThreadTurn): ToolPart {
@@ -51,9 +54,10 @@ export function callToolPart(x: ThreadTurn): ToolPart {
   const cut = text.lastIndexOf(' · ');
   const head = cut >= 0 ? text.slice(0, cut) : text;
   const colon = head.indexOf(': ');
+  const outcome = cut >= 0 ? text.slice(cut + 3) : '';
   return { kind: 'tool', callId: x.meta?.tool_call_id || `tool${x.seq ?? x.ts ?? ''}`, name: x.meta?.tool || 'tool',
-           argsSummary: colon >= 0 ? head.slice(colon + 2) : '', status: x.meta?.ok === false ? 'failed' : 'ok',
-           summary: cut >= 0 ? text.slice(cut + 3) : '' };
+           argsSummary: colon >= 0 ? head.slice(colon + 2) : '',
+           status: (x.meta?.ok ?? !FAILED_OUTCOMES.has(outcome)) ? 'ok' : 'failed', summary: outcome };
 }
 
 /** A stored thread as the feed shows it: the page's own opener hidden, context lines stripped. */

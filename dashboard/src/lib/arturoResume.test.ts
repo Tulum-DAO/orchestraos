@@ -161,5 +161,21 @@ test('a tool chip stays inside its call card', async () => {
   ]);
   const items = groupCalls(turns, false);
   assert.equal(items.length, 1);
-  assert.equal((items[0] as { kind: string }).kind, 'call');
+  const call = items[0] as { kind: string; turns: typeof turns };
+  assert.equal(call.kind, 'call');
+  assert.equal(call.turns.length, 3);                                    // hi, the tool chip, ok (the end line closes it)
+  assert.ok(call.turns.some((t) => t.callTools && t.parts?.length === 1));
+});
+
+test("a tool row's ask keeps its own ': ' and ' · ', and a row without ok falls back on its outcome word", async () => {
+  const { callToolPart } = await import('./arturoResume');
+  const p = callToolPart({ role: 'assistant', content: 'Asked gm: a: b · c · gm has it',
+                           meta: { kind: 'call_tool', tool: 'gm_command', ok: true, tool_call_id: 'x' } });
+  assert.equal(p.argsSummary, 'a: b · c');
+  assert.equal(p.summary, 'gm has it');
+  const bare = (content: string) => callToolPart({ role: 'assistant', content, meta: { kind: 'call_tool', tool: 'research' } });
+  assert.equal(bare("research: q · didn't finish").status, 'failed');
+  assert.equal(bare('research: q · refused').status, 'failed');
+  assert.equal(bare('research: q · done').status, 'ok');
+  assert.equal(bare('spending_month_summary · done').argsSummary, '');
 });

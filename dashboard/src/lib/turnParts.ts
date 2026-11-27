@@ -83,3 +83,16 @@ export function groupParts(parts: TurnPart[]): PartGroup[] {
 export function hasToolParts(parts?: TurnPart[] | null): boolean {
   return !!parts && parts.some((p) => p.kind === 'tool');
 }
+
+/** Back-to-back tool-only turns of a call as ONE turn, so they draw as one run, the way the live call keeps them (a
+ *  thread read back holds each tool run as its own row). The first turn's key stays; anything else breaks the run. */
+export function foldToolTurns<T extends { role: string; text: string; parts?: TurnPart[] }>(turns: T[]): T[] {
+  const toolOnly = (t: T) => t.role !== 'user' && !t.text.trim() && !!t.parts?.length && t.parts.every((p) => p.kind === 'tool');
+  const out: T[] = [];
+  for (const t of turns) {
+    const last = out[out.length - 1];
+    if (last && toolOnly(last) && toolOnly(t)) out[out.length - 1] = { ...last, parts: [...last.parts!, ...t.parts!] };
+    else out.push(t);
+  }
+  return out;
+}
