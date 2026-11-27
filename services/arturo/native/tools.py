@@ -172,6 +172,10 @@ class ArturoTools:
     def _spending_read(self, name):
         return self.spending is not None and self.spending.owns(name) and self.spending.is_read(name)
 
+    def fence(self, conversation_id):
+        """A tool's text just reached the call (a late result's note): only lookups until the caller speaks (I5)."""
+        self._fenced.add(conversation_id)
+
     def new_turn(self, conversation_id):
         """The caller spoke again: the fence lifts (the session calls this)."""
         self._fenced.discard(conversation_id)
@@ -365,16 +369,19 @@ class Delivery:
                             " VALUES (?,?,?,?,?)", (task_id, conversation_id, text, "pending", self.ledger.clock()))
             return cur.rowcount == 1
 
-    def take_pending(self, conversation_id, to_state):
-        """Every row of this call still pending, moved to `to_state` in one transaction (the call ended: they go to
-        its thread, not into a session nobody hears). Returns the rows taken."""
+    def take_pending(self, conversation_id, to_state, sent_since=None):
+        """Every row of this call still pending, and (sent_since) any sent or acked at or after that time, moved to
+        `to_state` in one transaction (the call ended: they go to its thread, not into a session nobody hears).
+        Returns the rows taken."""
+        where, a = "conversation_id = ? AND (state = 'pending'", [conversation_id]
+        if sent_since is not None:
+            where, a = where + " OR (state IN ('attempted', 'accepted') AND updated >= ?)", a + [sent_since]
+        where += ")"
         c = self.ledger._connect()
         try:
             c.execute("BEGIN IMMEDIATE")
-            rows = [dict(r) for r in c.execute("SELECT * FROM deliveries WHERE conversation_id = ? AND state = ?"
-                                               " ORDER BY updated, rowid", (conversation_id, "pending"))]
-            c.execute("UPDATE deliveries SET state = ?, updated = ? WHERE conversation_id = ? AND state = 'pending'",
-                      (to_state, self.ledger.clock(), conversation_id))
+            rows = [dict(r) for r in c.execute(f"SELECT * FROM deliveries WHERE {where} ORDER BY updated, rowid", a)]
+            c.execute(f"UPDATE deliveries SET state = ?, updated = ? WHERE {where}", [to_state, self.ledger.clock()] + a)
             c.execute("COMMIT")
             return rows
         except Exception:
@@ -383,6 +390,10 @@ class Delivery:
             raise
         finally:
             c.close()
+
+    def mark(self, task_id, state):
+        with self.ledger._connect() as c:
+            c.execute("UPDATE deliveries SET state = ?, updated = ? WHERE task_id = ?", (state, self.ledger.clock(), task_id))
 
     def pending(self, conversation_id):
         with self.ledger._connect() as c:

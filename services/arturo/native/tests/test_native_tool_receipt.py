@@ -124,7 +124,7 @@ def test_accepted_backs_i_started_it_never_done_or_saved_until_the_result_is_in(
     assert call.session.orchestra.execute(b, "n1", "remember_note", "{}") is RUNNING
     clock[0] += srv.DETACH_AFTER_S
     assert call.session.orchestra.execute(b, "n1", "remember_note", "{}")["receipt"] == "accepted"
-    assert call.gate.is_backed(("action", "start"))                  # "I've started it": true, it is running
+    assert not call.gate.is_backed(("action", "start"))              # a running note backs no "I've started the seat"
     assert not call.gate.is_backed(("state", None))                  # "it's done": not until the result is in
     assert not call.gate.is_backed(("action", "save"))               # "I've saved it": not yet
     gate.set()
@@ -215,7 +215,7 @@ def test_a_slow_tool_lets_arturo_speak_within_3_5_s_and_its_result_lands_later_a
     assert notes[0]["type"] == "session.thinking.append"                 # the kind measured to be voiced
     assert "remember_note" in notes[0]["content"] and "finished" in notes[0]["content"]
     rep = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())
-    assert list(rep["deliveries"].values()) == ["attempted"]
+    assert list(rep["deliveries"].values()) == ["no_thread"]          # sent < LATE_NOTE_VOICE_S before the hang-up
     assert [h["name"] for h in rep["handed_over"]] == ["remember_note"]
 
 

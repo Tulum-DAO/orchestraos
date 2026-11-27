@@ -418,6 +418,9 @@ class NativeSession:
 
     def delivery_sent(self, task_id, frame):
         self.delivery.mark_sent(task_id, frame)
+        fence = getattr(self.orchestra, "fence", None)     # the note's text cannot steer an action (I5): fenced from
+        if fence is not None:                               # the moment it is in the call, whatever turn this is
+            fence(self.binding.conversation_id)
 
     def report(self):
         return {

@@ -32,7 +32,7 @@ from .. import host_page, tracker_snapshot
 from .offline import LocalTransport, OfflineTools
 from .session import RUNNING, Driver, NativeSession, TransportDown
 from .tool_ledger import ToolLedger
-from .tools import ArturoTools
+from .tools import CLAIM_BACKERS, RECENT_RECEIPT_S, ArturoTools
 
 log = logging.getLogger("arturo-native")
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or Path(__file__).resolve().parents[3])
@@ -228,13 +228,18 @@ class OpenAITransport:
 RECEIPT_FLAG = "ARTURO_NATIVE_TOOL_RECEIPT"
 DETACH_TOOLS = frozenset({"gm_command"})
 DETACH_AFTER_S = 1.5
+LATE_NOTE_VOICE_S = 8.0     # a note sent this close to the hang-up may not have been voiced (thinking: ~5 s after send)
 DETACHED = {"ok": True, "result": "Sent to gm; gm has not answered yet. Tell the operator that once, in a few words "
                                   "(gm's answer comes into this call when it lands, or to the chat after it), then "
                                   "keep answering him yourself. Never fill the air with 'still on it'."}
 ACCEPTED = {"ok": True, "receipt": "accepted", "status": "running",
-            "result": "Accepted and started; still running. Say in a few words that you've started it, never that it "
+            "result": "Accepted; still running. Tell the operator in a few words that it is under way, never that it "
                       "is done; its result comes into this call when it lands (or to the chat after the call). Then "
                       "keep talking with the operator."}
+# Never handed over: a tool whose result is a guard's question the caller must answer on a LATER turn (answer_menu's
+# staged read-back, a spending guard), and the spending group (G6: its words carry amounts and merchants, which must
+# not reach the native ledger's deliveries table or a thread). The tracker's call timeout bounds a spending hold.
+HOLD_TOOLS = frozenset({"answer_menu"})
 _GM_ANSWER = "gm says:"
 
 
@@ -277,11 +282,11 @@ class ToolRunner:
                                                               arguments_json)
             self._started[tool_call_id] = self.clock()
         if not fut.done():
-            if ((_receipts_on() or name in DETACH_TOOLS)
+            if ((name in DETACH_TOOLS or (_receipts_on() and not self.holds(name)))
                     and self.clock() - self._started[tool_call_id] >= DETACH_AFTER_S):
                 out = DETACHED if name in DETACH_TOOLS else ACCEPTED
                 self._detached[tool_call_id] = (name, out, self.clock() - self._started[tool_call_id])
-                fut.add_done_callback(lambda f, cid=tool_call_id, n=name: self._answer_late(cid, n, f))
+                fut.add_done_callback(lambda f, cid=tool_call_id, n=name: self._dispatch_late(cid, n, f))
                 return dict(out)
             return RUNNING
         try:
@@ -290,12 +295,33 @@ class ToolRunner:
             log.error(f"native {binding.conversation_id}: tool {name} raised {e!r}")
             return {"ok": False, "error": "TOOL_ERROR", "detail": type(e).__name__}
 
-    def accepted_running(self):
-        """A handed-over call is still running: "I've started it" is true, "it's done" is not (the claim gate)."""
-        return any(not self._futs[cid].done() for cid in list(self._detached))
+    def holds(self, name):
+        """True for a tool that is never handed over (HOLD_TOOLS, the spending group)."""
+        spending = getattr(self.tools, "spending", None)
+        return name in HOLD_TOOLS or (spending is not None and spending.owns(name))
+
+    def fence(self, conversation_id):
+        """A late result was just put into the call: what it says cannot steer an action until the caller speaks."""
+        f = getattr(self.tools, "fence", None)
+        if f is not None:
+            f(conversation_id)
+
+    def accepted_running(self, names=None):
+        """A handed-over call (of one of `names`, if given) is still running: the claim gate lets it back "I've
+        started it" for a start-class tool only; "it's done" waits for the real result."""
+        return any(not self._futs[cid].done() and (names is None or n in names)
+                   for cid, (n, _, _) in list(self._detached.items()))
 
     def handed_over(self):
         return [{"call_id": cid, "name": n, "after_s": round(at, 2)} for cid, (n, _, at) in list(self._detached.items())]
+
+    def _dispatch_late(self, call_id, name, fut):
+        """add_done_callback runs at once on the CALLER's thread (the event loop) if the tool finished in between: the
+        late path (sqlite) always runs on the tool pool instead."""
+        try:
+            self.pool.submit(self._answer_late, call_id, name, fut)
+        except RuntimeError:                         # the pool is shut down (server exit): nothing can deliver it
+            log.warning(f"native: the late result of {name} {call_id} was lost: the tool pool is closed")
 
     def _answer_late(self, call_id, name, fut):
         """A handed-over call finished (on its tool thread). gm's real answer ("gm says:") goes on; gm's own promise
@@ -399,8 +425,15 @@ class NativeCall:
         ACCEPTED is never a success: "it's done" / "I've saved it" wait for the real result."""
         if self.toolset.backed(self.binding.conversation_id, self.session.turn_started_epoch, kind):
             return True
+        # a late result backs like a receipt from the moment it ARRIVED (the ledger dates a call by its start: a 90 s
+        # spawn_agent's result would otherwise be older than RECENT_RECEIPT_S when it lands)
+        since = min(self.session.turn_started_epoch, time.time() - RECENT_RECEIPT_S)
+        backers = CLAIM_BACKERS.get(kind[1], frozenset()) if kind[0] == "action" else None
+        for name, ok, _text, at in list(self._late_raw.values()):
+            if ok and at >= since and (backers is None or name in backers):
+                return True
         running = getattr(self.session.orchestra, "accepted_running", None)
-        return kind == ("action", "start") and running is not None and running()
+        return kind == ("action", "start") and running is not None and running(CLAIM_BACKERS["start"])
 
     # ---- plumbing --------------------------------------------------------------------------------------------
     def emit(self, msg):
@@ -744,20 +777,26 @@ class NativeCall:
         self._context_sent_at, self._context_sends = now, self._context_sends + 1
 
     def _late(self, call_id, name, ok, text):
-        """A handed-over tool finished (ToolRunner, on its tool thread). While the call is up its result is queued in
+        """A handed-over tool finished (ToolRunner, on the tool pool). While the call is up its result is queued in
         the deliveries table (one row per note, at most once per call id) and the Driver sends it as a note; once the
         call ended it becomes a line in the call's thread (_post_after_call)."""
         conv = self.binding.conversation_id
         try:
             notes = self._late_notes(name, ok, text)
+        except Exception as e:  # noqa: BLE001 — a stamp/timezone failure must not lose the result
+            log.warning(f"native {conv}: the late note for {name} could not be built: {e!r}")
+            notes = [f"The {name} you handed over earlier in this call just "
+                     + ("finished; its result is in the chat." if ok else "ended without finishing.")]
+        try:
             with self._late_lock:
-                self._late_raw[call_id] = (name, ok, text)
+                self._late_raw[call_id] = (name, ok, text, time.time())
                 for i, note in enumerate(notes):
                     self.session.delivery.queue(f"{call_id}#{i}", conv, note)
-                if self._ended:
+                ended = self._ended
+                if ended:
                     self._post_after_call()
             log.info(f"native {conv}: LATE-RESULT {name} {call_id} ok={ok} "
-                     f"{'after the call' if self._ended else 'queued as a note'}")
+                     f"{'after the call' if ended else 'queued as a note'}")
         except Exception as e:  # noqa: BLE001 — the call already heard "accepted"
             log.warning(f"native {conv}: the late result of {name} could not be queued: {e!r}")
 
@@ -780,32 +819,49 @@ class NativeCall:
         return [(head if i == 0 else f"{tc.stamp(now, tz, label)} ({name} result, cont.) ") + c
                 for i, c in enumerate(chunks)]
 
-    def _post_after_call(self):
-        """Under _late_lock, once the call ended: every late result still pending becomes ONE assistant line in the
-        call's page thread (threads.db, the relay's after_call shape). gm's answer is gm's to post (it comes to the
-        chat); a call with no page thread has no thread to post into: those rows are marked, never sent."""
+    def _post_after_call(self, sent_since=None):
+        """Under _late_lock, once the call ended (on the tool pool or the connect pool, never the event loop): every
+        late result still pending, and any sent as a note at or after `sent_since` (it may not have been voiced before
+        the hang-up; a repeat in the thread is the lesser loss), becomes ONE assistant line in the call's page thread
+        (threads.db, the relay's after_call shape), and only if the caller may write there (thread_readable: the
+        fleet, or the caller who started that thread). Each row ends in a state that says what happened."""
         conv = self.binding.conversation_id
         target = self.page_thread
-        rows = self.session.delivery.take_pending(conv, "posted" if target else "no_thread")
-        done = []
+        rows = self.session.delivery.take_pending(conv, "after_call", sent_since=sent_since)
+        by_call = {}
         for r in rows:
-            cid = r["task_id"].rsplit("#", 1)[0]
-            if cid not in done:
-                done.append(cid)
-        for cid in done:
-            name, ok, text = self._late_raw.get(cid, (None, False, ""))
-            if name is None or name in DETACH_TOOLS:
-                continue
-            if not target:
-                log.info(f"native {conv}: LATE-RESULT {name} {cid} after the call, no page thread to post it in")
-                continue
-            from services.arturo.thread_store import ThreadStore
-            line = (f"After the call, {name} finished.\n\n" if ok else f"After the call, {name} didn't finish.\n\n")
-            line += call_context.thread_context._redact(text or "")
-            seq = ThreadStore(call_context.thread_context.threads_db_path()).append_message(
-                target, "assistant", line, meta={"kind": "after_call", "tool": name, "call_id": cid,
-                                                 "conversation_id": conv}, principal=self.binding.principal)
-            log.info(f"native {conv}: LATE-RESULT {name} {cid} posted to thread {target[:24]} seq={seq}")
+            by_call.setdefault(r["task_id"].rsplit("#", 1)[0], []).append(r["task_id"])
+        tc = call_context.thread_context
+        for cid, task_ids in by_call.items():
+            name, ok, text, _at = self._late_raw.get(cid, (None, False, "", 0.0))
+            if name is None:
+                state = "lost"
+            elif name in DETACH_TOOLS:
+                state = "gm_chat"                                   # gm's answer is gm's to post (#674)
+            elif not target:
+                state = "no_thread"
+            elif not tc.thread_readable(target, self.binding.principal):
+                state = "not_owner"
+            else:
+                line = (f"After the call, {name} finished.\n\n" if ok else f"After the call, {name} didn't finish.\n\n")
+                seq = self.server.thread_store().append_message(
+                    target, "assistant", line + tc._redact(text or ""),
+                    meta={"kind": "after_call", "tool": name, "call_id": cid, "conversation_id": conv},
+                    principal=self.binding.principal)
+                state = "posted" if seq is not None else "post_failed"
+            for tid in task_ids:
+                self.session.delivery.mark(tid, state)
+            log.info(f"native {conv}: LATE-RESULT {name} {cid} after the call: {state}"
+                     + (f" (thread {target[:24]})" if target else ""))
+
+    def _end_late(self, sent_since):
+        """The call ended: late results from now on go to its thread; what is still pending goes there now."""
+        try:
+            with self._late_lock:
+                self._ended = True
+                self._post_after_call(sent_since=sent_since)
+        except Exception as e:  # noqa: BLE001 — never block the teardown on the archive
+            log.warning(f"native {self.binding.conversation_id}: late results not posted: {e!r}")
 
     def _flush_chat_feed(self):
         """From _tick, after session.started: poll the chat every CHAT_POLL_S off the loop; send at most one stamped
@@ -994,12 +1050,11 @@ class NativeCall:
         if self._close_task is None:
             self.closed, self.close_reason = True, reason
             self.session.deliveries_open = False               # nobody hears a note now: late results go to the thread
-            with self._late_lock:
-                self._ended = True
-                try:
-                    self._post_after_call()
-                except Exception as e:  # noqa: BLE001 — never block the teardown on the archive
-                    log.warning(f"native {self.binding.conversation_id}: late results not posted: {e!r}")
+            sent_since = time.time() - LATE_NOTE_VOICE_S
+            try:                                                   # sqlite + threads.db: off the event loop
+                self._end_late_fut = self.server.connect_pool.submit(self._end_late, sent_since)
+            except RuntimeError:
+                self._end_late(sent_since)
             self._close_task = asyncio.create_task(
                 self._finalize_close(reason), name=f"native-close-{self.binding.conversation_id[:8]}")
         # Do not propagate cancellation from a transient caller (notably the
@@ -1086,6 +1141,14 @@ class NativeServer:
         self.thread_loader = call_context.opening                   # (agent) -> that agent's chat + Arturo's calls
         self.page_thread_loader = lambda tid, principal: call_context.opening_thread(tid, principal=principal)
         self.calls_loader = call_context.opening_calls              # () -> Arturo's own calls, no chat
+        self._thread_store = None
+
+    def thread_store(self):
+        """The proxy's threads.db (after-call lines), opened once: ThreadStore() re-runs its schema and migration."""
+        if self._thread_store is None:
+            from services.arturo.thread_store import ThreadStore
+            self._thread_store = ThreadStore(call_context.thread_context.threads_db_path())
+        return self._thread_store
         self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
 
