@@ -19,7 +19,8 @@ evidence, because once Shaw's label is known the other voice can only be that in
 
 A name is VERIFIED when it is a Pocket-named label, or when it is mapped to a label and is an invitee of
 the matched event. A Pocket name that is exactly an invitee's name gets that invitee's email. Pocket
-names verify only once Shaw's own label is proven (a quoted proof, or his configured name). Everything else
+names verify only when POSTCALL_SHAW_NAMES is set and Shaw's own label is proven (a quoted proof, or
+his configured name). Everything else
 stays unverified, and nothing here raises on missing or malformed input: an unknown stays
 unknown and the card shows it.
 """
@@ -204,10 +205,11 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
             lent.add(id(invitee))
     named_ids = {id(p) for p in named.values()} | lent
     generic = tuple(l for l in labels if l not in named and _norm(l) not in shaw_names)
-    # Pocket names verify only once Shaw's own label is proven: a generic label (ground() required a
-    # quoted proof) or his configured name. A person-named claim that is not his configured name is
-    # unproven, and could be a participant's voice mistaken for his, so names stay unverified.
-    shaw_proven = shaw_label in labels and (not _pocket_named(shaw_label) or _norm(shaw_label) in shaw_names)
+    # Pocket names verify only when Shaw's names are configured (so a named label can be ruled out as
+    # his own voice) AND his label is proven: a generic label (ground() required a quoted proof) or his
+    # configured name. Anything else fails closed: names are shown but stay unverified.
+    shaw_proven = bool(shaw_names) and shaw_label in labels and (
+        not _pocket_named(shaw_label) or _norm(shaw_label) in shaw_names)
 
     pairs = [(l, p) for l, p in _proposed(raw, call, generic, shaw_label, people) if id(p) not in named_ids]
     shortcut = _shortcut(event, invitees, labels, shaw_label, people) if not named else None

@@ -232,8 +232,10 @@ def test_unconfigured_person_named_shaw_label_verifies_nobody(base):
     assert roster.verified_names == set()
 
 
-def test_generic_shaw_label_with_evidence_still_verifies_pocket_names(base):
-    """A generic Shaw label (proven by quoted evidence in ground) does not need the configured name."""
+def test_generic_shaw_label_with_evidence_still_verifies_pocket_names(base, monkeypatch):
+    """A generic Shaw label (proven by quoted evidence in ground) verifies Pocket names when Shaw's
+    names are configured (so a named label can be ruled out as his own voice)."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole")
     call = dataclasses.replace(base, transcript=NAMED_TWO.replace("**Shaw Cole**", "**SPEAKER_00**"))
     roster = participants.resolve(call, _raw(shaw_label="SPEAKER_00"), [], shaw_emails=SHAW)
     assert roster.verified_names == {"Dana Reyes"}
@@ -253,3 +255,16 @@ def test_shortcut_still_maps_a_generic_voice_when_shaw_is_name_labelled(base, mo
     call = dataclasses.replace(base, transcript=NAMED_TWO.replace("**Dana Reyes**", "**SPEAKER_01**"))
     roster = participants.resolve(call, _raw(), _calendar_with_dana(), shaw_emails=SHAW)
     assert roster.label_names == {"SPEAKER_01": "Dana Reyes"} and roster.verified_names == {"Dana Reyes"}
+
+
+# --- review round 3 ------------------------------------------------------------------------------
+
+def test_generic_misclaim_without_configured_names_verifies_nobody(base):
+    """R3 blocker: variable unset, Pocket names Shaw, the extractor wrongly claims the generic voice.
+    Nothing may verify: "Shaw Cole" is not a verified participant and Shaw items stay inferred."""
+    call = dataclasses.replace(base, transcript=NAMED_TWO.replace("**Dana Reyes**", "**SPEAKER_01**"))
+    roster = participants.resolve(call, _raw(shaw_label="SPEAKER_01"), [], shaw_emails=SHAW)
+    assert roster.verified_names == set()
+    shaw_it, part_it = participants.apply_trust([_item("shaw", "SPEAKER_01"),
+                                                 _item("participant", "Shaw Cole")], roster)
+    assert shaw_it.trust == "inferred" and part_it.trust == "inferred"
