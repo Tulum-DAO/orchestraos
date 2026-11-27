@@ -1656,6 +1656,39 @@ export function dedupeQueuedCommands(items: any[]): any[] {
   return drop.size ? items.filter((it) => !drop.has(it)) : items;
 }
 
+/**
+ * NARRATION SAVED AS THINKING (Shaw 2026-11-21: "None of the non command messages ... stuck" in Bubbles and Modern).
+ * Claude Code 2.1.284 on Opus 5.5 writes a reply's private thinking as an EMPTY thinking block (only its signature),
+ * and the words it shows the person between tool calls as a SECOND thinking block of the same reply, with text. The
+ * terminal draws that second block as a message (its ● line), so Dev showed it; this parser read it as thinking, which
+ * the chat folds away, so the message vanished. Measured on a live session: 40 of 40 thinking blocks with text came
+ * right after an empty one of the same reply. Rule: within one reply (message.id), a thinking block with text AFTER an
+ * empty thinking block is the assistant speaking (kind 'text'). A thinking block with text and no empty one before it
+ * (another model, another CLI, thinking shown in full) stays thinking. `redacted` holds the replies seen with an empty
+ * thinking block so far (ClaudeParseState: carried across a log's reads, its appends included).
+ */
+export function narrationFromThinking(o: any, items: any[], redacted: Set<string>): any[] {
+  if (o?.type !== 'assistant') return items;
+  const id = typeof o?.message?.id === 'string' ? o.message.id : '';
+  if (!id) return items;
+  const blocks = Array.isArray(o.message.content) ? o.message.content : [];
+  let seen = redacted.has(id);
+  const out = items.map((it) => it);
+  let k = 0;
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object' || b.type !== 'thinking') continue;
+    // items keep the blocks' order: the k-th thinking item is this block
+    const idx = out.findIndex((it, i) => it.kind === 'thinking' && i >= k);
+    if (idx < 0) break;
+    k = idx + 1;
+    const text = typeof b.thinking === 'string' ? b.thinking : '';
+    if (!text.trim()) { seen = true; continue; }
+    if (seen) out[idx] = { ...out[idx], kind: 'text', role: 'assistant', text, narration: true };
+  }
+  if (seen) redacted.add(id);
+  return out;
+}
+
 // keepSidechain: a subagent's own log (<sid>/subagents/agent-<id>.jsonl) is sidechain on every row; its
 // view keeps them. The seat's chat never does.
 function normalizeClaudeEntry(o: any, keepSidechain = false): any[] {
@@ -2241,6 +2274,9 @@ export interface ClaudeParseState {
   waiting?: { id: string; usage: TokenUsage };
   /** Tokens of replies that drew nothing, to go on the next drawn assistant item. */
   carried?: TokenUsage;
+  /** Replies (message.id) seen with an empty thinking block (narrationFromThinking): a later thinking block of the same
+   *  reply with text is narration, also when it is appended a read later. */
+  redacted: Set<string>;
 }
 
 /** Claude Code lines -> items, continuing `state`. Claude Code writes each block of one API reply as its own line,
@@ -2254,7 +2290,7 @@ function parseClaudeLines(lines: string[], keepSidechain: boolean, state: Claude
     if (!line.trim()) continue;
     try {
       const o = JSON.parse(line);
-      const got = normalizeClaudeEntry(o, keepSidechain);
+      const got = narrationFromThinking(o, normalizeClaudeEntry(o, keepSidechain), state.redacted);
       for (const it of got) it.li = li;   // which line: the cache turns it into the line's byte offset (line_off/line_part)
       const msg = o?.message;
       const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
@@ -2297,7 +2333,7 @@ export function logParser(antigravityHint: boolean, keepSidechain = false): LogP
       if (isAntigravity) return { items: normalizeAntigravity(lines), state: null };
       if (looksLikeGrok(lines)) return { items: parseGrokUpdates(lines), state: null };
       if (looksLikeCodex(lines)) return { items: parseCodexRollout(lines), state: null };
-      const state: ClaudeParseState = { counted: new Set<string>() };
+      const state: ClaudeParseState = { counted: new Set<string>(), redacted: new Set<string>() };
       const items = parseClaudeLines(lines, keepSidechain, state);
       // A resumable state only on POSITIVE Claude evidence. An empty or torn first read (a session file the tailer saw
       // the second it was created; a codex session_meta line half-written) shows no grammar at all: handing back a
