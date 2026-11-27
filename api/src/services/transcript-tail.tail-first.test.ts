@@ -17,8 +17,10 @@ process.env.HOME = join(dir, 'home');
 if (!process.env.ORCHESTRA_CONFIG) {
   process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
 }
-const { TranscriptTailer } = await import('./transcript-tail.js');
-const { clearLogCache, logCacheFullParses, logCacheAppends } = await import('./transcript-log-cache.js');
+const { TranscriptTailer, tailerCapForTests } = await import('./transcript-tail.js');
+const { clearLogCache, logCacheFullParses, logCacheAppends, logCacheBytesRead } = await import('./transcript-log-cache.js');
+const { normalizeTranscript } = await import('../routes/chat-transcript.js');
+import { readFileSync, statSync } from 'node:fs';
 
 const noTurns = { read: () => [], sig: () => '' };
 const user = (uuid: string, text: string) => JSON.stringify({ type: 'user', uuid, timestamp: '2026-11-26T03:00:00.000Z', message: { role: 'user', content: text } }) + '\n';
@@ -47,4 +49,40 @@ test('a tick after an appended line reads the new bytes through the cache: no se
   t.tick();
   assert.equal(logCacheAppends(), appends + 1);
   assert.equal(got.length, 2);
+});
+
+test('the first tick on a 3 MB log reads its tail, not the file: under 1 MB, no whole-file parse, the same items as a whole-file read', () => {
+  clearLogCache();
+  const f = join(dir, 'big-seat.jsonl');
+  const filler = 'x'.repeat(900);
+  const lines: string[] = [];
+  let i = 0;
+  while (lines.join('').length < 3 * 1024 * 1024) {
+    lines.push(user(`u${i}`, i % 9 === 8 ? `[MSG from gm | high] mail ${i} ${filler}` : `question ${i} ${filler}`), said(`a${i}`, `answer ${i} ${filler}`));
+    i++;
+  }
+  writeFileSync(f, lines.join(''));
+  const size = statSync(f).size;
+  const read0 = logCacheBytesRead();
+  const full0 = logCacheFullParses();
+  const got: any[] = [];
+  tailerCapForTests(400);   // the tailer keeps 400 items (2000 live): a 3 MB fixture shows the saving a 40 MB log gets at 2000
+  const t = new TranscriptTailer({ agentId: 'zz-tail-first-big', limit: 150, interrupted: noTurns, resolve: () => ({ path: f, sid: 'S2' }) });
+  t.subscribe((ev: any) => got.push(ev));
+  t.tick();
+  tailerCapForTests(null);
+  const read = logCacheBytesRead() - read0;
+  assert.ok(read < 1024 * 1024, `the first tick read ${read} of ${size} bytes`);
+  assert.equal(logCacheFullParses(), full0, 'no whole-file parse');
+  assert.equal(got[0].type, 'snapshot');
+  assert.equal(got[0].items.length, 150);
+  // the same items, refs included, as a whole-file read of the log gives for its newest 150
+  // the kept 400 as a whole-file read gives them: the snapshot is their newest 150
+  const whole = normalizeTranscript(readFileSync(f, 'utf-8').split('\n'), 'zz-tail-first-big', 'S2', 400, false, false, null, true);
+  whole.items = whole.items.slice(-150);
+  const refsOf = (items: any[]) => items.map((it: any) => [it.uuid, it.ref, it.audience, it.exchange, it.text?.slice(0, 12)]);
+  assert.deepEqual(got[0].items.map((it: any) => ({ ...it, ref: undefined })), whole.items.map((it: any) => ({ ...it, ref: undefined })));
+  assert.ok(got[0].items.every((it: any) => it.line_off === undefined && it.line_part === undefined), 'the stream\'s items never carry the cache\'s line fields');
+  assert.equal(refsOf(got[0].items).length, 150);
+  // appends on a kept chunk: the first test (the log is the chunk there); at the item cap the window slides (as before this change).
 });

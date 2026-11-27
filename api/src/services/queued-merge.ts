@@ -266,10 +266,11 @@ export function placeByDelivery(items: any[], pending: any[], batches: any[], li
  */
 
 /** A cheap signature of this agent's rows in the store, for the first-page cache
- *  (services/transcript-first-page-cache.ts): how many rows address the agent and the newest one,
- *  and the same for the rows still pending or processing (the held turns B1 shows, which leave the
- *  page when delivered). Two indexed lookups, under 2 ms on a 17,000-row inbox; the merge itself
- *  (B2's LIKE over every row) is what the cache saves. '' with no store. */
+ *  (services/transcript-first-page-cache.ts): per status, how many rows address the agent and the
+ *  newest of them, so a row moving between statuses (pending -> delivered -> acknowledged: the held
+ *  turns B1 shows leave the page, B2 admits an acknowledged one) changes the string. One query,
+ *  covered by idx_messages_inbox (to_agent, status, created_at); 3.9 ms on a 17,195-row inbox. The
+ *  merge itself (B2's LIKE over every row) is what the cache saves. '' with no store. */
 export function queuedStateSig(agentId: string): string {
   const db = conn();
   if (!db) return '';

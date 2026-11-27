@@ -127,7 +127,7 @@ test('without before: the old envelope (keys and count) plus has_older/oldest_id
     // 5 units reach into b2's two-item line; the first page keeps that line whole, so 6 items.
     assert.equal(env.items.length, 6);
     assert.deepEqual(env.items.map((i: any) => i.uuid), ALL.slice(-6));
-    assert.equal(env.oldest_id, `${G2}~b2`, 'oldest_id names a whole line');
+    assert.match(env.oldest_id, new RegExp(`^${G2}~@\\d+~b2$`), 'oldest_id names a whole line: its byte offset, then its uuid');
     // a seat whose current log fills the window: the same as the one-log builder gives, plus the server's message
     // ref on each log item (reactions build step 1; normalizeTranscript, the contract's builder, stays ref-free)
     const two = await get('?limit=2');
