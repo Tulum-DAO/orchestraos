@@ -24,6 +24,11 @@ ASK_KEYS = ("prompt", "question", "query", "message", "task", "text", "title", "
 # call opened; one that finished after the last caption). The call id match is exact; the window only bounds the read.
 WINDOW_BEFORE_S = 120
 WINDOW_AFTER_S = 600
+# native/tools.py refusals (the tool never ran); native/tool_ledger.py PENDING: still running when the call ended (the
+# card is written once, at the hang-up); TOOL_ERROR or anything else: it ran and did not finish.
+REFUSED = frozenset({"BAD_ARGUMENTS", "CONFIRM_FIRST", "FENCED", "NEEDS_A_CARD", "NOT_A_MESSAGE", "NO_CALL_ID",
+                     "PRINCIPAL_IN_ARGS", "TOOL_NOT_ALLOWED"})
+STILL_RUNNING = "IN_PROGRESS"
 
 
 def _clip(text, n=GIST_MAX):
@@ -58,7 +63,7 @@ def _gist(args):
 
 def _gm_outcome(ok, text):
     t = (text or "").lstrip()
-    if t.startswith("gm says:"):
+    if t.startswith("gm says:") or t.startswith("GM response:"):
         return "gm answered"
     if "gm has it" in t or t.startswith("Sent to gm") or "already went to gm" in t:
         return "gm has it"
@@ -68,12 +73,14 @@ def _gm_outcome(ok, text):
 def outcome(name, result):
     """(ok, word) from a tool's function output ({ok, result} or {ok: False, error, detail})."""
     r = result if isinstance(result, dict) else {"ok": bool(result), "result": str(result or "")}
-    text = str(r.get("result") or "")
+    text, err = str(r.get("result") or ""), r.get("error")
+    if err == STILL_RUNNING:                         # gm_command sends first, then waits: gm has the question
+        return True, ("gm has it" if name == "gm_command" else "still running when the call ended")
     if name == "gm_command":
-        word = _gm_outcome(r.get("ok") is not False, text)
+        word = "didn't reach gm" if err else _gm_outcome(r.get("ok") is not False, text)
         return word != "didn't reach gm", word
     if r.get("ok") is False:
-        return False, ("refused" if r.get("error") else "didn't finish")
+        return False, ("refused" if err in REFUSED else "didn't finish")
     return True, "done"
 
 
@@ -131,8 +138,10 @@ def ledger_turns(call_id, turns, db):
             "SELECT tool_call_id, conversation_id, name, args_json, result_json, created FROM tool_calls"
             " WHERE created BETWEEN ? AND ? ORDER BY created",
             (min(stamps) - WINDOW_BEFORE_S, max(stamps) + WINDOW_AFTER_S)).fetchall()
-    except sqlite3.OperationalError:
-        return []                                            # a ledger without the table yet
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return []                                        # a ledger without the table yet
+        raise                                                # locked, I/O: archive logs it, never silently
     finally:
         conn.close()
     out = []

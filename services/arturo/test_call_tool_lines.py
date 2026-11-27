@@ -58,7 +58,7 @@ def test_gms_answer_in_the_call_and_a_detached_hand_over_read_right():
 def test_any_other_tool_is_its_name_the_gist_and_the_outcome():
     assert ctl.tool_line("research", {"query": "GPT-Live turn latency"}, {"ok": True, "result": "..."}) == \
         "research: GPT-Live turn latency · done"
-    assert ctl.tool_line("spawn_agent", {"agent_id": "x"}, {"ok": False, "error": "REFUSED", "detail": "no"}) == \
+    assert ctl.tool_line("spawn_agent", {"agent_id": "x"}, {"ok": False, "error": "TOOL_NOT_ALLOWED", "detail": "no"}) == \
         "spawn_agent: x · refused"
     assert ctl.tool_line("list_agents", {}, {"ok": True, "result": "a, b"}) == "list_agents · done"
 
@@ -172,3 +172,76 @@ def test_the_proxy_reads_the_native_services_own_ledger_file(tmp_path, monkeypat
     m = _native_proxy(tmp_path, monkeypatch)
     # the native service's ledger: NativeServer(ORCHESTRA_DIR/state/arturo/native) -> ToolLedger(that dir).path
     assert m.NATIVE_TOOL_LEDGER == m.ARTURO_STATE / "native" / ToolLedger.__init__.__defaults__[0]
+
+
+# ---- review round 1: what a run that had not finished, or crashed, reads as ---------------------------------------
+PENDING = {"ok": False, "error": "IN_PROGRESS", "detail": "this tool call is still running"}   # ToolLedger.PENDING
+
+
+def test_a_tool_still_running_at_the_hang_up_never_reads_as_failed():
+    from services.arturo.native.tool_ledger import ToolLedger
+    assert ToolLedger.PENDING == PENDING
+    assert ctl.tool_line("gm_command", {"prompt": "why the latency?"}, PENDING) == "Asked gm: why the latency? · gm has it"
+    assert ctl.tool_line("spawn_agent", {"agent_id": "x"}, PENDING) == "spawn_agent: x · still running when the call ended"
+    assert ctl.outcome("spawn_agent", PENDING)[0] is True
+
+
+def test_a_crash_is_didnt_finish_and_only_a_refusal_is_refused():
+    crash = {"ok": False, "error": "TOOL_ERROR", "detail": "TimeoutError"}
+    assert ctl.tool_line("research", {"query": "q"}, crash) == "research: q · didn't finish"
+    assert ctl.tool_line("gm_command", {"prompt": "q"}, crash) == "Asked gm: q · didn't reach gm"
+    for code in sorted(ctl.REFUSED):
+        assert ctl.tool_line("research", {"query": "q"}, {"ok": False, "error": code}).endswith("· refused")
+
+
+def test_the_proxys_gm_response_shape_is_an_answer():
+    assert ctl.tool_line("gm_command", {"prompt": "q"}, {"ok": True, "result": "GM response: yes"}).endswith(
+        "· gm answered")
+
+
+def test_a_locked_ledger_is_an_error_the_archive_logs_never_a_silent_empty(tmp_path, monkeypatch):
+    import sqlite3
+    db = _ledger(tmp_path, [(CONV, "gm_command", {"prompt": "x"}, GM_PROMISE, T0)])
+    real = sqlite3.connect
+
+    class _Locked:
+        def __init__(self, c):
+            self.c = c
+            self.row_factory = None
+
+        def execute(self, *a):
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self):
+            self.c.close()
+
+    monkeypatch.setattr(ctl.sqlite3, "connect", lambda *a, **k: _Locked(real(*a, **k)))
+    with pytest.raises(sqlite3.OperationalError):
+        ctl.ledger_turns(CALL, [{"role": "user", "text": "hi", "ts": T0}], db)
+
+
+def test_with_the_ledger_a_journals_own_tool_turns_are_not_written(tmp_path):
+    """The merge may link another call's server journal: the ledger is this call's only source of tool runs."""
+    s = ThreadStore(tmp_path / "t.db")
+    ct = CallThreads(s, end_marker=_card, tool_turns=lambda cid, turns: [])
+    turns = [{"role": "user", "text": "hi", "ts": T0},
+             {"role": "tool", "tool": "inject_message", "input": {"message": "someone else's"}, "status": "done",
+              "ts": T0 + 1}]
+    assert ct.archive(CALL, "web_x", turns, principal="fleet")
+    assert [t["content"] for t in s.get_thread("web_x")["turns"]][:1] == ["hi"]
+    assert not any("someone else" in t["content"] for t in s.get_thread("web_x")["turns"])
+
+
+def test_neither_brain_reads_a_tool_line_as_something_arturo_said(tmp_path):
+    from services.arturo import thread_context as tc
+    from services.arturo.thread_store import brain_content
+    meta = {"kind": "call_tool", "tool": "gm_command", "ok": True, "tool_call_id": "call_0"}
+    said = brain_content("assistant", "Asked gm: q · gm has it", "voice", meta)
+    assert said.startswith("(A tool ran on the call; a record, not something said:") and "(on the call)" not in said
+    db = _ledger(tmp_path, [(CONV, "gm_command", {"prompt": "why the latency?"}, GM_PROMISE, T0 + 13)])
+    s = ThreadStore(tmp_path / "t.db")
+    ct = CallThreads(s, end_marker=_card, tool_turns=lambda cid, turns: ctl.ledger_turns(cid, turns, db))
+    ct.archive(CALL, "web_y", [{"role": "arturo", "text": "Let me check.", "ts": T0 + 12},
+                               {"role": "arturo", "text": "Passed it on.", "ts": T0 + 20}], principal="fleet")
+    lines = tc.thread_lines("web_y", tmp_path / "t.db")       # the next call's opening
+    assert [l.text for l in lines] == ["Let me check.", "Passed it on."]

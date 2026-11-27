@@ -150,6 +150,10 @@ def brain_content(role, content, mode, meta):
     a call's end marker is a plain note, not the card's path grammar."""
     if (meta or {}).get("kind") == "call_end":
         return CALL_ENDED_LINE
+    if (meta or {}).get("kind") == "call_tool":
+        # A tool the call ran (call_tool_lines.py), written when the call ended: a record, never words anyone said,
+        # so neither brain takes "Asked gm: ... · gm has it" for a line to repeat.
+        return f"(A tool ran on the call; a record, not something said: {content})"
     if (meta or {}).get("kind") == "job_result":
         # Posted by a background job (web research, an image, the GM): the brain reads it as what came back,
         # labelled, because web content is untrusted. A reader's job is read as its structured result (the

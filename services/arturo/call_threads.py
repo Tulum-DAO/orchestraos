@@ -114,6 +114,9 @@ class CallThreads:
         from services.arturo import call_tool_lines
         turns = [t for t in turns or () if isinstance(t, dict)]
         if self.tool_turns is not None:
+            # The source of truth for the call's tool runs; a journal's own tool turns come from whichever server
+            # journal the merge linked to it (a time-window fallback can link another call's), so they are dropped.
+            turns = [t for t in turns if t.get("role") != "tool"]
             try:
                 turns = call_tool_lines.merge(turns, self.tool_turns(cid, turns))
             except Exception as e:  # noqa: BLE001 — the call's words still go in

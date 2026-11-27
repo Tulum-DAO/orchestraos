@@ -450,6 +450,8 @@ def thread_entries(thread_id: str, db, operator_label: str = "Operator", assista
             m = json.loads(meta) if meta else {}
         except ValueError:
             m = {}
+        if isinstance(m, dict) and m.get("kind") == "call_tool":
+            continue                         # a tool-run record (call_tool_lines.py), not speech: as the journals
         if isinstance(m, dict) and m.get("kind") == "call_end":
             cid = m.get("call_id") if isinstance(m.get("call_id"), str) else "call"
             for line in pending:
