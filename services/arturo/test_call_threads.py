@@ -201,3 +201,14 @@ def test_archive_says_what_landed_when_a_write_fails_without_raising(tmp_path):
     ct = CallThreads(s, end_marker=lambda cid: ("Call ended.", {"kind": "call_end", "call_id": cid}))
     assert ct.archive("vc_client_1", "web_n1", [{"role": "user", "text": "hi", "ts": 1000.0}], principal="fleet")
     assert ct.archived == (0, False)
+
+
+def test_a_line_that_landed_counts_even_when_its_memory_echo_throws(tmp_path):
+    # The line is in the thread; on_line failing after it must not make a retry write it again.
+    s = ThreadStore(tmp_path / "t.db")
+
+    def boom(*a):
+        raise RuntimeError("memory down")
+    ct = CallThreads(s, on_line=boom, end_marker=lambda cid: ("Call ended.", {"kind": "call_end", "call_id": cid}))
+    assert ct.archive("vc_client_1", "web_n1", [{"role": "user", "text": "hi", "ts": 1000.0}], principal="fleet")
+    assert ct.archived == (1, True)

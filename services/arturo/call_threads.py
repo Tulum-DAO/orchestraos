@@ -58,7 +58,8 @@ class CallThreads:
             return self._by_thread.get(thread_id)
 
     def _write(self, cid, thread_id, role, text, meta=None, ts=None, principal=None):
-        """True when the line landed in the thread."""
+        """True when the line landed in the thread (whatever its memory echo does after)."""
+        seq = None
         try:
             seq = self.store.append_message(thread_id, role, text, mode="voice", meta=meta,
                                             principal=principal or self._principal.get(cid), ts=ts)
@@ -67,10 +68,9 @@ class CallThreads:
             if self.on_line is not None:
                 from services.arturo.thread_store import brain_content
                 self.on_line(thread_id, role, brain_content(role, text, "voice", meta))
-            return seq is not None
         except Exception as e:  # noqa: BLE001 — the archive is never worth breaking a call
             log.warning(f"call {cid[:8]}: archiving a line failed: {e!r}")
-            return False
+        return seq is not None
 
     def observe(self, cid, ev):
         """One relay event, as the browser will get it. Only FINAL lines are archived."""
