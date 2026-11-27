@@ -119,7 +119,7 @@ def test_1_a_stale_reading_whose_5_hour_reset_passed_counts_as_0():
 
 def test_1_codex_logins_in_the_profiles_file_are_never_a_claude_target():
     doc = {"profiles": [{"id": "default", "enrolled": True}, {"id": "strategysimple", "enrolled": True},
-                        {"id": "shawcole", "provider": "codex", "enrolled": True},
+                        {"id": "codex-a", "provider": "codex", "enrolled": True},
                         {"id": "x", "provider": "claude", "enrolled": True}, {"id": "off", "enrolled": False}]}
     assert LS.claude_logins(doc) == ["default", "strategysimple", "x"]
 
@@ -835,7 +835,7 @@ def test_5_our_own_switch_is_not_nudged_twice_as_a_hand_switch():
 
 PROFILES_11_26 = {"active": "default", "profiles": [
     {"id": "default", "enrolled": True}, {"id": "strategysimple", "enrolled": True},
-    {"id": "shawcole", "provider": "codex", "enrolled": True}, {"id": "shaw", "provider": "codex", "enrolled": True}]}
+    {"id": "codex-a", "provider": "codex", "enrolled": True}, {"id": "codex-b", "provider": "codex", "enrolled": True}]}
 
 
 class Replay1126(SwitchLogFake):
@@ -845,7 +845,7 @@ class Replay1126(SwitchLogFake):
 
 def test_replay_11_27_00_48z_the_refused_trigger_now_switches_to_default():
     """limit-events 00:48:02Z: "trigger: strategysimple 5-hour at 96%" then switch_refused "default: usage
-    reading older than 30 min; shawcole: no usage reading; shaw: no usage reading". default's last reading
+    reading older than 30 min; codex-a: no usage reading; codex-b: no usage reading". default's last reading
     (5-hour 1%, weekly 80%) went stale at 22:40Z, so it was taken about 22:10Z."""
     now = 1795740482                                     # 2026-11-27T00:48:02Z
     usage = {"strategysimple": {"as_of": now - 120, "windows": {
