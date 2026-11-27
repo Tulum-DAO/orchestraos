@@ -47,7 +47,7 @@ NOW = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
 
 ROWS = [
     # (fact_id, kind, text, state)
-    ("f-car", "fact", "Shaw took the car to the garage on Tuesday and it is repaired now", "active"),
+    ("f-car", "fact", "Sam took the car to the garage on Tuesday and it is repaired now", "active"),
     ("f-bill", "decision", "Northwind invoice is paid in full, no balance left", "active"),
     ("f-old", "fact", "The automobile mechanic quoted four hundred dollars", "superseded"),
     ("f-noise", "fact", "Distill this recorded conversation about the automobile into facts", "active"),
@@ -70,7 +70,7 @@ def _make_db(path, rows=ROWS):
 
 def _add(con, rows):
     con.executemany("INSERT INTO facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    [(fid, NOW, kind, text, "shaw", 1.0, "{}", "[]", json.dumps({"source_kind": "voice"}),
+                    [(fid, NOW, kind, text, "operator", 1.0, "{}", "[]", json.dumps({"source_kind": "voice"}),
                       state, "standard", NOW) for fid, kind, text, state in rows])
     con.commit()
 

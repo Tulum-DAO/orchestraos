@@ -1,8 +1,9 @@
-"""Hybrid facts index: FTS5 bm25 + local MiniLM vectors over state/brain/facts.db (plan step 1).
+"""Hybrid facts index: FTS5 bm25 + local MiniLM vectors over state/brain/facts.db.
 
-Shaw chose option B on card apr_39e1b560 (2026-11-26): all-MiniLM-L6-v2 plus FTS5 bm25, rank-fused, no LLM
-call on any lookup. Measured on this box: query embed p95 22 ms, end-to-end recall p95 62 ms on a quiet box,
-28/30 reworded facts in the top 5 (FTS alone: 24/30). See state/projects/nod/PLAN_one-memory-system.md.
+The design the operator chose (2026-11-26), from a measured comparison of four options: all-MiniLM-L6-v2 plus
+FTS5 bm25, rank-fused, with no LLM call on any lookup. Matching is by meaning as well as by words, so a fact
+stated in other words is still found. Measured on the host: query embed p95 22 ms, end-to-end recall p95 62 ms
+on a quiet box, 28/30 reworded facts in the top 5 (FTS alone: 24/30).
 
 What lives where:
   - facts.db stays the source of truth and is only ever READ (mode=ro). Its states, supersession and noise
@@ -16,7 +17,7 @@ What lives where:
     UPDATEs state, expiry, slot and validity columns, and never deletes a fact or rewrites its text. States
     are read live at query time, so they need no sync.
 
-CPU (fleet rule, gm msg_9b1b7757): every build or sync runs as
+CPU (the host's shared-CPU rule): every build or sync runs as
     flock /tmp/heavy-job.lock nice -n 19 taskset -c 6,7 python3 -m services.arturo.facts_index sync
 and `sync` itself also lowers its priority, pins to cores 6,7 and caps the embedder at 2 threads, so a bare
 invocation cannot take the box either. The lock is the caller's: flock is per open file, so taking it again
@@ -48,7 +49,7 @@ DEPTH = 50                   # rows each ranker contributes to the fusion (the m
 RRF_K = 60                   # reciprocal-rank constant (the measured setting)
 MIN_COS_ENV = "ARTURO_FACTS_HYBRID_MIN_COS"
 DEFAULT_MIN_COS = 0.33       # the measured same-meaning threshold for MiniLM (98.3% on 30 pairs + 30 negatives)
-BUILD_THREADS = 2            # gm msg_9b1b7757: embedding threads capped at 2
+BUILD_THREADS = 2            # shared-CPU rule: embedding threads capped at 2
 QUERY_THREADS = 1            # in the proxy: one intra-op thread, like semantic_recall
 HEAVY_CORES = (6, 7)
 MAX_FTS_TERMS = 8            # the rarest topic words of a question; more only widens the bm25 sort

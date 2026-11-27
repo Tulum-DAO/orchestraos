@@ -458,7 +458,7 @@ def _query_tail(dbpath, src_mark, keywords):
 
 
 def query_hybrid(text, keywords, k=K, dbpath=None, jsonpath=None, index_path=None):
-    """Plan step 1 (Shaw's option B, card apr_39e1b560): FTS5 bm25 + MiniLM vectors, fused by reciprocal rank.
+    """Hybrid recall, the operator's chosen design: FTS5 bm25 + MiniLM vectors, fused by reciprocal rank.
     Returns None when the index cannot answer yet (the caller then serves the keyword ranking unchanged).
 
     Ranked lists fused:
