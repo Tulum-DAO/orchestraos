@@ -257,6 +257,33 @@ def test_native_call_card_written_once_even_when_finalize_is_re_driven(tmp_path,
     assert json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())["thread_card_written"] is True
 
 
+def test_a_repeated_call_ended_post_never_writes_the_call_twice(tmp_path, monkeypatch):
+    # The gateway rewrites the journal whole on every POST /voice-call-ended for the same conv_id (same call id),
+    # so the journal's thread_card_written flag is gone the second time. The thread itself must remember.
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    _native_journal(m)
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    _native_journal(m)                                                    # the second POST: a fresh journal
+    assert "thread_card_written" not in json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    assert len(_cards(m, "web_abc123")) == 1
+    said = [(t["role"], t["content"]) for t in m._THREADS.get_thread("web_abc123")["turns"][2:]]
+    assert said.count(("user", "what is up")) == 1 and said.count(("assistant", "Two approvals.")) == 1
+
+
+def test_the_same_call_id_in_another_thread_is_not_a_repeat(tmp_path, monkeypatch):
+    # The once check is per (thread, call id): a card for this call in one thread does not stop its own thread.
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_other", "typed", "answer", principal="fleet")
+    m._THREADS.append_message("web_other", "assistant", "Call ended.", mode="voice",
+                              meta={"kind": "call_end", "call_id": NATIVE}, principal="fleet")
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    _native_journal(m)
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    assert len(_cards(m, "web_abc123")) == 1
+
+
 def test_no_thread_id_no_card_and_journal_unchanged_shape(tmp_path, monkeypatch):
     m = _native_proxy(tmp_path, monkeypatch)
     m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")

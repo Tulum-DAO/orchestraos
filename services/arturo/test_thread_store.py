@@ -106,3 +106,17 @@ def test_a_store_whose_file_cannot_be_written_degrades_instead_of_killing_a_turn
     assert s.usable is False
     s.record_turn("c1", "q", "a")      # must not raise
     assert s.list_threads() == [] and s.get_thread("c1") is None and s.history("c1") == []
+
+
+def test_has_call_end_matches_only_this_call_in_this_thread(tmp_path):
+    s = ThreadStore(tmp_path / "threads.db")
+    s.record_turn("t1", "hi", "hello")
+    assert s.has_call_end("t1", "vc_a") is False
+    s.append_message("t1", "assistant", "said on the call", mode="voice")                   # a line, no meta
+    s.append_message("t1", "assistant", "a job card", mode="voice", meta={"kind": "job", "call_id": "vc_a"})
+    assert s.has_call_end("t1", "vc_a") is False                                             # other kinds don't count
+    s.append_message("t1", "assistant", "Call ended (vc_a).", mode="voice", meta={"kind": "call_end", "call_id": "vc_a"})
+    assert s.has_call_end("t1", "vc_a") is True
+    assert s.has_call_end("t1", "vc_b") is False                                             # another call
+    assert s.has_call_end("t2", "vc_a") is False                                             # another thread
+    assert s.has_call_end("t1", "") is False and s.has_call_end("", "vc_a") is False

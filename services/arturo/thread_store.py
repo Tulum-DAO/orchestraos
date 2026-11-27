@@ -822,6 +822,28 @@ class ThreadStore:
                 break
         return out
 
+    def has_call_end(self, conversation_id, call_id):
+        """True when this thread already holds the end card of this call (meta kind call_end, same call_id). The
+        thread is the memory a call's card was written: a journal can be rewritten whole (a repeated call-ended
+        POST for the same call), a thread row cannot be un-written. False on any error, so a broken store reads
+        as "not written" and the caller's own guards decide."""
+        if not self.usable or not conversation_id or not call_id:
+            return False
+        try:
+            with self._connect() as conn:
+                rows = conn.execute("SELECT meta FROM turns WHERE thread_id = ? AND meta LIKE ?",
+                                    (conversation_id, '%"call_end"%')).fetchall()
+            for r in rows:
+                try:
+                    meta = json.loads(r["meta"] or "{}")
+                except ValueError:
+                    continue
+                if isinstance(meta, dict) and meta.get("kind") == "call_end" and meta.get("call_id") == call_id:
+                    return True
+            return False
+        except Exception:  # noqa: BLE001
+            return False
+
     def has_opener(self, conversation_id):
         """True when this thread holds the page's first-run opener: it is the onboarding thread,
         and a later opener on it is the operator coming BACK, not arriving."""
