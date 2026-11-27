@@ -605,7 +605,9 @@ def test_the_sweeper_writes_an_owed_card_nothing_else_re_drives(tmp_path, monkey
     assert len(_cards(m, "web_abc123")) == 1
 
 
-def test_the_sweeper_gives_up_on_a_refused_thread_and_after_its_cap(tmp_path, monkeypatch):
+def test_the_sweeper_stops_at_its_cap_and_never_writes_into_a_refused_thread(tmp_path, monkeypatch):
+    # A refusal is an attempt like any other, not an instant give-up: a locked store reads as a refusal for a device
+    # caller (started_by answers "fleet" when it cannot read), and that must not end a card the caller is owed.
     m = _native_proxy(tmp_path, monkeypatch)
     m._THREADS.record_turn("web_mine", "typed", "answer", principal="device:other")    # someone else's thread
     store = m._THREADS
@@ -613,19 +615,52 @@ def test_the_sweeper_gives_up_on_a_refused_thread_and_after_its_cap(tmp_path, mo
     m._THREADS = _Unreadable()
     assert m.finalize_from_client(client_call_id=NATIVE) is True
     m._THREADS = store
+    p = m.VOICE_CALLS_DIR / f"{NATIVE}.json"
     m._retry_owed_cards(now=2_000_000_000.0)
-    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
-    assert d["card_gaveup"] is True and _cards(m, "web_mine") == []     # refused: final, never retried
-    # and a store that never comes back stops at the cap
-    _native_journal(m)
-    m._THREADS = _Unreadable()
-    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    d = json.loads(p.read_text())
+    assert d["card_attempts"] == 1 and not d.get("card_gaveup")
+    assert d["card_next_ts"] == 2_000_000_000.0 + 30                      # the first wait is 30 s
     t = 2_000_000_000.0
     for _ in range(m._CARD_RETRY_CAP + 3):
-        m._retry_owed_cards(now=t)
         t += 100_000
-    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+        m._retry_owed_cards(now=t)
+    d = json.loads(p.read_text())
     assert d["card_gaveup"] is True and d["card_attempts"] == m._CARD_RETRY_CAP
+    assert _cards(m, "web_mine") == []                                    # refused: never written
+
+
+def test_a_device_callers_card_survives_a_lock_that_reads_as_a_refusal(tmp_path, monkeypatch):
+    m = _native_proxy(tmp_path, monkeypatch)
+    store = m._THREADS
+    store.record_turn("dev1_t", "typed", "answer", principal="device:dev1")             # the caller's own thread
+    _native_journal(m, thread_id="dev1_t", principal="device:dev1")
+    monkeypatch.setattr(store, "started_by", lambda tid: "fleet")                       # a locked read answers fleet
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    m._retry_owed_cards(now=2_000_000_000.0)
+    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert not d.get("card_gaveup") and not d.get("thread_card_written")
+    monkeypatch.undo()
+    m._retry_owed_cards(now=d["card_next_ts"] + 1)
+    assert len(_cards(m, "dev1_t")) == 1
+
+
+def test_a_journal_the_gateway_rewrote_meanwhile_collects_no_attempt(tmp_path, monkeypatch):
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    _native_journal(m)
+    store = m._THREADS
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    real = m._write_call_card
+
+    def rewrite_then_fail(*a):
+        _native_journal(m)                                                # the gateway's re-POST lands mid-pass
+        return real(*a)
+    monkeypatch.setattr(m, "_write_call_card", rewrite_then_fail)
+    m._retry_owed_cards(now=2_000_000_000.0)
+    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert "card_attempts" not in d and "own_turns" not in d
+    m._THREADS = store
 
 
 def test_the_inject_sweeper_runs_the_card_pass_even_with_injects_off():

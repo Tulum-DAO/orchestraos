@@ -818,8 +818,9 @@ _CARD_RETRY_CAP = 8
 
 def _retry_owed_cards(now=None):
     """One sweeper pass: a call card a failed archive still owes (the journal kept the caller's own lines) is written
-    here. Nothing else re-drives a finalize but the gateway's re-POST, which rewrites the journal whole. Backed off,
-    capped, and a thread that refuses the caller is final."""
+    here. Nothing else re-drives a finalize but the gateway's re-POST, which rewrites the journal whole. Backed off
+    (30 s, doubling, 15 min at most) and capped. A refusal counts as a failed attempt rather than ending it at once: a
+    locked store reads as a refusal for a device caller, and a refused thread is never written anyway."""
     import json as _json
     from services.arturo.call_journal import _atomic_write
     now = time.time() if now is None else now
@@ -836,10 +837,6 @@ def _retry_owed_cards(now=None):
         call_id = d.get("call_id") or p.stem
         if _write_call_card(p, call_id, *owed):
             continue
-        try:
-            refused = _thread_refusal(owed[0], owed[2]) is not None
-        except Exception:  # noqa: BLE001 — an unreadable store is a reason to retry, not to give up
-            refused = False
         with _JOURNALS_LOCK:
             try:
                 d = _json.loads(p.read_text())
@@ -849,12 +846,11 @@ def _retry_owed_cards(now=None):
                 continue                    # written meanwhile, or the gateway rewrote the journal
             n = int(d.get("card_attempts") or 0) + 1
             d["card_attempts"] = n
-            if refused or n >= _CARD_RETRY_CAP:
+            if n >= _CARD_RETRY_CAP:
                 d["card_gaveup"] = True
-                log.warning(f"call {call_id}: call card given up after {n} attempt(s)"
-                            f"{' (thread refused)' if refused else ''}")
+                log.warning(f"call {call_id}: call card given up after {n} attempts")
             else:
-                d["card_next_ts"] = now + min(900, 30 * 2 ** n)
+                d["card_next_ts"] = now + min(900, 30 * 2 ** (n - 1))
             _atomic_write(p, d)
 
 
