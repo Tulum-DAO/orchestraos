@@ -2629,7 +2629,7 @@ function takeoverAt(items: readonly any[], promotedAt: string | null | undefined
  *  the hold phase it may start in, so the takeover is found once on the log's HEAD, read forward from its first line
  *  until the takeover is known (a hold phase is the first half hour or so of a green's log), and every chunk is cut at
  *  that line. A found takeover never moves (the log only grows); no takeover yet is read again when the log grows. */
-type Takeover = 'whole' | 'none' | { off: number; firstPromote: number | null | undefined; exchange: string | undefined };
+type Takeover = 'whole' | 'none' | { off: number; firstPromote: number | undefined; exchange: string | undefined };
 const takeovers = new Map<string, { t: Takeover; size: number }>();
 const TAKEOVERS_MAX = 256;
 const HEAD_WANT0 = 32 * 1024;
@@ -2653,10 +2653,14 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
   if (kept && (typeof kept.t === 'object' ? size >= kept.size : kept.size === size)) return kept.t;
   let t: Takeover = 'whole';
   // From a small head up, doubled: the takeover is usually in the first lines (a person turn, or a short hold phase).
-  let hi = Math.min(TAIL_WANT0, HEAD_WANT0);
+  // No takeover yet (the last read ran to the end): the head is the whole log, read through the whole-file cache, which
+  // parses only the lines appended since (a range read of a grown file starts over).
+  let hi = kept?.t === 'none' ? Number.POSITIVE_INFINITY : Math.min(TAIL_WANT0, HEAD_WANT0);
   for (let round = 0; round < 64; round++) {
     let log: ReturnType<typeof logRange>;
-    try { log = logRange(path, parser, 0, hi); } catch { return 'whole'; }
+    try {
+      log = Number.isFinite(hi) ? logRange(path, parser, 0, hi) : { ...cachedLog(path, parser), end: Math.max(size, 0), eof: true };
+    } catch { return 'whole'; }
     const items = settlePromoteTurns(prep(log.items), promotedAt, null);
     const at = takeoverAt(items, promotedAt, log.eof);
     if (at === 'more' && !log.eof) { hi *= 2; continue; }
@@ -2664,10 +2668,11 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
     else if (at === 'whole') t = 'whole';
     else if (typeof items[at]?.line_off === 'number') {
       const promote = items.find((it) => it?.wake === 'promote' && isTurnOpener(it) && Date.parse(String(it.ts ?? '')) >= t0);
-      // The log's first promote turn after the promotion, when the head holds it; else found when a chunk needs it.
+      // The log's first promote turn after the promotion, when the head holds it (the head is the log's start); else
+      // found when a chunk needs it (firstPromoteOf: one may still land).
       // The exchange the takeover's turn is in, as the whole log tags it (the head is the log's start): the hold phase
       // can leave one open (withHeadTags).
-      t = { off: items[at].line_off, firstPromote: promote ? promote.line_off ?? undefined : (log.eof ? null : undefined),
+      t = { off: items[at].line_off, firstPromote: typeof promote?.line_off === 'number' ? promote.line_off : undefined,
         exchange: items[at].exchange === undefined ? undefined : String(items[at].exchange) };
     }
     break;
@@ -2677,29 +2682,12 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
   return t;
 }
 
-/** The log line of the first promote turn at or after `promotedAt`, read on the whole log: only for a chunk that starts
- *  after the promotion and holds a promote turn (a second wake, or one that landed late), which is rare. Kept with the
- *  takeover. */
-function firstPromoteOff(path: string, parser: LogParser<any>, promotedAt: string, prep: (items: readonly any[]) => any[],
-                         sig: string, t: { off: number; firstPromote: number | null | undefined }): number | null {
-  if (t.firstPromote !== undefined) return t.firstPromote;
-  const t0 = Date.parse(promotedAt);
-  let found: number | null = null;
-  try {
-    const promote = prep(cachedLog(path, parser).items)
-      .find((it) => it?.wake === 'promote' && isTurnOpener(it) && Date.parse(String(it.ts ?? '')) >= t0);
-    found = typeof promote?.line_off === 'number' ? promote.line_off : null;
-  } catch { return null; }
-  const kept = takeovers.get(takeoverKey(path, logStat(path).id, promotedAt, sig));
-  if (kept && typeof kept.t === 'object') kept.t.firstPromote = found;
-  return found;
-}
-
-/** For a log with no takeover to cut at ('whole': no promotion time, or no times): the log line of the promote turn
- *  settlePromoteTurns takes as the promotion's on the whole log (its first, or its first at or after `promotedAt`).
- *  Read on the whole log, only for a chunk below the head that holds a promote wake; a found one is kept. */
+/** The log line of the promote turn settlePromoteTurns takes as the promotion's on the whole log: its first at or after
+ *  `promotedAt` (its first, with no promotion time). Read on the whole log, only for a chunk below the head that holds a
+ *  promote wake (a second wake, or one that landed late), which is rare. A found one is kept (the log only grows); none
+ *  yet holds only while the file does not grow (a wake may land). */
 const firstPromotes = new Map<string, { off: number | null; size: number }>();
-function wholeFirstPromote(path: string, parser: LogParser<any>, promotedAt: string | null | undefined,
+function firstPromoteOf(path: string, parser: LogParser<any>, promotedAt: string | null | undefined,
                            prep: (items: readonly any[]) => any[], sig: string): number | null {
   const { id, size } = logStat(path);
   const key = takeoverKey(path, id, promotedAt, sig);
@@ -2736,15 +2724,15 @@ function liveFromFile(items: readonly any[], view: { path: string; parser: LogPa
   if (cut === 'log') return liveFrom(items, promotedAt, open);
   if (cut === 'whole') {
     // Nothing to cut at, but a chunk below the head may hold a promote turn that is not the log's first.
-    const first = view.start > 0 && hasPromoteWake(items) ? wholeFirstPromote(view.path, view.parser, promotedAt, prep, sig) : undefined;
+    const first = view.start > 0 && hasPromoteWake(items) ? firstPromoteOf(view.path, view.parser, promotedAt, prep, sig) : undefined;
     return dropHookMarkers(settlePromoteTurns(items, promotedAt, open, first));
   }
   if (cut === 'none') return [];
-  const t0 = Date.parse(String(promotedAt));
-  // A chunk that starts after the promotion may hold a promote turn that is not the log's first one.
-  const firstTs = items.find((it) => !Number.isNaN(Date.parse(String(it?.ts ?? ''))))?.ts;
-  const late = view.start > 0 && hasPromoteWake(items) && firstTs !== undefined && Date.parse(String(firstTs)) >= t0;
-  const first = late ? firstPromoteOff(view.path, view.parser, String(promotedAt), prep, sig, cut) : undefined;
+  // A chunk below the head may hold a promote turn that is not the log's first one: which one is first is read on the
+  // log (the head's, or firstPromoteOf), never guessed from the chunk's own times (a line queued mid-turn keeps the
+  // time it was typed).
+  const first = view.start > 0 && hasPromoteWake(items)
+    ? (cut.firstPromote ?? firstPromoteOf(view.path, view.parser, promotedAt, prep, sig)) : undefined;
   const settled = dropHookMarkers(settlePromoteTurns(items, promotedAt, open, first));
   let k = 0;
   while (k < settled.length && typeof settled[k]?.line_off === 'number' && settled[k].line_off < cut.off) k++;

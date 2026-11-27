@@ -57,6 +57,13 @@ const SEATS = {
   // HOOKS: BELOW's shape with Stop-hook continuations (isMeta lines: a marker each, gone before anything is sent) after
   // every reply: a chunk holds more items than the chat it shows.
   hooks: { seat: 'zz-ht-hooks', sid: '66666666-2222-4333-8444-000000000009', promoted: SWAP, after: 40 },
+  // QUEUED: LATE's log with a message queued mid-turn just before the second promote wake, its line stamped before the
+  // promotion: a chunk that starts there has no line after the promotion before the wake.
+  queued: { seat: 'zz-ht-queued', sid: '66666666-2222-4333-8444-00000000000a', promoted: SWAP, after: 30 },
+  // GROW: a short log with no promote wake yet; later it grows past a tail window and its first promote wake lands.
+  grow: { seat: 'zz-ht-grow', sid: '66666666-2222-4333-8444-00000000000b', promoted: SWAP, after: 2 },
+  // WAITING: promoted, but every turn after the promotion is still a machine wake: no takeover yet, nothing shown.
+  waiting: { seat: 'zz-ht-waiting', sid: '66666666-2222-4333-8444-00000000000c', promoted: SWAP, after: 0 },
 } as const;
 {
   const db = new Database(join(orch, 'state', 'orchestra-registry.db'));
@@ -123,6 +130,9 @@ function seatLog(seat: string, after: number, late = false, kind = ''): string[]
       say(`p-c${i}`, at(live0, i * 30 + 3), `answer ${i} ${filler}`));
     if (kind === 'hooks') for (let j = 0; j < 3; j++) lines.push(hook(`p-k${i}.${j}`, at(live0, i * 30 + 4 + j)));
   }
+  const hydrate = (i: number, t: string) => [user(`h-wal${i}`, t, mail('lineage-daemon', `[WAL DELTA] hydrate from ${seat} blue ${i}`)),
+    say(`h-ans${i}`, at(t, 1), `Hydrate ${i} taken in. ${filler}`, true), result(`h-ansr${i}`, at(t, 2), `h-ans${i}`)];
+  if (kind === 'waiting') for (let i = 12; i < 52; i++) lines.push(...hydrate(i, at(live0, (i - 12) * 60)));
   if (kind === 'fwd') lines.push(user('m-1', at(live0, 0), mail('peer', 'status?')), say('m-1c', at(live0, 1), 'status ok'));
   if (kind === 'digest') {
     for (let i = 0; i < 30; i++) {
@@ -133,6 +143,10 @@ function seatLog(seat: string, after: number, late = false, kind = ''): string[]
   }
   if (late) {
     const t = at(live0, after * 30 + 60);
+    if (kind === 'queued') {
+      lines.push(JSON.stringify({ type: 'attachment', uuid: 'q-old', timestamp: '2026-11-20T07:30:00Z',
+        attachment: { type: 'queued_command', prompt: `a message typed while it worked ${filler}`, origin: { kind: 'human' } } }));
+    }
     lines.push(user('w-2', t, promote('m2')), say('w-2a', at(t, 1), 'Checking the registry again.', true),
       result('w-2r', at(t, 2), 'w-2a'), say('w-2c', at(t, 3), `Still the live seat. ${filler}`),
       user('p-z', at(t, 30), `one more question ${filler}`), say('p-zc', at(t, 31), 'One more answer.'));
@@ -143,12 +157,12 @@ function seatLog(seat: string, after: number, late = false, kind = ''): string[]
 const paths: Record<string, string> = {};
 for (const [k, s] of Object.entries(SEATS)) {
   paths[k] = join(projects, `${s.sid}.jsonl`);
-  writeFileSync(paths[k], seatLog(s.seat, s.after, k === 'late' || k === 'nolate', k).join('\n') + '\n');
+  writeFileSync(paths[k], seatLog(s.seat, s.after, k === 'late' || k === 'nolate' || k === 'queued', k).join('\n') + '\n');
   writeFileSync(join(orch, 'state', 'agents', `${s.seat}.json`), JSON.stringify({ session_id: s.sid, cwd: '/repo' }));
 }
 
 const { default: router, tailFirstForTests, normalizeTranscriptFile } = await import('./chat-transcript.js');
-const { clearLogCache } = await import('../services/transcript-log-cache.js');
+const { clearLogCache, logCacheBytesRead } = await import('../services/transcript-log-cache.js');
 const { clearFirstPageCache } = await import('../services/transcript-first-page-cache.js');
 const fresh = () => { clearLogCache(); clearFirstPageCache(); };
 
@@ -203,10 +217,15 @@ for (const [k, s] of Object.entries(SEATS)) {
         assert.deepEqual(ids(oracle).slice(0, 4), ['w-1', 'w-1a', 'w-1r', 'w-1c']);
         assert.ok(!ids(oracle).some((u) => u.startsWith('w-2')), 'precondition: the second promote turn is left out');
         assert.ok(ids(oracle).includes('p-zc'));
+      } else if (k === 'queued') {
+        assert.ok(ids(oracle).includes('q-old') && ids(oracle).includes('w-1c'), 'precondition: the queued message and the first promote turn');
+        assert.ok(!ids(oracle).some((u) => u.startsWith('w-2')), 'precondition: the second promote turn is left out');
       } else if (k === 'nolate') {
         assert.ok(ids(oracle).includes('h-brief'), 'precondition: no promotion time, no cut');
         assert.ok(ids(oracle).includes('w-1c'), 'precondition: the first promote turn keeps its final reply');
         assert.ok(!ids(oracle).some((u) => u.startsWith('w-2')), 'precondition: the second promote turn is left out');
+      } else if (k === 'waiting') {
+        assert.deepEqual(ids(oracle), [], 'precondition: no takeover yet, nothing shown');
       } else if (k === 'fwd') {
         // Mail alone after the promotion: its reply is the strip, in the forwarded turn's exchange (the whole log has a
         // person's turn, so the newest reply is not drawn for want of one).
@@ -359,6 +378,78 @@ test('a log replaced in place (another file at the same path) is cut at its own 
     tailFirstForTests({ want0: 4 * 1024 });
     fresh();
     assert.deepEqual(whole(await walkAll(get, 6, 5)), whole(oracle));
+    tailFirstForTests({ want0: 256 * 1024 });
+  });
+});
+
+test('a chunk that starts at a line stamped before the promotion still settles the log\'s first promote turn, not its own', async () => {
+  const s = SEATS.queued;
+  const want = readFileSync(paths.queued).length - lineOffset(paths.queued, 'q-old');
+  const read = (n: number, tailFirst: boolean) =>
+    whole(normalizeTranscriptFile(paths.queued, s.seat, s.sid, n, false, false, false, false, tailFirst).items);
+  await withServer(s.seat, async (get) => {
+    for (const n of [4, 8]) {
+      tailFirstForTests({ want0: Number.POSITIVE_INFINITY });
+      fresh();
+      const oracle = { stream: read(n, false), page: whole((await get(`?limit=${n}`)).items) };
+      // The chunk starts at the queued line: its first time is before the promotion.
+      tailFirstForTests({ want0: want });
+      fresh();
+      assert.deepEqual(read(n, true), oracle.stream, `stream window of ${n}`);
+      fresh();
+      assert.deepEqual(whole((await get(`?limit=${n}`)).items), oracle.page, `first page of ${n}`);
+    }
+    tailFirstForTests({ want0: 256 * 1024 });
+  });
+});
+
+test('a promote wake that lands after the head was read without one is the log\'s first promote turn', async () => {
+  const s = SEATS.grow;
+  await withServer(s.seat, async (get) => {
+    tailFirstForTests({ want0: 1024 });
+    fresh();
+    assert.equal(ids(await walkAll(get, 6, 5))[0], 'p-u0', 'precondition: the head is read (no promote wake yet)');
+    // More than a tail window of turns after the promotion, then the promote wake's turn and a question.
+    const t0 = '2026-11-20T09:00:00Z';
+    const more: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      more.push(user(`g-u${i}`, at(t0, i * 30), `later question ${i} ${filler}`), say(`g-c${i}`, at(t0, i * 30 + 1), `later answer ${i} ${filler}`));
+    }
+    const t1 = at(t0, 600);
+    more.push(user('w-1', t1, promote('m1')), say('w-1a', at(t1, 1), 'Checking the registry.', true),
+      result('w-1r', at(t1, 2), 'w-1a'), say('w-1c', at(t1, 3), `I am the live seat now. ${filler}`),
+      user('p-z', at(t1, 30), `one more question ${filler}`), say('p-zc', at(t1, 31), 'One more answer.'));
+    appendFileSync(paths.grow, more.join('\n') + '\n');
+    tailFirstForTests({ want0: Number.POSITIVE_INFINITY });
+    fresh();
+    const oracle = await walkAll(get, 6, 5);
+    assert.ok(ids(oracle).includes('w-1c'), 'precondition: the first promote turn keeps its final reply');
+    tailFirstForTests({ want0: 4 * 1024 });
+    fresh();
+    assert.deepEqual(whole(await walkAll(get, 6, 5)), whole(oracle));
+    tailFirstForTests({ want0: 256 * 1024 });
+  });
+});
+
+test('a log with no takeover yet reads only what it appended when it grows, not its head again', async () => {
+  const s = SEATS.waiting;
+  assert.ok(readFileSync(paths.waiting).length > 64 * 1024, 'precondition: the head read takes more than two steps');
+  await withServer(s.seat, async (get) => {
+    tailFirstForTests({ want0: 1024 });
+    fresh();
+    assert.deepEqual((await get('?limit=6')).items, [], 'precondition: nothing shown');
+    // The first growth reads the log whole once (the head's cache was cleared above: the page kept a tail chunk only),
+    // never the head again in doubling steps on top; after that, only what was appended.
+    for (let i = 0; i < 4; i++) {
+      const added = [user(`h-wal${60 + i}`, at('2026-11-20T09:00:00Z', i * 60), mail('lineage-daemon', `[WAL DELTA] hydrate from ${s.seat} blue ${60 + i}`)),
+        say(`h-ans${60 + i}`, at('2026-11-20T09:00:00Z', i * 60 + 1), 'Taken in.')].join('\n') + '\n';
+      appendFileSync(paths.waiting, added);
+      const before = logCacheBytesRead();
+      assert.deepEqual((await get('?limit=6')).items, []);
+      const read = logCacheBytesRead() - before;
+      const cap = i === 0 ? readFileSync(paths.waiting).length * 1.25 : 8 * 1024;
+      assert.ok(read < cap, `growth ${i}: ${added.length} bytes appended, ${read} bytes read`);
+    }
     tailFirstForTests({ want0: 256 * 1024 });
   });
 });

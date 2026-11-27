@@ -110,15 +110,17 @@ const { default: router, tailFirstForTests, chatWindow } = await import('./chat-
 const { clearLogCache, logCacheBytesRead, logCacheFullParses } = await import('../services/transcript-log-cache.js');
 const { clearFirstPageCache } = await import('../services/transcript-first-page-cache.js');
 
-async function withServer<T>(fn: (get: (q: string) => Promise<any>) => Promise<T>): Promise<T> {
+async function withServer<T>(fn: (get: (q: string) => Promise<any>) => Promise<T>, dividers = true): Promise<T> {
   const express = (await import('express')).default;
   const a = express();
   a.use('/api/agents', router);
   const server = a.listen(0);
   try {
     const base = `http://127.0.0.1:${(server.address() as any).port}/api/agents/${SEAT}/transcript`;
-    // The divider between generations is an operator's view (?dividers=1); this suite counts it.
-    return await fn(async (q) => (await fetch(`${base}${q}${q.includes('?') ? '&' : '?'}dividers=1`)).json());
+    // The divider between generations is an operator's view (?dividers=1); this suite counts it, and once reads the
+    // default (no divider: the generations read as one conversation).
+    const extra = (q: string) => (dividers ? `${q.includes('?') ? '&' : '?'}dividers=1` : '');
+    return await fn(async (q) => (await fetch(`${base}${q}${extra(q)}`)).json());
   } finally {
     server.close();
   }
@@ -175,6 +177,25 @@ test('every page equals the whole-file build, from the first page back to the fi
     // cursor shape: a byte offset, then the uuid
     assert.match(pages[pages.length - 1].oldest_id, new RegExp(`^${G2}~@\\d+~g2-`));
   });
+});
+
+test('without dividers (the default) every page, at every chunk size, equals the whole-file build: one conversation across the generations', async () => {
+  await withServer(async (get) => {
+    tailFirstForTests({ want0: Number.POSITIVE_INFINITY });
+    fresh();
+    const oracle = flat(await walkAll(get, 40, 100));
+    const uuids = oracle.map((it: any) => it.uuid);
+    assert.ok(!uuids.includes(`rot:${G2}`), 'precondition: no marker between the generations');
+    assert.ok(uuids.includes('g1-u0') && uuids.includes('g2-u0'), 'precondition: both generations');
+    for (const want0 of [256 * 1024, 16 * 1024]) {
+      tailFirstForTests({ want0 });
+      fresh();
+      assert.deepEqual(flat(await walkAll(get, 40, 100)), oracle, `pages at want0 ${want0}`);
+      fresh();
+      assert.deepEqual(flat(await walkAll(get, 23, 37)), oracle, `pages of 23/37 at want0 ${want0}`);
+    }
+    tailFirstForTests({ want0: 256 * 1024 });
+  }, false);
 });
 
 test('the first page of a 3 MB log reads under 1 MB and parses nothing in full; an older page reads a window, not the file', async () => {
