@@ -284,6 +284,24 @@ def test_the_same_call_id_in_another_thread_is_not_a_repeat(tmp_path, monkeypatc
     assert len(_cards(m, "web_abc123")) == 1
 
 
+def test_only_the_callers_own_lines_reach_the_thread_never_a_merged_server_journal(tmp_path, monkeypatch):
+    # The merge's time-window fallback can link ANY overlapping server journal, and it recovers a role the client
+    # journal lacks entirely. Those lines are someone else's call: they must never be archived into this thread.
+    m = _native_proxy(tmp_path, monkeypatch)
+    now = 1_800_000_000.0
+    other = {"call_id": "vc_server_0000other", "started_at": now - 5, "page": "server", "status": "live",
+             "turns": [{"role": "user", "text": "someone else's secret", "ts": now + 2},
+                       {"role": "arturo", "text": "their answer", "ts": now + 4},
+                       {"role": "tool", "name": "lookup", "text": "their tool", "ts": now + 3}]}
+    (m.VOICE_CALLS_DIR / "vc_server_0000other.json").write_text(json.dumps(other))
+    _native_journal(m, thread_id="dev1_t", turns=[], principal="device:dev1")    # an empty call: both roles absent
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    th = m._THREADS.get_thread("dev1_t")
+    lines = [t["content"] for t in th["turns"]]
+    assert not any("someone else" in c or "their answer" in c or "their tool" in c for c in lines), lines
+    assert len(_cards(m, "dev1_t")) == 1                                             # the empty call's own card
+
+
 def test_no_thread_id_no_card_and_journal_unchanged_shape(tmp_path, monkeypatch):
     m = _native_proxy(tmp_path, monkeypatch)
     m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
@@ -296,14 +314,22 @@ def test_no_thread_id_no_card_and_journal_unchanged_shape(tmp_path, monkeypatch)
 
 def test_a_thread_store_that_throws_never_fails_the_finalize(tmp_path, monkeypatch):
     m = _native_proxy(tmp_path, monkeypatch)
+    reached = []
 
     class Boom:
+        # Answers the once check (not written yet), so the finalize really reaches the writes, which throw.
         usable = True
 
+        def has_call_end(self, tid, cid):
+            reached.append("has_call_end")
+            return False
+
         def started_by(self, tid):
+            reached.append("started_by")
             return "fleet"
 
         def append_message(self, *a, **k):
+            reached.append("append_message")
             raise RuntimeError("disk on fire")
 
         def __getattr__(self, name):
@@ -311,17 +337,21 @@ def test_a_thread_store_that_throws_never_fails_the_finalize(tmp_path, monkeypat
     m._THREADS = Boom()
     _native_journal(m)
     assert m.finalize_from_client(client_call_id=NATIVE) is True
+    assert "append_message" in reached                                   # the throwing write was really reached
     d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
     assert d["status"] == "ended" and d["thread_card_written"] is True   # claimed: never retried into a double
 
-    # and a store that throws on the existence check too
+    # and a store that throws on the ownership check: a device caller, so _thread_refusal asks started_by
+    reached.clear()
+
     class Boom2(Boom):
         def started_by(self, tid):
+            reached.append("started_by")
             raise RuntimeError("locked")
     m._THREADS = Boom2()
-    d.pop("thread_card_written")
-    (m.VOICE_CALLS_DIR / f"{NATIVE}.json").write_text(json.dumps(d))
+    _native_journal(m, principal="device:dev1")
     assert m.finalize_from_client(client_call_id=NATIVE) is True
+    assert reached[:1] == ["started_by"]                                 # the throwing check was really reached
 
 
 def test_a_call_from_a_fresh_page_starts_its_thread_under_the_caller_like_the_relay(tmp_path, monkeypatch):
