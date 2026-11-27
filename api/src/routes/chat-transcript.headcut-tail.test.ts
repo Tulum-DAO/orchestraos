@@ -64,6 +64,12 @@ const SEATS = {
   grow: { seat: 'zz-ht-grow', sid: '66666666-2222-4333-8444-00000000000b', promoted: SWAP, after: 2 },
   // WAITING: promoted, but every turn after the promotion is still a machine wake: no takeover yet, nothing shown.
   waiting: { seat: 'zz-ht-waiting', sid: '66666666-2222-4333-8444-00000000000c', promoted: SWAP, after: 0 },
+  // HELDQ: a message typed to the green while it read its init file (a queued copy), written as a real turn well after:
+  // the whole log drops the copy, so the chat starts at the real turn, which a head read that stops between them lacks.
+  heldq: { seat: 'zz-ht-heldq', sid: '66666666-2222-4333-8444-00000000000d', promoted: SWAP, after: 4 },
+  // PENDQ: a log that so far ENDS in the green's init read with a message queued in it: the copy is the takeover for
+  // now; later its real turn is written, and the chat starts there.
+  pendq: { seat: 'zz-ht-pendq', sid: '66666666-2222-4333-8444-00000000000e', promoted: SWAP, after: 0 },
 } as const;
 {
   const db = new Database(join(orch, 'state', 'orchestra-registry.db'));
@@ -111,6 +117,24 @@ function seatLog(seat: string, after: number, late = false, kind = ''): string[]
   const hold0 = '2026-11-20T07:00:00Z';
   const lines = [user('h-brief', at(hold0, 0), `You are ${seat}. Read /tmp/agent-init-${seat}.md and follow all instructions in it.`),
     say('h-read', at(hold0, 5), `Reading the init file. ${filler}`, true), result('h-readr', at(hold0, 6), 'h-read')];
+  if (kind === 'pendq') {
+    for (let i = 0; i < 20; i++) lines.push(say(`h-b${i}`, at(hold0, 10 + i * 3), `reading part ${i}`, true), result(`h-br${i}`, at(hold0, 11 + i * 3), `h-b${i}`));
+    lines.push(JSON.stringify({ type: 'attachment', uuid: 'h-q', timestamp: at(hold0, 80),
+      attachment: { type: 'queued_command', prompt: 'are you up?', origin: { kind: 'human' } } }));
+    for (let i = 20; i < 24; i++) lines.push(say(`h-b${i}`, at(hold0, 81 + i), `reading part ${i}`, true), result(`h-br${i}`, at(hold0, 82 + i), `h-b${i}`));
+    return lines;
+  }
+  if (kind === 'heldq') {
+    const t = (n: number) => at(hold0, 10 + n);
+    for (let i = 0; i < 34; i++) {
+      if (i === 5) {
+        lines.push(JSON.stringify({ type: 'attachment', uuid: 'h-q', timestamp: t(i * 3),
+          attachment: { type: 'queued_command', prompt: 'are you up?', origin: { kind: 'human' } } }));
+      }
+      lines.push(say(`h-b${i}`, t(i * 3 + 1), `reading part ${i}`, true), result(`h-br${i}`, t(i * 3 + 2), `h-b${i}`));
+    }
+    lines.push(user('h-r', at(hold0, 300), 'are you up?'), say('h-rc', at(hold0, 301), `Yes, reading in. ${filler}`));
+  }
   if (kind === 'fwd') {
     lines.push(user('h-fwd', at(hold0, 30), `[fwd from peer] ${mail('lineage-daemon', `[WAL DELTA] hydrate from ${seat} blue 0`)}`),
       say('h-fwdc', at(hold0, 31), `Forwarded digest read. ${filler}`));
@@ -228,6 +252,11 @@ for (const [k, s] of Object.entries(SEATS)) {
         assert.ok(ids(oracle).includes('h-brief'), 'precondition: no promotion time, no cut');
         assert.ok(ids(oracle).includes('w-1c'), 'precondition: the first promote turn keeps its final reply');
         assert.ok(!ids(oracle).some((u) => u.startsWith('w-2')), 'precondition: the second promote turn is left out');
+      } else if (k === 'pendq') {
+        assert.equal(ids(oracle)[0], 'h-q', 'precondition: the queued copy is the takeover until its real turn is written');
+      } else if (k === 'heldq') {
+        assert.deepEqual(ids(oracle).slice(0, 2), ['h-r', 'h-rc'], 'precondition: the chat starts at the real turn of the queued copy');
+        assert.ok(!ids(oracle).includes('h-q'), 'precondition: the copy is dropped for its real turn');
       } else if (k === 'waiting') {
         assert.deepEqual(ids(oracle), [], 'precondition: no takeover yet, nothing shown');
       } else if (k === 'fwd') {
@@ -280,6 +309,8 @@ test('precondition: the chunk sizes put the takeover inside the first window for
   assert.ok(size('below') - holdBytes('below') > 16 * 1024, 'BELOW: a 16 KiB tail starts after the takeover');
   assert.ok(size('fwd') - lineOffset(paths.fwd, 'h-fwdc') > 16 * 1024 && size('fwd') - holdBytes('fwd') < 16 * 1024,
     'FWD: a 16 KiB tail holds the takeover and starts after the forwarded turn');
+  const q = lineOffset(paths.heldq, 'h-q'), r = lineOffset(paths.heldq, 'h-r');
+  assert.ok(q < 16 * 1024 && r > 32 * 1024, 'HELDQ: the first head read holds the queued copy, not its real turn');
   const digestLines = readFileSync(paths.digest, 'utf-8').split('\n').filter((l) => l.includes('"d-')).join('\n').length;
   assert.ok(digestLines > 16 * 1024, 'DIGEST: a 16 KiB tail holds digest turns alone');
 });
@@ -456,6 +487,28 @@ test('a log with no takeover yet reads only what it appended when it grows, not 
       const cap = i === 0 ? readFileSync(paths.waiting).length * 1.25 : 8 * 1024;
       assert.ok(read < cap, `growth ${i}: ${added.length} bytes appended, ${read} bytes read`);
     }
+    tailFirstForTests({ want0: 256 * 1024 });
+  });
+});
+
+test('a queued copy that is the takeover for now gives way to its real turn when that is written', async () => {
+  const s = SEATS.pendq;
+  await withServer(s.seat, async (get) => {
+    tailFirstForTests({ want0: 4 * 1024 });
+    fresh();
+    assert.equal(ids(await walkAll(get, 6, 5))[0], 'h-q', 'precondition: the copy opens the chat for now');
+    const more: string[] = [];
+    for (let i = 24; i < 40; i++) more.push(say(`h-b${i}`, at('2026-11-20T07:02:00Z', i * 2), `reading part ${i}`, true), result(`h-br${i}`, at('2026-11-20T07:02:00Z', i * 2 + 1), `h-b${i}`));
+    more.push(user('h-r', '2026-11-20T07:05:00Z', 'are you up?'), say('h-rc', '2026-11-20T07:05:01Z', `Yes, reading in. ${filler}`));
+    for (let i = 0; i < 6; i++) more.push(user(`p-u${i}`, at('2026-11-20T08:00:30Z', i * 30), `question ${i} ${filler}`), say(`p-c${i}`, at('2026-11-20T08:00:30Z', i * 30 + 3), `answer ${i} ${filler}`));
+    appendFileSync(paths.pendq, more.join('\n') + '\n');
+    tailFirstForTests({ want0: Number.POSITIVE_INFINITY });
+    fresh();
+    const oracle = await walkAll(get, 6, 5);
+    assert.deepEqual(ids(oracle).slice(0, 2), ['h-r', 'h-rc'], 'precondition: the chat now starts at the real turn');
+    tailFirstForTests({ want0: 4 * 1024 });
+    fresh();
+    assert.deepEqual(whole(await walkAll(get, 6, 5)), whole(oracle));
     tailFirstForTests({ want0: 256 * 1024 });
   });
 });

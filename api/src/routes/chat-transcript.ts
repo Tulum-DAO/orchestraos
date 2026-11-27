@@ -2629,7 +2629,8 @@ function takeoverAt(items: readonly any[], promotedAt: string | null | undefined
  *  the hold phase it may start in, so the takeover is found once on the log's HEAD, read forward from its first line
  *  until the takeover is known (a hold phase is the first half hour or so of a green's log), and every chunk is cut at
  *  that line. A found takeover never moves (the log only grows); no takeover yet is read again when the log grows. */
-type Takeover = 'whole' | 'none' | { off: number; firstPromote: number | undefined; exchange: string | undefined };
+type Takeover = 'whole' | 'none'
+  | { off: number; firstPromote: number | undefined; exchange: string | undefined; queued?: true };
 const takeovers = new Map<string, { t: Takeover; size: number }>();
 const TAKEOVERS_MAX = 256;
 const HEAD_WANT0 = 32 * 1024;
@@ -2649,8 +2650,9 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
   const { id, size } = logStat(path);
   const key = takeoverKey(path, id, promotedAt, sig);
   const kept = takeovers.get(key);
-  // A found takeover never moves while the file only grows; a file cut shorter is read again.
-  if (kept && (typeof kept.t === 'object' ? size >= kept.size : kept.size === size)) return kept.t;
+  // A found takeover never moves while the file only grows (except a queued copy's: see below); a file cut shorter is
+  // read again.
+  if (kept && (typeof kept.t === 'object' && !kept.t.queued ? size >= kept.size : kept.size === size)) return kept.t;
   let t: Takeover = 'whole';
   // From a small head up, doubled: the takeover is usually in the first lines (a person turn, or a short hold phase).
   // No takeover yet (the last read ran to the end): the head is the whole log, read through the whole-file cache, which
@@ -2664,6 +2666,11 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
     const items = settlePromoteTurns(prep(log.items), promotedAt, null);
     const at = takeoverAt(items, promotedAt, log.eof);
     if (at === 'more' && !log.eof) { hi *= 2; continue; }
+    // A message typed mid-turn is a queued copy until its real turn is written, maybe far on (dedupeQueuedCommands
+    // drops the copy then, in the whole log too): a head that ends before it has no takeover yet. At the log's end the
+    // copy is the takeover for now, read again when the log grows.
+    const queued = typeof at === 'number' && items[at]?.queued === true;
+    if (queued && !log.eof) { hi *= 2; continue; }
     if (at === 'more' || at === 'none') t = 'none';
     else if (at === 'whole') t = 'whole';
     else if (typeof items[at]?.line_off === 'number') {
@@ -2673,7 +2680,7 @@ function headTakeover(path: string, parser: LogParser<any>, promotedAt: string |
       // The exchange the takeover's turn is in, as the whole log tags it (the head is the log's start): the hold phase
       // can leave one open (withHeadTags).
       t = { off: items[at].line_off, firstPromote: typeof promote?.line_off === 'number' ? promote.line_off : undefined,
-        exchange: items[at].exchange === undefined ? undefined : String(items[at].exchange) };
+        exchange: items[at].exchange === undefined ? undefined : String(items[at].exchange), ...(queued ? { queued: true as const } : {}) };
     }
     break;
   }
