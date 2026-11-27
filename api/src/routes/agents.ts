@@ -36,7 +36,7 @@ import { headlessSeats } from '../services/status-stream.js';
 import { headlessInDev, paneHoldsSupervisor, PANE_IS_SUPERVISOR } from '../lib/paneGuard.js';
 import { agentCallGoesToSeat, agentCallSwitch, liveEngine, writeAgentCallSwitch } from '../lib/agentCallGate.js';
 import { recordSettingChange } from '../lib/settingsLog.js';
-import { headlessStep, stepFromProbe } from '../services/live-step.js';
+import { headlessStep, stepFromProbe, streamStep } from '../services/live-step.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -424,12 +424,14 @@ router.get('/', async (_req: Request, res: Response) => {
     } catch { /* detector unavailable -> legacy fields stand */ }
 
     // The live step (services/live-step.ts), for the cards' line: a headless seat from its supervisor log, a tmux seat
-    // from the pane probe's verdict merged above (no tool input here; an open chat's stream adds the summary).
+    // from its open chat stream's step when one is open (its transcript: the call's own description), else the pane
+    // probe's verdict merged above.
     try {
       const headless = headlessSeats();
       for (const agent of allAgents) {
         const st = headless.has(agent.id)
           ? (headlessInDev(agent.id) ? null : headlessStep(agent.id, dataDir()))
+          : streamStep(agent.id) !== undefined ? streamStep(agent.id) ?? null
           : (agent.status_source === 'detector' || agent.status_source === 'transcript')
             ? stepFromProbe({ state: agent.status, tool: agent.tool as string | undefined, state_age_s: agent.state_age_s as number | undefined }, null)
             : null;

@@ -19,10 +19,13 @@
  * the client fallback. Live agent STATE stays the v2-detector lane — never
  * folded into this stream (locked congruence guardrail, DEC-1787826639).
  *
- *   event: step       data: { agent_id, kind: 'tool'|'thinking'|'waiting'|'idle', tool?, summary?, since }
+ *   event: step       data: { agent_id, kind: 'tool'|'thinking'|'waiting'|'idle', tool?, summary?, described?,
+ *                             writing?, since }
  *                         What the agent is doing right now (services/live-step.ts): a headless seat from its
- *                         supervisor log, a tmux seat from the pane probe (summary from its open tool call). Sent on
- *                         change and once on connect; `kind: null` = no step to show (stopped, restarting, in Dev).
+ *                         supervisor log, a tmux seat from its transcript (a call's own description, the agent's latest
+ *                         line), with the pane probe for idle, a held question and a seat that is down. Read every
+ *                         250 ms; sent on change and once on connect; `kind: null` = no step to show (stopped,
+ *                         restarting, in Dev, or a log whose newest lines are too long to read the turn from).
  *
  *   event: live_text  data: { agent_id, message_id, text, blocks[{ uuid, text }], done }
  *                         HEADLESS seats only (services/live-text.ts): the reply still being
@@ -49,7 +52,7 @@ import { headlessSeats } from '../services/status-stream.js';
 import { LiveText, type LiveTextView } from '../services/live-text.js';
 import { compactionNotices, compactionItem, noticeShown } from '../services/conversation-store.js';
 import { readSeatSettings } from '../lib/seatSettings.js';
-import { headlessStep, openToolUse, stepFromProbe, stepSig, type StepBody } from '../services/live-step.js';
+import { headlessStep, noteStreamStep, sameStep, stepFromTurn, stepSig, type StepBody } from '../services/live-step.js';
 import { getDetectorStates, type DetectorStatus } from '../services/agent-status.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -67,7 +70,9 @@ const HEARTBEAT_MS = 25000;
  *  The poll route's pages (?before=) hold the rest. ?limit= still asks for more, up to MAX_LIMIT. */
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 500;
-/** Live text is read more often than the transcript: words arrive many times a second. */
+/** Live text is read more often than the transcript: words arrive many times a second. A tmux seat's log is peeked at
+ *  the same pace (a stat of the file it follows) and read at once when it grew, so its step and its new lines go out
+ *  within a quarter second of being written; the full beat (re-resolve the session, notices, gone) stays at TICK_MS. */
 const LIVE_TICK_MS = 250;
 
 // One shared tailer (+ one file-read per beat) per agent, however many
@@ -131,20 +136,23 @@ function probeNow(): Map<string, DetectorStatus> {
   return probe;
 }
 
-/** The seat's step now: ONE source, chosen by whether it runs headless (and not in Dev). */
+/** The seat's step now: ONE source, chosen by whether it runs headless (and not in Dev); a tmux seat's from its
+ *  transcript, the probe for what only the screen knows (stepFromTurn). */
 export function currentStep(agentId: string, entry: Pick<Live, 'headless' | 'tailer'>): StepBody | null {
   if (headlessSeats().has(agentId)) return entry.headless ? headlessStep(agentId, dataDir()) : null;
   const tmux = seatTmuxSession(agentId);
   const d = tmux ? probeNow().get(tmux) : undefined;
-  return stepFromProbe(d, openToolUse(entry.tailer.recentItems()));
+  return stepFromTurn(entry.tailer.recentItems(), d, entry.tailer.turn());
 }
 
 function stepBeat(agentId: string, entry: Live): void {
   let s: StepBody | null = null;
   try { s = currentStep(agentId, entry); } catch { s = null; }
   const key = stepSig(s);
-  if (key === entry.stepKey) return;
+  // Only a new step goes out: the same one with a drifting start is not sent again (it keeps the start it was sent with).
+  if (key === entry.stepKey || sameStep(entry.step, s)) return;
   entry.step = s; entry.stepKey = key;
+  noteStreamStep(agentId, s);
   for (const cb of entry.stepSubs) { try { cb(s); } catch { /* a closed client */ } }
 }
 
@@ -177,7 +185,11 @@ function startBeat(agentId: string, entry: Live): void {
   }, TICK_MS);
   entry.timer.unref?.();
   if (entry.liveText && !entry.liveTimer) {
-    entry.liveTimer = setInterval(() => { liveStep(entry); if (entry.headless) stepBeat(agentId, entry); }, LIVE_TICK_MS);
+    entry.liveTimer = setInterval(() => {
+      liveStep(entry);
+      if (!entry.headless) { try { if (entry.tailer.grew()) entry.tailer.tick(); } catch { /* the full beat retries */ } }
+      stepBeat(agentId, entry);
+    }, LIVE_TICK_MS);
     entry.liveTimer.unref?.();
   }
 }
@@ -209,6 +221,7 @@ function getTailer(agentId: string, limit: number): Live {
   try { entry.headless = liveTextOn(agentId); } catch { entry.headless = false; }
   startBeat(agentId, entry);
   live.set(agentId, entry);
+  noteStreamStep(agentId, entry.step);                 // open: the list reads this stream's step (none yet)
   return entry;
 }
 
@@ -218,6 +231,7 @@ function releaseTailer(agentId: string): void {
     if (entry.timer) clearInterval(entry.timer);
     if (entry.liveTimer) clearInterval(entry.liveTimer);
     live.delete(agentId);
+    noteStreamStep(agentId, undefined);
   }
 }
 
