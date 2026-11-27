@@ -63,7 +63,11 @@ def test_the_live_prompt_asks_for_varied_receipts_not_one_line():
 
 def test_progress_claims_are_their_own_kind():
     for said in ("That's running now.", "It's now running in the background.", "It's under way.", "That's queued.",
-                 "It's running, it'll be done in a minute.", "That's running now and being saved."):
+                 "It's running, it'll be done in a minute.", "That's running now and being saved.",
+                 "That's running now; meanwhile, what else do you need?",                  # natural receipts must
+                 "It's under way, I'll tell you when it lands.",                           # never be cut off
+                 "On it. That's running now, should be finished in a minute.",
+                 "That's running now, about a hundred rows to go."):
         assert claim_gate.claim_kind(said) == ("state", "progress"), said
     for said in ("That's done.", "It's saved.", "All done!", "It's running. Done.",
                  "It's running and the note is saved.", "It's running; it's done now.",   # codex on #698: mixed
@@ -73,7 +77,9 @@ def test_progress_claims_are_their_own_kind():
                  "It's running and the message was delivered.",                           # codex round 3
                  "It's running; your note is confirmed to be saved already.",
                  "It's running; your note appears to be saved already.",                   # "to be" is no future
-                 "It's running; your note has been written down."):                        # codex round 4
+                 "It's running; your note has been written down.",                         # codex round 4
+                 "It's running; I wrote the note.", "It's running; your changes went through.",   # round 5
+                 "It's running; the message has been broadcast."):
         assert claim_gate.claim_kind(said) == ("state", None), said
     for said in ("I'm pulling that up.", "On it, it'll take a moment."):
         assert claim_gate.claim_kind(said) is None, said

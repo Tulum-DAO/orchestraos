@@ -67,14 +67,25 @@ _FUTURE_BEFORE = re.compile(r"(?:(?:'ll|\bwill|\bshould|\bgoing to|\bgonna)\s+be
 # A blocklist of completion words always misses one ("your note has been written down": codex round 4 on #698), so
 # beside it any past form counts too: a word ending in -ed or a common irregular participle, other than the progress
 # words themselves. Conservative on purpose: "I just checked, it's running" then needs a result as well.
-_PAST = re.compile(r"\b(?:\w{2,}ed|written|done|sent|made|set|put|given|taken|built|kept|found|got|gotten|shown|told|"
-                   r"paid|bought|brought|left|begun|run)\b", re.I)
+_PAST = re.compile(r"\b(?:\w{2,}(?<!e)ed|written|wrote|done|did|sent|made|set|put|given|gave|taken|took|built|kept|found|"
+                   r"got|gotten|shown|showed|told|paid|bought|brought|left|begun|began|run|ran|went|gone|broadcast|"
+                   r"read|cut|let|shut|spread|sold|held|won|met|meant|fed|led|lost|hung|stuck|struck|drew|drawn|"
+                   r"threw|thrown|knew|known|grew|grown|flew|flown|wore|worn|tore|torn|froze|frozen|spoke|spoken|"
+                   r"broke|broken|chose|chosen|woke|woken|rode|ridden|rose|risen|drove|driven|ate|eaten|fell|fallen)\b",
+                   re.I)
+_NOT_PAST = frozenset({"hundred", "red", "bed", "shed", "sacred", "naked", "wicked", "kindred", "rugged", "jagged",
+                       "ragged", "crooked", "beloved", "read"})     # -ed words that are no past ("need": (?<!e)ed)
+# THE CRITERION (#698): a progress phrase admits only itself. Every other clause of the utterance is judged at least as
+# strictly as main judges that clause on its own (the action and state recognisers run on the whole text, and this
+# past-form rule adds more). A completion phrased in a way main never recognised ("I wrote the note." alone passes on
+# main) is a limit of the base gate, not of this path.
 
 
 def _completes(text):
     for rx in (_COMPLETION, _PAST):
         for m in rx.finditer(text or ""):
-            if _PROGRESS.match(m.group(0)) or _FUTURE_BEFORE.search(text[max(0, m.start() - 32):m.start()]):
+            if (_PROGRESS.match(m.group(0)) or m.group(0).lower() in _NOT_PAST
+                    or _FUTURE_BEFORE.search(text[max(0, m.start() - 32):m.start()])):
                 continue
             return True
     return False
