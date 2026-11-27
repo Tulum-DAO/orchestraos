@@ -186,7 +186,8 @@ def test_archive_writes_a_finished_calls_lines_then_its_card(tmp_path):
     assert ct.archive("vc_client_1", "web_n1", turns, principal="fleet")
     got = s.get_thread("web_n1")["turns"]
     assert [(t["role"], t["content"], t.get("mode")) for t in got] == [
-        ("user", "hi", "voice"), ("assistant", "Hello.", "voice"),
+        ("user", "hi", "voice"), ("assistant", "x · done", "voice"), ("assistant", "Hello.", "voice"),
         ("assistant", "Call ended (vc_client_1). [voice-call: vc_client_1 /x.json]", "voice")]
-    assert got[0]["ts"] == 1000.0 and got[2]["meta"] == {"kind": "call_end", "call_id": "vc_client_1"}
+    assert got[0]["ts"] == 1000.0 and got[3]["meta"] == {"kind": "call_end", "call_id": "vc_client_1"}
+    assert got[1]["meta"] == {"kind": "call_tool", "tool": "x", "ok": True, "tool_call_id": ""}   # a tool run is a line
     assert seen[-1] == ("web_n1", "assistant", CALL_ENDED_LINE)

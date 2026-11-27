@@ -8999,6 +8999,12 @@ def _call_end_marker(cid):
     return _call_end_card(journal_call_id(cid))
 
 
+# The native service's tool ledger (native/server.py: ToolLedger(ORCHESTRA_DIR/state/arturo/native)): a native call's
+# tool runs live there, not in its journal, and become lines in its thread (call_tool_lines.py).
+from services.arturo import call_tool_lines as _call_tool_lines
+NATIVE_TOOL_LEDGER = ARTURO_STATE / "native" / "tool_ledger.sqlite3"
+
+
 def _archive_client_call(call_id, thread_id, turns, principal=None):
     """A native (dashboard GPT-Live) call is never bound to its thread live: finalize_from_client hands it here
     once, after the merge, and its lines + call card go into that thread the way the relay's live path writes
@@ -9012,7 +9018,8 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
                         "no call card written")
             return False
         owner = _THREADS.started_by(thread_id) or _thread_key(principal)
-        ct = _call_threads.CallThreads(_THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card)
+        ct = _call_threads.CallThreads(_THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card,
+                                       tool_turns=lambda cid, t: _call_tool_lines.ledger_turns(cid, t, NATIVE_TOOL_LEDGER))
         if not ct.archive(call_id, thread_id, turns, principal=owner):
             log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
             return False
