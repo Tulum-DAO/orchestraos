@@ -37,7 +37,10 @@ test('a big log: the first read takes its last lines, not the file; an append re
   appendFileSync(f, more.join('\n') + '\n');
   const b2 = rawTailBytesRead();
   t.update(f);
-  assert.equal(rawTailBytesRead() - b2, Buffer.byteLength(more.join('\n') + '\n'));
+  // the appended bytes, plus the bytes under the old end compared and the new end kept (64 each)
+  const appended = Buffer.byteLength(more.join('\n') + '\n');
+  const got = rawTailBytesRead() - b2;
+  assert.ok(got >= appended && got <= appended + 128, `read ${got} for ${appended} appended`);
   assert.deepEqual(t.lines, lines.concat(more).slice(-RAW_TAIL_LINES));
   const b3 = rawTailBytesRead();
   t.update(f);
@@ -140,4 +143,49 @@ test('a turn the kept lines cannot decide is no step, whatever the items and the
   assert.equal(stepFromTurn(items, { state: 'idle', state_age_s: 0 }, { ended: null, finals: new Set(), known: false }, now), null);
   assert.deepEqual(stepFromTurn(items, busy, { ended: null, finals: new Set(), known: true }, now),
     { kind: 'tool', tool: 'Bash', summary: 'List the files', described: true, since: '2026-11-27T06:00:00Z' });
+});
+
+// First pass on #706 (grok-gm, msg_d93471e2): three cases the byte bookkeeping got wrong.
+test('a cap that keeps no line at all cannot say whose log it is: not known (no step), never a guessed one', () => {
+  const f = join(dir, 'one-huge-reply.jsonl');
+  writeFileSync(f, [asked('go'), said('z'.repeat(5 * 1024 * 1024))].join('\n') + '\n');
+  const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'h' }) });
+  const off = t.subscribe(() => {});
+  assert.equal(t.turn().known, false);
+  off();
+});
+
+test('a file rewritten in place (same inode) is read again, not taken as an append', () => {
+  const f = join(dir, 'rewrite.jsonl');
+  const a = asked('first'), b = asked('second'), c = said('third');
+  writeFileSync(f, a + '\n');
+  const t = new RawTail();
+  t.update(f);
+  writeFileSync(f, b + '\n' + c + '\n');                         // truncates and rewrites the same inode, longer
+  t.update(f);
+  assert.deepEqual(t.lines, [b, c]);
+});
+
+test('a line still being written that ends inside a UTF-8 character: its bytes are counted, not its decoded text', () => {
+  const f = join(dir, 'utf8.jsonl');
+  writeFileSync(f, Buffer.concat([Buffer.from('first\n'), Buffer.from([0xe2])]));
+  const t = new RawTail();
+  t.update(f);
+  assert.deepEqual(t.lines, ['first']);
+  // 2 bytes appended: one byte held plus 2 is 3, the decoded length of the held byte (U+FFFD) is 3 too. Counting the
+  // decoded text made this read look like "nothing new".
+  appendFileSync(f, 'A\n');
+  t.update(f);
+  assert.equal(t.lines.length, 2);
+  assert.ok(t.lines[1].endsWith('A'), t.lines[1]);
+  appendFileSync(f, Buffer.from([0xe2, 0x82, 0xac, 0x0a]));    // "€" whole, then the newline
+  t.update(f);
+  assert.equal(t.lines[2], '€');
+  // The same held byte, read by an append this time (not the first read)
+  appendFileSync(f, Buffer.from([0xe2]));
+  t.update(f);
+  appendFileSync(f, 'B\n');
+  t.update(f);
+  assert.equal(t.lines.length, 4);
+  assert.ok(t.lines[3].endsWith('B'), t.lines[3]);
 });
