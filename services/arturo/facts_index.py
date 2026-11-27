@@ -51,7 +51,11 @@ DEFAULT_MIN_COS = 0.33       # the measured same-meaning threshold for MiniLM (9
 BUILD_THREADS = 2            # gm msg_9b1b7757: embedding threads capped at 2
 QUERY_THREADS = 1            # in the proxy: one intra-op thread, like semantic_recall
 HEAVY_CORES = (6, 7)
-MAX_FTS_TERMS = 32
+MAX_FTS_TERMS = 8            # the rarest topic words of a question; more only widens the bm25 sort
+MIN_FTS_TERMS = 3            # a short question keeps its 3 rarest words even when they are common
+FTS_POOL = 100               # bm25 candidates re-ranked by how many of the question's keywords they hold
+DF_MAX_FRAC = 0.02           # a word in more than 2% of facts says little and makes the match set huge
+DF_MIN_CAP = 200             # ...but on a small store, never drop a word found in fewer facts than this
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -125,7 +129,42 @@ _SCHEMA = (
     "src_rowid INTEGER NOT NULL, vec BLOB NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_doc_src ON doc(src_rowid)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, tokenize='porter unicode61')",
+    # how many facts hold each word: picks the rare words of a question for the FTS match (see fts_match)
+    "CREATE TABLE IF NOT EXISTS df (term TEXT PRIMARY KEY, n INTEGER NOT NULL) WITHOUT ROWID",
 )
+
+
+def terms(text):
+    """The distinct topic words of `text`, in order: lowercase alphanumeric runs, 2+ chars, no stopwords."""
+    seen = []
+    for t in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(t) >= 2 and t not in _STOP and t not in seen:
+            seen.append(t)
+    return seen
+
+
+def _df_add(con, texts, sign=1):
+    counts = {}
+    for txt in texts:
+        for t in terms(txt):
+            counts[t] = counts.get(t, 0) + sign
+    con.executemany("INSERT INTO df(term, n) VALUES (?, ?) ON CONFLICT(term) DO UPDATE SET n = n + excluded.n",
+                    counts.items())
+
+
+def _df_backfill(con):
+    """Count words over everything already indexed, once (an index built before the df table existed)."""
+    if _meta(con, "df_built") == "1":
+        return
+    with con:
+        con.execute("DELETE FROM df")
+        cur = con.execute("SELECT text FROM fts")
+        while True:
+            chunk = [r[0] for r in cur.fetchmany(5000)]
+            if not chunk:
+                break
+            _df_add(con, chunk)
+        _set_meta(con, "df_built", "1")
 
 
 def _open_rw(index_path):
@@ -189,8 +228,10 @@ def sync(facts_path=None, index_path=None, embed=None, batch=256, max_rows=None,
         if mark > top_src:
             con.execute("DELETE FROM doc")
             con.execute("DELETE FROM fts")
+            con.execute("DELETE FROM df")
             con.commit()
             mark, rebuilt = 0, True
+        _df_backfill(con)
         _set_meta(con, "model", MODEL)
         _set_meta(con, "dim", DIM)
         con.commit()
@@ -205,11 +246,13 @@ def sync(facts_path=None, index_path=None, embed=None, batch=256, max_rows=None,
                 for (rid, fid, txt), v in zip(rows, vecs):
                     old = con.execute("SELECT rowid FROM doc WHERE fact_id=?", (fid,)).fetchone()
                     if old:
+                        _df_add(con, [r[0] for r in con.execute("SELECT text FROM fts WHERE rowid=?", old)], -1)
                         con.execute("DELETE FROM fts WHERE rowid=?", old)
                         con.execute("DELETE FROM doc WHERE rowid=?", old)
                     cur = con.execute("INSERT INTO doc(fact_id, src_rowid, vec) VALUES (?, ?, ?)",
                                       (fid, rid, to_blob(v)))
                     con.execute("INSERT INTO fts(rowid, text) VALUES (?, ?)", (cur.lastrowid, txt or ""))
+                _df_add(con, [t for _, _, t in rows])
                 _set_meta(con, "synced_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
             added += len(rows)
             mark = rows[-1][0]
@@ -247,16 +290,22 @@ def status(facts_path=None, index_path=None):
 
 # --- search --------------------------------------------------------------------------------------------------
 
-def fts_match(text):
-    """An FTS5 OR-query over the topic words of `text` (quoted, so no word is read as an operator), or ''."""
-    seen = []
-    for t in re.findall(r"[a-z0-9]+", (text or "").lower()):
-        if len(t) < 2 or t in _STOP or t in seen:
-            continue
-        seen.append(t)
-        if len(seen) >= MAX_FTS_TERMS:
-            break
-    return " OR ".join(f'"{t}"' for t in seen)
+def fts_match(text, df=None, total=0):
+    """An FTS5 OR-query over the topic words of `text` (each quoted, so no word is read as an operator), or ''.
+
+    With the word counts (`df`: word -> facts holding it; `total`: facts indexed), only words some fact holds are
+    kept, words held by more than DF_MAX_FRAC of facts are dropped (a short question keeps its MIN_FTS_TERMS
+    rarest), and the MAX_FTS_TERMS rarest remain. Measured 2026-11-27 on 30 real voice questions: up to 32 words,
+    common ones included ("make", "get"), put the bm25 sort at p95 133 ms; the rare words carry the match, and
+    the vectors carry the meaning."""
+    words = terms(text)
+    if df is not None and words:
+        cap = max(DF_MIN_CAP, int(total * DF_MAX_FRAC))
+        held = sorted((w for w in words if df.get(w, 0) > 0), key=lambda w: df[w])
+        words = [w for w in held if df[w] <= cap]
+        if len(words) < MIN_FTS_TERMS:
+            words = held[:MIN_FTS_TERMS]
+    return " OR ".join(f'"{t}"' for t in words[:MAX_FTS_TERMS])
 
 
 def rrf(rank_lists, k=RRF_K):
@@ -268,15 +317,35 @@ def rrf(rank_lists, k=RRF_K):
     return sc
 
 
+def _trim_heap():
+    """Hand freed heap back to the OS after the big first load (glibc keeps it otherwise). Best effort."""
+    try:
+        import ctypes  # noqa: PLC0415
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:                                # noqa: BLE001 — not glibc, or no ctypes: nothing to trim
+        pass
+
+
 class _Matrix:
-    """The vectors held in memory, appended to as sync adds rows. Brute-force dot products: 50k x 384 is a few ms."""
+    """What a lookup reads, held in memory and appended to as sync adds rows: the vectors (brute-force dot
+    products, 50k x 384 is a few ms), an in-memory copy of the FTS table and the word counts. The sidecar file is
+    only checked for new rows; measured 2026-11-27, the same FTS query costs p95 ~10 ms in memory against ~35 ms
+    on the file, under the same load."""
 
     def __init__(self, path):
         self.path = path
         self.ident = None
-        self.top = 0
-        self.ids = []
-        self.mat = None
+        self.checked = 0.0                           # monotonic time of the last refresh check (see search)
+        self.mlock = threading.Lock()                # the FTS copy is written on refresh and read on the FTS thread
+        self._clear()
+
+    def _clear(self):
+        np = _np()
+        self.top, self.ids, self.mat, self.df = 0, [], np.zeros((0, DIM), dtype=np.float32), {}
+        mem = sqlite3.connect(":memory:", check_same_thread=False)
+        mem.execute("CREATE VIRTUAL TABLE m USING fts5(text, fid UNINDEXED, tokenize='porter unicode61')")
+        with self.mlock:
+            self.mem = mem
 
     def _file_ident(self):
         st = os.stat(self.path)
@@ -288,35 +357,90 @@ class _Matrix:
         np = _np()
         ident = self._file_ident()
         if ident != self.ident:
-            self.ident, self.top, self.ids, self.mat = ident, 0, [], np.zeros((0, DIM), dtype=np.float32)
+            self.ident = ident
+            self._clear()
             if max_inline is not None:
                 return False
         con = _open_ro(self.path)
         try:
+            con.execute("BEGIN")                     # one snapshot for the counts and the rows, whatever sync does
             top = con.execute("SELECT COALESCE(MAX(rowid), 0) FROM doc").fetchone()[0]
             if top < self.top:                       # rows were deleted under us (a rebuild in place)
-                self.top, self.ids, self.mat = 0, [], np.zeros((0, DIM), dtype=np.float32)
+                self._clear()
             if top == self.top:
                 return True
             if max_inline is not None:
                 waiting = con.execute("SELECT COUNT(*) FROM doc WHERE rowid > ?", (self.top,)).fetchone()[0]
                 if waiting > max_inline:
                     return False
-            rows = con.execute("SELECT rowid, fact_id, vec FROM doc WHERE rowid > ? ORDER BY rowid",
-                               (self.top,)).fetchall()
+            first = self.top == 0
+            n_new = con.execute("SELECT COUNT(*) FROM doc WHERE rowid > ?", (self.top,)).fetchone()[0]
+            cur = con.execute("SELECT doc.rowid, doc.fact_id, doc.vec, fts.text FROM doc JOIN fts "
+                              "ON fts.rowid = doc.rowid WHERE doc.rowid > ? ORDER BY doc.rowid", (self.top,))
+            # streamed in chunks into one preallocated block: the first load is 50k rows, and holding every row
+            # (vector blobs + text) at once before copying them doubled the proxy's memory for nothing
+            block = np.empty((n_new, DIM), dtype=np.float32)
+            ids, df, filled, last = [], (None if first else self.df), 0, self.top
+            while True:
+                chunk = cur.fetchmany(4096)
+                if not chunk:
+                    break
+                chunk = chunk[:n_new - filled]          # rows synced after the COUNT wait for the next refresh
+                if not chunk:
+                    break
+                block[filled:filled + len(chunk)] = from_blobs([r[2] for r in chunk])
+                filled += len(chunk)
+                ids.extend(r[1] for r in chunk)
+                if df is not None:
+                    for r in chunk:
+                        for t in terms(r[3]):
+                            df[t] = df.get(t, 0) + 1
+                with self.mlock:
+                    self.mem.executemany("INSERT INTO m(rowid, text, fid) VALUES (?, ?, ?)",
+                                         ((r[0], r[3] or "", r[1]) for r in chunk))
+                last = chunk[-1][0]
+            if first:
+                df = dict(con.execute("SELECT term, n FROM df"))
         finally:
             con.close()
-        if rows:
-            # a fact_id re-indexed under a new rowid leaves its old row in the matrix; search drops duplicates
-            self.ids.extend(r[1] for r in rows)
-            self.mat = np.vstack([self.mat, from_blobs([r[2] for r in rows])])
-            self.top = rows[-1][0]
+        if not filled:
+            return True
+        if first:
+            with self.mlock:
+                self.mem.execute("INSERT INTO m(m) VALUES('optimize')")
+        # a fact_id re-indexed under a new rowid leaves its old row in memory; search drops duplicates
+        self.df = df
+        self.ids.extend(ids)
+        self.mat = block[:filled] if not len(self.mat) else np.vstack([self.mat, block[:filled]])
+        self.top = last
+        if first:
+            _trim_heap()
         return True
+
+    def fts(self, text, depth, keywords=None):
+        """The FTS list (see search): bm25 candidates re-ranked by how many keywords each holds."""
+        q = fts_match(text, self.df, len(self.ids))
+        if not q:
+            return []
+        with self.mlock:
+            rows = self.mem.execute("SELECT fid, text FROM m WHERE m MATCH ? ORDER BY bm25(m) LIMIT ?",
+                                    (q, max(depth, FTS_POOL))).fetchall()
+        kws = keywords if keywords else terms(text)
+        held = [sum(1 for k in kws if k in (t or "").lower()) for _, t in rows]
+        order = sorted(range(len(rows)), key=lambda i: (-held[i], i))    # stable: bm25 order within a count
+        out = []
+        for i in order:
+            if rows[i][0] not in out:
+                out.append(rows[i][0])
+            if len(out) >= depth:
+                break
+        return out
 
 
 _lock = threading.Lock()
 _state = {"embed": None, "matrix": None, "loading": False, "failed": None}
 MAX_INLINE_ROWS = 2000       # a turn absorbs at most this many freshly synced vectors; more go to the loader
+REFRESH_EVERY_S = 30.0       # how often a lookup checks the sidecar for newly synced rows
 
 
 def _reset_for_tests():
@@ -365,9 +489,11 @@ def min_cos():
         return DEFAULT_MIN_COS
 
 
-def search(text, index_path=None, depth=DEPTH, embed_factory=None):
+def search(text, index_path=None, depth=DEPTH, embed_factory=None, keywords=None):
     """The two ranked lists for `text`: (fts_fact_ids, vector_fact_ids), each up to `depth` long, best first.
     A vector hit below min_cos() is left out: the nearest neighbours of an unrelated question are not answers.
+    The FTS list is the FTS_POOL best bm25 rows re-ranked by how many of `keywords` (default: the topic words
+    of `text`) each one holds, bm25 breaking ties: keyword recall's own signal, over a better candidate set.
 
     Returns None while the index is not usable (missing file, model or matrix still loading, load failed);
     the first such call starts the background loader. Never loads a model or the full matrix on the caller's
@@ -382,9 +508,14 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None):
         _start_loader(index_path, embed_factory)
         return None
     m = _state["matrix"]
-    if not m.refresh(max_inline=MAX_INLINE_ROWS):
-        _start_loader(index_path, embed_factory)
-        return None
+    now = time.monotonic()
+    if now - m.checked >= REFRESH_EVERY_S:           # new facts land twice a day; no need to look on every turn
+        m.checked = now
+        if not m.refresh(max_inline=MAX_INLINE_ROWS):
+            m.checked = 0.0
+            _start_loader(index_path, embed_factory)
+            return None
+    fts_job = _fts_pool().submit(m.fts, text, depth, keywords)      # sqlite and onnx both release the GIL
     np = _np()
     qv = np.frombuffer(to_blob(_state["embed"]([text])[0]), dtype="<f4")
     sims = m.mat @ qv
@@ -400,17 +531,19 @@ def search(text, index_path=None, depth=DEPTH, embed_factory=None):
             vec_ids.append(fid)
         if len(vec_ids) >= depth:
             break
-    fts_ids = []
-    q = fts_match(text)
-    if q:
-        con = _open_ro(index_path)
-        try:
-            fts_ids = [r[0] for r in con.execute(
-                "SELECT doc.fact_id FROM fts JOIN doc ON doc.rowid = fts.rowid WHERE fts MATCH ? "
-                "ORDER BY bm25(fts) LIMIT ?", (q, depth))]
-        finally:
-            con.close()
-    return fts_ids, vec_ids
+    return fts_job.result(), vec_ids
+
+
+_pool = []
+
+
+def _fts_pool():
+    with _lock:
+        if not _pool:
+            from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+            _pool.append(ThreadPoolExecutor(max_workers=1, thread_name_prefix="facts-index-fts"))
+        return _pool[0]
+
 
 
 # --- CLI -----------------------------------------------------------------------------------------------------

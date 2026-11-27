@@ -431,31 +431,34 @@ def _facts_by_id(dbpath, fact_ids):
 
 
 def query_hybrid(text, keywords, k=K, dbpath=None, jsonpath=None, index_path=None):
-    """Plan step 1 (Shaw's option B, card apr_39e1b560): keyword ranking + FTS5 bm25 + MiniLM vectors,
-    fused by reciprocal rank. Returns None when the index cannot answer yet (the caller then serves the
-    keyword ranking unchanged).
+    """Plan step 1 (Shaw's option B, card apr_39e1b560): FTS5 bm25 + MiniLM vectors, fused by reciprocal rank.
+    Returns None when the index cannot answer yet (the caller then serves the keyword ranking unchanged).
 
-    Three ranked lists are fused:
-      1. today's keyword ranking (_query_sources_keyword, every source, its kind and recency terms included),
-         so a fact keyword recall finds is never silently dropped;
-      2. FTS5 bm25 over the indexed fact text;
-      3. cosine similarity of the question to every fact vector, which finds the same fact in other words.
-    Lists 2 and 3 are the measured option B; list 1 keeps the dashboard JSON store and today's tie-breaks in."""
+    Ranked lists fused:
+      1. FTS5 bm25 over the indexed fact text (its rarest words; see facts_index.fts_match), re-ranked by how
+         many of the question's keywords each fact holds;
+      2. cosine similarity of the question to every fact vector, which finds the same fact in other words;
+      3. the dashboard JSON store's keyword ranking, which the index does not cover.
+    facts.db's LIKE scan is NOT re-run here: it costs as much as the whole hybrid lookup (p95 63 ms measured
+    2026-11-27), and on 230 labelled queries lists 1+2 lost none of its answers (the step-1 gate in the PR)."""
     dbpath = dbpath or default_db_path()
     if not os.path.exists(dbpath):
         return None
-    lists = facts_index.search(text, index_path=index_path)
+    lists = facts_index.search(text, index_path=index_path, keywords=keywords)
     if lists is None:
         return None
     fts_ids, vec_ids = lists
-    base = _query_sources_keyword(keywords, k=facts_index.DEPTH, dbpath=dbpath, jsonpath=jsonpath) if keywords else []
-    rows = {f["fact_id"]: f for f in base}
-    rows.update({fid: f for fid, f in _facts_by_id(dbpath, [i for i in set(fts_ids) | set(vec_ids)
-                                                            if i not in rows]).items()})
+    rows = _facts_by_id(dbpath, list(dict.fromkeys(fts_ids + vec_ids)))
+    jsonpath = jsonpath or default_json_path()
+    js = query_facts_json(jsonpath, keywords, k=facts_index.DEPTH) if keywords else []
+    rows.update({f["fact_id"]: f for f in js})
     # an id the live store no longer serves (superseded, noise, gone) takes no place in any list
-    ranked = [[f["fact_id"] for f in base]] + [[i for i in lst if i in rows] for lst in (fts_ids, vec_ids)]
+    ranked = [[i for i in lst if i in rows] for lst in (fts_ids, vec_ids)] + [[f["fact_id"] for f in js]]
     score = facts_index.rrf(ranked)
     order = sorted(score, key=lambda i: (score[i], rows[i].get("ts") or ""), reverse=True)
+    # each ranker's best answer goes first. Fusion alone lets facts that sit mid-list in BOTH lists push out a
+    # fact one ranker is sure of (measured: 5 of 230 answers keyword recall found were lost that way)
+    order = list(dict.fromkeys([lst[0] for lst in ranked if lst] + order))
     return [{"fact_id": i, "ts": rows[i].get("ts"), "kind": rows[i].get("kind") or "fact",
              "text": rows[i].get("text") or "", "expiry_class": rows[i].get("expiry_class") or "standard"}
             for i in order[:k]]

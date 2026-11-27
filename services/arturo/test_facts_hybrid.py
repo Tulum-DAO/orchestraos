@@ -83,6 +83,7 @@ def store(tmp_path, monkeypatch):
     _make_db(db)
     fi._reset_for_tests()
     calls.clear()
+    monkeypatch.setattr(fi, "REFRESH_EVERY_S", 0.0)      # tests sync and search back to back
 
     def no_real_model(threads):
         raise ImportError("tests never load the real model")
@@ -291,3 +292,69 @@ def test_yield_cpu_lowers_priority_and_pins_cores():
 def test_fts_match_quotes_every_term():
     assert fi.fts_match('what is "NEAR" the AND-gate?') == '"near" OR "gate"'
     assert fi.fts_match("what is it") == ""
+
+
+# --- the three things the step-1 gate needed (0 of 230 labelled answers lost) ---------------------------------
+
+def test_each_rankers_best_answer_is_served(store, monkeypatch):
+    """Fusion alone ranks facts that sit mid-list in BOTH lists above a fact only one ranker has, even at its #1."""
+    monkeypatch.setenv(fi.FLAG, "1")
+    con = sqlite3.connect(store["db"])
+    _add(con, [(f"x{i}", "fact", f"filler fact number {i}", "active") for i in range(6)])
+    con.close()
+    both = [f"x{i}" for i in range(6)]
+    monkeypatch.setattr(fi, "search", lambda text, index_path=None, keywords=None: (["f-bill"] + both, both))
+    got = _ids(fr.query_hybrid("anything at all", ["anything"], dbpath=store["db"], jsonpath=store["json"]))
+    assert len(got) == fr.K and got[0] == "f-bill"
+
+
+def test_a_short_question_keeps_its_rarest_three_words(store, monkeypatch):
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    monkeypatch.setattr(fi, "DF_MIN_CAP", 0)
+    monkeypatch.setattr(fi, "DF_MAX_FRAC", 0.0)          # every word counts as common
+    df = dict(sqlite3.connect(store["index"]).execute("SELECT term, n FROM df"))
+    assert fi.fts_match("luna dog vet appointment", df, len(ROWS)).count('"') == 2 * fi.MIN_FTS_TERMS
+    assert fi.fts_match("luna zzzunknownzzz", df, len(ROWS)) == '"luna"'   # a word no fact holds is never searched
+
+
+def test_word_counts_follow_sync(store):
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-luna2", "fact", "Luna chewed the sofa", "active")])
+    con.close()
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    ix = dict(sqlite3.connect(store["index"]).execute("SELECT term, n FROM df"))
+    m = fi._state["matrix"]
+    assert m.refresh(max_inline=10) and ix["luna"] == m.df["luna"] == 2
+    assert "f-luna2" in fi.search("luna sofa", index_path=store["index"], keywords=["luna", "sofa"])[0]
+
+
+def test_fts_list_prefers_the_fact_holding_more_of_the_question(store):
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-rep", "fact", "mango mango", "active"),                      # the one rare word, twice
+               ("f-all", "fact", "we saw a zebra and ate an apple", "active")] +   # two common words
+              [(f"z{i}", "fact", f"the zebra pen and the apple tree, note {i}", "active") for i in range(8)])
+    con.close()
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    ix = fi._open_ro(store["index"])
+    bm25 = [r[0] for r in ix.execute("SELECT doc.fact_id FROM fts JOIN doc ON doc.rowid = fts.rowid WHERE fts "
+                                     "MATCH '\"zebra\" OR \"apple\" OR \"mango\"' ORDER BY bm25(fts)")]
+    assert bm25.index("f-rep") < bm25.index("f-all")     # bm25 alone prefers the rare word repeated
+    got = fi._state["matrix"].fts("zebra apple mango", 20, ["zebra", "apple", "mango"])
+    assert got.index("f-all") < got.index("f-rep")
+
+
+def test_lookups_check_for_new_rows_at_most_every_interval(store, monkeypatch):
+    monkeypatch.setattr(fi, "REFRESH_EVERY_S", 3600.0)
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    _ready(store["index"])
+    fi.search("luna", index_path=store["index"])
+    con = sqlite3.connect(store["db"])
+    _add(con, [("f-boat", "fact", "The sailboat needs new sails before the regatta", "active")])
+    con.close()
+    fi.sync(store["db"], store["index"], embed=fake_embed)
+    assert "f-boat" not in fi.search("sailboat regatta", index_path=store["index"])[0]
+    fi._state["matrix"].checked = 0.0                    # the interval has passed
+    assert "f-boat" in fi.search("sailboat regatta", index_path=store["index"])[0]
