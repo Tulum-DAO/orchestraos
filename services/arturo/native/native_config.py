@@ -60,11 +60,11 @@ def backend_opening_budget():
     raw = os.environ.get(BACKEND_OPENING_ENV, "").strip().lower()
     if raw == "full":
         return None
-    return int(raw) if raw.isdigit() else BACKEND_OPENING_TOKENS
+    return int(raw) if raw.isascii() and raw.isdecimal() else BACKEND_OPENING_TOKENS   # "²" is a digit, not an int
 
 
 def backend_context(ctx, budget):
-    """The fenced thread cut to its header and the newest lines that fit `budget` tokens."""
+    """The fenced thread cut to its header and the newest lines that fit `budget` tokens (at least the newest one)."""
     from services.arturo import thread_context as tc
     if budget is None or tc.estimate_tokens(ctx) <= budget:
         return ctx
@@ -75,7 +75,7 @@ def backend_context(ctx, budget):
     keep, used = [], tc.estimate_tokens("\n".join(head + lines[-1:]))
     for line in reversed(body):
         used += tc.estimate_tokens(line) + 1
-        if used > budget:
+        if used > budget and keep:                       # the newest line always stays, even over budget
             break
         keep.insert(0, line)
     dropped = len(body) - len(keep)

@@ -714,3 +714,25 @@ def test_the_backend_opening_budget_comes_from_env(monkeypatch):
     assert f["session"]["delegation"]["responses"]["instructions"].endswith(native_config.fenced(ctx))
     monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "bogus")
     assert native_config.backend_opening_budget() == native_config.BACKEND_OPENING_TOKENS
+
+
+def test_the_newest_line_survives_a_budget_smaller_than_it(monkeypatch):
+    # Claude review of the trim: a 1,200-char newest line under a 300-token budget left the backend only the fences.
+    from services.arturo import thread_context as tc
+    from services.arturo.native import native_config
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "300")
+    newest = "[2026-11-26T23:59:00Z 18:59 Tulum] call vc_x Shaw: " + "x" * 1200
+    ctx = "\n".join(["THREAD web_x: header", "[2026-11-26T23:00:00Z 18:00 Tulum] call vc_x Shaw: old", newest])
+    f = native_config.session_start_frame([], context=ctx)      # unfenced: an older API route
+    thread = f["session"]["delegation"]["responses"]["instructions"][len(native_config.prompts()["backend"]):].strip()
+    assert newest in thread and "Shaw: old" not in thread
+    assert thread.startswith(tc.PAST_OPEN) and thread.endswith(tc.PAST_CLOSE)
+    assert "(1 older line(s) not shown)" in thread
+
+
+def test_a_non_ascii_digit_budget_falls_back_instead_of_failing_the_call(monkeypatch):
+    from services.arturo.native import native_config
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, "²")
+    assert native_config.backend_opening_budget() == native_config.BACKEND_OPENING_TOKENS
+    monkeypatch.setenv(native_config.BACKEND_OPENING_ENV, " 800 ")
+    assert native_config.backend_opening_budget() == 800
