@@ -799,6 +799,9 @@ def finalize_from_client(client_call_id="", conv_id=""):
     do_inject = False
     summary = ""
     inj_call_id = ""
+    card_thread = None                       # the thread this call's card goes to (outside the lock), once
+    card_principal = None                    # who posted the call (the gateway stamped it on the journal)
+    merged = []
     with _JOURNALS_LOCK:
         try:
             client = _json.loads(cpath.read_text())
@@ -846,6 +849,10 @@ def finalize_from_client(client_call_id="", conv_id=""):
             server_turns = list(server_turns) + [t for t in _fm.native_tool_turns(conv, NATIVE_TOOL_LEDGER)
                                                  if t["call_id"] not in _have]
         # merge: client spine + server tools + surface events, ts-ordered
+        # The caller's OWN lines, before the merge: the thread gets these and nothing else. The merge can link any
+        # overlapping server journal (the time-window fallback) and recovers a role this journal lacks from it, so
+        # merged user/arturo lines may be another call's; they stay in the journal and the gm record only.
+        own_turns = list(client.get("turns", []))
         merged = _fm.merge_timeline(client.get("turns", []), server_turns, surface_events)
         summary = _endcall.sanitize_summary(_fm.summarize(merged))
         client["turns"] = merged
@@ -876,6 +883,15 @@ def finalize_from_client(client_call_id="", conv_id=""):
         if _ir.is_trivial_stub_with_richer_sibling(client, _client_sibs):
             client["gm_inject_suppressed"] = True
             log.info(f"finalize_from_client: {cpath.name} is a trivial split-call stub — inject SUPPRESSED")
+        # Item 10: a client journal that names its Arturo thread (the dashboard's native engine) gets its call card
+        # there. Claimed HERE, in the same write as the merge, so a re-driven finalize never writes it twice; the
+        # thread write itself happens after the lock. An agent's call lives in that agent's chat (as on the relay).
+        _tid = client.get("thread_id")
+        if (_tid and not client.get("thread_card_written") and not client.get("agent")
+                and _call_threads.valid_thread_id(_tid)):
+            client["thread_card_written"] = True
+            card_thread = _tid
+            card_principal = client.get("thread_principal")
         from services.arturo.call_journal import _atomic_write
         _atomic_write(cpath, client)
         # flip + supersede the server shard (so the watchdog's superseded_by guard suppresses it)
@@ -905,6 +921,9 @@ def finalize_from_client(client_call_id="", conv_id=""):
             sp.unlink()
     except Exception as _ue:
         log.error(f"finalize_from_client: sidecar unlink error: {_ue}")
+
+    if card_thread:
+        _archive_client_call(inj_call_id or cpath.stem, card_thread, own_turns, card_principal)
 
     if do_inject:
         # First attempt now; the background sweeper re-drives until gm accepts (DELIB-BUG-1).
@@ -8983,12 +9002,51 @@ def _call_line_to_memory(thread_id, role, content):
     _thread_grew(thread_id)
 
 
-def _call_end_marker(cid):
-    from services.arturo.relay_live_bridge import journal_call_id
-    call_id = journal_call_id(cid)
+def _call_end_card(call_id):
     # The browser's own end line (lib/handsFree onCallEnded + voiceSession buildMarker): one card, either way.
     return (f"Call ended ({call_id}). [voice-call: {call_id} {VOICE_CALLS_DIR}/{call_id}.json]",
             {"kind": "call_end", "call_id": call_id})
+
+
+def _call_end_marker(cid):
+    from services.arturo.relay_live_bridge import journal_call_id
+    return _call_end_card(journal_call_id(cid))
+
+
+_ARCHIVE_LOCK = _threading.Lock()   # one native call archive at a time (the once check and its write)
+
+
+def _archive_client_call(call_id, thread_id, turns, principal=None):
+    """A native (dashboard GPT-Live) call is never bound to its thread live: finalize_from_client hands it here
+    once, after the merge, and its lines + call card go into that thread the way the relay's live path writes
+    them (CallThreads.archive: same roles, mode, meta and end line). Same rule as the relay's bind: the caller
+    (`principal`, stamped on the journal by the gateway) must pass _thread_refusal, and a thread not yet in the
+    archive is started under that caller -- a call from a fresh Arturo page has typed nothing yet. Never
+    raises: finalize goes on."""
+    try:
+        if _thread_refusal(thread_id, principal) is not None:
+            log.warning(f"call {call_id}: thread {thread_id[:24]} refused for {principal or 'anonymous'}: "
+                        "no call card written")
+            return False
+        # Once per (thread, call): the journal's thread_card_written flag does not survive a repeated call-ended
+        # POST (the gateway rewrites the journal whole, same call id), so the thread itself is asked. The check and
+        # the write hold one lock, so two finalizes of the same call (each on its own thread) cannot both pass it.
+        # has_meta raises on a store it cannot read: the except below then writes nothing (never post blind).
+        with _ARCHIVE_LOCK:
+            if _THREADS.has_meta(thread_id, kind="call_end", call_id=call_id):
+                log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
+                return True
+            owner = _THREADS.started_by(thread_id) or _thread_key(principal)
+            ct = _call_threads.CallThreads(_THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card)
+            if not ct.archive(call_id, thread_id, turns, principal=owner):
+                log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
+                return False
+        log.info(f"call {call_id}: lines + call card written to thread {thread_id[:24]}")
+        _maybe_gist(thread_id, force=True)       # a call ended: its conversation's summary catches up
+        return True
+    except Exception as e:  # noqa: BLE001 — the card is never worth failing a finalize
+        log.warning(f"call {call_id}: call card for thread {str(thread_id)[:24]} failed: {e!r}")
+        return False
 
 
 _CALL_THREADS = None

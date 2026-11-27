@@ -20,6 +20,9 @@ import {
 } from './nativeVoice.ts';
 
 const HANGUP_WAIT_MS = 6000;
+/** The thread ids the call-ended route accepts (api/src/routes/voice-native.ts THREAD_ID_RE): any other is not sent,
+ *  so an odd id costs the call its card, never its transcript. */
+const THREAD_ID_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
 /** Lead before the first chunk of an utterance (playback otherwise starts the instant a chunk lands). */
 const PLAYBACK_LEAD_S = 0.08;
 
@@ -106,6 +109,8 @@ export class NativeVoiceSession implements CallSession {
     let rows: TranscriptState = emptyTranscript();
     const seenTools = new Set<string>();
     let lastContext = '';
+    // The Arturo thread this call was started from (as the relay sends it as threadId): its card is written there.
+    const threadId = typeof opts.threadId === 'string' && THREAD_ID_RE.test(opts.threadId) ? opts.threadId : null;
     const mine = () => this.ws === ws;
 
     const emit = (fx: TranscriptEffect[]) => {
@@ -134,7 +139,8 @@ export class NativeVoiceSession implements CallSession {
       try {
         const r = await fetch('/api/voice/call-ended', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ started_at: startedAt / 1000, ended_at: Date.now() / 1000, turns, conv_id: convId }),
+          body: JSON.stringify({ started_at: startedAt / 1000, ended_at: Date.now() / 1000, turns, conv_id: convId,
+            ...(threadId ? { thread_id: threadId } : {}) }),
           signal: AbortSignal.timeout(8000),
         });
         const d = await r.json().catch(() => null) as { ok?: boolean; call_id?: string; error?: string } | null;

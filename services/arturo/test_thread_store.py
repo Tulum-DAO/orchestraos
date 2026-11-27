@@ -106,3 +106,18 @@ def test_a_store_whose_file_cannot_be_written_degrades_instead_of_killing_a_turn
     assert s.usable is False
     s.record_turn("c1", "q", "a")      # must not raise
     assert s.list_threads() == [] and s.get_thread("c1") is None and s.history("c1") == []
+
+
+def test_a_call_card_is_found_by_has_meta_for_this_call_in_this_thread_only(tmp_path):
+    # The native call archive's once check: has_meta(thread, kind="call_end", call_id=...).
+    s = ThreadStore(tmp_path / "threads.db")
+    s.record_turn("t1", "hi", "hello")
+    card = dict(kind="call_end", call_id="vc_a")
+    assert s.has_meta("t1", **card) is False
+    s.append_message("t1", "assistant", "said on the call", mode="voice")                   # a line, no meta
+    s.append_message("t1", "assistant", "a job card", mode="voice", meta={"kind": "job", "call_id": "vc_a"})
+    assert s.has_meta("t1", **card) is False                                                 # other kinds don't count
+    s.append_message("t1", "assistant", "Call ended (vc_a).", mode="voice", meta={"kind": "call_end", "call_id": "vc_a"})
+    assert s.has_meta("t1", **card) is True
+    assert s.has_meta("t1", kind="call_end", call_id="vc_b") is False                        # another call
+    assert s.has_meta("t2", **card) is False                                                 # another thread
