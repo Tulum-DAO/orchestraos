@@ -149,7 +149,9 @@ export function lastFleetSwitch(dataDir: string, account: string, provider: Prov
   for (const line of raw.slice(-1_048_576).split('\n')) {
     try {
       const d = JSON.parse(line);
-      if (d && d.seat === '*shared*' && d.status === 'switched' && d.to === account && typeof d.ts === 'string'
+      // Claude's fleet switch writes seat "*shared*"; the Codex switch writes kind "shared" (codex_account_switch.py)
+      const fleetWide = provider === 'codex' ? d?.kind === 'shared' : d?.seat === '*shared*';
+      if (d && fleetWide && d.status === 'switched' && d.to === account && typeof d.ts === 'string'
         && (d.provider ?? 'claude') === provider) best = d.ts;
     } catch { /* not a row */ }
   }
@@ -362,6 +364,13 @@ export function codexRefusalWords(to: string, account: string): Record<string, s
     'registry-lock-busy': 'The account registry is busy. No Codex login was changed; try again.',
     'symlink-refused': 'A Codex login file or folder is a link, not a plain file; nothing was changed.',
     'not-a-regular-file': 'A Codex login file is not a plain file; nothing was changed.',
+    'vault-slot-in-use': `A Codex process is running on ${to}'s parked login right now (a check or a review); nothing was changed. Try again in a minute.`,
+    'registry-unreadable': 'The account registry cannot be read; no Codex login was changed.',
+    // raised after the login exchange can have happened: never "nothing was changed"
+    'pending-switch': 'The Codex switch stopped half-way. Codex agents may already be on the new login; the next press finishes it. '
+      + 'Check logs/account-switch.jsonl before pressing again.',
+    'io-error': 'The Codex switch hit a file error and may have stopped half-way; the next press finishes or repairs it. '
+      + 'Check logs/account-switch.jsonl before pressing again.',
   };
 }
 

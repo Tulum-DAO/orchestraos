@@ -504,8 +504,8 @@ test('Codex top line: since/by from Codex ledger rows only; Claude ignores Codex
   mkdirSync(join(h.od, 'logs'), { recursive: true });
   writeFileSync(join(h.od, 'logs', 'account-switch.jsonl'), [
     { ts: '2026-11-21T20:23:13+00:00', seat: '*shared*', to: 'beta', status: 'switched', from: 'default' },
-    { ts: '2026-11-21T20:30:00+00:00', seat: '*shared*', provider: 'codex', to: 'shaw', status: 'switched', from: 'shawcole' },
-    { ts: '2026-11-21T20:40:00+00:00', seat: '*shared*', provider: 'codex', to: 'beta', status: 'switched', from: 'shaw' },
+    { ts: '2026-11-21T20:30:00+00:00', provider: 'codex', kind: 'shared', from: 'shawcole', to: 'shaw', status: 'switched', by: null, displaced_to: 'vault', followers: 2 },
+    { ts: '2026-11-21T20:40:00+00:00', provider: 'codex', kind: 'shared', to: 'beta', status: 'switched', from: 'shaw' },
   ].map((r) => JSON.stringify(r)).join('\n') + '\n');
   writeFileSync(join(h.od, 'state', 'shaw-location.json'), JSON.stringify({ tz: 'America/New_York', label: 'ET' }));
   const now = new Date('2026-11-21T21:00:00Z');
@@ -540,8 +540,15 @@ test('Codex switch: args, switched/noop words, refusals say Codex, unknown token
     + 'shaw.cole is parked; press its card to switch back.');
   const no = switchAnswer('shaw', cli(0, { status: 'noop' }), {}, 'codex');
   assert.deepEqual([no.http, no.body.status, no.body.message], [200, 'noop', 'shaw is already the login all Codex agents use.']);
+  // every reason scripts/codex_account_switch.py can raise (Claude review of #676)
   const tokens = ['account-not-enrolled', 'login-missing', 'login-unreadable', 'login-empty', 'outgoing-login-blank', 'shared-login-unnamed',
-    'vault-slot-occupied', 'registry-lock-busy', 'symlink-refused', 'not-a-regular-file'];
+    'vault-slot-occupied', 'registry-lock-busy', 'symlink-refused', 'not-a-regular-file', 'pending-switch', 'io-error',
+    'vault-slot-in-use', 'registry-unreadable'];
+  for (const t of ['pending-switch', 'io-error']) {
+    const m = codexRefusalWords('shaw', 'shaw')[t] || '';
+    assert.doesNotMatch(m, /nothing was changed/i, t);          // it may have stopped half-way: never "nothing changed"
+    assert.match(m, /account-switch\.jsonl/, t);
+  }
   const words = codexRefusalWords('shaw', 'shaw');
   assert.deepEqual(tokens.filter((t) => !words[t]), []);
   for (const t of tokens) {
