@@ -89,8 +89,11 @@ def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="art
     from services.arturo.relay_live_bridge import journal_call_id
     done = []
     try:
-        replies = store.query(to_agent=to_agent, from_agent=gm, type="reply", status="pending", limit=REPLIES_MAX,
-                              tenant_id=_read_tenants(store))
+        replies = []
+        for tenant in _read_tenants(store):                # one strict query per tenant: works on any store
+            replies += store.query(to_agent=to_agent, from_agent=gm, type="reply", status="pending",
+                                   limit=REPLIES_MAX, tenant_id=tenant)
+        replies = sorted(replies, key=lambda r: str(r.get("created_at") or ""), reverse=True)[:REPLIES_MAX]
     except Exception as e:  # noqa: BLE001 — the next sweep tries again
         log.warning(f"gm answers: inbox unreadable: {e!r}")
         return done
