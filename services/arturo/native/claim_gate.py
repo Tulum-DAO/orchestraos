@@ -38,12 +38,20 @@ _ACTION_RES += [
 # STATE claims: something is done / running / saved. Backed by ANY successful tool call this turn (a status read is
 # evidence: "the build is finished" after get_agent_output said so). Present / present-perfect only: "it was created
 # yesterday" is history, not a claim (gm msg_04c7d9bd).
+_STATE_SUBJ = r"(?:it|that|this|the (?:task|seat|agent|note|message))"
+_STATE_WORD = (r"(?:done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
+               r"on its way|up|live)")
 _STATE_RES = [
-    re.compile(r"\b(?:it|that|this|the (?:task|seat|agent|note|message))(?:'s| is| has been)\s+"
-               r"(?:done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
-               r"on its way|up|live)\b", re.I),
+    re.compile(rf"\b{_STATE_SUBJ}(?:'s| is| has been)\s+{_STATE_WORD}\b", re.I),
     re.compile(r"\b(?:all )?(?:done|finished)[.!]|\btaken care of\b|\bconsider it done\b", re.I),
 ]
+# A TEMPORAL clause says when something will be so, not that it is: "I'll let you know when it's done" (codex round 8
+# on #698, parent msg_00c4361e). Only the clause itself is set aside, so "It's done, I'll tell you when the next one
+# is" and "When you asked, it's done" stay claims. It is a prefix of the words, so it holds while they stream in.
+_TEMPORAL_RE = re.compile(
+    rf"\b(?:when(?:ever)?|once|after|before|until|till|as soon as)\s+"
+    rf"(?:{_STATE_SUBJ}(?:'s|\s+is|\s+has been|\s+gets|\s+will be|'ll be)\s+)?(?:all\s+)?(?:{_STATE_WORD}|finished)\b",
+    re.I)
 # NOT claims, by design: progress/announcement tense ("I'm starting a seat called X to ..." is how the spawn read-back
 # is said BEFORE the call), the future ("I'll start ..."), capability ("I can start one"), questions, other people's
 # actions ("you started"), and narration to Shaw ("I told you", "I asked you").
@@ -54,7 +62,8 @@ def claim_kind(text):
     for cls, r in _ACTION_RES:
         if r.search(text or ""):
             return ("action", cls)
-    if any(r.search(text or "") for r in _STATE_RES):
+    said = _TEMPORAL_RE.sub(" ", text or "")
+    if any(r.search(said) for r in _STATE_RES):
         return ("state", None)
     return None
 
