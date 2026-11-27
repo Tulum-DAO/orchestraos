@@ -146,8 +146,10 @@ test("a call card's header with a failure says Finished, not Worked; all ok keep
   assert.equal(callRunSummary(t).lead, runSummary(t).lead.replace(/^Worked for /, 'Finished in '));
   assert.equal(callRunSummary(t.slice(0, 1)).lead, runSummary(t.slice(0, 1)).lead);   // one ok call: unchanged
   // Unfinished work is never "Finished": still running reads Working, an interrupted call Stopped, failure or not.
-  const running = [part('a', 'gm_command', 'failed'),
-                   fromPart({ kind: 'tool', callId: 'r', name: 'research', argsSummary: '', status: 'running', summary: '' })];
+  const running = [timed('a', 'failed', '2026-11-27T10:00:00Z', '2026-11-27T10:00:04Z'),
+                   { ...fromPart({ kind: 'tool', callId: 'r', name: 'research', argsSummary: '', status: 'running', summary: '' }),
+                     ts: '2026-11-27T10:00:06Z' }];
   assert.equal(callRunSummary(running).lead, 'Working');
-  assert.match(callRunSummary(running, true).lead, /^Stopped/);
+  assert.match(callRunSummary(running, true).lead, /^Stopped after \d+s$/);
+  assert.equal(callRunSummary(running, true).lead, runSummary(running, true).lead);
 });
