@@ -207,7 +207,7 @@ def claude_account_at(paths, ts_iso):
                     r = json.loads(line)
                 except ValueError:
                     continue
-                if r.get("status") == "switched" and r.get("seat") == "*shared*" and (
+                if isinstance(r, dict) and r.get("status") == "switched" and r.get("seat") == "*shared*" and (
                         not ts_iso or str(r.get("ts", "")) <= _norm_ts(ts_iso)):
                     best = r.get("to")
     except OSError:
@@ -222,26 +222,128 @@ def _norm_ts(ts):
 
 # --- one pass ----------------------------------------------------------------------------------
 
-def scan(paths, now, cursors, *, start_at_end=True):
-    """-> (events: list[LimitEvent with .seat], recoveries: set[(runtime, sid)])"""
+def _maybe_relevant(line):
+    """Cheap pre-filter: may this line be an assistant row, a limit note or a prompt? Routing is on the
+    PARSED fields (_route), never on these substrings: a prompt that quotes them is still a prompt."""
+    if '"type":"assistant"' in line or '"type": "assistant"' in line:
+        return True
+    if '"usageLimitNote"' in line or '"informational"' in line:
+        return True
+    if '"type":"user"' in line or '"type": "user"' in line:
+        # a tool result is never a prompt; the content list opens with it (cheap, and only a skip)
+        return '"content":[{"tool_use_id"' not in line and '"content":[{"type":"tool_result"' not in line
+    return False
+
+
+def _route(row):
+    """"assistant" | "release" | "note" | "prompt" | None, from the parsed row."""
+    t = row.get("type")
+    if t == "assistant":
+        return "assistant"
+    if t == "user" and row.get("usageLimitNote"):
+        # 2.1.284: "wrap_up" = the limit (grace allowance), "release" = "earlier usage-limit notes no
+        # longer apply" (the seat is working again)
+        note = row.get("usageLimitNote")
+        return "release" if note == "release" else "note" if note == "wrap_up" else "note_unknown"
+    if t == "system" and row.get("subtype") == "informational":
+        return "note"
+    if t == "user":
+        return "prompt"
+    return None
+
+
+def _is_prompt(row):
+    """A new prompt the seat answers (an operator line, a mail wake, a nudge), not a tool result or meta note."""
+    if row.get("type") != "user" or row.get("isMeta"):
+        return False
+    c = (row.get("message") or {}).get("content")
+    return isinstance(c, str) or (isinstance(c, list) and any(
+        isinstance(b, dict) and b.get("type") == "text" for b in c))
+
+
+def _infer_window(paths, ev, now):
+    """A limit note names no window. When the login's own usage reading (<= 2 h old) shows its 5-hour
+    window at 95%+ (or its weekly used up), that is the window, with the reading's reset: the same
+    episode key as the API-error rows and the switch's poll trigger."""
+    if ev.runtime != "claude" or ev.window != "unknown" or not ev.account:
+        return
+    u = _read_json(os.path.join(paths.usage_dir, f"api-claude-{ev.account}.json"), {})
+    if not u or now - float(u.get("as_of") or 0) > 2 * 3600:
+        return
+    w = u.get("windows") or {}
+    for name, window, at in (("5h", "5-hour", 95.0), ("weekly", "weekly", 100.0)):
+        pct, reset = (w.get(name) or {}).get("used_pct"), (w.get(name) or {}).get("resets_at")
+        try:
+            if pct is None or float(pct) < at or not reset or now >= float(reset):
+                continue
+        except (TypeError, ValueError):
+            continue                     # an odd reading names no window
+        if ev.reset_at and abs(int(ev.reset_at) - int(reset)) > 15 * 60:
+            continue                     # the note names another reset: not this window
+        ev.window, ev.reset_at = window, int(reset)
+        return
+
+
+def _scan_claude_row(paths, row, now, events, recovered, grace):
+    kind = _route(row)
+    if kind is None:
+        return
+    sid = row.get("sessionId") or row.get("session_id")
+    if kind == "prompt":
+        if sid in grace and _is_prompt(row):
+            grace[sid]["prompted"] = True
+        return
+    if kind == "note_unknown":              # a note value this watcher does not know: log it, act on nothing
+        _append(paths.log, {"ts": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                            "kind": "note_unknown", "note": str(row.get("usageLimitNote"))[:40], "session": sid})
+        return
+    if kind == "release":                   # the CLI itself says the limit is over: a recovery
+        grace.pop(sid, None)
+        recovered.add(("claude", sid))
+        return
+    ev = LE.from_claude_row(row) if kind == "assistant" else LE.from_claude_limit_note(row)
+    if ev is None:
+        if kind == "assistant" and not row.get("isApiErrorMessage"):
+            g = grace.get(sid)
+            if g is None or g.get("prompted"):
+                grace.pop(sid, None)
+                recovered.add(("claude", sid))
+        return
+    if ev.window != "credits":              # a model's credits cap has no grace allowance (model_drop moves it)
+        since = ev.ts or datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
+        grace[sid] = {"since": since, "prompted": False}
+        recovered.discard(("claude", sid))
+    ev.account = claude_account_at(paths, ev.ts)
+    _infer_window(paths, ev, now)
+    ev.seat = seat_for_session(paths, sid) or f"session {str(sid)[:8]}"
+    events.append(ev)
+
+
+def scan(paths, now, cursors, *, start_at_end=True, grace=None):
+    """-> (events: list[LimitEvent with .seat], recoveries: set[(runtime, sid)])
+    `grace` ({sid: {"since", "prompted"}}, persisted by the caller): after a limit row a seat's own
+    assistant rows are its grace allowance (2.1.284+), not a recovery; only a healthy row after a NEW
+    prompt is (11-26: seats read "recovered" in the run that saw their limit)."""
     events, recovered = [], set()
+    grace = {} if grace is None else grace
     for p in _fresh_files(os.path.join(paths.claude_projects, "*", "*.jsonl"), now):
         for line in new_lines(p, cursors, start_at_end=start_at_end):
-            if '"type":"assistant"' not in line and '"type": "assistant"' not in line:
+            if not _maybe_relevant(line):
                 continue
             try:
                 row = json.loads(line)
+                if isinstance(row, dict):
+                    _scan_claude_row(paths, row, now, events, recovered, grace)
             except ValueError:
                 continue
-            ev = LE.from_claude_row(row)
-            sid = row.get("sessionId") or row.get("session_id")
-            if ev is None:
-                if not row.get("isApiErrorMessage"):
-                    recovered.add(("claude", sid))
-                continue
-            ev.account = claude_account_at(paths, ev.ts)
-            ev.seat = seat_for_session(paths, sid) or f"session {str(sid)[:8]}"
-            events.append(ev)
+            except (TypeError, AttributeError, KeyError) as e:
+                # one odd row never wedges the watcher (its cursor already moved), and never silently
+                _append(paths.log, {"ts": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                                    "kind": "row_error", "file": os.path.basename(p),
+                                    "error": f"{type(e).__name__}: {e}"[:200]})
+    cutoff = datetime.fromtimestamp(now - 86400, timezone.utc).isoformat()
+    for sid in [s for s, g in grace.items() if str(g.get("since") or "") < cutoff[:19]]:
+        del grace[sid]
     for p in _fresh_files(os.path.join(paths.codex_sessions, "**", "rollout-*.jsonl"), now):
         m = _UUID_TAIL.search(p)
         sid = m.group(1) if m else None
@@ -287,8 +389,8 @@ def switch_decision(paths, ev):
     """What the fleet-wide login switch WOULD do for this Claude episode (dry run, never acts)."""
     if ev.runtime != "claude" or not (ev.window in ("weekly", "monthly-spend")):   # credits: model_drop
         return None
-    profiles = [p.get("id") for p in _read_json(paths.profiles, {}).get("profiles", []) if p.get("enrolled")]
-    others = [p for p in profiles if p and p != ev.account]
+    import limit_switch as LS
+    others = [p for p in LS.claude_logins(_read_json(paths.profiles, {})) if p != ev.account]
     best, why = None, "no other enrolled login"
     for acct in others:
         u = _read_json(os.path.join(paths.usage_dir, f"api-claude-{acct}.json"), {})
@@ -297,7 +399,7 @@ def switch_decision(paths, ev):
         if five is None or week is None:
             why = f"{acct}: no usage reading"
             continue
-        if five < 80 and week < 80:         # the armed switch's own headroom rule (limit_switch)
+        if five < LS.HEADROOM_PCT and week < LS.WEEKLY_HEADROOM_PCT:   # the armed switch's own rule
             best, why = acct, f"{acct} has headroom (5-hour {five:.0f}%, weekly {week:.0f}%)"
             break
         why = f"{acct} has no headroom (5-hour {five:.0f}%, weekly {week:.0f}%)"
@@ -312,7 +414,9 @@ def run_once(paths, *, now=None, mail_fn=None, start_at_end=True, inbox_fn=None,
     rows = _read_json(paths.seat_rows, {}).get("seats", {})
     cfg = _read_json(paths.failover_cfg, {})
     stamp = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
-    events, recovered = scan(paths, now, cursors, start_at_end=start_at_end)
+    grace = episodes.get("_grace") if isinstance(episodes.get("_grace"), dict) else {}
+    events, recovered = scan(paths, now, cursors, start_at_end=start_at_end, grace=grace)
+    episodes["_grace"] = grace
 
     for ev in events:
         key = episode_key(ev)

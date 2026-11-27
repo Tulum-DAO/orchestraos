@@ -253,12 +253,12 @@ test('every refusal reason is a 409 (503 when busy) in words; the detail is not 
     ['something-new', /Not switched \(something-new\)/, 409],
   ];
   for (const [reason, re, http] of cases) {
-    const a = switchAnswer('beta', cli(2, { status: 'refused', reason, detail: '/home/shaw/.claude-beta used by pid 774272' }));
+    const a = switchAnswer('beta', cli(2, { status: 'refused', reason, detail: '/home/operator/.claude-beta used by pid 774272' }));
     assert.equal(a.http, http, reason);
     assert.equal(a.body.ok, false, reason);
     assert.equal(a.body.reason, reason);
     assert.match(a.body.message, re, reason);
-    assert.ok(!a.body.message.includes('/home/shaw'), `${reason}: no path`);
+    assert.ok(!a.body.message.includes('/home/operator'), `${reason}: no path`);
   }
 });
 
@@ -430,7 +430,7 @@ test('the switched message says where the replaced login went; an unknown value 
 
 test('sign-in-needed and account-login-dead refuse in plain words, never the raw code', () => {
   for (const reason of ['sign-in-needed', 'account-login-dead']) {
-    const a = switchAnswer('beta', cli(1, { status: 'refused', reason, detail: '/home/shaw/.claude: signed out' }));
+    const a = switchAnswer('beta', cli(1, { status: 'refused', reason, detail: '/home/operator/.claude: signed out' }));
     assert.equal(a.http, 409);
     assert.equal(a.body.ok, false);
     assert.doesNotMatch(a.body.message, new RegExp(`\\(${reason}\\)|/home/`));
@@ -552,7 +552,7 @@ test('Codex switch: args, switched/noop words, refusals say Codex, unknown token
   const words = codexRefusalWords('shaw', 'shaw');
   assert.deepEqual(tokens.filter((t) => !words[t]), []);
   for (const t of tokens) {
-    const a = switchAnswer('shaw', cli(2, { status: 'refused', reason: t, detail: '/home/shaw/.codex/auth.json' }), {}, 'codex');
+    const a = switchAnswer('shaw', cli(2, { status: 'refused', reason: t, detail: '/home/operator/.codex/auth.json' }), {}, 'codex');
     assert.equal(a.http, t === 'registry-lock-busy' ? 503 : 409, t);
     assert.match(a.body.message, /Codex/, t);
     assert.doesNotMatch(a.body.message, /Claude|\/home\//, t);
