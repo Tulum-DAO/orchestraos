@@ -113,21 +113,24 @@ test('B2: an unacknowledged batch does NOT render (batch still mid-processing)',
   assert.ok(!out.some((i: any) => i.kind === 'queued_batch' && i.key === 'msg:b_c'));
 });
 
-test('interleave: synthetic items sort by ts among JSONL items, stable', () => {
+test('interleave: a batch sits between log items by its time; a pending turn goes after everything delivered', () => {
   const jsonl = [
     { kind: 'assistant', role: 'assistant', text: 'early reply', ts: '2026-09-14T13:00:00.000+00:00' },
     { kind: 'assistant', role: 'assistant', text: 'late reply', ts: '2026-09-14T13:50:00.000+00:00' },
   ];
   const out = mergeQueuedItems(jsonl, 'gm');
   const texts = out.map((i: any) => i.text);
-  // batch (13:30) sits between the two replies; the pending phone turn (13:40) after the batch, before late reply
+  // The log keeps delivery order (#462): the batch (13:30) sits between the two replies by its time without
+  // moving either; the pending phone turn (sent 13:40) has not been taken in yet, so it goes after everything
+  // delivered, after the late reply too, never by when it was typed.
   const iEarly = texts.indexOf('early reply');
   const iBatchEntryA = out.findIndex((i: any) => i.kind === 'queued_batch');
   const iPhone = texts.indexOf('hello from phone');
   const iLate = texts.indexOf('late reply');
   assert.ok(iEarly < iBatchEntryA, 'early reply before batch');
   assert.ok(iBatchEntryA < iPhone, 'batch before pending phone turn');
-  assert.ok(iPhone < iLate, 'pending phone turn before late reply');
+  assert.ok(iLate < iPhone, 'pending phone turn after the late reply (delivery order, not send time)');
+  assert.equal(iPhone, out.length - 1, 'the pending turn is the last item');
 });
 
 test('no queued data for an unrelated agent -> items returned unchanged', () => {
