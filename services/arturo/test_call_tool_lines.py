@@ -245,3 +245,30 @@ def test_neither_brain_reads_a_tool_line_as_something_arturo_said(tmp_path):
                                {"role": "arturo", "text": "Passed it on.", "ts": T0 + 20}], principal="fleet")
     lines = tc.thread_lines("web_y", tmp_path / "t.db")       # the next call's opening
     assert [l.text for l in lines] == ["Let me check.", "Passed it on."]
+
+
+def test_only_this_calls_own_tool_runs_reach_its_thread_never_an_overlapping_journals(tmp_path, monkeypatch):
+    """The merge's time-window fallback can link ANY overlapping server journal; another call's tool runs (in that
+    journal, or another conversation's rows in the ledger) must never be archived into this thread."""
+    from services.arturo.test_finalize_from_client import _native_proxy
+    m = _native_proxy(tmp_path, monkeypatch)
+    m.NATIVE_TOOL_LEDGER = _ledger(tmp_path, [
+        (CONV, "gm_command", {"prompt": "why the latency?"}, GM_PROMISE, T0 + 13),
+        ("native-someoneelse", "inject_message", {"message": "their secret note"}, {"ok": True, "result": "sent"},
+         T0 + 14)])
+    other = {"call_id": "vc_server_0000other", "started_at": T0 - 5, "page": "server", "status": "live",
+             "turns": [{"role": "user", "text": "someone else's question", "ts": T0 + 11},
+                       {"role": "tool", "tool": "lookup", "input": {"query": "their lookup"}, "result": "dispatched",
+                        "status": "done", "ts": T0 + 12}]}
+    (m.VOICE_CALLS_DIR / "vc_server_0000other.json").write_text(json.dumps(other))
+    j = {"call_id": CALL, "started_at": T0, "ended_at": T0 + 30, "page": "client", "status": "ended",
+         "source": "client", "conv_id": CONV, "summary": "Client transcript.", "thread_id": "web_ypc88hel",
+         "thread_principal": "fleet",
+         "turns": [{"role": "user", "text": "there is latency", "ts": T0 + 10},
+                   {"role": "arturo", "text": "I've passed that to gm.", "ts": T0 + 20}]}
+    (m.VOICE_CALLS_DIR / f"{CALL}.json").write_text(json.dumps(j))
+    m._THREADS.record_turn("web_ypc88hel", "typed first", "typed answer", principal="fleet")
+    assert m.finalize_from_client(client_call_id=CALL) is True
+    lines = [t["content"] for t in m._THREADS.get_thread("web_ypc88hel")["turns"]]
+    assert not any("their" in c or "someone else" in c or "lookup" in c for c in lines), lines
+    assert lines[2:5] == ["there is latency", "Asked gm: why the latency? · gm has it", "I've passed that to gm."]

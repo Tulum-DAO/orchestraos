@@ -841,6 +841,10 @@ def finalize_from_client(client_call_id="", conv_id=""):
             server_d = {c: d for c, d in candidates}.get(server_id, {})
             server_turns = server_d.get("turns", [])
         # merge: client spine + server tools + surface events, ts-ordered
+        # The caller's OWN lines, before the merge: the thread gets these and nothing else. The merge can link any
+        # overlapping server journal (the time-window fallback) and recovers a role this journal lacks from it, so
+        # merged user/arturo lines may be another call's; they stay in the journal and the gm record only.
+        own_turns = list(client.get("turns", []))
         merged = _fm.merge_timeline(client.get("turns", []), server_turns, surface_events)
         summary = _endcall.sanitize_summary(_fm.summarize(merged))
         client["turns"] = merged
@@ -911,7 +915,7 @@ def finalize_from_client(client_call_id="", conv_id=""):
         log.error(f"finalize_from_client: sidecar unlink error: {_ue}")
 
     if card_thread:
-        _archive_client_call(inj_call_id or cpath.stem, card_thread, merged, card_principal)
+        _archive_client_call(inj_call_id or cpath.stem, card_thread, own_turns, card_principal)
 
     if do_inject:
         # First attempt now; the background sweeper re-drives until gm accepts (DELIB-BUG-1).
@@ -9003,6 +9007,7 @@ def _call_end_marker(cid):
 # tool runs live there, not in its journal, and become lines in its thread (call_tool_lines.py).
 from services.arturo import call_tool_lines as _call_tool_lines
 NATIVE_TOOL_LEDGER = ARTURO_STATE / "native" / "tool_ledger.sqlite3"
+_ARCHIVE_LOCK = _threading.Lock()   # one native call archive at a time (the once check and its write)
 
 
 def _archive_client_call(call_id, thread_id, turns, principal=None):
@@ -9018,16 +9023,20 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
                         "no call card written")
             return False
         # Once per (thread, call): the journal's thread_card_written flag does not survive a repeated call-ended
-        # POST (the gateway rewrites the journal whole, same call id), so the thread itself is asked.
-        if _THREADS.has_call_end(thread_id, call_id):
-            log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
-            return True
-        owner = _THREADS.started_by(thread_id) or _thread_key(principal)
-        ct = _call_threads.CallThreads(_THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card,
-                                       tool_turns=lambda cid, t: _call_tool_lines.ledger_turns(cid, t, NATIVE_TOOL_LEDGER))
-        if not ct.archive(call_id, thread_id, turns, principal=owner):
-            log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
-            return False
+        # POST (the gateway rewrites the journal whole, same call id), so the thread itself is asked. The check and
+        # the write hold one lock, so two finalizes of the same call (each on its own thread) cannot both pass it.
+        with _ARCHIVE_LOCK:
+            if _THREADS.has_call_end(thread_id, call_id):
+                log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
+                return True
+            owner = _THREADS.started_by(thread_id) or _thread_key(principal)
+            # A native call's tool runs come from the native ledger, keyed by this call (never a merged journal's).
+            ct = _call_threads.CallThreads(
+                _THREADS, on_line=_call_line_to_memory, end_marker=_call_end_card,
+                tool_turns=lambda cid, t: _call_tool_lines.ledger_turns(cid, t, NATIVE_TOOL_LEDGER))
+            if not ct.archive(call_id, thread_id, turns, principal=owner):
+                log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
+                return False
         log.info(f"call {call_id}: lines + call card written to thread {thread_id[:24]}")
         _maybe_gist(thread_id, force=True)       # a call ended: its conversation's summary catches up
         return True
