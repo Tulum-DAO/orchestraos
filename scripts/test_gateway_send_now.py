@@ -644,3 +644,37 @@ def test_N2_a_remove_for_another_reason_is_not_already_sent(box, monkeypatch, tm
     status, body = _send_now(box, {"session": "seat", "message_id": mid})
     assert status == 200 and body["outcome"] == "not-queued", body
     assert seat.keys() == []
+
+
+# ------------------------------------------------------------------ review r3 (MERGE-OK @ 7981b4a8, non-blocking F1/F2)
+def test_F2_a_screen_with_no_queue_and_no_hint_reads_as_empty(box, monkeypatch, tmp_path):
+    # measured: the hint is drawn under a queue block, so a real empty queue draws no hint at all
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(hint=False), [enq(WORDS), tool_result(), rem(WORDS)])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "already-sent", body
+    assert seat.keys() == []
+
+
+def test_F1_a_screen_that_cannot_be_read_is_no_evidence_the_queue_is_empty(box, monkeypatch, tmp_path):
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(), [enq(WORDS), deq()])
+    real = seat.__call__
+
+    def t(*args, timeout=5):
+        if args[0] == "capture-pane":
+            seat.calls.append(args)
+            return types.SimpleNamespace(returncode=1, stdout="")
+        return real(*args, timeout=timeout)
+    monkeypatch.setattr(G, "_tmux", t)
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is not None
+
+
+def test_F1_a_dialog_over_the_queue_is_no_evidence_either(box, monkeypatch, tmp_path):
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, MENU_SCREEN, [enq(WORDS), deq()])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "prompt-open", body
+    assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is not None

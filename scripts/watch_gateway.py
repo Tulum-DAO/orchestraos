@@ -7550,10 +7550,17 @@ def _send_now(session, message_id):
     window = {"since": at - SEND_NOW_SINCE_SLACK_S, "until": at + SEND_NOW_UNTIL_SLACK_S}
     text = row.get("text") or ""
 
-    def screen_queue_empty():
-        # Positive evidence only: nothing at all drawn queued. A row that merely fails to match exactly (a word the
-        # CLI wrapped mid-word) is not evidence the message is gone.
-        return not (Q.screen_queue(_capture_pane(session, lines=0, ansi=True) or "") or [])
+    def screen_says_empty():
+        """None when the screen shows the CLI's queue empty, else the refusal: positive evidence only. A screen that
+        cannot be read, or a menu or permission dialog over the queue, says nothing; a row that merely fails to match
+        exactly (a word the CLI wrapped mid-word) is no evidence the message is gone."""
+        raw = _capture_pane(session, lines=0, ansi=True)
+        if raw is None:
+            return "queue-unclear"
+        unsafe = _mid_turn_recheck(session, force=False, raw=raw)
+        if unsafe and unsafe["why"] in ("no_composer", "permission_pending"):
+            return "prompt-open"
+        return "queue-unclear" if (Q.screen_queue(raw) or []) else None
 
     with _pane_guard(session) as held:
         if not held:
@@ -7567,8 +7574,9 @@ def _send_now(session, message_id):
             if item is None or item["left"]:
                 # "Left" from the rows alone can be a dequeue paired wrongly (a tail that starts mid-queue), and "never
                 # queued" can be a tail too short: either is said only when the screen shows nothing queued at all.
-                if not screen_queue_empty():
-                    return _send_now_refused("queue-unclear")
+                refusal = screen_says_empty()
+                if refusal:
+                    return _send_now_refused(refusal)
                 SS.drop(ORCH_DIR, message_id)
                 # Only a dequeue or an absorbed_mid_turn remove was measured as delivery; any other remove (a message
                 # pulled back to edit) took it out of the queue without sending it.
