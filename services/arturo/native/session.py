@@ -18,6 +18,7 @@ What it does with a frame, in documented terms (protocol.py cites each):
 """
 import base64
 import json
+import logging
 import re
 import collections
 import time
@@ -28,6 +29,7 @@ from .cost import CostRecorder
 from .tool_ledger import args_sha
 from .tools import ArturoTools, Delivery, SessionBinding
 
+log = logging.getLogger("arturo-native")
 _DEFAULT = object()
 # A boundary that runs tools off the audio loop returns this while a call is still running: the delegation stays held
 # and is submitted on a later tick, when every one of its results is ready (a real tool can take up to 120 s).
@@ -39,6 +41,18 @@ SUPERSEDED_OUTPUT = {"status": "superseded", "note": "the caller kept talking; a
 SPAN_TAIL_S = 0.8            # same end-of-span rule as the relay (stream_relay OPENAI_SPAN_TAIL_S)
 BARGE_S = 0.3                # same energy-barge rule as the relay (F5)
 _CLAIM_RE = re.compile(r"\b(done|finished|completed|it'?s (all )?set|taken care of)\b", re.I)
+# DROPPED-REQUEST (gm msg_bbfb14fb; field case arturo-latency-dev evidence-1126/dropped-request.md, run B1: "ask the GM
+# ..." spoken while a read_screen_context delegation was out; GPT-Live never delegated it). From the frames we have,
+# a request is SWALLOWED when: the caller began a NEW utterance (input transcript after a UTTERANCE_GAP_S pause) while
+# a delegation was still out (created before that utterance began, its calls not all answered), and no delegation was
+# created in the DROP_AFTER_S after the caller's last words. Logged once per utterance with the call id, the timings,
+# the busy delegations and the lengths of what was heard / said (the words, redacted, go to the call report only);
+# never acted on. Small talk with no delegation out is never one. It is a SIGNAL to investigate, not a verdict: an
+# "ok, thanks" while a tool is held, a pause > UTTERANCE_GAP_S inside one request, or a request's own delegation
+# created before its first transcript delta can each be reported; any new delegation clears the watch, even one that
+# answers an earlier request.
+UTTERANCE_GAP_S = 1.0
+DROP_AFTER_S = 6.0          # normal: delegation 1.3-2.0 s after the caller stops (B1 l1a 1.3 s, C_def l1b 2.0 s)
 
 
 class TransportDown(RuntimeError):
@@ -57,6 +71,7 @@ class Metrics:
     barges: list = field(default_factory=list)                  # (barge_t, last_speech_t or None)
     duplicate_call_events: int = 0
     hold_wait_s: dict = field(default_factory=dict)             # call_id -> seconds the settle/hold kept it
+    dropped_requests: list = field(default_factory=list)        # DROPPED-REQUEST records (see DROP_AFTER_S)
     tool_names: dict = field(default_factory=dict)              # call_id -> tool name, in request order
     tool_ready_at: dict = field(default_factory=dict)           # call_id -> t its delegation completed
     tool_next: dict = field(default_factory=dict)               # call_id -> what came first after its result:
@@ -111,6 +126,10 @@ class NativeSession:
         self._order = []                        # delegation ids in creation order
         self._held = []                         # completed delegations whose calls are not submitted yet
         self._done = {}                         # (turn, name, args_sha) -> (call_id, output): L2 per-turn reuse
+        self._utt_start = None                  # when the caller's current utterance began (transcript clock)
+        self._drop_watch = None                 # an utterance spoken while a delegation was out (DROP_AFTER_S)
+        self.delivery_kind = None               # () -> append kind for late results; None: the POC's rule
+        self.deliveries_open = True             # False once the call ended: a late result goes to its thread instead
 
     # ---------------------------------------------------------------------------------------------------
     def on_server_frame(self, frame):
@@ -143,6 +162,7 @@ class NativeSession:
                 self._record_claim()
         elif t == "session.input_transcript.delta":
             self._caller_activity(now)
+            self._watch_request(now, frame.get("delta") or "")
             self._last_user_t = now
             self.m.user_end_at = now
             # A new caller turn (receipts, fence, read-back) needs the caller's own SPEECH after Arturo began, not
@@ -200,8 +220,9 @@ class NativeSession:
     def _delegation(self, did, response_id, target):
         if did not in self.delegations:
             self.delegations[did] = {"response_id": response_id, "calls": {}, "target": target, "ready": None,
-                                     "terminal": None}
+                                     "terminal": None, "created": self.clock()}
             self._order.append(did)
+            self._drop_watch = None                  # the provider delegated: the caller's request was not lost
         elif response_id and not self.delegations[did]["response_id"]:
             self.delegations[did]["response_id"] = response_id
         return self.delegations[did]
@@ -222,7 +243,41 @@ class NativeSession:
 
     def tick(self, now=None):
         """Release held delegations whose time has come (the Driver calls this on every pump)."""
-        return [protocol.validate_client(f) for f in self._release(self.clock() if now is None else now)]
+        now = self.clock() if now is None else now
+        self._check_dropped(now)
+        return [protocol.validate_client(f) for f in self._release(now)]
+
+    # ---- DROPPED-REQUEST (see DROP_AFTER_S) ----------------------------------------------------------------
+    def _busy(self, before):
+        """Delegations created before `before` whose calls are not all answered (or that have not finished yet)."""
+        return [did for did in self._order
+                if self.delegations[did]["created"] < before
+                and (self.delegations[did]["terminal"] is None
+                     or any(c not in self.submitted_calls for c in self.delegations[did]["calls"]))]
+
+    def _watch_request(self, now, delta):
+        if self._last_user_t is None or now - self._last_user_t >= UTTERANCE_GAP_S:
+            self._utt_start = now
+            busy = self._busy(now)
+            self._drop_watch = {"since": now, "busy": busy, "heard": "", "said": len(self.output_text)} if busy else None
+        if self._drop_watch is not None:
+            self._drop_watch["heard"] += delta
+
+    def _check_dropped(self, now):
+        w = self._drop_watch
+        if w is None or self._last_user_t is None or now - self._last_user_t < DROP_AFTER_S:
+            return
+        self._drop_watch = None
+        from services.arturo.thread_context import _redact
+        heard, said = " ".join(w["heard"].split()), " ".join(self.output_text[w["said"]:].split())
+        rec = {"at_s": round(w["since"] - (self.m.started_at or w["since"]), 2), "busy": w["busy"],
+               "heard": _redact(heard)[:160], "said": _redact(said)[:160],
+               "no_delegation_s": round(now - self._last_user_t, 2)}
+        self.m.dropped_requests.append(rec)
+        # the log carries no words (G6: a caller's words can carry amounts and merchants); the report has them, redacted
+        log.warning(f"native {self.binding.conversation_id}: DROPPED-REQUEST the caller spoke {rec['at_s']} s into the "
+                    f"call while delegation(s) {rec['busy']} were out; no delegation {rec['no_delegation_s']} s after "
+                    f"their last words (heard {len(heard)} chars, Arturo said {len(said)} chars)")
 
     def _release(self, now):
         frames = []
@@ -371,8 +426,11 @@ class NativeSession:
 
     def delivery_frames(self):
         """(task_id, frame) pairs to send now; call delivery_sent() for each one the transport accepted."""
+        if not self.deliveries_open:
+            return []
         return [(tid, protocol.validate_client(f)) for tid, f in self.delivery.frames_for(
-            self.binding.conversation_id, self.user_speaking, self.assistant_speaking)]
+            self.binding.conversation_id, self.user_speaking, self.assistant_speaking,
+            kind=self.delivery_kind() if self.delivery_kind else None)]
 
     def _after_results(self, what):
         """The first thing after each tool result already sent: the model speaking, or asking for another tool."""
@@ -396,6 +454,9 @@ class NativeSession:
 
     def delivery_sent(self, task_id, frame):
         self.delivery.mark_sent(task_id, frame)
+        fence = getattr(self.orchestra, "fence", None)     # the note's text cannot steer an action (I5): fenced from
+        if fence is not None:                               # the moment it is in the call, whatever turn this is
+            fence(self.binding.conversation_id)
 
     def report(self):
         return {
@@ -410,8 +471,9 @@ class NativeSession:
             "barge_to_last_speech_s": [round(s - b, 3) if s else None for b, s in self.m.barges],
             "claims": self.claims, "acks": self.acks, "errors": self.m.errors,
             "undocumented_types": self.m.undocumented_types, "cost": self.cost.summary(),
-            "deliveries": self.delivery.states(),
+            "deliveries": self.delivery.states(self.binding.conversation_id),
             "hold_wait_s": self.m.hold_wait_s,
+            "dropped_requests": self.m.dropped_requests,
             "tool_timeline": self.tool_timeline(),
             "not_executed": [{k: r[k] for k in ("tool_call_id", "name", "status", "ref")}
                              for r in self.orchestra.ledger.not_executed()],

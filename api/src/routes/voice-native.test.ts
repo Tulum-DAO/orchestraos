@@ -365,6 +365,42 @@ test('validateCallEnded: the gateway\'s limits: the NEWEST 200 turns, each cut t
   assert.equal(r.body.turns[199].text.length, 2000);
 });
 
+test('validateCallEnded: an optional thread_id (item 10) is kept when well-formed, refused (400) when not', { timeout: 8000 }, () => {
+  const ok = validateCallEnded({ ...goodBody(), thread_id: 'web_k3j9x2ab' }) as { ok: true; body: any };
+  assert.ok(ok.ok);
+  assert.equal(ok.body.thread_id, 'web_k3j9x2ab');
+  const none = validateCallEnded(goodBody()) as { ok: true; body: any };
+  assert.ok(none.ok && !('thread_id' in none.body));                    // absent stays absent
+  const nul = validateCallEnded({ ...goodBody(), thread_id: null }) as { ok: true; body: any };
+  assert.ok(nul.ok && !('thread_id' in nul.body));                      // null is no thread
+  for (const bad of ['', 'has space', 'a/b', 'x'.repeat(81), 'web_1\n', 42, ['web_1'], {}]) {
+    const v = validateCallEnded({ ...goodBody(), thread_id: bad }) as { ok: false; status: number; error: string };
+    assert.equal(v.ok, false, JSON.stringify(bad));
+    assert.equal(v.status, 400);
+    assert.match(v.error, /thread_id/);
+  }
+});
+
+test('POST /call-ended: the thread_id reaches the gateway; a malformed one is a 400 and never forwarded', { timeout: 8000 }, async () => {
+  const app3 = express();
+  app3.use(express.json());
+  app3.use('/api/voice', createVoiceNativeRouter());
+  const s3 = app3.listen(0, '127.0.0.1');
+  await new Promise<void>((r3) => s3.once('listening', () => r3()));
+  try {
+    const url = `http://127.0.0.1:${(s3.address() as AddressInfo).port}/api/voice/call-ended`;
+    const post = (body: unknown) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', cookie: sessionCookie() }, body: JSON.stringify(body) });
+    lastPost = {};
+    const res = await post({ ...goodBody('native-thread000001'), thread_id: 'web_k3j9x2ab' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(lastPost.body, { ...goodBody('native-thread000001'), thread_id: 'web_k3j9x2ab' });
+    lastPost = {};
+    const bad = await post({ ...goodBody('native-thread000002'), thread_id: 'no spaces allowed' });
+    assert.equal(bad.status, 400);
+    assert.deepEqual(lastPost, {});
+  } finally { s3.close(); }
+});
+
 test('fitReason: cut on a character boundary to <= 123 UTF-8 bytes', { timeout: 8000 }, () => {
   const r = fitReason('é'.repeat(100));                 // 200 bytes
   assert.ok(Buffer.byteLength(r) <= 123);

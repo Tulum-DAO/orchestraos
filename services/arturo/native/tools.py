@@ -172,6 +172,10 @@ class ArturoTools:
     def _spending_read(self, name):
         return self.spending is not None and self.spending.owns(name) and self.spending.is_read(name)
 
+    def fence(self, conversation_id):
+        """A tool's text just reached the call (a late result's note): only lookups until the caller speaks (I5)."""
+        self._fenced.add(conversation_id)
+
     def new_turn(self, conversation_id):
         """The caller spoke again: the fence lifts (the session calls this)."""
         self._fenced.discard(conversation_id)
@@ -351,20 +355,58 @@ SPENDING_BACKS = frozenset({"save", "fix"})
 
 
 class Delivery:
-    """Async results into a live native session, deduplicated on task_id (ported from the POC's Delivery). Nothing in
-    production queues a delivery yet; the session still drives it so a later async path has one place to land."""
+    """Async results into a live native session, deduplicated on task_id (ported from the POC's Delivery). A tool the
+    call handed over (server.ToolRunner) queues its late result here; the Driver sends each pending row once, and a
+    row still pending when the call ends is taken for the call's thread instead (take_pending), never sent twice."""
 
     def __init__(self, ledger: ToolLedger):
         self.ledger = ledger
 
+    def queue(self, task_id, conversation_id, text):
+        """At most one row per task_id: a second queue of the same id is a no-op. Returns True when it was new."""
+        with self.ledger._connect() as c:
+            cur = c.execute("INSERT OR IGNORE INTO deliveries (task_id, conversation_id, text, state, updated)"
+                            " VALUES (?,?,?,?,?)", (task_id, conversation_id, text, "pending", self.ledger.clock()))
+            return cur.rowcount == 1
+
+    def take_pending(self, conversation_id, to_state, sent_since=None):
+        """Every row of this call still pending, and (sent_since) any sent or acked at or after that time, moved to
+        `to_state` in one transaction (the call ended: they go to its thread, not into a session nobody hears).
+        Returns the rows taken."""
+        where, a = "conversation_id = ? AND (state = 'pending'", [conversation_id]
+        if sent_since is not None:
+            where, a = where + " OR (state IN ('attempted', 'accepted') AND updated >= ?)", a + [sent_since]
+        where += ")"
+        c = self.ledger._connect()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            rows = [dict(r) for r in c.execute(f"SELECT * FROM deliveries WHERE {where} ORDER BY updated, rowid", a)]
+            c.execute(f"UPDATE deliveries SET state = ?, updated = ? WHERE {where}", [to_state, self.ledger.clock()] + a)
+            c.execute("COMMIT")
+            return rows
+        except Exception:
+            if c.in_transaction:
+                c.execute("ROLLBACK")
+            raise
+        finally:
+            c.close()
+
+    def mark(self, task_id, state):
+        with self.ledger._connect() as c:
+            c.execute("UPDATE deliveries SET state = ?, updated = ? WHERE task_id = ?", (state, self.ledger.clock(), task_id))
+
     def pending(self, conversation_id):
         with self.ledger._connect() as c:
             return [dict(r) for r in c.execute("SELECT * FROM deliveries WHERE conversation_id = ? AND state = ?"
-                                               " ORDER BY updated", (conversation_id, "pending"))]
+                                               " ORDER BY updated, rowid", (conversation_id, "pending"))]
 
-    def frames_for(self, conversation_id, user_speaking, assistant_speaking):
+    def frames_for(self, conversation_id, user_speaking, assistant_speaking, kind=None):
+        """kind: one append kind for every row (the server passes call_context.feed_kind(), the kind measured to be
+        voiced); None = the POC's rule (thinking while Arturo speaks, else commentary)."""
         if user_speaking:
             return []
+        if kind is not None:
+            return [(d["task_id"], protocol._append(kind, d["text"])) for d in self.pending(conversation_id)]
         return [(d["task_id"], (protocol.thinking_append if assistant_speaking else protocol.commentary_append)(d["text"]))
                 for d in self.pending(conversation_id)]
 
@@ -379,9 +421,12 @@ class Delivery:
             c.execute("UPDATE deliveries SET state = 'accepted', updated = ? WHERE client_event_id = ? AND"
                       " state = 'attempted'", (self.ledger.clock(), client_event_id))
 
-    def states(self):
+    def states(self, conversation_id=None):
+        q, a = "SELECT task_id, state FROM deliveries", ()
+        if conversation_id is not None:
+            q, a = q + " WHERE conversation_id = ?", (conversation_id,)
         with self.ledger._connect() as c:
-            return {r["task_id"]: r["state"] for r in c.execute("SELECT task_id, state FROM deliveries")}
+            return {r["task_id"]: r["state"] for r in c.execute(q, a)}
 
 
 # An ACTION is a success only in one of the proxy's own success shapes (review round 4: failure prefixes kept drifting;
