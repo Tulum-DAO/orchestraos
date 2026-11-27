@@ -31,6 +31,10 @@ def _err_row(ts, quota, text="You've hit your org's monthly spend limit"):
             "quotaLimits": quota}
 
 
+def _prompt_row(ts, text="[MSG from gm | high] continue"):
+    return {"type": "user", "timestamp": ts, "sessionId": SID_C, "message": {"role": "user", "content": text}}
+
+
 def _ok_row(ts):
     return {"type": "assistant", "timestamp": ts, "sessionId": SID_C,
             "message": {"content": [{"type": "text", "text": "done"}]}}
@@ -129,7 +133,7 @@ def test_plain_five_hour_is_logged_and_on_the_seat_row_but_not_mailed(tree):
 def test_recovery_by_effect_clears_the_row_and_closes_the_episode(tree):
     _add(tree.transcript, _err_row("2026-11-25T18:00:00Z", WEEKLY_Q))
     _run(tree)
-    _add(tree.transcript, _ok_row("2026-11-25T18:10:00Z"))
+    _add(tree.transcript, _prompt_row("2026-11-25T18:09:00Z"), _ok_row("2026-11-25T18:10:00Z"))
     _run(tree)
     assert json.load(open(tree.seat_rows))["seats"] == {}
     kinds = [r["kind"] for r in _log(tree)]
@@ -381,3 +385,81 @@ def test_f1_a_reset_less_seat_row_expires_after_12h_without_a_new_row(tree):
                            "sessionId": SID_C, "message": {"content": [{"type": "text", "text": "x"}]}})
     assert _run(tree, now=NOW)["limited_seats"] == ["pm-nod"]
     assert _run(tree, now=NOW + 13 * 3600, backfill=False)["limited_seats"] == []
+
+
+# --- 11-26 miss: Claude Code 2.1.284 limit notes, grace allowance, row order ---------------------
+
+def _note_row(ts):
+    return {"type": "user", "isMeta": True, "usageLimitNote": "wrap_up", "timestamp": ts, "sessionId": SID_C,
+            "message": {"role": "user", "content": "[Usage limit reached; a short grace allowance remains, "
+                                                   "then this turn is cut off without warning.]"}}
+
+
+def _info_row(ts, when="4:20pm"):
+    return {"type": "system", "subtype": "informational", "level": "notice", "isMeta": False, "timestamp": ts,
+            "sessionId": SID_C, "content": f"Usage limit reached · continuing automatically at {when} · esc to cancel"}
+
+
+@pytest.fixture
+def ny(monkeypatch):
+    import time
+    monkeypatch.setenv("TZ", "America/New_York")        # the CLI and the watcher share the host zone
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def _five_hour_full(tree):
+    (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
+        {"as_of": NOW - 60, "windows": {"5h": {"used_pct": 100.0, "resets_at": FIVE_Q["resetsAt"]},
+                                        "weekly": {"used_pct": 44.0, "resets_at": NOW + 5 * 86400}}}))
+
+
+def test_g1_a_wrap_up_note_and_the_informational_row_are_a_5_hour_limit(tree, ny):
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    seats = json.load(open(tree.seat_rows))["seats"]
+    assert seats["pm-nod"]["key"] == f"claude|strategysimple|5-hour|{FIVE_Q['resetsAt']}"
+    opened = [r for r in _log(tree) if r["kind"] == "episode_open"]
+    assert len(opened) == 1 and opened[0]["window"] == "5-hour"
+
+
+def test_g2_without_a_usage_reading_the_note_is_an_unknown_window_with_the_rows_reset(tree, ny):
+    _add(tree.transcript, _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    row = json.load(open(tree.seat_rows))["seats"]["pm-nod"]
+    assert row["window"] == "unknown" and row["reset_at"] == FIVE_Q["resetsAt"]
+
+
+def test_g3_grace_allowance_rows_are_not_a_recovery_a_reply_to_a_new_prompt_is(tree, ny):
+    _five_hour_full(tree)
+    _add(tree.transcript, _note_row("2026-11-25T17:55:00Z"), _ok_row("2026-11-25T17:55:05Z"),
+         _info_row("2026-11-25T17:55:15Z"))
+    _run(tree)
+    _add(tree.transcript, _ok_row("2026-11-25T17:56:00Z"))       # still the grace turn's tail
+    _run(tree)
+    assert "pm-nod" in json.load(open(tree.seat_rows))["seats"]
+    _add(tree.transcript, _prompt_row("2026-11-25T18:06:24Z", "The shared Claude login was switched. Continue."),
+         _ok_row("2026-11-25T18:06:30Z"))
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}
+    assert [r["how"] for r in _log(tree) if r["kind"] == "seat_recovered"] == ["healthy record"]
+
+
+def test_g4_a_healthy_row_before_the_limit_row_in_the_same_run_is_no_recovery(tree):
+    _add(tree.transcript, _ok_row("2026-11-25T17:59:00Z"), _err_row("2026-11-25T18:00:00Z", FIVE_Q))
+    _run(tree)
+    assert "pm-nod" in json.load(open(tree.seat_rows))["seats"]
+    assert not [r for r in _log(tree) if r["kind"] == "seat_recovered"]
+
+
+def test_g5_other_informational_rows_and_meta_rows_are_no_limit(tree):
+    _add(tree.transcript,
+         {"type": "system", "subtype": "informational", "timestamp": "2026-11-25T17:55:00Z", "sessionId": SID_C,
+          "content": "Auto-update installed · restart to apply"},
+         {"type": "user", "isMeta": True, "timestamp": "2026-11-25T17:55:01Z", "sessionId": SID_C,
+          "message": {"role": "user", "content": "[Earlier usage-limit notes no longer apply.]"}})
+    _run(tree)
+    assert json.load(open(tree.seat_rows))["seats"] == {}

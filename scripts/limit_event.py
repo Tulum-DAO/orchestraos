@@ -209,8 +209,33 @@ def _iso_to_dt(ts):
         return None
 
 
+def from_claude_limit_note(row: dict) -> LimitEvent | None:
+    """Claude Code 2.1.284+ hits a limit WITHOUT an API-error row: a meta user row carrying
+    usageLimitNote ("wrap_up": a short grace allowance, then the turn is cut off) and, when the turn
+    ends, a system/informational row "Usage limit reached · continuing automatically at 11:10pm".
+    Either one -> a Claude limit (window unknown; the informational row gives the reset), else None."""
+    if not isinstance(row, dict):
+        return None
+    ev = None
+    if row.get("type") == "user" and row.get("usageLimitNote"):
+        ev = LimitEvent("claude", "unknown", None, text=_row_text(row)[:300])
+    elif row.get("type") == "system" and row.get("subtype") == "informational":
+        text = row.get("content") if isinstance(row.get("content"), str) else ""
+        now = _iso_to_dt(row.get("timestamp")) or datetime.now(timezone.utc)
+        ev = from_text(text, now=now)
+        if ev is None or ev.runtime != "claude" or ev.window == "credits":
+            return None
+    if ev is None:
+        return None
+    ev.source = "transcript"
+    ev.session_id = row.get("sessionId") or row.get("session_id")
+    ev.ts = row.get("timestamp")
+    return ev
+
+
 def from_claude_row(row: dict) -> LimitEvent | None:
-    """A Claude Code transcript row -> LimitEvent, only for API-error rows."""
+    """A Claude Code transcript row -> LimitEvent, only for API-error rows (limit notes:
+    from_claude_limit_note)."""
     if not isinstance(row, dict) or not row.get("isApiErrorMessage"):
         return None
     text = _row_text(row)
