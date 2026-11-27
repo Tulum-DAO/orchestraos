@@ -55,10 +55,10 @@ class CallThreads:
         with self._lock:
             return self._by_thread.get(thread_id)
 
-    def _write(self, cid, thread_id, role, text, meta=None):
+    def _write(self, cid, thread_id, role, text, meta=None, ts=None, principal=None):
         try:
             seq = self.store.append_message(thread_id, role, text, mode="voice", meta=meta,
-                                            principal=self._principal.get(cid))
+                                            principal=principal or self._principal.get(cid), ts=ts)
             if seq is None:
                 log.warning(f"call {cid[:8]}: a line was not archived to {thread_id[:24]}")
             if self.on_line is not None:
@@ -98,4 +98,30 @@ class CallThreads:
                 log.warning(f"call {cid[:8]}: end marker failed: {e!r}")
         with self._lock:
             self._principal.pop(cid, None)
+        return True
+
+    def archive(self, cid, thread_id, turns, principal=None):
+        """A call that was never bound live (the dashboard's native GPT-Live engine journals client-side): once it
+        has ended, its lines and its end marker go into its thread at once, as the live path would have written
+        them (the operator's words as "user", Arturo's as "assistant", mode "voice", then the call card). `turns`
+        are call-journal turns ({role: user|arturo, text, ts}); any other role (tool, surface) is not a line the
+        caller saw. Like the live path, the card is written even for a call with no lines. Never raises."""
+        if not cid or not valid_thread_id(thread_id):
+            return False
+        for t in turns or ():
+            if not isinstance(t, dict):
+                continue
+            role = {"user": "user", "arturo": "assistant"}.get(t.get("role"))
+            text = (t.get("text") or "").strip() if isinstance(t.get("text"), str) else ""
+            if role is None or not text:
+                continue
+            ts = t.get("ts")
+            ts = ts if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0 else None
+            self._write(cid, thread_id, role, text, ts=ts, principal=principal)
+        if self.end_marker is not None:
+            try:
+                text, meta = self.end_marker(cid)
+                self._write(cid, thread_id, "assistant", text, meta=meta, principal=principal)
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"call {cid[:8]}: end marker failed: {e!r}")
         return True

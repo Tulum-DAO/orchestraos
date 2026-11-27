@@ -10237,6 +10237,9 @@ async def handle_presence(request):
     return _json({"ok": True, "viewing": cur.get("viewing")})
 
 
+VOICE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}\Z")
+
+
 async def handle_voice_call_ended(request):
     """POST /voice-call-ended — iOS posts the authoritative transcript the moment
     the operator ends the call.  Kills the 120s-silence guessing window.
@@ -10264,6 +10267,11 @@ async def handle_voice_call_ended(request):
     conv_id = data.get("conv_id")
     if conv_id is not None:
         conv_id = str(conv_id)[:200]
+    # The Arturo thread the call was started from (the dashboard's native engine): the proxy's finalize writes the
+    # call's card there. Optional; a malformed one is IGNORED, never a 400 (iOS/watch post here too).
+    thread_id = data.get("thread_id")
+    if not (isinstance(thread_id, str) and VOICE_THREAD_ID_RE.match(thread_id)):
+        thread_id = None
 
     # --- call_id ---
     if conv_id:
@@ -10300,6 +10308,11 @@ async def handle_voice_call_ended(request):
     }
     if conv_id:
         journal["conv_id"] = conv_id
+    if thread_id:
+        journal["thread_id"] = thread_id
+        # who posted it, built fresh like an Arturo turn's X-Arturo-Principal: Arturo files the call card
+        # under it and refuses a thread this caller may not write to (a device writes only its own threads)
+        journal["thread_principal"] = _arturo_principal_headers(request).get("X-Arturo-Principal")
 
     # --- atomic write (idempotent: same call_id → overwrite is fine) ---
     VOICE_CALLS_DIR.mkdir(parents=True, exist_ok=True)
