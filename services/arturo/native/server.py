@@ -313,7 +313,8 @@ class ToolRunner:
                    for cid, (n, _, _) in list(self._detached.items()))
 
     def handed_over(self):
-        return [{"call_id": cid, "name": n, "after_s": round(at, 2)} for cid, (n, _, at) in list(self._detached.items())]
+        return [{"call_id": cid, "name": n, "after_s": round(at, 2)}
+                for cid, (n, _, at) in list(self._detached.items())]
 
     def _dispatch_late(self, call_id, name, fut):
         """add_done_callback runs at once on the CALLER's thread (the event loop) if the tool finished in between: the
@@ -425,9 +426,9 @@ class NativeCall:
         ACCEPTED is never a success: "it's done" / "I've saved it" wait for the real result."""
         if self.toolset.backed(self.binding.conversation_id, self.session.turn_started_epoch, kind):
             return True
-        # a late result backs like a receipt from the moment it ARRIVED (gm's answer never does: "gm says: that needs a
-        # card" is an answer, not a success, and the ledger never counted it either) (the ledger dates a call by its start: a 90 s
-        # spawn_agent's result would otherwise be older than RECENT_RECEIPT_S when it lands)
+        # a late result backs like a receipt from the moment it ARRIVED (the ledger dates a call by its start: a 90 s
+        # spawn_agent's result would otherwise be older than RECENT_RECEIPT_S when it lands). gm's answer never does:
+        # "gm says: that needs a card" is an answer, not a success, and the ledger never counted it either.
         since = min(self.session.turn_started_epoch, time.time() - RECENT_RECEIPT_S)
         backers = CLAIM_BACKERS.get(kind[1], frozenset()) if kind[0] == "action" else None
         for name, ok, _text, at in list(self._late_raw.values()):
@@ -1084,7 +1085,7 @@ class NativeCall:
         fut = getattr(self, "_end_late_fut", None)
         if fut is not None:                                        # the report shows where each late result went
             try:
-                await asyncio.wait_for(asyncio.wrap_future(fut), 5)
+                await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)), 5)   # a timeout never cancels it
             except Exception:  # noqa: BLE001 — a slow archive never holds the report
                 pass
         billed = self.session.cost.billed_seconds
