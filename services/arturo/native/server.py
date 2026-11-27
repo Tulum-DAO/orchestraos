@@ -386,6 +386,8 @@ class NativeCall:
         self.out = asyncio.Queue()
         self.transport = self.driver = None
         self.t0 = None
+        self._accepted = time.monotonic()                          # the leg clock's zero: this socket accepted
+        self.legs = {}                                             # leg -> seconds since accept (first time only)
         self.closed = False
         self.close_reason = None
         # ``close`` can be requested concurrently by the socket loop, the
@@ -489,6 +491,9 @@ class NativeCall:
             except (ConnectionResetError, RuntimeError):
                 return
 
+    def _mark(self, leg):
+        self.legs.setdefault(leg, round(time.monotonic() - self._accepted, 3))
+
     def on_frame(self, direction, frame):
         if direction != "in":
             if frame.get("type") in ("response.item.create", "response.create"):
@@ -496,10 +501,12 @@ class NativeCall:
             return
         t = frame.get("type")
         now = time.monotonic()
-        if t == "session.started" and self.backend_fallback == "sent":
-            self.backend_fallback = "ok"
-            log.warning(f"native {self.binding.conversation_id}: BACKEND-FALLBACK ok: the default delegation config "
-                        f"started; the call keeps its tools")
+        if t == "session.started":
+            self._mark("session_started_s")
+            if self.backend_fallback == "sent":
+                self.backend_fallback = "ok"
+                log.warning(f"native {self.binding.conversation_id}: BACKEND-FALLBACK ok: the default delegation "
+                            f"config started; the call keeps its tools")
         if t == "session.output_audio.delta":
             self._in_t = _gap(self._in_gaps, self._in_t)
             try:
@@ -514,6 +521,8 @@ class NativeCall:
                 from services.arturo import openai_live
                 if openai_live.is_speech(pcm):
                     self._out_speech_t = now
+                    if self.backend_fallback != "trying":      # a rejected session's audio is never heard
+                        self._mark("first_audio_s")
                 if not self._force_muted and self.backend_fallback != "trying":   # forced barge / rejected session
                     self.gate.feed_audio(pcm, now)
             speaking = self.session.assistant_speaking
@@ -536,6 +545,7 @@ class NativeCall:
                 log.warning(f"native {self.binding.conversation_id}: CLAIM-UNBACKED {self.gate.blocked_text[-120:]!r}")
                 self.emit({"type": "transcript", "who": "arturo", "text": "", "new": False, "withdrawn": True})
             if not self.gate.blocked:
+                self._mark("first_transcript_s")
                 self.arturo_text += frame.get("delta") or ""
                 self.emit({"type": "transcript", "who": "arturo", "text": self.arturo_text.strip(), "new": fresh})
         elif t == "session.input_transcript.delta":
@@ -751,6 +761,7 @@ class NativeCall:
             raise
 
     async def _open(self):
+        self._mark("start_frame_s")
         threaded = call_context.enabled()
         # what opens the call (gm msg_e7402cbb): the page's own thread, else the named agent's chat, else Arturo's
         # own calls with no chat at all (never gm's chat read out as if it were the operator's)
@@ -774,12 +785,16 @@ class NativeCall:
                 return False
             try:
                 self.transport = await self._connect()
+                self._mark("provider_connected_s")
             except Exception as e:  # noqa: BLE001 — no key, timeout, refused, DNS: the caller is told, nothing leaks
                 log.warning(f"native: provider connect failed: {e!r}")
                 self.emit({"type": "refused", "reason": f"voice service unreachable: {e}"})
                 return False
         self.driver = Driver(self.session, self.transport, _Observer(self))
         self.t0 = time.monotonic()
+        # the first call since process start pays the provider's first connect (latency plan 2(a)): name it
+        self.start_kind = "cold" if self.server.starts == 0 else "warm"
+        self.server.starts += 1
         self.spend.start()
         opening, skipped = "", None
         if opening_fut is not None:
@@ -803,10 +818,13 @@ class NativeCall:
                 log.warning(f"native {self.binding.conversation_id}: chat feed off: {e!r}")
         if self.provider is not None:
             asyncio.ensure_future(self.provider.start())
+        self._mark("start_s")
         log.info(f"native {self.binding.conversation_id}: START principal={self.binding.principal} "
                  f"device={self.binding.device} tools={len(self.binding.allowed)} "
-                 f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent if self.chat_named else '-'} thread={self.page_thread or '-'} "
-                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']}")
+                 f"claim_gate={'on' if self.gate.enabled else 'off'} chat={self.chat_agent if self.chat_named else '-'} "
+                 f"thread={self.page_thread or '-'} "
+                 f"opening_tokens={self.opening_tokens} turns={self.opening_info['turns']} start={self.start_kind} "
+                 f"connect_s={self.legs.get('provider_connected_s')} start_s={self.legs.get('start_s')}")
         self.emit({"type": "state", "mode": self.mode, "conversation_id": self.binding.conversation_id,
                    "principal": self.binding.principal, "caps": {
                        "session_min": self.spend.session_max_s / 60, "session_usd": self.spend.session_max_usd,
@@ -1227,7 +1245,10 @@ class NativeCall:
         except Exception as e:  # noqa: BLE001 — never lose the report for a usage-store hiccup
             log.error(f"native {self.binding.conversation_id}: usage record failed: {e!r}")
         rep = self.session.report()
-        rep.update(reason=reason, spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
+        legs = {k: self.legs.get(k) for k in ("start_frame_s", "provider_connected_s", "start_s", "session_started_s",
+                                              "first_transcript_s", "first_audio_s")}
+        rep.update(start=getattr(self, "start_kind", None), legs=legs, reason=reason,
+                   spent_usd=self.spend.usd(billed), claims_blocked=self.gate.blocks,
                    claim_dropped_audio_s=round(self.gate.dropped_s, 2), claim_late=self.gate.late,
                    claim_hold_s=self.gate.hold_s, forced_barges=self.forced_barges,
                    uplink=self.uplink_report(), downlink=self.downlink.report(), no_input=self.no_input,
@@ -1283,6 +1304,7 @@ class NativeServer:
         self.page_thread_loader = lambda tid, principal: call_context.opening_thread(tid, principal=principal)
         self.calls_loader = call_context.opening_calls              # () -> Arturo's own calls, no chat
         self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
+        self.starts = 0                                             # calls started since process start (cold|warm)
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
         self._thread_store = None
         # the gm answers sweep has its own thread: a sweep stuck on a busy sqlite never takes a live call's tool worker

@@ -359,6 +359,8 @@ def _server(tmp_path, monkeypatch, enabled=True, verified=True, usage=None, exec
                          transport_factory=FakeProvider, usage_store=usage or FakeUsage(),
                          verify=lambda headers: verified)
     s.thread_loader = lambda agent: ""                  # never the live API or the live call journals
+    s.calls_loader = lambda: ""
+    s.page_thread_loader = lambda tid, principal: ""
     s.chat_feed_factory = lambda agent: None
     return s
 
@@ -547,6 +549,23 @@ def test_the_native_prompts_share_no_text_with_the_relays_f1_prompt():
             assert line not in p["live"] and line not in p["backend"]
     assert "say out loud which seat you will start" in p["live"]
     assert "READ_BACK_FIRST" in p["backend"]
+
+
+def test_the_live_prompt_says_the_opening_is_its_own_conversation_and_decisions_are_cards():
+    # proving call 2026-11-26: the page thread opened with 41 turns, yet Arturo said it had no past chats (the prompt
+    # told it never to answer "messages" from memory), then doubted the "hello" it found because its own typed reply
+    # came after it; the typed reply also offered an approval as a choice in prose
+    from services.arturo import thread_context as tc
+    live = native_config.prompts()["live"]
+    assert "The PAST CONTEXT block below is your own conversation with Shaw" in live
+    assert tc.PAST_OPEN.startswith("PAST CONTEXT")                   # the name the rule points at
+    assert "never say you can't see or don't\nhave your past chats" in live
+    assert "an Arturo line after it is your own reply" in live
+    assert "a decision goes on a card for him" in live
+    frame = native_config.session_start_frame([], context="[2026-11-25T22:20:01Z] chat Shaw: hello")
+    text = json.dumps(frame)
+    assert text.index("your own conversation with Shaw") < text.index("PAST CONTEXT: background only")
+    assert live.strip().split("\n\n")[-1].startswith("START:")    # the greet still fires (START stays last)
 
 
 def test_the_live_prompt_says_gm_is_answered_in_its_own_time_and_never_still_on_it():
@@ -1435,6 +1454,153 @@ def test_review5_n14_speech_is_credited_per_20ms_window_not_per_chunk(tmp_path):
     sess.on_uplink(_clicks(5), now=6.0); sess.on_uplink(_clicks(5), now=6.1); sess.on_uplink(_clicks(3), now=6.2)
     feed(fx.input_transcript(" yes start it"))                                          # 0.26 s of real speech
     assert t.execute(sess.binding, "s2", "spawn_agent", json.dumps(SPAWN))["ok"]
+
+
+# ---- latency instrumentation (measure before any behaviour change) ----------------------------------------------
+def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_result(tmp_path):
+    from services.arturo.native.session import NativeSession
+    from services.arturo.native import fixtures as fx
+    t, ex = _tools(tmp_path)
+    T = [0.0]
+    # a real settle: the call is requested at 1.0, its delegation completes at 1.4 while the caller spoke 0.6 s ago
+    # (held), and the tick at 2.0 sends the result, so requested, ready and result are three different times
+    sess = NativeSession(_fleet(t), t, clock=lambda: T[0], speech_fn=lambda pcm: any(pcm),
+                         settle=native_config.Settle(quiet_s=1.0, speak_or_s=1.0, hold_max_s=8.0),
+                         turn_speech_fn=lambda pcm: False)
+
+    def feed(frames, at):
+        T[0] = at
+        for f in frames:
+            sess.on_server_frame(f[0])
+    feed([fx.started()], 10.0)
+    feed([fx.input_transcript(" what are my agents doing")], 10.8)
+    c1 = fx.tool_turn("d1", "r1", [("c1", "list_agents", "{}")])
+    feed(c1[:-1], 11.0)
+    feed(c1[-1:], 11.4)
+    assert sess.report()["tool_timeline"][0]["result_s"] is None      # still held at 1.4
+    T[0] = 12.0
+    assert sess.tick()
+    feed(fx.tool_turn("d2", "r2", [("c2", "knowledge", json.dumps({"query": "dream fix"}))]), 12.5)
+    feed(fx.speech(0.3), 13.0)
+    rows = {r["call_id"]: r for r in sess.report()["tool_timeline"]}
+    assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "requested_s": 1.0, "ready_s": 1.4,
+                          "result_s": 2.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
+    assert rows["c2"]["name"] == "knowledge" and rows["c2"]["result_s"] == 2.5
+    assert rows["c2"]["first_audio_s"] == 3.0 and rows["c2"]["next"] == "audio"
+
+
+def test_a_tool_with_no_result_yet_is_in_the_timeline_with_nulls(tmp_path):
+    from services.arturo.native.session import NativeSession
+    from services.arturo.native import fixtures as fx
+    t, ex = _tools(tmp_path)
+    sess = NativeSession(_fleet(t), t, clock=lambda: 5.0, speech_fn=lambda pcm: any(pcm), settle=None)
+    sess.on_server_frame(fx.started()[0])
+    sess.on_server_frame(fx.delegation_created("d1", "r1")[0])
+    sess.on_server_frame(fx.response_event("d1", fx.nested_function_call_done("c9", "list_agents", "{}"), "")[0])
+    (row,) = sess.report()["tool_timeline"]
+    assert row["name"] == "list_agents" and row["requested_s"] == 0.0
+    assert row["ready_s"] is None and row["result_s"] is None and row["first_audio_s"] is None
+    assert row["next"] is None
+
+
+def test_the_first_call_since_process_start_is_cold_and_the_next_warm(tmp_path, monkeypatch, caplog):
+    # latency plan 2(a): the cutover's first call greeted at 4.95 s against 3.27 s later; the report must say which
+    import logging
+
+    async def one(c):
+        ws = await c.ws_connect("/native/ws", headers=HDRS)
+        await ws.send_str(json.dumps({"type": "start"}))
+        for _ in range(100):
+            if FakeProvider.instances and FakeProvider.instances[-1].sent:
+                break
+            await asyncio.sleep(0.02)
+        FakeProvider.instances[-1].push({"type": "session.started"})
+        await asyncio.sleep(0.2)
+        await ws.send_str(json.dumps({"type": "disconnect"}))
+        await ws.close()
+        await asyncio.sleep(0.2)
+
+    async def go():
+        s = _server(tmp_path, monkeypatch)
+        s.thread_loader = lambda agent: ""
+        c = await _client(s)
+        try:
+            await one(c)
+            FakeProvider.instances.clear()
+            await one(c)
+        finally:
+            await c.close()
+    with caplog.at_level(logging.INFO, logger="arturo-native"):
+        _run(go())
+    starts = [r.getMessage() for r in caplog.records if ": START " in r.getMessage()]
+    assert len(starts) == 2 and " start=cold" in starts[0] and " start=warm" in starts[1]
+    reps = sorted((tmp_path / "native" / "calls").glob("*.json"), key=lambda p: p.stat().st_mtime)
+    assert [json.loads(p.read_text())["start"] for p in reps] == ["cold", "warm"]
+
+
+def test_the_report_times_each_leg_of_the_call_from_the_socket_accept(tmp_path, monkeypatch, caplog):
+    # latency leg timing: on a real call START came 1.37 s after the API dialled and the first words 3.27 s after
+    # the client saw "state"; nothing on the native side split those legs. Each leg here takes a known time, so a
+    # mark copied from its neighbour, or two marks swapped, goes red.
+    import base64
+    import logging
+
+    def slow_provider():
+        time.sleep(0.05)
+        return FakeProvider()
+
+    def slow_thread(*agent):
+        # runs beside the connect: wait until the call is connected, then 0.05 s more, so START lands after the
+        # connect by that much however slow the runner is
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not any(
+                c.legs.get("provider_connected_s") is not None for c in list(s.calls.values())):
+            time.sleep(0.005)
+        time.sleep(0.05)
+        return ""
+
+    from services.arturo.native import call_context
+    monkeypatch.setenv(call_context.FLAG, "1")
+    s = _server(tmp_path, monkeypatch)
+    s.transport_factory = slow_provider
+    s.thread_loader = s.calls_loader = slow_thread      # a start frame with no agent reads Arturo's calls
+
+    async def go():
+        c = await _client(s)
+        try:
+            ws = await c.ws_connect("/native/ws", headers=HDRS)
+            await asyncio.sleep(0.05)
+            await ws.send_str(json.dumps({"type": "start"}))
+            for _ in range(100):
+                if FakeProvider.instances and FakeProvider.instances[-1].sent:
+                    break
+                await asyncio.sleep(0.02)
+            p = FakeProvider.instances[-1]
+            await asyncio.sleep(0.1)
+            p.push({"type": "session.started"})
+            await asyncio.sleep(0.1)
+            p.push({"type": "session.output_transcript.delta", "delta": "Hey"})
+            await asyncio.sleep(0.1)
+            loud = base64.b64encode((b"\xff\x7f\x01\x80") * 800).decode()
+            p.push({"type": "session.output_audio.delta", "delta": loud})
+            await asyncio.sleep(0.2)
+            await ws.send_str(json.dumps({"type": "disconnect"}))
+            await ws.close()
+            await asyncio.sleep(0.2)
+        finally:
+            await c.close()
+    with caplog.at_level(logging.INFO, logger="arturo-native"):
+        _run(go())
+    legs = json.loads(next((tmp_path / "native" / "calls").glob("*.json")).read_text())["legs"]
+    order = ["start_frame_s", "provider_connected_s", "start_s", "session_started_s", "first_transcript_s",
+             "first_audio_s"]
+    assert all(legs[k] is not None for k in order), legs
+    assert legs["start_frame_s"] >= 0.04, legs                     # the zero is the accept, not the start frame
+    assert legs["provider_connected_s"] - legs["start_frame_s"] >= 0.04, legs
+    for before, after in zip(order[1:], order[2:]):
+        assert legs[after] - legs[before] >= 0.04, (before, after, legs)
+    start = next(r.getMessage() for r in caplog.records if ": START " in r.getMessage())
+    assert f" connect_s={legs['provider_connected_s']} start_s={legs['start_s']}" in start
 
 
 def test_a_question_to_gm_never_holds_the_call_and_gms_answer_comes_in_as_a_note(tmp_path, monkeypatch):

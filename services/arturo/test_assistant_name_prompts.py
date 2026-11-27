@@ -58,3 +58,12 @@ def test_live_voice_onboarding_and_transcripts_use_the_name(store):
     text = onboarding.playbook({"devices": ["iPhone"]})
     assert "Arturo" not in text.replace("the Arturo tab", "")
     assert "Example: hello" in endcall.build_full_transcript([{"role": "arturo", "text": "hello"}])
+
+
+def test_the_text_brain_never_offers_a_decision_as_prose_options(mod):
+    # 2026-11-26: the Arturo page's typed reply ended "Want me to approve it, or should I first check ...?"; a decision
+    # is a card on the operator's phone and watch, never a choice in chat
+    for channel in ("text", "dashboard", "voice"):
+        ctx = mod.build_context(calling_channel=channel)
+        assert "Never offer the operator a choice to approve or decide as prose options" in ctx
+        assert "a decision goes on a card for them" in ctx

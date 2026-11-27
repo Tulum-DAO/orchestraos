@@ -72,6 +72,10 @@ class Metrics:
     duplicate_call_events: int = 0
     hold_wait_s: dict = field(default_factory=dict)             # call_id -> seconds the settle/hold kept it
     dropped_requests: list = field(default_factory=list)        # DROPPED-REQUEST records (see DROP_AFTER_S)
+    tool_names: dict = field(default_factory=dict)              # call_id -> tool name, in request order
+    tool_ready_at: dict = field(default_factory=dict)           # call_id -> t its delegation completed
+    tool_next: dict = field(default_factory=dict)               # call_id -> what came first after its result:
+    #                                                             "audio" | "tool:<name>" (latency plan step 1)
     undocumented_types: dict = field(default_factory=dict)
     errors: list = field(default_factory=list)
 
@@ -198,10 +202,14 @@ class NativeSession:
             else:
                 self.seen_calls.add(call_id)
                 self.m.tool_requested_at[call_id] = now
+                self.m.tool_names[call_id] = name
+                self._after_results(f"tool:{name}")
             deleg["calls"][call_id] = (name, args)
             return []
         if et in protocol.TERMINAL_NESTED:
             deleg["terminal"] = now
+            for cid in deleg["calls"]:
+                self.m.tool_ready_at.setdefault(cid, now)
             if any(cid not in self.submitted_calls for cid in deleg["calls"]):
                 deleg["ready"], deleg["turn"] = now, self._turn
                 if did not in self._held:
@@ -358,6 +366,7 @@ class NativeSession:
                     self.m.user_end_at = None
                 for cid, t_sent in self.m.tool_result_sent_at.items():
                     self.m.first_audio_after_result.setdefault(cid, round(now - t_sent, 3))
+                self._after_results("audio")
         else:
             self._quiet_s += len(pcm) / 32000.0
             if self._speaking and self._quiet_s >= SPAN_TAIL_S:
@@ -423,6 +432,26 @@ class NativeSession:
             self.binding.conversation_id, self.user_speaking, self.assistant_speaking,
             kind=self.delivery_kind() if self.delivery_kind else None)]
 
+    def _after_results(self, what):
+        """The first thing after each tool result already sent: the model speaking, or asking for another tool."""
+        for cid in self.m.tool_result_sent_at:
+            self.m.tool_next.setdefault(cid, what)
+
+    def tool_timeline(self):
+        """One row per tool call in request order, seconds from session.started: requested, its delegation done
+        (ready), result sent, first audio after the result, and what came first after the result."""
+        t0 = self.m.started_at or 0.0
+        rel = lambda t: None if t is None else round(t - t0, 3)   # noqa: E731
+        rows = []
+        for cid, name in self.m.tool_names.items():
+            sent = self.m.tool_result_sent_at.get(cid)
+            after = self.m.first_audio_after_result.get(cid)
+            rows.append({"call_id": cid, "name": name, "requested_s": rel(self.m.tool_requested_at.get(cid)),
+                         "ready_s": rel(self.m.tool_ready_at.get(cid)), "result_s": rel(sent),
+                         "first_audio_s": None if sent is None or after is None else rel(sent + after),
+                         "next": self.m.tool_next.get(cid)})
+        return rows
+
     def delivery_sent(self, task_id, frame):
         self.delivery.mark_sent(task_id, frame)
         fence = getattr(self.orchestra, "fence", None)     # the note's text cannot steer an action (I5): fenced from
@@ -445,6 +474,7 @@ class NativeSession:
             "deliveries": self.delivery.states(self.binding.conversation_id),
             "hold_wait_s": self.m.hold_wait_s,
             "dropped_requests": self.m.dropped_requests,
+            "tool_timeline": self.tool_timeline(),
             "not_executed": [{k: r[k] for k in ("tool_call_id", "name", "status", "ref")}
                              for r in self.orchestra.ledger.not_executed()],
             "settle": None if self.settle is None else self.settle.__dict__,
