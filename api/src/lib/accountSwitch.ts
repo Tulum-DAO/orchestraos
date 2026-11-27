@@ -367,7 +367,7 @@ export function codexRefusalWords(to: string, account: string): Record<string, s
     'vault-slot-in-use': `A Codex process is running on ${to}'s parked login right now (a check or a review); nothing was changed. Try again in a minute.`,
     'registry-unreadable': 'The account registry cannot be read; no Codex login was changed.',
     // raised after the login exchange can have happened: never "nothing was changed"
-    'pending-switch': 'The Codex switch stopped half-way. Codex agents may already be on the new login; the next press finishes it. '
+    'pending-switch': 'The Codex switch stopped half-way. Codex agents may already be on the new login; the next press tries to finish it. '
       + 'Check logs/account-switch.jsonl before pressing again.',
     'io-error': 'The Codex switch hit a file error and may have stopped half-way; the next press finishes or repairs it. '
       + 'Check logs/account-switch.jsonl before pressing again.',
