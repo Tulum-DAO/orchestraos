@@ -2120,7 +2120,7 @@ def main():
     # inbox
     p = sub.add_parser("inbox")
     p.add_argument("--tenant", default=None, help="strict: only this tenant (default: this install's "
-                   "tenant plus any mail under an unknown tenant, flagged tenant_mismatch)")
+                   "tenant plus [messages] also_read, those flagged tenant_mismatch; other tenants are counted on stderr)")
     p.add_argument("--agent", required=True)
     p.add_argument("--status", default="pending")
     p.add_argument("--all", dest="all_flag", action="store_true", default=False)

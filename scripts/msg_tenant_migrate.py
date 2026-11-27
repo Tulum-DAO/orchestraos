@@ -2,8 +2,8 @@
 """Close originals that were re-delivered by hand during the message-tenant split (2026-11-27).
 
 Mail written under one tenant and read under another was stranded; the operator re-sent it under the
-right tenant. Once readers surface unknown-tenant mail, the stranded originals would show up beside
-their re-deliveries. This closes each named original, only while it is still pending:
+right tenant. Once readers also read the legacy name ([messages] also_read), the stranded originals
+would show up beside their re-deliveries. This closes each named original, only while it is still pending:
 
     status -> 'retracted', error -> 're-delivered as <NEW> (message tenant fix)'
 

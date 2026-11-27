@@ -326,7 +326,7 @@ def main(argv=None) -> int:
     ap.add_argument("--agent", required=True)
     ap.add_argument("--session", default=None, help="tmux session (default: --agent)")
     ap.add_argument("--tenant", default=None,
-                    help="strict: only this tenant (default: the install's tenant + unknown-tenant mail)")
+                    help="strict: only this tenant (default: the install's tenant + [messages] also_read)")
     ap.add_argument("--db", default=None, help="msg_store db (default: MSG_DB_PATH or <data dir>/state/tasks.db)")
     ap.add_argument("--orphan-exit-s", type=float, default=120.0,
                     help="exit once the tmux session has been gone this long (0 = never)")
