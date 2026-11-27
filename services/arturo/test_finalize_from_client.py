@@ -195,3 +195,29 @@ def test_trivial_stub_sibling_suppressed_no_inject(scratch, monkeypatch):
     sj = json.loads((scratch / "vc_client_stub00000000.json").read_text())
     assert sj.get("gm_inject_suppressed") is True
     assert injected == []                                  # the stub never injected
+
+
+def test_a_native_call_counts_the_tool_runs_in_its_ledger(monkeypatch, tmp_path):
+    # Shaw's 18:3x call: three gm_command runs on a native call, summary "0 tool runs" (no server journal to fold)
+    from services.arturo.native.tool_ledger import ToolLedger
+    scratch = tmp_path / "calls"
+    scratch.mkdir()
+    m = _load_proxy(scratch)
+    m._GM_INJECT_ENABLED = False
+    led = ToolLedger(tmp_path / "native")
+    for i in range(3):
+        led.run_once_external(f"c{i}", "native-q1", "fleet", "gm_command", {"prompt": f"q{i}"},
+                              lambda: ({"ok": True, "result": "sent"}, None))
+    monkeypatch.setattr(m, "NATIVE_TOOL_LEDGER", tmp_path / "native" / "tool_ledger.sqlite3")
+    now = __import__("time").time()
+    (scratch / "vc_client_nq1.json").write_text(json.dumps({
+        "call_id": "vc_client_nq1", "source": "client", "status": "ended", "conv_id": "native-q1",
+        "started_at": now - 60, "ended_at": now,
+        "turns": [{"role": "user", "text": "ask the gm", "ts": now - 50},
+                  {"role": "arturo", "text": "Sent.", "ts": now - 40}]}))
+    # twice: with the gm inject off (or failing) gm_injected stays False, so a re-notify merges again (codex review)
+    for _ in range(2):
+        assert m.finalize_from_client(client_call_id="vc_client_nq1", conv_id="native-q1") is True
+        client = json.loads((scratch / "vc_client_nq1.json").read_text())
+        assert [t["tool"] for t in client["turns"] if t.get("role") == "tool"] == ["gm_command"] * 3
+        assert client["summary"].startswith("Voice call: 2 turns, 3 tool runs.")
