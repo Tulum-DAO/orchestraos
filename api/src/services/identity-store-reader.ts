@@ -256,6 +256,7 @@ export function predecessorOf(sid: string, orch: string = ORCHESTRA_DIR): Predec
 
 /** One generation of a lineage chain, as the stitched chat needs it. */
 export interface ChainLink {
+  id: number;                 // the generations row id (the promoted generation's owed verdict is keyed by it)
   generation: number;
   session_id: string | null;
   conversation_path: string | null;
@@ -306,7 +307,7 @@ function readLineageChainOf(sid: string, orch: string, max: number):
     return {
       root: cur.root, cwd: cur.cwd ?? null,
       links: newestFirst.reverse().map((r) => ({
-        generation: r.generation, session_id: r.session_id ?? null,
+        id: r.id, generation: r.generation, session_id: r.session_id ?? null,
         conversation_path: r.conversation_path ?? null, promoted_at: r.promoted_at ?? null,
       })),
     };

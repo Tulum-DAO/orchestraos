@@ -82,7 +82,8 @@ async function withServer<T>(fn: (get: (q: string) => Promise<any>) => Promise<T
   const server = a.listen(0);
   try {
     const base = `http://127.0.0.1:${(server.address() as any).port}/api/agents/${SEAT}/transcript`;
-    return await fn(async (q) => (await fetch(`${base}${q}`)).json());
+    // The divider between generations is an operator's view now (?dividers=1); these tests read the chat with it.
+    return await fn(async (q) => (await fetch(`${base}${q}${q.includes('?') ? '&' : '?'}dividers=1`)).json());
   } finally {
     server.close();
   }

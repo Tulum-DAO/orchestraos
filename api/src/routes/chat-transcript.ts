@@ -14,7 +14,7 @@ import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, cl
 import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems, queuedStateSig } from '../services/queued-merge.js';
-import { tagAudience, tagSynthetics, openerKind } from '../lib/audience.js';
+import { tagAudience, tagSynthetics, openerKind, wakeKind, mailWake, isRouterMail, promoteWake, promoteEnvelopeRest } from '../lib/audience.js';
 import { hasReactionWake, stripReactionWake, silentReply } from '../lib/reaction-wake-text.js';
 import { refable, partAt, messageRef } from '../lib/messageRef.js';
 import { storeRules, applyStoreRules, compactionNotices, mergeNotices, storePath } from '../services/conversation-store.js';
@@ -808,6 +808,8 @@ interface Segment {
   session: string;                      // '' for a current log with no known session
   generation: number | null;
   promotedAt: string | null;
+  root?: string | null;                 // the lineage root and generations row id: the key of the owed verdict
+  generationId?: number | null;
   file: () => string | null;
   /** A past generation: look its file up again, past this segment's own memo (the kept first page
    *  asks, so a file that was missing when the page was built is seen when it appears). */
@@ -843,6 +845,7 @@ export function chatSegments(agentId: string, sid: string | null, currentPath: s
   const last = head?.links[head.links.length - 1];
   const current: Segment = {
     session: sid ?? '', generation: last?.generation ?? null, promotedAt: last?.promoted_at ?? null,
+    root: head?.root ?? null, generationId: last?.id ?? null,
     file: () => currentPath,
   };
   if (!head) return [current];
@@ -852,7 +855,7 @@ export function chatSegments(agentId: string, sid: string | null, currentPath: s
     if (!from || !SESSION_ID.test(from) || from === sid) continue;
     let found: string | null | undefined;
     past.push({
-      session: from, generation: l.generation, promotedAt: l.promoted_at,
+      session: from, generation: l.generation, promotedAt: l.promoted_at, root: head.root, generationId: l.id,
       file: () => {
         if (found === undefined) {
           found = pastFile(from, head.cwd, l.conversation_path);
@@ -1019,17 +1022,29 @@ function segmentView(agentId: string, seg: Segment, range: Range = 'whole'): Seg
   const { sig, mark } = warmupMarkFor(agentId, seg.session || null);
   // What a session only saw (the earlier-conversation block, seed rows) is never shown (services/conversation-store.ts).
   const rules = storeRules(seg.session || null);
-  const key = `view:${seg.session}:${sig}:${rules.sig}:${log.start}:${end ?? ''}`;
+  const prep = (xs: readonly any[]) => applyStoreRules(dropWarmup(xs, mark), rules);
+  // Was anything owed to the operator when this generation was promoted? The capsule's verdict for this generation
+  // (owedVerdict), read only when this log has a promote wake to settle. Never the previous log.
+  const open = hasPromoteWake(log.items) ? owedVerdict(seg.root ?? null, seg.generationId ?? null, dataDir(), seg.promotedAt) : null;
+  // From the generation's promotion on (liveFrom): its hold phase as a green is never shown, on any page. A chunk of the
+  // log is cut at the takeover's line, found once on the log's head (liveFromFile).
+  const cutSig = `${sig}:${rules.sig}`;
+  const file = { path, parser, start: log.start, eof: log.eof ?? true };
+  const cut = cutOfView(file, seg.promotedAt, prep, cutSig);
+  const key = `view:${seg.session}:${sig}:${rules.sig}:${log.start}:${end ?? ''}:${seg.promotedAt ?? ''}:${open}:${cutKey(cut)}`;
   const memo = log.memo.get(key) as SegmentView | undefined;
   if (memo) return memo;
-  const items = applyStoreRules(dropWarmup(log.items, mark), rules);
+  const items = liveFromFile(prep(log.items), file, cut, seg.promotedAt, open, prep, cutSig);
   const firstAt = new Map<string, number>();
   const userTexts = new Map<string, string>();
   items.forEach((it, i) => {
     if (it?.uuid && !firstAt.has(String(it.uuid))) firstAt.set(String(it.uuid), i);
     if (isUserText(it) && !userTexts.has(String(it.uuid))) userTexts.set(String(it.uuid), String(it.text ?? ''));
   });
-  const view: SegmentView = { items, firstAt, userTexts, start: log.start, end, eof: log.eof ?? true };
+  // A chunk that starts at or before the takeover holds the whole chat of this generation: nothing older is shown, so
+  // the view starts at the log's start (a page never widens below it).
+  const whole = cut === 'none' || (typeof cut === 'object' && cut.off >= log.start);
+  const view: SegmentView = { items, firstAt, userTexts, start: whole ? 0 : log.start, end, eof: log.eof ?? true };
   // One view per file: an older warm-up signature is never asked for again.
   for (const k of [...log.memo.keys()]) if (k.startsWith('view:')) log.memo.delete(k);
   log.memo.set(key, view);
@@ -1103,7 +1118,7 @@ function carriedOver(s: number, views: Views): Set<number> {
 /** Everything older than position (seg, at), newest first; markers only between two generations
  *  that both show something. Views are made only as the walk reaches them. The walk STOPS at the start of a
  *  partial view (a tail or middle read): what is older is in the same file, below the chunk, and the caller widens. */
-function* olderThan(views: Views, seg: number, at: number): Generator<Unit> {
+function* olderThan(views: Views, seg: number, at: number, dividers = false): Generator<Unit> {
   const segs = views.segs;
   const hiddenMemo = new Map<number, Set<number>>();
   const hidden = (i: number) => {
@@ -1138,7 +1153,8 @@ function* olderThan(views: Views, seg: number, at: number): Generator<Unit> {
     let t = s - 1;
     while (t >= 0 && !shows(t)) t--;
     if (t < 0) return;
-    if (i >= 0 && shows(s)) yield { item: rotationMarker(segs[t], segs[s]), seg: s, at: -1 };
+    // The marker only when asked for (operators: ?dividers=1): the chat reads as one conversation.
+    if (dividers && i >= 0 && shows(s)) yield { item: rotationMarker(segs[t], segs[s]), seg: s, at: -1 };
     s = t;
     i = Number.POSITIVE_INFINITY;
   }
@@ -1153,8 +1169,14 @@ function cursorOf(u: Unit, segs: Segment[]): string {
   if (typeof u.item?.line_off === 'number') {
     return u.item?.uuid ? `${s}~@${u.item.line_off}~${u.item.uuid}` : `${s}~@${u.item.line_off}~#${u.item.line_part}`;
   }
-  return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${u.at}`;
+  return u.item?.uuid ? `${s}~${u.item.uuid}` : `${s}~#${CURSOR_CUT}.${u.at}`;
 }
+
+/** The version of a position cursor (`~#<version>.<index>`): an index counts places in a generation's view, and the
+ *  head cut (liveFrom) moved them, so a cursor from an older server is "unknown cursor", never the wrong items. A line
+ *  cursor (`~@<offset>~...`) names its log line and is checked against the item there, so it needs no version: one
+ *  that names an item the cut left out is not found. */
+const CURSOR_CUT = 'h1';
 
 /** A unit's item as a shallow copy (the cache keeps the originals), with the server's message ref
  *  `<session>~<uuid>#<part>` (lib/messageRef.ts) when it can carry one: a log item with a real uuid, in a generation
@@ -1204,8 +1226,11 @@ function cursorAt(views: Views, cursor: string): { seg: number; at: number } | n
     if (views.ranges[s] !== 'whole') views.reset(s, 'whole');
     const v = views.get(s);
     if (!v) return null;
-    if (/^#\d+$/.test(rest)) {
-      const n = Number(rest.slice(1));
+    // A position cursor names a place in the view as cut (CURSOR_CUT): one from before the head cut is unknown.
+    if (rest.startsWith('#')) {
+      const pos = new RegExp(`^#${CURSOR_CUT}\\.(\\d+)$`).exec(rest);
+      if (!pos) return null;
+      const n = Number(pos[1]);
       return n < v.items.length ? { seg: s, at: n } : null;
     }
     const at = v.firstAt.get(rest);
@@ -1228,7 +1253,8 @@ function readableLog(path: string): void {
 /** A window of the stitched chat: the newest `limit` positions (no cursor), or the `limit`
  *  positions just older than `before`. A page never starts inside one log line's items, so the
  *  next page, read from its `oldest_id`, neither repeats nor skips any. Read tail-first: see TAIL_WANT0. */
-export function chatWindow(agentId: string, segs: Segment[], limit: number, before: string | null):
+export function chatWindow(agentId: string, segs: Segment[], limit: number, before: string | null,
+                           opts: { dividers?: boolean } = {}):
     { items: any[]; has_older: boolean; oldest_id: string | null; cursor_ts: string | null } | null {
   const views = new Views(agentId, segs, { want: TAIL_WANT0 });
   const last = segs.length - 1;
@@ -1260,7 +1286,7 @@ export function chatWindow(agentId: string, segs: Segment[], limit: number, befo
         }
       }
     }
-    const walk = olderThan(views, from.seg, from.at);
+    const walk = olderThan(views, from.seg, from.at, opts.dividers === true);
     const units: Unit[] = [];
     let done = false;
     // Never one step past `limit` without a cursor: a window the current log fills must not look
@@ -1573,6 +1599,21 @@ export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
   return out;
 }
 
+/** A processed batch's machine wakes (lib/audience.ts wakeKind) left out, and a batch left empty with them. */
+export function dropWakeBatchEntries(items: any[]): any[] {
+  const out: any[] = [];
+  for (const it of items) {
+    if (it?.kind !== 'queued_batch' || !Array.isArray(it.entries)) { out.push(it); continue; }
+    const kept = it.entries.filter((e: any) => !wakeKind(e?.body) && !mailWake(e?.agent, e?.body));
+    if (kept.length === it.entries.length) { out.push(it); continue; }
+    if (!kept.length) continue;
+    const copy = { ...it, entries: kept, count: kept.length };
+    if (LIVE_CARDS.has(it)) LIVE_CARDS.add(copy);      // keep its identity as a live card
+    out.push(copy);
+  }
+  return out;
+}
+
 /**
  * Drop a queued message that the log ALSO recorded as a real user turn.
  *
@@ -1624,7 +1665,19 @@ function normalizeClaudeEntry(o: any, keepSidechain = false): any[] {
   // caveats. The operator, 2026-10-08: rendered as user rows, they "look like messages that come
   // from the user when it's not". Measured across the 60 most recent live transcripts:
   // not one isMeta entry is human speech. Only the explicit `true` hides a turn.
-  if (t === 'user' && o.isMeta === true) return [];
+  if (t === 'user' && o.isMeta === true) {
+    // Except the promote wake in its Stop-hook shape (lib/audience.ts promoteWake): it opens the promoted seat's first
+    // turn, which settlePromoteTurns keeps or leaves out whole. Dropped like the rest, its turn's work and reply would
+    // run on inside whatever turn came before (a hydrate digest's, or a person's).
+    const c = o.message?.content;
+    const text = typeof c === 'string' ? c
+      : Array.isArray(c) ? c.filter((b: any) => b?.type === 'text').map((b: any) => String(b.text ?? '')).join('\n') : '';
+    if (promoteWake(text)) return [{ kind: 'text', role: 'user', text, ts: o.timestamp, uuid: o.uuid }];
+    // A Stop-hook continuation (review v3 F2) leaves a marker, never drawn and gone before anything is sent (liveFrom
+    // drops it): the promote turn's final reply is the one BEFORE it, as the capsule reads a hook continuation.
+    if (/^Stop hook feedback:/.test(text.trimStart())) return [{ kind: HOOK_MARKER, ts: o.timestamp, uuid: o.uuid }];
+    return [];
+  }
   const msg = o.message || {};
   const role = msg.role || t;
   const ts = o.timestamp;
@@ -1911,12 +1964,21 @@ function enrichItems(items: any[], atStart = true): any[] {
       firstUserSeen = true;
       const text = (it.text || '').trim();
       if (text.length > 800 || /^You are\b/.test(text)) {
-        return withLine(withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts), it);
+        const out = withLine(withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts), it);
+        // Marked on its length alone: a guess (a long first message may be the operator's), never a reason to cut it.
+        if (!/^You are\b/.test(text)) BRIEF_GUESS.add(out);
+        return out;
       }
     }
     return it;
   });
 }
+
+/** First user texts enrichItems marked is_system on their LENGTH only (not a "You are ..." brief): drawn as before, but
+ *  liveFrom reads them by their words, so an operator's long first message in a rotated log is never cut with the
+ *  harness's lines (review item 3). Identity-keyed: a copy made later is the old, cautious reading. */
+const BRIEF_GUESS = new WeakSet<object>();
+
 
 // Server-side pairing (schema render_items[]): tool_result attached under its
 // tool_use, empties dropped, order preserved. Replaces the duplicated web
@@ -2299,8 +2361,369 @@ function finishLogItems(items: any[], atStart = true, dedupeQueued = false): any
     return shown ? { ...it, text: shown.text, call_id: shown.call_id } : it;
   });
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
-  // outside the window keeps its tags.
-  return tagAudience(enrichItems(items, atStart));
+  // outside the window keeps its tags. Then the machine wakes are taken out (hideWakes), on the whole log too.
+  return hideWakes(tagAudience(enrichItems(splitPromoteEnvelopes(items), atStart)));
+}
+
+/** A router-injected promote wake with an operator's words after it in the same prompt (lib/audience.ts
+ *  promoteEnvelopeRest): the turn is his, so the line is his words alone, before the turn is tagged. */
+function splitPromoteEnvelopes(items: any[]): any[] {
+  return items.map((it) => {
+    if (it?.kind !== 'text' || it.role !== 'user' || it.mid_turn || it.is_system) return it;
+    const rest = promoteEnvelopeRest(it.text);
+    return rest ? { ...it, text: rest, promote_envelope: true } : it;
+  });
+}
+
+/** The machine wakes left out of a seat's chat (lib/audience.ts wakeKind): a `rotation` wake's whole turn (a hydrate
+ *  digest and the agent's answer to it, a promote notice, the retire notice), and a `beat` wake's own line, emptied and
+ *  flagged `wake` (never drawn: both renderers skip empty user text), so the turn it opened keeps its place. */
+const HOOK_MARKER = 'hook_continuation';
+const STOP_HOOK = /^Stop hook feedback:/;
+/** A beat wake's emptied line; a Stop-hook line is flagged `hook` (it continues the turn before it, review v3 F2). */
+const beatLine = (it: any): any => ({ ...it, text: '', wake: 'beat', ...(STOP_HOOK.test(String(it.text ?? '').trimStart()) ? { hook: true } : {}) });
+
+export function hideWakes(items: any[]): any[] {
+  let any = false;
+  for (const it of items) if (isTurnOpener(it) && !it.is_system && wakeKind(it.text)) { any = true; break; }
+  if (!any) return items;
+  const out: any[] = [];
+  let dropping = false;
+  for (const it of items) {
+    if (isTurnOpener(it)) {
+      const k = it.is_system ? null : wakeKind(it.text);
+      // A wake typed in while the agent was mid-turn (a queued_command) did not start what follows it: the turn it
+      // landed in goes on. Only its own line is taken out.
+      if (it.queued) {
+        dropping = false;
+        if (k === 'rotation') continue;
+        out.push(k === 'beat' ? beatLine(it) : it);
+        continue;
+      }
+      // The promote wake alone, in either shape: its line is hidden here and its turn kept for settlePromoteTurns,
+      // which knows the promotion time and whether an operator message was still open (liveFrom).
+      if (!it.is_system && promoteWake(it.text)) {
+        dropping = false;
+        out.push({ ...it, text: '', wake: 'promote' });
+        continue;
+      }
+      dropping = k === 'rotation';
+      if (dropping) continue;
+      out.push(k === 'beat' ? beatLine(it) : it);
+      continue;
+    }
+    if (!dropping) out.push(it);
+  }
+  return out;
+}
+
+const BOOT_LINE = /^You are [\w.-]+\. Read \/tmp\/agent-init-[\w.-]+\.md\b/;
+/** A turn that is not part of the conversation: a wake, the harness's own line (the spawn brief, a stop hook), the
+ *  spawn boot line. After the promotion a first message marked system on its length alone (BRIEF_GUESS) is read by
+ *  its words instead: it is the operator's first input in a rotated log, not a brief. */
+const notConversation = (it: any, afterPromotion = false): boolean =>
+  (!!it?.wake && it?.owed === undefined) || (it?.is_system === true && !(afterPromotion && BRIEF_GUESS.has(it)))
+  || BOOT_LINE.test(String(it?.text ?? '').trimStart());
+
+/** A turn an operator (a person) opened: not a wake, not the harness or the boot line, and not machine-written
+ *  (mail, forwarded mail, a card answer, a hook, a job's notice: lib/audience.ts openerKind). Before the promotion a
+ *  length-only system mark stands: a green's long brief is the likelier reading there. */
+const personTurn = (it: any): boolean => !notConversation(it) && !isRouterMail(it?.text)
+  && !/^\[fwd from /.test(String(it?.text ?? '').trimStart()) && openerKind(it) === 'person';
+
+/** A background job's notice (<task-notification> ... <tool-use-id>X</tool-use-id>) for a job launched by a tool call
+ *  in `launched`: the job was started before the promotion, so its notice is the hold phase's too. */
+const TASK_TOOL_ID = /^<task-notification>[\s\S]*?<tool-use-id>([^<\s]+)<\/tool-use-id>/;
+const heldJobNotice = (it: any, launched: Set<string>): boolean => {
+  const m = TASK_TOOL_ID.exec(String(it?.text ?? '').trimStart());
+  return !!m && launched.has(m[1]);
+};
+
+/** An operator's own input: a turn he opened, or a message he sent while the agent was working (queued). Not a wake,
+ *  the harness, mail, a job's notice, a reaction wake or a voice call's page line. */
+const personInput = (it: any): boolean => it?.kind === 'text' && it.role === 'user' && !it.mid_turn
+  && !it.reaction_wake && !it.voice_said && String(it.text ?? '').trim() !== '' && personTurn(it);
+
+const hasPromoteWake = (items: readonly any[]): boolean => items.some((it) => it?.wake === 'promote');
+
+/** A card or questionnaire answer the approval loop relayed (review v3 F3): his input too, though machine-written. */
+const CARD_ANSWER = /^\[(?:APPROVAL RESOLVED|DECISION ANSWERED|MULTI-PART DECISION ANSWERED|HUMAN-TASK|questionnaire-answers|questionnaire-discarded) /;
+const operatorInput = (it: any): boolean => personInput(it)
+  || (it?.kind === 'text' && it.role === 'user' && CARD_ANSWER.test(String(it.text ?? '').trimStart()));
+
+/** A Stop-hook continuation: the marker of a dropped isMeta hook line, or an emptied hook line. */
+const hookContinuation = (it: any): boolean => it?.kind === HOOK_MARKER || (it?.wake === 'beat' && it?.hook === true);
+
+/** The turn opened at `k`: up to the next opener that is not a message queued while the agent worked. */
+function turnEnd(items: readonly any[], k: number): number {
+  let end = k + 1;
+  while (end < items.length && !(isTurnOpener(items[end]) && !items[end].queued && !hookContinuation(items[end]))) end++;
+  return end;
+}
+
+/** The owed verdict the capsule wrote for a promoted generation (agent-orchestra lineage_daemon/wal/
+ *  conversation_capsule.py write_owed_verdict: <data dir>/state/agent-handoffs/owed/<root>.<generation id>.json, at the
+ *  promote wake). THE one source of "owed to the operator" (review v2): the API never re-derives it. true / false from
+ *  the file; null when there is no file, it cannot be read, or it is not this generation's (the promote turn is then
+ *  kept: it is left out only on positive evidence). Read on each view build: it is a few hundred bytes. */
+export function owedVerdict(root: string | null, generationId: number | null, orch: string = dataDir(),
+                            promotedAt?: string | null): boolean | null {
+  // The registry's root alphabet, the same as conversation_capsule.py _ROOT_OK (ASCII; no dots; 1-64).
+  if (!root || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(root) || !Number.isInteger(generationId)) return null;
+  try {
+    const v = JSON.parse(readFileSync(join(orch, 'state', 'agent-handoffs', 'owed', `${root}.${generationId}.json`), 'utf-8'));
+    if (!v || v.root !== root || v.generation_id !== generationId || typeof v.owed !== 'boolean') return null;
+    // A generation promoted twice has one verdict file (review v4 B-2): it speaks only for the promotion it was
+    // computed for. A different (or missing) promoted_at, when this promotion's is known, is no verdict: keep.
+    if (promotedAt !== undefined && promotedAt !== null) {
+      const a = Date.parse(String(v.promoted_at ?? '')), b = Date.parse(String(promotedAt));
+      if (Number.isNaN(a) || Number.isNaN(b) || a !== b) return null;
+    }
+    return v.owed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The promote wake's turn (rulings 2026-11-21, item 2; hideWakes marks its opener wake:'promote'). The first one at or
+ * after `promotedAt` is LEFT OUT, the seat's reply included ("I am now canonical, I checked the registry ..."), only
+ * when nothing is owed: `owed` is false (the capsule's verdict, owedVerdict). When something is owed, or that is not
+ * known, the turn stays: the wake line stays hidden, the turn counts as conversation (owed) and its FINAL reply (the
+ * last assistant text with no tool call after it in the turn; none if the turn ends in a call) is for the operator. A turn that also
+ * holds an operator message (sent while the wake turn ran) stays whatever the rest. Any other promote turn (a second
+ * wake, one before the promotion, a log with no promotion time) is left out. `owed` may be a thunk: read once, and
+ * only when such a turn exists. `firstOff`, for a chunk that starts after the promotion (a tail-first read): the log
+ * line of the log's first promote turn at or after it (null: none), which the chunk alone cannot see.
+ */
+export function settlePromoteTurns(items: readonly any[], promotedAt: string | null | undefined,
+                                   open: boolean | null | (() => boolean | null) = null,
+                                   firstOff?: number | null): any[] {
+  if (!hasPromoteWake(items)) return items as any[];
+  const t0 = promotedAt ? Date.parse(String(promotedAt)) : NaN;
+  let known: { v: boolean | null } | null = null;
+  const isOpen = (): boolean | null => {
+    if (!known) known = { v: typeof open === 'function' ? open() : open };
+    return known.v;
+  };
+  const out: any[] = [];
+  let firstTaken = false;
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (it?.wake !== 'promote' || !isTurnOpener(it)) { out.push(it); continue; }
+    // The turn runs to the next opener that is neither a message queued while it worked nor a Stop-hook continuation.
+    const end = turnEnd(items, k);
+    const t = Date.parse(String(it.ts ?? ''));
+    // No promotion time (the registry lookup failed): not known, so the first promote turn is treated as the one to
+    // settle, kept unless a verdict says nothing was owed (review v3 F4).
+    const first = !firstTaken && (firstOff !== undefined ? firstOff !== null && it.line_off === firstOff
+      : Number.isNaN(t0) || (!Number.isNaN(t) && t >= t0));
+    if (first) firstTaken = true;
+    let op = -1;
+    for (let j = k + 1; j < end; j++) if (operatorInput(items[j])) { op = j; break; }
+    const withOperator = op >= 0;
+    // owed:false (review v4 B-1, gm): the turn is not deleted. Its wake line stays hidden, its tool calls stay in the
+    // show-work strip, and no reply of the wake's own work is emitted (review v5 A-1): nothing is drawn for the operator.
+    // Any other promote turn (a second wake, one before the promotion) is left out, as before.
+    const verdict = first && !withOperator ? isOpen() : null;
+    const quiet = first && !withOperator && verdict === false;
+    const keep = withOperator || first;
+    if (keep) {
+      // The final reply only (review v2 P2-3): the last assistant text before the first Stop-hook continuation with no
+      // tool call after it; a turn that ends in a call has none.
+      let hookAt = end;
+      for (let j = k + 1; j < end; j++) if (hookContinuation(items[j])) { hookAt = j; break; }
+      let closing = -1;
+      if (!withOperator && !quiet) {
+        for (let j = hookAt - 1; j > k; j--) {
+          if (items[j]?.kind === 'tool_use') break;
+          if (items[j]?.kind === 'text' && items[j].role === 'assistant') { closing = j; break; }
+        }
+      }
+      // Every other reply of the wake's own work, and its thinking, is NOT EMITTED (review v5 A-1): no client grouping
+      // can then draw it (the web draws every text whatever its audience tag, and an edge thinking block as a "💭" line;
+      // the apps force the newest text to 'user'). Its tool calls and results stay: the work in the show-work strip.
+      // The raw session file keeps everything. From an operator message on, his exchange keeps its items and tags.
+      const quietTo = withOperator ? op : end;
+      out.push({ ...it, owed: !quiet });
+      for (let j = k + 1; j < end; j++) {
+        const x = items[j];
+        if (j === closing) { out.push({ ...x, audience: 'user' }); continue; }
+        if (j < quietTo && ((x?.kind === 'text' && x.role === 'assistant') || x?.kind === 'thinking')) continue;
+        out.push(x);
+      }
+    }
+    k = end - 1;
+  }
+  return out;
+}
+
+/** A generation's chat from its takeover on: a green lives 30-60 minutes before it
+ *  takes over (reads its init file, takes in the baton, answers hydrate digests, verifies its promote notice, writes
+ *  an "I am now canonical" recap), and none of that is the conversation. The takeover is the EARLIER of
+ *   - the first turn a person opened before `promotedAt` (an operator writing to the green, or a late-stamped old
+ *     generation that was in fact working with him: the conversation had started), and
+ *   - the first turn opened at or after `promotedAt` that is not a machine wake, the harness, the spawn boot line, or
+ *     the notice of a background job launched before `promotedAt`.
+ *  Everything before the takeover is left out; everything from it on stays (machine wakes are already out: hideWakes).
+ *  No promotion time, or a log with no times at all: the log whole, as before (nothing to cut on). No takeover yet:
+ *  nothing to show. */
+export function liveFrom(items: readonly any[], promotedAt: string | null | undefined,
+                         open: boolean | null | (() => boolean | null) = null): any[] {
+  return dropHookMarkers(cutAtTakeover(settlePromoteTurns(items, promotedAt, open), promotedAt));
+}
+
+/** The Stop-hook markers exist only for settlePromoteTurns: nothing downstream ever sees one. */
+export const dropHookMarkers = (items: readonly any[]): any[] =>
+  (items.some((it) => it?.kind === HOOK_MARKER) ? items.filter((it) => it?.kind !== HOOK_MARKER) : items as any[]);
+
+function cutAtTakeover(items: readonly any[], promotedAt: string | null | undefined): any[] {
+  const at = takeoverAt(items, promotedAt, true);
+  if (at === 'whole' || at === 0) return items as any[];
+  if (at === 'none' || at === 'more') return [];
+  return items.slice(at);
+}
+
+/** The index of the takeover in `items` (a log, or the head of one: `eof` says whether it runs to the log's end):
+ *  'whole' when there is nothing to cut on (no promotion time, no times at all), 'none' when there is no takeover yet,
+ *  'more' when the head ends before the takeover is known. */
+function takeoverAt(items: readonly any[], promotedAt: string | null | undefined, eof: boolean): number | 'whole' | 'none' | 'more' {
+  const t0 = promotedAt ? Date.parse(String(promotedAt)) : NaN;
+  if (Number.isNaN(t0)) return 'whole';
+  let i = -1;
+  let timed = false;
+  for (let k = 0; k < items.length; k++) {
+    const t = Date.parse(String(items[k]?.ts ?? ''));
+    if (Number.isNaN(t)) continue;
+    timed = true;
+    if (t >= t0 && isTurnOpener(items[k])) { i = k; break; }
+  }
+  if (!timed) return eof ? 'whole' : 'more';
+  // A person's turn before the promotion: the takeover.
+  const cut = i < 0 ? items.length : i;
+  for (let k = 0; k < cut; k++) {
+    if (isTurnOpener(items[k]) && personTurn(items[k])) return k;
+  }
+  if (i < 0) return eof ? 'none' : 'more';
+  // Jobs the hold phase launched: their notices after the promotion are still its own.
+  const launched = new Set<string>();
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (it?.kind === 'tool_use' && it.id && Date.parse(String(it.ts ?? '')) < t0) launched.add(String(it.id));
+  }
+  while (i < items.length && (notConversation(items[i], true) || heldJobNotice(items[i], launched))) {
+    let j = i + 1;
+    while (j < items.length && !isTurnOpener(items[j])) j++;
+    i = j;
+  }
+  if (i < items.length) return i;
+  return eof ? 'none' : 'more';
+}
+
+/** Where a generation's chat starts, as a log line: 'whole' (nothing cut), 'none' (nothing shown yet), or the byte
+ *  offset of the takeover's line. A tail-first view (a chunk of the log, services/transcript-log-cache.ts) cannot see
+ *  the hold phase it may start in, so the takeover is found once on the log's HEAD, read forward from its first line
+ *  until the takeover is known (a hold phase is the first half hour or so of a green's log), and every chunk is cut at
+ *  that line. A found takeover never moves (the log only grows); no takeover yet is read again when the log grows. */
+type Takeover = 'whole' | 'none' | { off: number; firstPromote: number | null | undefined };
+const takeovers = new Map<string, { t: Takeover; size: number }>();
+const TAKEOVERS_MAX = 256;
+const HEAD_WANT0 = 32 * 1024;
+
+function logSize(path: string): number {
+  try { return statSync(path).size; } catch { return -1; }
+}
+
+function headTakeover(path: string, parser: LogParser<any>, promotedAt: string | null | undefined,
+                      prep: (items: readonly any[]) => any[], sig: string): Takeover {
+  const t0 = promotedAt ? Date.parse(String(promotedAt)) : NaN;
+  if (Number.isNaN(t0)) return 'whole';
+  const key = `${path}|${promotedAt}|${sig}`;
+  const size = logSize(path);
+  const kept = takeovers.get(key);
+  if (kept && (typeof kept.t === 'object' || kept.size === size)) return kept.t;
+  let t: Takeover = 'whole';
+  // From a small head up, doubled: the takeover is usually in the first lines (a person turn, or a short hold phase).
+  let hi = Math.min(TAIL_WANT0, HEAD_WANT0);
+  for (let round = 0; round < 64; round++) {
+    let log: ReturnType<typeof logRange>;
+    try { log = logRange(path, parser, 0, hi); } catch { return 'whole'; }
+    const items = settlePromoteTurns(prep(log.items), promotedAt, null);
+    const at = takeoverAt(items, promotedAt, log.eof);
+    if (at === 'more' && !log.eof) { hi *= 2; continue; }
+    if (at === 'more' || at === 'none') t = 'none';
+    else if (at === 'whole') t = 'whole';
+    else if (typeof items[at]?.line_off === 'number') {
+      const promote = items.find((it) => it?.wake === 'promote' && isTurnOpener(it) && Date.parse(String(it.ts ?? '')) >= t0);
+      // The log's first promote turn after the promotion, when the head holds it; else found when a chunk needs it.
+      t = { off: items[at].line_off, firstPromote: promote ? promote.line_off ?? undefined : (log.eof ? null : undefined) };
+    }
+    break;
+  }
+  if (takeovers.size >= TAKEOVERS_MAX) takeovers.delete(takeovers.keys().next().value as string);
+  takeovers.set(key, { t, size });
+  return t;
+}
+
+/** The log line of the first promote turn at or after `promotedAt`, read on the whole log: only for a chunk that starts
+ *  after the promotion and holds a promote turn (a second wake, or one that landed late), which is rare. Kept with the
+ *  takeover. */
+function firstPromoteOff(path: string, parser: LogParser<any>, promotedAt: string, prep: (items: readonly any[]) => any[],
+                         sig: string, t: { off: number; firstPromote: number | null | undefined }): number | null {
+  if (t.firstPromote !== undefined) return t.firstPromote;
+  const t0 = Date.parse(promotedAt);
+  let found: number | null = null;
+  try {
+    const promote = prep(cachedLog(path, parser).items)
+      .find((it) => it?.wake === 'promote' && isTurnOpener(it) && Date.parse(String(it.ts ?? '')) >= t0);
+    found = typeof promote?.line_off === 'number' ? promote.line_off : null;
+  } catch { return null; }
+  const kept = takeovers.get(`${path}|${promotedAt}|${sig}`);
+  if (kept && typeof kept.t === 'object') kept.t.firstPromote = found;
+  return found;
+}
+
+/** Where a view of a log FILE is cut (cheap: the head's takeover is kept): 'log' when the view is the whole log (cut
+ *  as liveFrom cuts it), else the log's takeover (headTakeover). `prep`: the store's rules and the warm-up. */
+function cutOfView(view: { path: string; parser: LogParser<any>; start: number; eof: boolean },
+                   promotedAt: string | null | undefined, prep: (items: readonly any[]) => any[], sig: string): 'log' | Takeover {
+  if (view.start === 0 && view.eof) return 'log';
+  return headTakeover(view.path, view.parser, promotedAt, prep, sig);
+}
+
+/** A cut as a memo key part. */
+const cutKey = (c: 'log' | Takeover): string => (typeof c === 'string' ? c : `@${c.off}`);
+
+/** liveFrom for a view of a log FILE (`items`: its items with `prep` applied) cut as cutOfView says: a whole log as
+ *  liveFrom cuts it; a chunk (a tail or a middle read) at the takeover's line. */
+function liveFromFile(items: readonly any[], view: { path: string; parser: LogParser<any>; start: number; eof: boolean },
+                      cut: 'log' | Takeover, promotedAt: string | null | undefined,
+                      open: boolean | null | (() => boolean | null), prep: (items: readonly any[]) => any[], sig: string): any[] {
+  if (cut === 'log') return liveFrom(items, promotedAt, open);
+  if (cut === 'whole') return dropHookMarkers(settlePromoteTurns(items, promotedAt, open));
+  if (cut === 'none') return [];
+  const t0 = Date.parse(String(promotedAt));
+  // A chunk that starts after the promotion may hold a promote turn that is not the log's first one.
+  const firstTs = items.find((it) => !Number.isNaN(Date.parse(String(it?.ts ?? ''))))?.ts;
+  const late = view.start > 0 && hasPromoteWake(items) && firstTs !== undefined && Date.parse(String(firstTs)) >= t0;
+  const first = late ? firstPromoteOff(view.path, view.parser, String(promotedAt), prep, sig, cut) : undefined;
+  const settled = dropHookMarkers(settlePromoteTurns(items, promotedAt, open, first));
+  let k = 0;
+  while (k < settled.length && typeof settled[k]?.line_off === 'number' && settled[k].line_off < cut.off) k++;
+  return k === 0 ? settled : settled.slice(k);
+}
+
+/** `sid`'s generation as the head of `agentId`'s lineage: its promotion time, root and generations row id. */
+function headOf(agentId: string, sid: string | null): { promotedAt: string | null; root: string; generationId: number | null } | null {
+  if (!sid || !SESSION_ID.test(sid)) return null;
+  try {
+    const chain = lineageChainOf(sid);
+    if (!chain || lineageOf(chain.root) !== lineageOf(agentId)) return null;
+    const last = chain.links[chain.links.length - 1];
+    return { promotedAt: last?.promoted_at ?? null, root: chain.root, generationId: last?.id ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /** The assistant text answering a reaction wake (after a reaction_wake turn, before the next user text) that is not a
@@ -2436,7 +2859,8 @@ export function normalizeTranscriptFile(
   const parser = logParser(antigravityHint, keepSidechain);
   if (!tailFirst) {
     const log = cachedLog(path, parser);
-    return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+    return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain,
+      { path, parser, start: log.start, eof: true });
   }
   // Tail-first (the SSE tailer's first read of a log): the last TAIL_WANT0 bytes, doubled until they hold `limit` shown
   // items with a PERSON turn opener below the oldest of them (the same rule as the poll route's pages: the audience pass
@@ -2452,11 +2876,15 @@ export function normalizeTranscriptFile(
     const oldest = shown.length - limit;
     let opened = false;
     for (let k = oldest - 1; k >= 0 && !opened; k--) if (isPersonOpener(shown[k])) opened = true;
-    if (shown.length >= limit && opened) return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+    if (shown.length >= limit && opened) {
+      return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain,
+        { path, parser, start: log.start, eof: true });
+    }
     want *= 2;
   }
   const log = cachedLog(path, parser);
-  return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain);
+  return windowFromLog(log.items, agentId, sessionId, limit, includeQueued, null, keepWakeReplies, keepSidechain,
+    { path, parser, start: log.start, eof: true });
 }
 
 function windowFromLog(
@@ -2468,11 +2896,21 @@ function windowFromLog(
   previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null,
   keepWakeReplies: boolean,
   keepSidechain: boolean,
+  file: { path: string; parser: LogParser<any>; start: number; eof: boolean } | null = null,
 ): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
   // A subagent's own log (keepSidechain) shares the seat's session id but none of the seat's window rules:
   // the store's seen-only/seed rows and the warmup mark name the seat's entries, so they never apply to it.
   const ruleSession = keepSidechain ? null : sessionId;
-  let all = applyStoreRules(dropWarmup(logged, warmupMarkFor(agentId, ruleSession).mark), storeRules(ruleSession));
+  const warm = warmupMarkFor(agentId, ruleSession);
+  const rules = storeRules(ruleSession);
+  const prep = (xs: readonly any[]) => applyStoreRules(dropWarmup(xs, warm.mark), rules);
+  // From this generation's promotion on, as the poll route's segments cut it (liveFrom; a chunk at the takeover's line).
+  const head = headOf(agentId, ruleSession);
+  const promotedAt = head?.promotedAt ?? null;
+  const open = () => owedVerdict(head?.root ?? null, head?.generationId ?? null, dataDir(), promotedAt);
+  const cutSig = `${warm.sig}:${rules.sig}`;
+  let all = file ? liveFromFile(prep(logged), file, cutOfView(file, promotedAt, prep, cutSig), promotedAt, open, prep, cutSig)
+    : liveFrom(prep(logged), promotedAt, open);
   // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
   // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
   // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
@@ -2480,7 +2918,7 @@ function windowFromLog(
   if (previous && all.length < limit) {
     let before: any[] | null = null;
     try {
-      before = applyStoreRules(logItems(previous.lines(), previous.antigravity), storeRules(String(previous.divider.from_session ?? '') || null));
+      before = dropHookMarkers(settlePromoteTurns(applyStoreRules(logItems(previous.lines(), previous.antigravity), storeRules(String(previous.divider.from_session ?? '') || null)), null, false));
     } catch { before = null; }  // unreadable: this log alone
     if (before) all = [...before, { ...previous.divider, audience: 'user' }, ...all];
   }
@@ -2526,6 +2964,8 @@ function finishWindow(windowed: any[], agentId: string, includeQueued: boolean,
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
     // ...and a machine message the pane recorded as a real turn shows as that turn, not ALSO as a batch.
     windowed = dropBatchEntriesCoveredByMachineTurns(windowed);
+    // ...and a machine wake that came in through the queue is no more shown than one typed into the pane (hideWakes).
+    windowed = dropWakeBatchEntries(windowed);
     // A headless seat's cut turns, shown where they happened (poll only, like the merges above).
     windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
@@ -2755,6 +3195,8 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     // valid only while those are unchanged too; the current log is covered by firstPageValidity).
     // `missing`: the past segments whose file was not there when the page was built; the kept page
     // asks for them again on every hit, so one that appears is seen.
+    // The divider between two generations is for operators only (?dividers=1); the chat is one conversation.
+    const dividers = req.query.dividers === '1' || req.query.dividers === 'true';
     const read = new Set<string>();
     const missing: Segment[] = [];
     const build = (): Record<string, unknown> | null => {
@@ -2762,7 +3204,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
       let segs: Segment[];
       try { segs = chatSegments(agentId, sid, current); } catch { segs = [{ session: sid ?? '', generation: null, promotedAt: null, file: () => current }]; }
       segs = segs.map((s) => ({ ...s, file: () => { const f = s.file(); if (f && f !== current) read.add(f); else if (!f && s.refind) missing.push(s); return f; } }));
-      const win = chatWindow(agentId, segs, limit, before);
+      const win = chatWindow(agentId, segs, limit, before, { dividers });
       if (!win) return null;
       const cursorMs = win.cursor_ts ? Date.parse(String(win.cursor_ts)) : NaN;
       const body = withCalls(agentId, win, limit, before,
@@ -2783,7 +3225,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     // so a seat switch that loads every visible seat's page again costs a stat and a send each.
     // A cursor page is not kept: it is read once, scrolling back.
     let built = false;
-    const page = firstPage(agentId, limit, firstPageValidity(agentId, sid, current), () => {
+    const page = firstPage(agentId, limit, `${firstPageValidity(agentId, sid, current)}|dividers=${dividers}`, () => {
       built = true;
       const body = build() ?? {};
       return { body, deps: [...read], probes: missing.map((s) => () => s.refind?.() ?? '') };
