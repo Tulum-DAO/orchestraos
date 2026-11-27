@@ -599,3 +599,27 @@ def test_R1_the_real_composer_reader_reads_the_queued_layout(monkeypatch):
     monkeypatch.setattr(G, "_agent_status", lambda: _DetReal("working", "claude"))
     assert G._typed_on_prompt_line(queued_pane(WORDS)) == "", "the placeholder under a queue is not a draft"
     assert G._typed_on_prompt_line(queued_pane(WORDS, composer=DRAFT)) == "my own half-typed draft"
+
+
+# ------------------------------------------------------------------ grok first pass (non-gating) @ 64815b69
+def test_G2_two_enqueues_of_the_same_words_in_the_window_refuse_rather_than_guess(box, monkeypatch, tmp_path):
+    t0 = time.time() - 30
+    mid = SS.record(G.ORCH_DIR, "seat", "hello there", now=t0)
+    seat = _seat(monkeypatch, tmp_path, queued_pane("hello there"),
+                 [enq("hello there", t0 - 2), enq("hello there", t0 + 3), deq(t0 + 4)])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == []
+
+
+def test_G3_a_screen_row_cut_short_never_matches_by_prefix(box, monkeypatch, tmp_path):
+    mid = _steered("Please send the report")
+    seat = _seat(monkeypatch, tmp_path, queued_pane("Please send…"), [enq("Please send the report")])
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == []
+
+
+def test_G5_words_match_with_their_spaces():
+    assert Q.same_text("look  at\nthe test", "look at the test")
+    assert not Q.same_text("to get her", "together")

@@ -33,14 +33,15 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 _GRAY = "38;5;246"
 
 
-def _flat(s) -> str:
-    return "".join(str(s or "").split())
+def _norm(s) -> str:
+    return " ".join(str(s or "").split())
 
 
 def same_text(content, text) -> bool:
-    """Whitespace-blind: the CLI and the screen may wrap or re-space what was typed."""
-    a = _flat(content)
-    return bool(a) and a == _flat(text)
+    """Equal up to runs of whitespace (the CLI and the screen may wrap a line or re-space it), never blind to it:
+    "to get her" is not "together". A word the screen breaks mid-word reads as two words and fails (closed)."""
+    a = _norm(content)
+    return bool(a) and a == _norm(text)
 
 
 def kind_of(content) -> str:
@@ -110,10 +111,11 @@ def queue_items(rows):
 
 def find(rows, text, since=None, until=None):
     """The queue's picture for one message: {"item": the LAST enqueue of this text with its time in [since, until]
-    (epoch s; an unbounded side when None), or None; "others": every OTHER item still queued}. An enqueue with no
+    (epoch s; an unbounded side when None), or None; "matches": how many enqueues of it fall in the window (more than
+    one = which is this message cannot be told); "others": every OTHER item still queued}. An enqueue with no
     readable time never matches a bounded window."""
     items = queue_items(rows)
-    target = None
+    target, matches = None, 0
     for it in items:
         if not same_text(it["content"], text):
             continue
@@ -121,8 +123,9 @@ def find(rows, text, since=None, until=None):
             if it["at"] is None or (since is not None and it["at"] < since) or (until is not None and it["at"] > until):
                 continue
         target = it
+        matches += 1
     others = [it for it in items if it["left"] is None and it is not target]
-    return {"item": target, "others": others}
+    return {"item": target, "matches": matches, "others": others}
 
 
 def step_ended(rows, item, since=None) -> str:

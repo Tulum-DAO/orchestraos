@@ -7511,11 +7511,9 @@ def _send_now_refused(reason, status=None, **extra):
 
 
 def _screen_shows(screen_text, text) -> bool:
+    """The whole message, never a prefix: a row the CLI cut short ("…") cannot say which message it is."""
     from scripts import claude_queue as Q
-    if Q.same_text(screen_text, text):
-        return True
-    head = Q._flat(screen_text).rstrip("…")
-    return len(head) >= 8 and Q._flat(screen_text).endswith("…") and Q._flat(text).startswith(head)
+    return Q.same_text(screen_text, text)
 
 
 def _send_now(session, message_id):
@@ -7562,6 +7560,9 @@ def _send_now(session, message_id):
         with _session_send_lock(session):
             pic = Q.find(Q.read_rows(path), text, **window)
             item = pic["item"]
+            if pic["matches"] > 1:
+                # The same words queued twice around this send: which one is this message cannot be told.
+                return _send_now_refused("queue-unclear")
             if item is None or item["left"]:
                 # "Left" from the rows alone can be a dequeue paired wrongly (a tail that starts mid-queue), and "never
                 # queued" can be a tail too short: either is said only when the screen agrees.
