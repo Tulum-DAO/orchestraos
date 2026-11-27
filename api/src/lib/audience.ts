@@ -3,13 +3,14 @@
  * chose (ios-watch-dev msg_1491bb2c, 2026-10-22). Every surface draws the same conversation: the
  * operator's message, ONE folded strip for everything that happened in between, the reply to him.
  *
- * - `audience: "user"` = drawn in the conversation: the operator's own messages, the FIRST and the
- *   CLOSING reply of a turn he opened (Shaw 2026-10-22 03:58 ET: "the first response at least to my
- *   message ... then the div, which is collapsible. And then the most recent message"), and only the
- *   closing reply of a job he set off (a <task-notification>). In a log with no turn he opened at
- *   all, the newest reply is drawn too.
- * - `audience: "agent"` = folded into the strip: tools, thinking, intermediate replies, and every
- *   turn something else opened (mail, a hook, lineage, the spawn brief), replies included.
+ * - `audience: "user"` = drawn in the conversation: the operator's own messages, EVERY reply of a
+ *   turn he opened (Shaw 2026-11-21: his words and the agent's words drawn, only the work between
+ *   them folded; was the first and the closing reply, Shaw 2026-10-22), and only the closing reply
+ *   of a job he set off (a <task-notification>). In a log with no turn he opened at all, the newest
+ *   reply is drawn too.
+ * - `audience: "agent"` = folded into the strip: tools, thinking, the replies of a job's turn before
+ *   its closing one, and every turn something else opened (mail, a hook, lineage, the spawn brief),
+ *   replies included.
  * - `exchange` = the uuid of the operator message the item belongs to (the latest one at or before
  *   it), so a client folds everything between his bubble and the reply. Absent before his first.
  *
@@ -212,17 +213,17 @@ export function tagAudience(items: any[]): any[] {
     if (kind === 'person' && opener.uuid) exchange = String(opener.uuid);
     let end = i + 1;
     while (end < items.length && !isOpener(items[end])) end++;
-    // The turn's first and closing replies: its first and last assistant text.
-    let first = -1, closing = -1;
+    // The turn's closing reply: its last assistant text (drawn even in a turn a job opened).
+    let closing = -1;
     for (let k = i + 1; k < end; k++) {
-      if (items[k]?.kind === 'text' && items[k].role === 'assistant') {
-        if (first < 0) first = k;
-        closing = k;
-      }
+      if (items[k]?.kind === 'text' && items[k].role === 'assistant') closing = k;
     }
     for (let k = i; k < end; k++) {
       const it = items[k];
-      const shown = (k === i && kind === 'person') || (k === first && kind === 'person')
+      // EVERY reply in a turn the person opened is drawn (Shaw 2026-11-21: his words, the agent's words, and only the
+      // work between them folded). The strip keeps the work: tool calls, results, thinking.
+      const said = it?.kind === 'text' && it.role === 'assistant';
+      const shown = (k === i && kind === 'person') || (said && kind === 'person')
         || (k === closing && kind !== 'machine');
       it.audience = shown ? 'user' : 'agent';
       if (exchange) it.exchange = exchange;

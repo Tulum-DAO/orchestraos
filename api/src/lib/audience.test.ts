@@ -14,14 +14,14 @@ const res = () => ({ kind: 'tool_result', role: 'user', text: 'ok', uuid: `r${++
 const think = () => ({ kind: 'thinking', role: 'assistant', text: 'hmm', uuid: `k${++n}` });
 const tags = (xs: any[]) => xs.map((x) => `${x.uuid}:${x.audience}${x.exchange ? '@' + x.exchange : ''}`);
 
-test('an operator turn: his message, the FIRST reply and the closing reply are drawn, the rest folds', () => {
-  // Shaw, 2026-10-22 03:58 ET: "I would expect to see the first response at least to my message that I
-  // sent ... and then the div, which is collapsible. And then the most recent message."
+test('an operator turn: his message and EVERY reply are drawn; the work between them folds', () => {
+  // Shaw, 2026-10-22: first response, the collapsible work, the most recent message. Shaw, 2026-11-21: every reply, with
+  // each run of work between two of them folded.
   const m = u('fix the card');
   const xs = [m, think(), a('looking'), tool(), res(), a('still on it'), tool(), res(), a('done: the card answers now')];
   tagAudience(xs);
   assert.deepEqual(xs.map((x) => x.audience),
-    ['user', 'agent', 'user', 'agent', 'agent', 'agent', 'agent', 'agent', 'user']);
+    ['user', 'agent', 'user', 'agent', 'agent', 'user', 'agent', 'agent', 'user']);
   assert.ok(xs.every((x) => x.exchange === m.uuid));
 });
 
@@ -96,7 +96,7 @@ test('a hook the route hides never turns the reply he waited for into a step (io
   const m = u('ship it');
   const xs = [m, a('shipping now'), tool(), res(), a('handled the queue digest'), a('shipped: #467 is merged')];
   tagAudience(xs);
-  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent', 'agent', 'user']);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent', 'user', 'user']);
   assert.ok(xs.every((x) => x.exchange === m.uuid));
 });
 
