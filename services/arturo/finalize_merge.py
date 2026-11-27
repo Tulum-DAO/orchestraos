@@ -12,6 +12,9 @@
 # the server vc id [secondary — verified on real call vc_client_2f140442c137 -> vc_e91877ed787b1316],
 # (c) [started_at, ended_at] time-window overlap [fallback].
 import json as _json
+import logging as _logging
+
+log = _logging.getLogger(__name__)
 
 
 def extract_surface_server_ids(surface_lines):
@@ -144,19 +147,26 @@ def native_tool_turns(conv_id, ledger_path):
     try:
         con = _sqlite3.connect(f"file:{ledger_path}?mode=ro", uri=True, timeout=2)
         try:
-            rows = con.execute("SELECT tool_call_id, name, args_json, created FROM tool_calls "
+            rows = con.execute("SELECT tool_call_id, name, args_json, result_json, created FROM tool_calls "
                                "WHERE conversation_id = ? ORDER BY created", (conv_id,)).fetchall()
         finally:
             con.close()
-    except _sqlite3.Error:
+    except _sqlite3.Error as e:
+        log.warning("native tool ledger unreadable for %s (%s): its tool runs are not in the journal", conv_id, e)
         return []
     out = []
-    for call_id, name, args_json, created in rows:
+    for call_id, name, args_json, result_json, created in rows:
         try:
             args = _json.loads(args_json or "{}")
         except ValueError:
             args = {}
+        try:
+            res = _json.loads(result_json or "{}")
+        except ValueError:
+            res = {}
+        res = res if isinstance(res, dict) else {}
+        # the run's own outcome: a gm_command that only promised "gm has it" is ok:false, not done
         out.append({"role": "tool", "tool": name, "input": args if isinstance(args, dict) else {},
-                    "result": "dispatched", "status": "done", "ts": float(created), "call_id": call_id,
-                    "source": "native"})
+                    "result": str(res.get("result", ""))[:300], "status": "done" if res.get("ok") is True else "not_ok",
+                    "ts": float(created), "call_id": call_id, "source": "native"})
     return out

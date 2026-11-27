@@ -141,3 +141,21 @@ def test_no_native_tool_turns_for_another_call_a_relay_call_or_no_ledger(tmp_pat
     assert fm.native_tool_turns("vc_relay_1", led) == []
     assert fm.native_tool_turns("", led) == []
     assert fm.native_tool_turns("native-a", tmp_path / "missing.sqlite3") == []
+
+
+def test_a_native_tool_turn_carries_the_runs_real_outcome(tmp_path):
+    # every folded run said "dispatched"/"done", while Shaw's three gm_command runs were ok:false ("gm has it")
+    from services.arturo.native.tool_ledger import ToolLedger
+    led = ToolLedger(tmp_path, clock=iter([100.0, 101.0, 150.0, 151.0]).__next__)
+    led.run_once_external("c1", "native-a", "fleet", "gm_command", {}, lambda: ({"ok": False, "result": "gm has it"}, None))
+    led.run_once_external("c2", "native-a", "fleet", "list_agents", {}, lambda: ({"ok": True, "result": "3 seats"}, None))
+    turns = fm.native_tool_turns("native-a", tmp_path / "tool_ledger.sqlite3")
+    assert [(t["status"], t["result"]) for t in turns] == [("not_ok", "gm has it"), ("done", "3 seats")]
+
+
+def test_an_unreadable_ledger_is_logged_not_silent(tmp_path, caplog):
+    bad = tmp_path / "tool_ledger.sqlite3"
+    bad.write_bytes(b"not a database" * 100)
+    with caplog.at_level("WARNING"):
+        assert fm.native_tool_turns("native-a", bad) == []
+    assert "native tool ledger" in caplog.text
