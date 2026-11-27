@@ -314,3 +314,120 @@ def test_f5_a_mail_failure_mid_flip_never_repeats_the_flip_or_the_delivered_mail
     fail["on"] = None
     CW.tick(paths, [], NOW + 240, mail, lambda r: None, probe=out)
     assert sorted(sent) == sorted(CW.DEFAULT_RECIPIENTS + ["gm"])             # each exactly once
+
+
+# --- a second login (gm order msg_02952e01, 2026-11-26): reviews keep running on whichever login serves -----
+
+def _vault(tmp_path, name, email):
+    import base64
+    d = tmp_path / "vault" / name
+    d.mkdir(parents=True)
+    claims = base64.urlsafe_b64encode(json.dumps({"email": email}).encode()).decode().rstrip("=")
+    (d / "auth.json").write_text(json.dumps({"tokens": {"id_token": f"h.{claims}.s"}}))
+    return str(d)
+
+
+class _Runner:
+    """Stands in for subprocess.run: answers by CODEX_HOME (None = the default login)."""
+    def __init__(self, answers):
+        self.answers, self.homes = answers, []
+
+    def __call__(self, argv, *, env, **kw):
+        home = env.get("CODEX_HOME")
+        self.homes.append(home)
+        rc, out, err = self.answers[home]
+        return type("P", (), {"returncode": rc, "stdout": out, "stderr": err})()
+
+
+def test_s1_default_out_then_a_vault_login_that_serves_is_ok_via_that_login(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    run = _Runner({None: (1, "", OUT_CREDITS_EXEC), alt: (0, OK_REPLY, "")})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert run.homes == [None, alt]
+    assert r.status == "ok" and r.codex_home == alt
+    assert "ok via two@example.com" in r.evidence and "out of credits" in r.evidence
+
+
+def test_s1_default_serving_never_spends_a_probe_on_another_login(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    run = _Runner({None: (0, OK_REPLY, "")})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert run.homes == [None] and r.status == "ok" and r.codex_home is None
+
+
+def test_s1_every_login_out_is_out_with_the_default_window(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    run = _Runner({None: (1, "", OUT_CREDITS_EXEC), alt: (1, "", OUT_USAGE)})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert r.status == "out" and r.window == "credits" and r.codex_home is None
+
+
+def test_s2_alt_homes_are_the_vault_logins_with_an_auth_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_WATCH_ALT_HOMES", raising=False)
+    a = _vault(tmp_path, "codex-two", "two@example.com")
+    (tmp_path / "vault" / "codex-empty").mkdir()
+    (tmp_path / "vault" / "claude-x").mkdir()
+    assert CW.alt_homes(str(tmp_path / "vault")) == [a]
+    monkeypatch.setenv("CODEX_WATCH_ALT_HOMES", "/x:/y")
+    assert CW.alt_homes(str(tmp_path / "vault")) == ["/x", "/y"]
+
+
+def test_s2_login_label_is_the_id_token_email_never_the_token(tmp_path):
+    a = _vault(tmp_path, "codex-two", "two@example.com")
+    assert CW.login_label(a) == "two@example.com"
+    bad = tmp_path / "vault" / "codex-bad"
+    bad.mkdir()
+    (bad / "auth.json").write_text("{not json")
+    assert CW.login_label(str(bad)) == "codex-bad"
+
+
+def test_s3_availability_names_the_serving_home_and_follows_it_without_mail(tmp_path):
+    st, box, ap = {}, Box(), str(tmp_path / "a.json")
+    out = CW.Reading("out", "credits", None, "probe", "out of credits")
+    for i in range(2):
+        CW.decide(st, [out], NOW + i, box.mail, availability_path=ap, log=lambda r: None)
+    assert json.load(open(ap))["codex_home"] is None
+    via = CW.Reading("ok", None, None, "probe", "ok via two@", codex_home="/v/two")
+    for i in range(2):
+        CW.decide(st, [via], NOW + 10 + i, box.mail, availability_path=ap, log=lambda r: None)
+    a = json.load(open(ap))
+    assert a["status"] == "ok" and a["codex_home"] == "/v/two" and a["gating_reviewer"] == "codex"
+    n = len(box.mails)
+    back = CW.Reading("ok", None, None, "probe", "reply: ok")             # the default login serves again
+    CW.decide(st, [back], NOW + 20, box.mail, availability_path=ap, log=lambda r: None)
+    a = json.load(open(ap))
+    assert a["status"] == "ok" and a["codex_home"] is None and len(box.mails) == n
+
+
+def test_s3_while_serving_via_another_login_the_default_logins_limits_change_nothing(tmp_path):
+    st = {"status": "ok", "codex_home": "/v/two"}
+    box, ap = Box(), str(tmp_path / "a.json")
+    for i, src in enumerate(("rollout", "usage", "rollout")):
+        CW.decide(st, [CW.Reading("out", "credits", None, src, "out of credits")], NOW + i, box.mail,
+                  availability_path=ap, log=lambda r: None)
+    assert st["status"] == "ok" and st["codex_home"] == "/v/two" and box.mails == []
+    for i in range(2):                                                    # a live probe that finds all out does flip
+        CW.decide(st, [CW.Reading("out", "credits", None, "probe", "out")], NOW + 10 + i, box.mail,
+                  availability_path=ap, log=lambda r: None)
+    assert st["status"] == "out" and st["codex_home"] is None
+
+
+# --- codex gating review of #671 ----------------------------------------------------------------
+
+def test_r1_a_parked_login_that_cannot_be_read_is_unknown_never_the_defaults_out(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    run = _Runner({None: (1, "", OUT_CREDITS_EXEC), alt: (124, "", "timed out")})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert r.status == "unknown" and "two@example.com" in r.evidence
+
+
+def test_r2_the_default_probe_never_inherits_a_parked_codex_home(tmp_path, monkeypatch):
+    alt = _vault(tmp_path, "codex-two", "two@example.com")
+    monkeypatch.setenv("CODEX_HOME", alt)
+    run = _Runner({None: (1, "", OUT_CREDITS_EXEC), alt: (0, OK_REPLY, "")})
+    r = CW.run_probe(NOW, homes=[alt], runner=run)
+    assert run.homes == [None, alt] and r.codex_home == alt
