@@ -31,6 +31,8 @@ BARE = [
     "I'll tell you when the next one starts. It's saved.",
     "Once again, it's done.",
     "After all, that's handled.",
+    "Just like before it is saved.",
+    "As before it is done.",
 ]
 
 
@@ -61,6 +63,12 @@ def test_streamed_word_by_word_a_temporal_clause_is_never_cut_off(said):
 def test_streamed_word_by_word_a_bare_claim_is_still_cut_off(said):
     g = _stream(said)
     assert g.blocked and g.correction_owed, said
+
+
+@pytest.mark.parametrize("said", TEMPORAL)
+def test_no_prefix_of_a_temporal_clause_is_a_claim(said):
+    """However the transcript deltas split the words, no partial text makes the clause a claim."""
+    assert [said[:i] for i in range(len(said) + 1) if claim_gate.claim_kind(said[:i])] == [], said
 
 
 def test_a_temporal_clause_does_not_hide_an_action_claim_beside_it():

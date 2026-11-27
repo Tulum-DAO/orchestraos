@@ -47,9 +47,10 @@ _STATE_RES = [
 ]
 # A TEMPORAL clause says when something will be so, not that it is: "I'll let you know when it's done" (codex round 8
 # on #698, parent msg_00c4361e). Only the clause itself is set aside, so "It's done, I'll tell you when the next one
-# is" and "When you asked, it's done" stay claims. It is a prefix of the words, so it holds while they stream in.
+# is" and "When you asked, it's done" stay claims. Not
+# "before": "just like before it is saved" means a past occasion and claims it (codex round 1 on #705). It is a prefix of the words, so it holds while they stream in.
 _TEMPORAL_RE = re.compile(
-    rf"\b(?:when(?:ever)?|once|after|before|until|till|as soon as)\s+"
+    rf"\b(?:when(?:ever)?|once|after|until|till|as soon as)\s+"
     rf"(?:{_STATE_SUBJ}(?:'s|\s+is|\s+has been|\s+gets|\s+will be|'ll be)\s+)?(?:all\s+)?(?:{_STATE_WORD}|finished)\b",
     re.I)
 # NOT claims, by design: progress/announcement tense ("I'm starting a seat called X to ..." is how the spawn read-back
