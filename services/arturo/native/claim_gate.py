@@ -29,11 +29,12 @@ _CLASSES = {
            r"went ahead and \w+)",
 }
 _ACTION_RES = [(cls, re.compile(rf"\b{_SUBJ}\s+{_ADV}(?:got (?:it|that) )?{verb}", re.I)) for cls, verb in _CLASSES.items()]
-# "I've got it started" / subjectless "Started." "Sent." "Saved." at the start of a sentence
+# "I've got it started" / subjectless "Started." "Sent." "Saved." at the start of a sentence or clause (";" ":" ","
+# count: "It's under way; Started." must not hide the "Started." main blocks alone, #698's invariant test)
 _ACTION_RES += [
-    ("start", re.compile(r"(?:^|[.!?]\s+)(?:started|spawned|launched)[.!,]", re.I)),
-    ("message", re.compile(r"(?:^|[.!?]\s+)sent[.!,]", re.I)),
-    ("save", re.compile(r"(?:^|[.!?]\s+)(?:saved|noted)[.!,]", re.I)),
+    ("start", re.compile(r"(?:^|[.!?;:,]\s+)(?:started|spawned|launched)[.!,]", re.I)),
+    ("message", re.compile(r"(?:^|[.!?;:,]\s+)sent[.!,]", re.I)),
+    ("save", re.compile(r"(?:^|[.!?;:,]\s+)(?:saved|noted)[.!,]", re.I)),
 ]
 # STATE claims: something is done / running / saved. Backed by ANY successful tool call this turn (a status read is
 # evidence: "the build is finished" after get_agent_output said so). Present / present-perfect only: "it was created
@@ -54,53 +55,12 @@ _STATE_RES = [
 # "I've started it"); every other state claim needs a finished result.
 # "started" is NOT progress: "the agent has been started" claims a finished start (start-class evidence, codex on #698).
 _PROGRESS = re.compile(r"^(?:running|queued|on its way|under ?way)$", re.I)
-# ...and an utterance with ANY completion word anywhere is never progress, however it is joined ("it's running and
-# saved", "under way; that's already saved", "the message was delivered": codex rounds 2-3 on #698). Conservative on
-# purpose: it then needs a result. Only the modal FUTURE is exempt ("it'll be done in a minute", "should be saved by
-# then") and the ongoing "being saved"; "confirmed to be saved" is a completion claim.
-_COMPLETION = re.compile(r"\b(?:done|finished|complete[d]?|saved|sent|started|created|launched|noted|stored|added|"
-                         r"handled|fixed|updated|set up|taken care of|delivered|confirmed|posted|submitted|recorded|"
-                         r"logged|scheduled|deployed|booked|paid|messaged|texted|emailed|forwarded)\b", re.I)
-_FUTURE_BEFORE = re.compile(r"(?:(?:'ll|\bwill|\bshould|\bgoing to|\bgonna)\s+be\s+(?:\w+\s+)?|\bbeing\s+)$", re.I)
-
-
-# A blocklist of completion words always misses one ("your note has been written down": codex round 4 on #698), so
-# beside it any past form counts too: a word ending in -ed or a common irregular participle, other than the progress
-# words themselves. Conservative on purpose: "I just checked, it's running" then needs a result as well.
-_PAST = re.compile(r"\b(?:\w{2,}(?<!e)ed|written|wrote|done|sent|made|given|gave|taken|took|built|kept|found|"
-                   r"got|gotten|shown|showed|told|paid|bought|brought|left|begun|began|ran|went|gone|sold|held|won|"
-                   r"met|meant|fed|led|lost|hung|stuck|struck|drew|drawn|threw|thrown|knew|known|grew|grown|flew|"
-                   r"flown|wore|worn|tore|torn|froze|frozen|spoke|spoken|broke|broken|chose|chosen|woke|woken|rode|"
-                   r"ridden|rose|risen|drove|driven|ate|eaten|fell|fallen)\b", re.I)
-# Verbs whose past is their present ("I'll let you know", "we can run through it": codex round 6): past only right
-# after a perfect / passive auxiliary ("has been broadcast", "it's set").
-_SAME_FORM = re.compile(r"\b(?:is|are|was|were|been|be|has|have|had|'s|'re|'ve|'d)\s+(?:\w+ly\s+|already\s+|just\s+|"
-                        r"now\s+|all\s+)?(?P<w>set|put|run|read|cut|let|shut|spread|broadcast|hit|cast|split|quit)\b",
-                        re.I)
-# -ed words that are no completion: nouns/adjectives, and the feelings a receipt may ask about ("are you interested in
-# the details?"). "need" is excluded by (?<!e)ed. "did" is left out of _PAST: "did you want anything else?"
-_NOT_PAST = frozenset({"hundred", "red", "bed", "shed", "sacred", "naked", "wicked", "kindred", "rugged", "jagged",
-                       "ragged", "crooked", "beloved", "interested", "excited", "tired", "supposed", "used", "based",
-                       "related", "concerned", "worried", "pleased", "surprised", "scared", "bored", "confused",
-                       "married", "detailed", "advanced", "limited", "skilled", "talented", "experienced"})
-# THE CRITERION (#698): a progress phrase admits only itself. Every other clause of the utterance is judged at least as
-# strictly as main judges that clause on its own (the action and state recognisers run on the whole text, and this
-# past-form rule adds more). A completion phrased in a way main never recognised ("I wrote the note." alone passes on
-# main) is a limit of the base gate, not of this path.
-
-
-def _completes(text):
-    text = text or ""
-    for rx in (_COMPLETION, _PAST):
-        for m in rx.finditer(text):
-            before = text[max(0, m.start() - 32):m.start()]
-            if _PROGRESS.match(m.group(0)) or m.group(0).lower() in _NOT_PAST or _FUTURE_BEFORE.search(before):
-                continue
-            return True
-    for m in _SAME_FORM.finditer(text):
-        if not _FUTURE_BEFORE.search(text[max(0, m.start("w") - 32):m.start("w")]):
-            return True
-    return False
+# THE INVARIANT (#698, arturo-context-dev msg_0e179be5): a progress phrase never lets through a completion that main's
+# gate blocks on its own. claim_kinds runs every recogniser over the WHOLE utterance and returns every claim, and the
+# gate requires each to be backed: a completion main recognises alone is still its own claim beside "that's running
+# now". A completion main ALSO misses alone ("your note has been written down", "it went through") is a gap in the
+# base recognisers, not this path (follow-up). No word blocklists here: they cut off natural receipts ("I'll keep you
+# posted", codex round 7).
 
 
 def claim_kinds(text):
@@ -110,10 +70,7 @@ def claim_kinds(text):
     kinds = list(dict.fromkeys(("action", cls) for cls, r in _ACTION_RES if r.search(text)))
     words = [m.group("word") for m in _STATE_RES[0].finditer(text)]
     other = any(r.search(text) for r in _STATE_RES[1:])
-    rest = text                                              # an action claim's own verb is checked as that action
-    for _cls, r in _ACTION_RES:
-        rest = r.sub(lambda m: " " * len(m.group(0)), rest)
-    if words and not other and all(_PROGRESS.match(w) for w in words) and not _completes(rest):
+    if words and not other and all(_PROGRESS.match(w) for w in words):
         kinds.append(("state", "progress"))                 # every state claim in it is progress, nothing completes
     elif words or other:
         kinds.append(("state", None))

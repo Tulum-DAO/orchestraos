@@ -2,6 +2,8 @@
 full duplex. The receipt gives the live model the INTENT (running, not done; vary it; keep talking) and never a line
 to read out; a progress claim ("that's running now") is backed while the tool runs, "it's done" never is."""
 import re
+
+import pytest
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -61,33 +63,65 @@ def test_the_live_prompt_asks_for_varied_receipts_not_one_line():
     assert "accepted and is starting" not in live
 
 
+NATURAL_RECEIPTS = (
+    "That's running now.", "It's now running in the background.", "It's under way.", "That's queued.",
+    "It's running, it'll be done in a minute.", "That's running now and being saved.",
+    "That's running now; meanwhile, what else do you need?", "It's under way, I'll tell you when it lands.",
+    "On it. That's running now, should be finished in a minute.", "That's running now, about a hundred rows to go.",
+    "That's running now; I'll let you know when it lands.",
+    "That's running now; meanwhile, we can run through your other questions.",
+    "It's under way; I need to read the rest first.", "That's running now; did you want anything else?",
+    "That's running now; are you interested in the details?",
+    "That's running now; I'll keep you posted.", "That's running now; you mentioned another question?",   # codex r7
+)
+
+
 def test_progress_claims_are_their_own_kind():
-    for said in ("That's running now.", "It's now running in the background.", "It's under way.", "That's queued.",
-                 "It's running, it'll be done in a minute.", "That's running now and being saved.",
-                 "That's running now; meanwhile, what else do you need?",                  # natural receipts must
-                 "It's under way, I'll tell you when it lands.",                           # never be cut off
-                 "On it. That's running now, should be finished in a minute.",
-                 "That's running now, about a hundred rows to go.",
-                 "That's running now; I'll let you know when it lands.",                   # codex round 6: same-form
-                 "That's running now; meanwhile, we can run through your other questions.",   # verbs, modals
-                 "It's under way; I need to read the rest first.",
-                 "That's running now; did you want anything else?",
-                 "That's running now; are you interested in the details?"):
+    for said in NATURAL_RECEIPTS:
         assert claim_gate.claim_kind(said) == ("state", "progress"), said
     for said in ("That's done.", "It's saved.", "All done!", "It's running. Done.",
-                 "It's running and the note is saved.", "It's running; it's done now.",   # codex on #698: mixed
+                 "It's running and the note is saved.", "It's running; it's done now.",   # mixed (codex r1-r2)
                  "The agent has been started.", "It's started.",                          # a finished start
-                 "It's running and saved.", "It's running and done now.",                 # codex round 2: shared
-                 "It's under way; that's already saved.",                                 # subject, adverbs
-                 "It's running and the message was delivered.",                           # codex round 3
-                 "It's running; your note is confirmed to be saved already.",
-                 "It's running; your note appears to be saved already.",                   # "to be" is no future
-                 "It's running; your note has been written down.",                         # codex round 4
-                 "It's running; I wrote the note.", "It's running; your changes went through.",   # round 5
-                 "It's running; the message has been broadcast."):
+                 ):
         assert claim_gate.claim_kind(said) == ("state", None), said
     for said in ("I'm pulling that up.", "On it, it'll take a moment."):
         assert claim_gate.claim_kind(said) is None, said
+
+
+# Every completion phrase main's own claim-gate tests know (test_native.py: m6 phrasings, backed/unbacked gate tests)
+# plus the mixed ones from codex rounds 1-3.
+MAIN_COMPLETIONS = (
+    "I sent the message to gm.", "I saved that note.", "I started research-bot.", "Consider it done.",
+    "I went ahead and did it.", "I got that going.", "Started.", "The seat is up.", "I've got it started.",
+    "I've started it.", "Done, I sent the message to gm.", "It's done.", "Done, I've started the research seat.",
+    "I've started research-bot on the vendor comparison.", "The build is finished.", "I've restarted the build.",
+    "That's done.", "It's saved.", "All done!", "The note is saved.", "It's done now.",
+    "The agent has been started.", "It's started.", "I've fixed it.", "I texted you.", "Sent.", "Saved.",
+)
+
+
+def test_the_invariant_a_progress_phrase_never_lets_a_main_blocked_completion_through():
+    # arturo-context-dev msg_0e179be5: with ONLY a running receipt (progress backed, nothing finished), every
+    # completion main blocks alone is blocked alone, and stays blocked with a progress phrase before or after it
+    backs = {("state", "progress")}
+
+    def blocked(text):
+        g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
+        g.feed_transcript(text)
+        return g.blocked
+    for x in MAIN_COMPLETIONS:
+        assert blocked(x), f"main blocks {x!r} alone"
+        for p in ("That's running now.", "It's under way;"):
+            assert blocked(f"{p} {x}") and blocked(f"{x} {p}"), (p, x)
+
+
+@pytest.mark.xfail(strict=True, reason="pre-existing gap in main's recognisers (they miss these ALONE too): a "
+                                       "follow-up to the classifier itself, listed in #698's limits")
+@pytest.mark.parametrize("x", ["Your note has been written down.", "I wrote the note.", "Your changes went through.",
+                               "The message has been broadcast.", "The message was delivered.",
+                               "Your note is confirmed to be saved already.", "That's already saved."])
+def test_known_limit_completions_main_misses_alone(x):
+    assert claim_gate.claim_kind(x) is not None
 
 
 def test_while_a_tool_runs_after_its_receipt_thats_running_now_is_true_and_its_done_is_not(tmp_path, monkeypatch):
@@ -240,15 +274,12 @@ def test_require_owner_is_opt_in_and_lets_the_owner_and_the_fleet_write(tmp_path
 def test_natural_receipts_stream_through_the_gate_word_by_word_unblocked():
     # the gate classifies the transcript as it grows: no prefix of a natural receipt may be cut off
     backs = {("state", "progress")}
-    for said in ("That's running now; I'll let you know when it lands.",
-                 "That's running now; meanwhile, we can run through your other questions.",
-                 "On it. That's running now, should be finished in a minute.",
-                 "That's running now; meanwhile, what else do you need?"):
+    for said in NATURAL_RECEIPTS:
         g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
         for w in said.split(" "):
             g.feed_transcript(w + " ")
             assert not g.blocked, (said, g.text)
     g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
-    for w in "That's running now; the message has been broadcast.".split(" "):
+    for w in "That's running now; the note is saved.".split(" "):
         g.feed_transcript(w + " ")
     assert g.blocked                                                        # a completion still needs its result
