@@ -222,3 +222,33 @@ test('a tiny budget is clamped up, not honoured to nothing', async () => {
     assert.match(t, new RegExp(`^\\[[^\\]]+\\] call vc_prev00001 ${SEAT}: noted$`, 'm'));
   });
 });
+
+test('?meta=1 says what the call will know, before the call: whose chat, whose calls, how many, how big', async () => {
+  await withApp(async (base) => {
+    const r = await fetch(`${base}/${SEAT}/call-context?meta=1&exclude=vc_now000001&budget=1500`);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type') || '', /^application\/json/);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    const m = await r.json();
+    assert.deepEqual(Object.keys(m).sort(), ['calls', 'chat', 'opening_tokens', 'previous_calls']);
+    assert.equal(m.chat, SEAT);
+    assert.equal(m.calls, SEAT);
+    assert.equal(m.previous_calls, 1);              // vc_prev00001; the starting call and Arturo's are not counted
+    const text = await (await fetch(`${base}/${SEAT}/call-context?exclude=vc_now000001&budget=1500`)).text();
+    assert.equal(m.opening_tokens, Math.ceil(Array.from(text).length / 4));
+    const arturo = await (await fetch(`${base}/${SEAT}/call-context?meta=1&calls=arturo`)).json();
+    assert.equal(arturo.calls, 'arturo');
+  });
+});
+
+test('meta carries no text, so a proxied (dashboard) request gets it; the text itself stays loopback-only', async () => {
+  await withApp(async (base) => {
+    const hdr = { headers: { 'x-forwarded-for': '100.64.0.9' } };
+    assert.equal((await fetch(`${base}/${SEAT}/call-context`, hdr)).status, 404);
+    const r = await fetch(`${base}/${SEAT}/call-context?meta=1`, hdr);
+    assert.equal(r.status, 200);
+    const m = await r.json();
+    assert.equal(m.chat, SEAT);
+    assert.ok(!JSON.stringify(m).includes('dream fix'), 'meta leaked thread text');
+  });
+});
