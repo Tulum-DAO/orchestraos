@@ -55,24 +55,43 @@ _STATE_RES = [
 # "started" is NOT progress: "the agent has been started" claims a finished start (start-class evidence, codex on #698).
 _PROGRESS = re.compile(r"^(?:running|queued|on its way|under ?way)$", re.I)
 # ...and an utterance with ANY completion word anywhere is never progress, however it is joined ("it's running and
-# saved", "under way; that's already saved": codex round 2 on #698). Conservative on purpose: it then needs a result.
-# A completion word right after "be"/"being" is the future or ongoing ("it'll be done in a minute"), not a claim.
-_COMPLETION = re.compile(r"(?<!\bbe )(?<!\bbeing )\b(?:done|finished|complete[d]?|saved|sent|started|created|"
-                         r"launched|noted|stored|added|handled|fixed|updated|set up|taken care of)\b", re.I)
+# saved", "under way; that's already saved", "the message was delivered": codex rounds 2-3 on #698). Conservative on
+# purpose: it then needs a result. Only the modal FUTURE is exempt ("it'll be done in a minute", "should be saved by
+# then") and the ongoing "being saved"; "confirmed to be saved" is a completion claim.
+_COMPLETION = re.compile(r"\b(?:done|finished|complete[d]?|saved|sent|started|created|launched|noted|stored|added|"
+                         r"handled|fixed|updated|set up|taken care of|delivered|confirmed|posted|submitted|recorded|"
+                         r"logged|scheduled|deployed|booked|paid|messaged|texted|emailed|forwarded)\b", re.I)
+_FUTURE_BEFORE = re.compile(r"(?:(?:'ll|\bwill|\bshould|\bgoing to|\bgonna)\s+be\s+(?:\w+\s+)?|\bbeing\s+)$", re.I)
+
+
+def _completes(text):
+    for m in _COMPLETION.finditer(text or ""):
+        if not _FUTURE_BEFORE.search(text[max(0, m.start() - 32):m.start()]):
+            return True
+    return False
+
+
+def claim_kinds(text):
+    """EVERY claim in the utterance, each of which must be backed on its own (codex round 3 on #698: "I've started it
+    and it's done" was checked only as a start). Kinds: ("action", class), ("state", "progress"), ("state", None)."""
+    text = text or ""
+    kinds = list(dict.fromkeys(("action", cls) for cls, r in _ACTION_RES if r.search(text)))
+    words = [m.group("word") for m in _STATE_RES[0].finditer(text)]
+    other = any(r.search(text) for r in _STATE_RES[1:])
+    rest = text                                              # an action claim's own verb is checked as that action
+    for _cls, r in _ACTION_RES:
+        rest = r.sub(lambda m: " " * len(m.group(0)), rest)
+    if words and not other and all(_PROGRESS.match(w) for w in words) and not _completes(rest):
+        kinds.append(("state", "progress"))                 # every state claim in it is progress, nothing completes
+    elif words or other:
+        kinds.append(("state", None))
+    return kinds
 
 
 def claim_kind(text):
-    """("action", class) | ("state", "progress") | ("state", None) | None."""
-    for cls, r in _ACTION_RES:
-        if r.search(text or ""):
-            return ("action", cls)
-    words = [m.group("word") for m in _STATE_RES[0].finditer(text or "")]
-    other = any(r.search(text or "") for r in _STATE_RES[1:])
-    if words and not other and all(_PROGRESS.match(w) for w in words) and not _COMPLETION.search(text):   # EVERY claim in it is progress (codex: "it's
-        return ("state", "progress")                                      # running and the note is saved" is not)
-    if words or other:
-        return ("state", None)
-    return None
+    """The first claim in the utterance (claim_kinds has them all): ("action", class) | ("state", ...) | None."""
+    ks = claim_kinds(text)
+    return ks[0] if ks else None
 
 
 def is_claim(text):
@@ -104,8 +123,8 @@ class ClaimGate:
         if self._released_wordless and not self._late_counted and self.text.strip():
             self.late += 1
             self._late_counted = True
-        kind = claim_kind(self.text) if self.enabled and not self.blocked else None
-        if kind and not self.is_backed(kind):
+        kinds = claim_kinds(self.text) if self.enabled and not self.blocked else []
+        if any(not self.is_backed(k) for k in kinds):        # every claim in it needs its own backing
             self.blocked, self.blocked_text = True, self.text.strip()
             self.blocks.append(self.blocked_text[-200:])
             self.correction_owed = True

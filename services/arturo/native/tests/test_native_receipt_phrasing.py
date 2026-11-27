@@ -69,7 +69,10 @@ def test_progress_claims_are_their_own_kind():
                  "It's running and the note is saved.", "It's running; it's done now.",   # codex on #698: mixed
                  "The agent has been started.", "It's started.",                          # a finished start
                  "It's running and saved.", "It's running and done now.",                 # codex round 2: shared
-                 "It's under way; that's already saved."):                                # subject, adverbs
+                 "It's under way; that's already saved.",                                 # subject, adverbs
+                 "It's running and the message was delivered.",                           # codex round 3
+                 "It's running; your note is confirmed to be saved already.",
+                 "It's running; your note appears to be saved already."):                  # "to be" is no future
         assert claim_gate.claim_kind(said) == ("state", None), said
     for said in ("I'm pulling that up.", "On it, it'll take a moment."):
         assert claim_gate.claim_kind(said) is None, said
@@ -176,3 +179,16 @@ def test_a_finished_success_is_no_evidence_that_something_is_running_now(tmp_pat
     call.toolset.spoken_fn = lambda conv: call.session.spoken_turn
     assert call.toolset.execute(b, "s1", "spawn_agent", spawn)["ok"]
     assert call.gate.is_backed(progress)                                    # the seat runs: true
+
+
+def test_every_claim_in_an_utterance_needs_its_own_backing():
+    # codex round 3 on #698: "I've started it and it's done" was checked only as a start, so a running spawn backed
+    # the "done" beside it
+    assert claim_gate.claim_kinds("I've started it and it's done.") == [("action", "start"), ("state", None)]
+    backs = {("action", "start"), ("state", "progress")}                 # a spawn still running after its receipt
+    g = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
+    g.feed_transcript("I've started it and it's done.")
+    assert g.blocked
+    g2 = claim_gate.ClaimGate(is_backed=lambda k: k in backs, hold_s=0.0)
+    g2.feed_transcript("I've started it, and that's running now.")
+    assert not g2.blocked
