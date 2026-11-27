@@ -22,6 +22,15 @@ export const MIN_BUDGET_TOKENS = 500;
 export const MAX_BUDGET_TOKENS = 20000;
 const LINE_MAX_CHARS = 1200;
 const MERGE_GAP_S = 120;  // one speaker's phrases further apart than this in a call are separate turns
+const BACKCHANNEL_WORDS = 2;  // a call phrase this short, wedged between two of the other speaker's, is not a turn
+// ... and only when every word is a wordless sound (codex review of #662): "no", "stop", "yes", "ok", "ah", "oh"
+// can be the answer
+const SOUND_RE = /^(?:m+(?:-?h+m*)?|h+m+|u+h+(?:-?h+u+h+)?|u+m+|e+r+m*|mhm+)?$/;
+
+function soundsOnly(text: string): boolean {
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length <= BACKCHANNEL_WORDS && words.every((w) => SOUND_RE.test(w.toLowerCase().replace(/[^a-z-]/g, '')));
+}
 const SUMMARY_SHARE = 0.2;
 // The opening is fenced as history that is over (thread_context.PAST_OPEN/PAST_CLOSE; live probes 2026-11-25: unfenced,
 // the thread ended on verbatim call dialogue and Arturo never greeted; thread off, he greeted at 1.5 s).
@@ -199,10 +208,23 @@ function summaries(dropped: Line[], tz: string, tzLabel: string, red: Redactor):
   });
 }
 
+const sameSpeaker = (a: Line, b: Line): boolean => a.channel === 'call' && b.channel === 'call'
+  && a.call_id === b.call_id && (a.role ?? '') === (b.role ?? '') && a.who === b.who;
+
+/** "Mm-h", "uh-huh", "m." (thread_context._backchannel): a call phrase of BACKCHANNEL_WORDS wordless sounds or fewer
+ *  between two phrases of the OTHER speaker in the same call, those two within MERGE_GAP_S of each other. */
+function backchannel(prev: Line | undefined, ln: Line, next: Line | undefined): boolean {
+  return prev !== undefined && next !== undefined && ln.channel === 'call' && soundsOnly(ln.text)
+    && sameSpeaker(prev, next) && prev.call_id === ln.call_id && !sameSpeaker(prev, ln)
+    && next.at - prev.at <= MERGE_GAP_S;
+}
+
 /** A turn is an exchange (thread_context.merge_phrases): consecutive phrases by the same speaker (same role and name)
  *  in the same call are one turn, stamped at its first phrase, while each phrase follows the one before within
- *  MERGE_GAP_S. Chat lines never merge. `lines` in time order. */
-export function mergePhrases(lines: Line[]): Line[] {
+ *  MERGE_GAP_S. A backchannel is left out first, so the phrases around it join. Chat lines never merge. `lines` in
+ *  time order. */
+export function mergePhrases(input: Line[]): Line[] {
+  const lines = input.filter((ln, i) => !backchannel(input[i - 1], ln, input[i + 1]));
   const out: Line[] = [];
   let lastAt = 0;
   for (const ln of lines) {
