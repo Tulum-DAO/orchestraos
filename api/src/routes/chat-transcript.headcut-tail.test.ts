@@ -133,7 +133,11 @@ function seatLog(seat: string, after: number, late = false, kind = ''): string[]
   const hydrate = (i: number, t: string) => [user(`h-wal${i}`, t, mail('lineage-daemon', `[WAL DELTA] hydrate from ${seat} blue ${i}`)),
     say(`h-ans${i}`, at(t, 1), `Hydrate ${i} taken in. ${filler}`, true), result(`h-ansr${i}`, at(t, 2), `h-ans${i}`)];
   if (kind === 'waiting') for (let i = 12; i < 52; i++) lines.push(...hydrate(i, at(live0, (i - 12) * 60)));
-  if (kind === 'fwd') lines.push(user('m-1', at(live0, 0), mail('peer', 'status?')), say('m-1c', at(live0, 1), 'status ok'));
+  if (kind === 'fwd') {
+    lines.push(user('m-1', at(live0, 0), mail('peer', 'status?')), say('m-1c', at(live0, 1), 'status ok'),
+      user('m-2', at(live0, 60), `[QUEUE-DIGEST] 1 pending message(s) for ${seat} older than 30s — batch-process now`),
+      say('m-2c', at(live0, 61), 'queue drained'));
+  }
   if (kind === 'digest') {
     for (let i = 0; i < 30; i++) {
       const t = at(live0, 600 + i * 60);
@@ -194,9 +198,9 @@ async function walkAll(get: (q: string) => Promise<any>, first: number, limit: n
 }
 
 const ids = (items: any[]) => items.map((it) => String(it.uuid));
-/** Whole items, not their ids: a tag, a text or a flag that differs is a different page. `ref` names the chunk's
- *  position (a cursor), which a chunk numbers its own way. */
-const whole = (items: any[]) => items.map(({ ref, ...rest }) => rest);
+/** Whole items, not their ids, as the JSON a client gets (key order too): a tag, a text or a flag that differs is a
+ *  different page. `ref` names the chunk's position (a cursor), which a chunk numbers its own way. */
+const whole = (items: any[]) => items.map(({ ref, ...rest }) => JSON.stringify(rest));
 const isHold = (u: string) => u.startsWith('h-');
 
 for (const [k, s] of Object.entries(SEATS)) {
@@ -229,7 +233,9 @@ for (const [k, s] of Object.entries(SEATS)) {
       } else if (k === 'fwd') {
         // Mail alone after the promotion: its reply is the strip, in the forwarded turn's exchange (the whole log has a
         // person's turn, so the newest reply is not drawn for want of one).
-        assert.deepEqual(ids(oracle), ['m-1', 'm-1c'], 'precondition: the chat is the mail turn');
+        assert.deepEqual(ids(oracle), ['m-1', 'm-1c', 'm-2', 'm-2c'], 'precondition: the chat is the mail turn and a digest turn');
+        assert.equal(oracle[2].wake, 'beat', 'precondition: the digest line is a beat wake (emptied after tagging)');
+        assert.equal(oracle[3].audience, 'agent', 'precondition: the newest reply is not drawn (the log has a person\'s turn)');
         assert.equal(oracle[1].audience, 'agent', 'precondition: the mail reply is the strip');
         assert.equal(oracle[1].exchange, 'h-fwd', 'precondition: in the hold-phase turn\'s exchange');
       } else if (k === 'digest') {

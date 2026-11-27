@@ -2753,7 +2753,14 @@ function withHeadTags(items: any[], exchange: string | undefined): any[] {
     if (out[i] === items[i]) out[i] = copyItem(items[i]);
     return out[i];
   };
-  for (let i = 0; i < items.length && items[i] && items[i].exchange === undefined; i++) copy(i).exchange = exchange;
+  for (let i = 0; i < items.length && items[i] && items[i].exchange === undefined; i++) {
+    // Where the audience pass puts it (right after `audience`), so the item reads as the whole-file build's, key for key.
+    const c = copy(i);
+    const keys = Object.keys(c);
+    const at = keys.indexOf('audience');
+    c.exchange = exchange;
+    if (at >= 0) for (const k of keys.slice(at + 1)) { const v = c[k]; delete c[k]; c[k] = v; }
+  }
   for (let i = 0; i < items.length; i++) {
     if (items[i] && Object.prototype.hasOwnProperty.call(items[i], NEWEST_DRAWN)) copy(i).audience = items[i][NEWEST_DRAWN];
   }
