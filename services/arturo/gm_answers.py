@@ -8,10 +8,11 @@ and the chat never showed it). This is the reader of those replies.
 
 Each pending reply from gm to `arturo` whose question carried a voice call becomes ONE assistant line in that
 question's thread, whether it was already spoken in the call or came after it. A call still live is left for the next
-sweep, so the answer lands after the call's own lines. The line is deduped on the reply's id (a repeat sweep, a second
-process, a hand backfill with the same meta), then the reply is acked and stamped with what happened. A reply that is
-not for a voice question is not ours and is left alone. A thread the caller did not start, or a tag that is not a
-thread at all ("gm chat"), is acked with no line.
+sweep, so the answer lands after the call's own lines. A reply is claimed before it is posted (msg_store claim: two
+sweeping processes never both post it), deduped on its id (a crash between post and ack, a hand backfill with the same
+meta), then acked and stamped with what happened. A reply that is not for a voice question is not ours and is left
+alone; so is one whose question does not say who asked (sent before the question carried it: a hand backfill's job).
+A thread the caller did not start, or a tag that is not a thread at all ("gm chat"), is acked with no line.
 
 Never raises into its caller: a sweep that cannot read or write leaves the reply pending for the next one.
 """
@@ -21,6 +22,7 @@ import logging
 log = logging.getLogger("arturo.gm_answers")
 
 ANSWER_MAX = 4000
+REPLIES_MAX = 500
 KIND = "gm_answer"
 
 
@@ -32,18 +34,14 @@ def _meta(raw):
     return out if isinstance(out, dict) else {}
 
 
-def _question_of(store, reply):
-    """The message gm answered: the reply's parent, else the first message from arturo in its conversation."""
-    pid = reply.get("parent_id")
-    if pid:
-        q = store.get(pid)
-        if q:
-            return q
-    conv = reply.get("conversation_id")
-    if conv:
-        for m in store.thread(conv):
-            if m.get("from_agent") == "arturo":
-                return m
+def _question_of(store, reply, gm, asker):
+    """The message gm answered: the reply's parent, else the first message in its conversation; only a question
+    arturo sent to gm (its metadata is what lets the answer into a thread)."""
+    q = store.get(reply["parent_id"]) if reply.get("parent_id") else None
+    if q is None and reply.get("conversation_id"):
+        q = next(iter(store.thread(reply["conversation_id"], limit=1)), None)
+    if q and q.get("from_agent") == asker and q.get("to_agent") == gm:
+        return q
     return None
 
 
@@ -59,25 +57,16 @@ def answer_line(question, body):
     if len(text) > ANSWER_MAX:
         text = text[:ANSWER_MAX].rstrip() + " ... (truncated)"
     q = " ".join(_redact(question).split())
-    return (f"gm answered a question from the call" + (f" (\"{q}\")" if q else "") + f":\n\n{text}")
+    return ("gm answered a question from the call" + (f" (\"{q}\")" if q else "") + f":\n\n{text}")
 
 
 def _may_write(threads, thread_id, principal):
-    """The proxy's thread rule: the fleet writes any thread; any other caller only a thread it started."""
+    """The proxy's thread rule: the fleet writes any thread; any other caller only a thread it started. A thread with
+    no row yet (the call archived no lines) is started by this line, as the caller's."""
     started = threads.started_by(thread_id)
-    if started is None:
-        return "no_thread"
-    if principal == "fleet" or (principal and started == principal):
+    if started is None or principal == "fleet" or started == principal:
         return None
     return "not_owner"
-
-
-def _replies(store, to_agent, gm):
-    out = []
-    for status in ("pending", "delivered"):
-        out.extend(m for m in store.inbox(to_agent, status=status, type="reply")
-                   if m.get("from_agent") == gm)
-    return out
 
 
 def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="arturo"):
@@ -87,25 +76,32 @@ def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="art
     from services.arturo.relay_live_bridge import journal_call_id
     done = []
     try:
-        replies = _replies(store, to_agent, gm)
+        replies = store.query(to_agent=to_agent, from_agent=gm, type="reply", status="pending", limit=REPLIES_MAX)
     except Exception as e:  # noqa: BLE001 — the next sweep tries again
         log.warning(f"gm answers: inbox unreadable: {e!r}")
         return done
     live = None
     for r in replies:
-        mid = r.get("id")
+        mid, claimed = r.get("id"), False
         try:
-            q = _question_of(store, r)
+            q = _question_of(store, r, gm, to_agent)
             qmeta = _meta((q or {}).get("metadata"))
             call = str(qmeta.get("voice_call") or "")
             if not call:
                 continue                                   # not a voice question: not ours
+            thread, principal = str(qmeta.get("thread_id") or ""), qmeta.get("principal")
+            if not principal:
+                done.append((mid, "no_principal"))         # left pending: who asked is unknown, so no thread is theirs
+                continue
             if live is None:
                 live = set(live_calls())
             if call in live:
                 done.append((mid, "call_live"))
                 continue
-            thread, principal = str(qmeta.get("thread_id") or ""), qmeta.get("principal")
+            if not store.claim(mid):
+                done.append((mid, "claimed"))              # another sweep has it
+                continue
+            claimed = True
             body = (r.get("body") or "").strip()
             if not body:
                 state, seq = "empty", None
@@ -118,11 +114,12 @@ def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="art
                         state = "already"
                     else:
                         seq = threads.append_message(
-                            thread, "assistant", answer_line(_question_words((q or {}).get("subject")), body),
+                            thread, "assistant", answer_line(_question_words(q.get("subject")), body),
                             meta={"kind": KIND, "call_id": journal_call_id(call), "msg_id": mid,
-                                  "conversation_id": call})
+                                  "conversation_id": call}, principal=principal)
                         if seq is None:
-                            done.append((mid, "post_failed"))      # left pending: the next sweep retries
+                            store.defer(mid, error="gm answer not posted")   # pending again: the next sweep retries
+                            done.append((mid, "post_failed"))
                             log.warning(f"gm answers: {mid} not posted to {thread[:24]}")
                             continue
                         state = "posted"
@@ -132,5 +129,10 @@ def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="art
             log.info(f"gm answers: {mid} (call {call}) -> {state}" + (f" {thread[:24]}#{seq}" if seq is not None else ""))
         except Exception as e:  # noqa: BLE001 — one bad row never stops the sweep
             log.warning(f"gm answers: {mid} failed: {e!r}")
+            if claimed:
+                try:
+                    store.defer(mid, error="gm answer sweep failed")
+                except Exception:  # noqa: BLE001 — the router returns a stale claim to pending
+                    pass
             done.append((mid, "error"))
     return done

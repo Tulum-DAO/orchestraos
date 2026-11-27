@@ -1038,6 +1038,8 @@ class NativeServer:
         self.page_feed_factory = call_context.ThreadFeed            # (thread id, principal=) -> .poll() -> [notes]
         self.chat_feed_factory = call_context.ChatFeed              # (agent) -> .poll() -> [stamped notes]
         self._thread_store = None
+        # the gm answers sweep has its own thread: a sweep stuck on a busy sqlite never takes a live call's tool worker
+        self.sweep_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="native-sweep")
         self.msg_store_factory = None                               # () -> msg_store.MessageStore (tests inject one)
 
     def thread_store(self):
@@ -1048,7 +1050,7 @@ class NativeServer:
         return self._thread_store
 
     def sweep_gm_answers(self):
-        """One pass of gm_answers (on a worker thread, never the event loop): calls still up wait for their end."""
+        """One pass of gm_answers (on its own thread, never the event loop): calls still up wait for their end."""
         from services.arturo import gm_answers
         if self.msg_store_factory is not None:
             store = self.msg_store_factory()
@@ -1066,7 +1068,7 @@ class NativeServer:
         async def loop():
             while True:
                 try:
-                    await asyncio.get_running_loop().run_in_executor(self.pool, self.sweep_gm_answers)
+                    await asyncio.get_running_loop().run_in_executor(self.sweep_pool, self.sweep_gm_answers)
                 except Exception as e:  # noqa: BLE001 — the next sweep tries again
                     log.warning(f"native: gm answers sweep failed: {e!r}")
                 await asyncio.sleep(GM_ANSWERS_SWEEP_S)

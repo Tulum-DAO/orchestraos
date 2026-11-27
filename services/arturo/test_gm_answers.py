@@ -106,10 +106,40 @@ def test_a_call_still_live_waits_so_the_answer_lands_after_its_lines(store, thre
 
 
 def test_a_reply_not_to_a_voice_question_is_left_alone(store, threads):
-    mid = store.send(from_agent="arturo", to_agent="pm-x", type="task", subject="spawn", body="spawn a seat for the latency work")
+    mid = store.send(from_agent="arturo", to_agent="gm", type="task", subject="relay", body="a typed relay to gm")
     rid = store.reply(mid, body="done")
+    assert store.get(rid)["from_agent"] == "gm"
     assert sweep(store, threads) == []
     assert store.get(rid)["status"] == "pending"
+
+
+def test_a_question_not_from_arturo_to_gm_lets_nothing_into_a_thread(store, threads):
+    """The question's metadata is what lets an answer into a thread: only a question arturo sent gm counts."""
+    mid = store.send(from_agent="pm-x", to_agent="gm", type="task", subject="[voice] q", body="spoofed voice question",
+                     metadata={"voice_call": CALL, "thread_id": THREAD, "principal": "fleet"})
+    rid = store.send(from_agent="gm", to_agent="arturo", type="reply", subject="re", body="an answer", parent_id=mid,
+                     conversation_id=store.get(mid)["conversation_id"])
+    assert sweep(store, threads) == []
+    assert rows(threads) == [] and store.get(rid)["status"] == "pending"
+
+
+def test_another_sweep_holding_the_claim_means_no_second_line(store, threads):
+    rid = answer(store, ask(store))
+    assert store.claim(rid)                                 # a second process got there first
+    assert sweep(store, threads) == []                      # not pending any more: not seen
+    store.defer(rid)
+    real = store.claim
+    store.claim = lambda m: False                            # lost the race between the read and the claim
+    assert sweep(store, threads) == [(rid, "claimed")]
+    store.claim = real
+    assert rows(threads) == []
+
+
+def test_a_thread_with_no_row_yet_is_started_by_the_answer_as_the_callers(store, threads):
+    rid = answer(store, ask(store, thread="web_new1", principal="device:phone-1"))
+    assert sweep(store, threads) == [(rid, "posted")]
+    assert threads.started_by("web_new1") == "device:phone-1"
+    assert len(rows(threads, "web_new1")) == 1
 
 
 def test_a_tag_that_is_not_a_thread_is_acked_with_no_line(store, threads):
@@ -131,12 +161,13 @@ def test_the_threads_own_starter_gets_the_line(store, threads):
     assert sweep(store, threads) == [(rid, "posted")]
 
 
-def test_a_question_without_its_caller_is_not_written_anywhere(store, threads):
-    mid = store.send(from_agent="arturo", to_agent="gm", type="task", subject=f"[voice thread {THREAD}] q", body="a question with no caller on it",
-                     metadata={"voice_call": CALL, "thread_id": THREAD})
+def test_a_question_without_its_caller_is_left_pending_and_written_nowhere(store, threads):
+    """Sent before the question said who asked: no thread is known to be theirs, and it is not acked away either."""
+    mid = store.send(from_agent="arturo", to_agent="gm", type="task", subject=f"[voice thread {THREAD}] q",
+                     body="a question with no caller on it", metadata={"voice_call": CALL, "thread_id": THREAD})
     rid = answer(store, mid)
-    assert sweep(store, threads) == [(rid, "not_owner")]
-    assert rows(threads) == []
+    assert sweep(store, threads) == [(rid, "no_principal")]
+    assert rows(threads) == [] and store.get(rid)["status"] == "pending"
 
 
 def test_secret_shapes_in_the_answer_are_blanked(store, threads):
@@ -152,6 +183,22 @@ def test_a_failed_write_leaves_the_reply_for_the_next_sweep(store, threads, monk
     monkeypatch.setattr(threads, "append_message", lambda *a, **k: None)
     assert sweep(store, threads) == [(rid, "post_failed")]
     assert store.get(rid)["status"] == "pending"
+
+
+def test_a_crash_after_the_claim_puts_the_reply_back(store, threads, monkeypatch):
+    rid = answer(store, ask(store))
+    monkeypatch.setattr(threads, "has_meta", lambda *a, **k: 1 / 0)
+    assert sweep(store, threads) == [(rid, "error")]
+    assert store.get(rid)["status"] == "pending"
+
+
+def test_many_other_replies_to_arturo_never_hide_gms(store, threads):
+    for i in range(60):                                      # older, as urgent, from other seats, never acked by us
+        m = store.send(from_agent="arturo", to_agent=f"pm-{i}", type="task", priority="high", subject="s",
+                       body=f"spawn number {i} now")
+        store.reply(m, body=f"done number {i}")
+    rid = answer(store, ask(store))
+    assert sweep(store, threads) == [(rid, "posted")]
 
 
 def test_only_gms_replies_are_read(store, threads):
