@@ -39,6 +39,9 @@ const SEATS = {
   inside: { seat: 'zz-ht-inside', sid: '66666666-2222-4333-8444-000000000001', promoted: SWAP, after: 4 },
   below: { seat: 'zz-ht-below', sid: '66666666-2222-4333-8444-000000000002', promoted: SWAP, after: 40 },
   none: { seat: 'zz-ht-none', sid: '66666666-2222-4333-8444-000000000003', promoted: null, after: 4 },
+  // LATE: its promote wake and recap, a long chat, then a SECOND promote wake: only the first is the promotion's, so
+  // the second turn is left out whole. A tail chunk that starts after the first cannot tell which is first alone.
+  late: { seat: 'zz-ht-late', sid: '66666666-2222-4333-8444-000000000004', promoted: SWAP, after: 30 },
 } as const;
 {
   const db = new Database(join(orch, 'state', 'orchestra-registry.db'));
@@ -75,8 +78,12 @@ const result = (uuid: string, ts: string, forUuid: string) => JSON.stringify({ t
   message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t-${forUuid}`, content: `ok ${filler}` }] } });
 const mail = (from: string, body: string) => `[MSG from ${from} | high] (sent 0m ago) ${body} — Read /tmp/agent-msg-x.md and act on it.`;
 
-/** A green's hold phase (its brief, hydrate digests and its answers to them, all machine), then `after` operator turns. */
-function seatLog(seat: string, after: number): string[] {
+/** The router's line for the promote notice (lib/audience.ts promoteWake, shape a). */
+const promote = (id: string) => `[MSG from identity-store | critical] (sent 0m ago) [PROMOTE] you are canonical — verify against the DB — Read /tmp/agent-msg-${id}.md and act on it.`;
+
+/** A green's hold phase (its brief, hydrate digests and its answers to them, all machine), then `after` operator turns;
+ *  `late`: the promote wake's turn first, and a second promote wake's turn after the operator turns. */
+function seatLog(seat: string, after: number, late = false): string[] {
   const hold0 = '2026-11-20T07:00:00Z';
   const lines = [user('h-brief', at(hold0, 0), `You are ${seat}. Read /tmp/agent-init-${seat}.md and follow all instructions in it.`),
     say('h-read', at(hold0, 5), `Reading the init file. ${filler}`, true), result('h-readr', at(hold0, 6), 'h-read')];
@@ -85,10 +92,20 @@ function seatLog(seat: string, after: number): string[] {
       say(`h-ans${i}`, at(hold0, 61 + i * 60), `Hydrate ${i} taken in. ${filler}`, true), result(`h-ansr${i}`, at(hold0, 62 + i * 60), `h-ans${i}`));
   }
   const live0 = '2026-11-20T08:00:30Z';
+  if (late) {
+    lines.push(user('w-1', '2026-11-20T08:00:05Z', promote('m1')), say('w-1a', '2026-11-20T08:00:06Z', 'Checking the registry.', true),
+      result('w-1r', '2026-11-20T08:00:07Z', 'w-1a'), say('w-1c', '2026-11-20T08:00:08Z', `I am the live seat now. ${filler}`));
+  }
   for (let i = 0; i < after; i++) {
     lines.push(user(`p-u${i}`, at(live0, i * 30), `question ${i} ${filler}`),
       say(`p-a${i}`, at(live0, i * 30 + 1), `working on ${i}`, true), result(`p-r${i}`, at(live0, i * 30 + 2), `p-a${i}`),
       say(`p-c${i}`, at(live0, i * 30 + 3), `answer ${i} ${filler}`));
+  }
+  if (late) {
+    const t = at(live0, after * 30 + 60);
+    lines.push(user('w-2', t, promote('m2')), say('w-2a', at(t, 1), 'Checking the registry again.', true),
+      result('w-2r', at(t, 2), 'w-2a'), say('w-2c', at(t, 3), `Still the live seat. ${filler}`),
+      user('p-z', at(t, 30), `one more question ${filler}`), say('p-zc', at(t, 31), 'One more answer.'));
   }
   seq += lines.length;
   return lines;
@@ -96,7 +113,7 @@ function seatLog(seat: string, after: number): string[] {
 const paths: Record<string, string> = {};
 for (const [k, s] of Object.entries(SEATS)) {
   paths[k] = join(projects, `${s.sid}.jsonl`);
-  writeFileSync(paths[k], seatLog(s.seat, s.after).join('\n') + '\n');
+  writeFileSync(paths[k], seatLog(s.seat, s.after, k === 'late').join('\n') + '\n');
   writeFileSync(join(orch, 'state', 'agents', `${s.seat}.json`), JSON.stringify({ session_id: s.sid, cwd: '/repo' }));
 }
 
@@ -143,11 +160,20 @@ for (const [k, s] of Object.entries(SEATS)) {
       const oracle = await walkAll(get, 6, 5);
       const stream = (n: number) => ids(normalizeTranscriptFile(paths[k], s.seat, s.sid, n, false, false, false, false, true).items);
       const streamOracle = stream(500);
-      if (s.promoted) {
+      if (k === 'late') {
+        // The first promote turn opens the chat (no verdict: its final reply is kept); the second is left out whole.
+        assert.ok(!ids(oracle).some(isHold), 'precondition: the whole-file build cuts the hold phase');
+        assert.deepEqual(ids(oracle).slice(0, 4), ['w-1', 'w-1a', 'w-1r', 'w-1c']);
+        assert.ok(!ids(oracle).some((u) => u.startsWith('w-2')), 'precondition: the second promote turn is left out');
+        assert.ok(ids(oracle).includes('p-zc'));
+      } else if (s.promoted) {
         assert.ok(!ids(oracle).some(isHold), 'precondition: the whole-file build cuts the hold phase');
         assert.equal(ids(oracle)[0], 'p-u0', 'the chat opens on the first turn after the promotion');
       } else {
-        assert.ok(ids(oracle).includes('h-ans0'), 'precondition: no promotion time, nothing cut');
+        // No promotion time: nothing is cut at a takeover (the brief and the init read stay); the hydrate turns are
+        // machine wakes, which leave whatever the promotion (hideWakes).
+        assert.ok(ids(oracle).includes('h-brief') && ids(oracle).includes('h-read'), 'precondition: no promotion time, no cut');
+        assert.ok(!ids(oracle).includes('h-ans0'), 'precondition: a hydrate turn is a machine wake');
       }
       for (const want0 of [16 * 1024, 4 * 1024, 1024]) {
         tailFirstForTests({ want0 });
