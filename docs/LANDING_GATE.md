@@ -22,8 +22,10 @@ carried 19 operator identifiers onto `main`, which turned every other PR's check
   at a named head**. A verdict on an earlier head does not carry forward: a new head gets a delta verdict.
 - The verdict names the CI jobs it saw green on that head (rule 1 applies to the reviewer too).
 - **Who gives it.** First a Codex reviewer, running fenced and read-only and arguing against the PR.
-  A fenced Claude reviewer stands in only while Codex is out of usage. The merge request names the
-  reviewer, and says why when the fallback ran.
+  A fenced Claude reviewer stands in only while Codex is out of usage. Which one gates is read from
+  `state/codex-availability.json` in the data dir (its `gating_reviewer`, rewritten by the limit watcher
+  when Codex availability flips). When it says `claude`, the merge request names its `window` and
+  `reset_label`. A missing file means Codex first.
 - **First-pass reading, never gating.** Before the gating review, every PR gets a Grok first pass, so
   the gating rounds start from a cleaner head and there are fewer of them. The owner asks for it once
   CI is running, and Grok reads in a fresh session, never inside a long-lived agent's context. Grok
@@ -31,6 +33,7 @@ carried 19 operator identifiers onto `main`, which turned every other PR's check
   list to the owner. The owner folds in each real finding, or answers it in one line on the PR, then
   asks for the gating review. `MERGE-OK` never depends on the first pass, and its findings never stop
   a merge. Each first pass reports its wall time, and the token count from its session's usage record.
+  If Grok is unavailable, the owner goes straight to the gating review: the first pass never holds a PR.
 - Grok is held out of gating review because it missed blocking defects in two calibration reviews,
   though both also found real issues the gating review had missed. It is re-calibrated for gating
   only on the operator's request or when a new Grok model lands.
