@@ -1076,6 +1076,7 @@ class NativeServer:
         yield
         if task is not None:
             task.cancel()
+        self.sweep_pool.shutdown(wait=False)
 
     def _spoken(self, conversation_id):
         call = self.calls.get(conversation_id)

@@ -23,6 +23,7 @@ log = logging.getLogger("arturo.gm_answers")
 
 ANSWER_MAX = 4000
 REPLIES_MAX = 500
+TENANT = "operator"                                    # the operator's threads.db: never another tenant's mail
 KIND = "gm_answer"
 
 
@@ -76,12 +77,13 @@ def post_gm_answers(store, threads, live_calls=frozenset, gm="gm", to_agent="art
     from services.arturo.relay_live_bridge import journal_call_id
     done = []
     try:
-        replies = store.query(to_agent=to_agent, from_agent=gm, type="reply", status="pending", limit=REPLIES_MAX)
+        replies = store.query(to_agent=to_agent, from_agent=gm, type="reply", status="pending", limit=REPLIES_MAX,
+                              tenant_id=TENANT)
     except Exception as e:  # noqa: BLE001 — the next sweep tries again
         log.warning(f"gm answers: inbox unreadable: {e!r}")
         return done
     live = None
-    for r in replies:
+    for r in reversed(replies):                            # the newest REPLIES_MAX, posted oldest first
         mid, claimed = r.get("id"), False
         try:
             q = _question_of(store, r, gm, to_agent)

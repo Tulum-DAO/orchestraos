@@ -123,15 +123,29 @@ def test_a_question_not_from_arturo_to_gm_lets_nothing_into_a_thread(store, thre
     assert rows(threads) == [] and store.get(rid)["status"] == "pending"
 
 
-def test_another_sweep_holding_the_claim_means_no_second_line(store, threads):
+def test_another_sweep_holding_the_claim_means_no_second_line(store, threads, monkeypatch):
     rid = answer(store, ask(store))
     assert store.claim(rid)                                 # a second process got there first
     assert sweep(store, threads) == []                      # not pending any more: not seen
     store.defer(rid)
-    real = store.claim
-    store.claim = lambda m: False                            # lost the race between the read and the claim
+    monkeypatch.setattr(store, "claim", lambda m: False)     # lost the race between the read and the claim
     assert sweep(store, threads) == [(rid, "claimed")]
-    store.claim = real
+    assert rows(threads) == []
+
+
+def test_two_answers_from_one_call_land_in_the_order_gm_sent_them(store, threads):
+    first = answer(store, ask(store, question="first question?"), body="the first answer")
+    store._conn().execute("UPDATE messages SET created_at='2026-01-01T00:00:00+00:00' WHERE id=?",
+                          [first]).connection.commit()
+    second = answer(store, ask(store, question="second question?"), body="the second answer")
+    assert [m for m, _ in sweep(store, threads)] == [first, second]
+    assert [r["meta"]["msg_id"] for r in rows(threads)] == [first, second]
+
+
+def test_another_tenants_mail_never_reaches_the_operators_threads(store, threads):
+    rid = answer(store, ask(store))
+    store._conn().execute("UPDATE messages SET tenant_id='acme' WHERE id=?", [rid]).connection.commit()
+    assert sweep(store, threads) == []
     assert rows(threads) == []
 
 
