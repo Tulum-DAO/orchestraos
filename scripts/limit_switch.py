@@ -643,8 +643,8 @@ def _mark_own_switch(state, deps, now):
 
 def _after_any_switch(active, now, log, deps, state, save, stamp, episodes=None):
     """Rule 5 for a switch this module did NOT make (the dashboard button, the CLI): the first run that
-    sees its row in account-switch.jsonl nudges the banner-stuck seats onto the new login (11-26: Shaw
-    switched by hand at 20:09 Tulum and 8 seats sat on the banner for an hour)."""
+    sees its row in account-switch.jsonl nudges the banner-stuck seats onto the new login (11-26: the
+    operator switched by hand and 8 seats sat on the banner for an hour)."""
     if not hasattr(deps, "last_switch_row"):
         return
     ts, to = deps.last_switch_row()

@@ -94,7 +94,7 @@ def test_1_a_reading_older_than_5_hours_counts_its_5_hour_window_as_reset_and_ke
 
 def test_1_11_26_miss_weekly_81_and_a_2_hour_old_reading_still_switch_and_gm_hears_it_is_stale():
     """11-26 01:03Z: strategysimple out at 100%; default's last reading 5-hour 1% / weekly 81%, two hours
-    old (its parked token expired, usage_poll could not read it). The old rule refused; Shaw switched
+    old (its parked token expired, usage_poll could not read it). The old rule refused; the operator switched
     by hand."""
     d = Fake(usage={"default": {"as_of": NOW - 2 * 3600,
                                 "windows": {"5h": {"used_pct": 1.0}, "weekly": {"used_pct": 81.0}}}})
@@ -859,7 +859,7 @@ def test_replay_11_27_00_48z_the_refused_trigger_now_switches_to_default():
     assert not [r for r in log if r["kind"] == "switch_refused"]
 
 
-def test_replay_11_27_01_09z_shaws_dashboard_switch_nudges_the_banner_seats(tmp_path):
+def test_replay_11_27_01_09z_the_operators_dashboard_switch_nudges_the_banner_seats(tmp_path):
     """account-switch.jsonl 01:09:19Z: "*shared*" -> default, by operator (dashboard). The watcher's next run
     (01:10:02Z) must nudge every unattached seat on the 2.1.284 banner."""
     log_path = tmp_path / "account-switch.jsonl"

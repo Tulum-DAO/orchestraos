@@ -544,7 +544,7 @@ def test_g6_replay_11_27_the_three_invisible_seats_exact_rows(tree, ny):
         db.execute("INSERT INTO generations (root, session_id) VALUES (?, ?)", (seat, sid))
     db.commit()
     db.close()
-    reset = 1795752600                                   # 23:10 Tulum, the strategysimple 5-hour reset
+    reset = 1795752600                                   # 2026-11-27T04:10Z, the strategysimple 5-hour reset
     now = 1795741560                                     # 2026-11-27T01:06Z
     (open(os.path.join(tree.usage_dir, "api-claude-strategysimple.json"), "w")).write(json.dumps(
         {"as_of": now - 120, "windows": {"5h": {"used_pct": 100.0, "resets_at": reset},
