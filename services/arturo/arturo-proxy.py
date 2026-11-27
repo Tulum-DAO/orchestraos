@@ -790,7 +790,7 @@ def _settle_for_finalize(conv_id="", cap_s=10.0, quiet_s=1.0):
 def _card_owed(client, own_turns):
     """(thread, the caller's own lines, caller) when this client journal still owes its Arturo thread a call card."""
     tid = client.get("thread_id")
-    if (tid and not client.get("thread_card_written") and not client.get("agent")
+    if (tid and not client.get("thread_card_written") and not client.get("card_gaveup") and not client.get("agent")
             and _call_threads.valid_thread_id(tid)):
         return tid, list(own_turns), client.get("thread_principal")
     return None
@@ -811,6 +811,51 @@ def _write_call_card(cpath, call_id, thread_id, turns, principal):
         except Exception as e:  # noqa: BLE001 — the card is in; the thread's own once check covers a re-drive
             log.warning(f"call {call_id}: card written but the journal was not marked: {e!r}")
     return True
+
+
+_CARD_RETRY_CAP = 8
+
+
+def _retry_owed_cards(now=None):
+    """One sweeper pass: a call card a failed archive still owes (the journal kept the caller's own lines) is written
+    here. Nothing else re-drives a finalize but the gateway's re-POST, which rewrites the journal whole. Backed off,
+    capped, and a thread that refuses the caller is final."""
+    import json as _json
+    from services.arturo.call_journal import _atomic_write
+    now = time.time() if now is None else now
+    for p in VOICE_CALLS_DIR.glob("vc_client_*.json"):
+        try:
+            d = _json.loads(p.read_text())
+        except Exception:
+            continue
+        if "own_turns" not in d or (d.get("card_next_ts") or 0) > now:
+            continue
+        owed = _card_owed(d, d["own_turns"])
+        if not owed:
+            continue
+        call_id = d.get("call_id") or p.stem
+        if _write_call_card(p, call_id, *owed):
+            continue
+        try:
+            refused = _thread_refusal(owed[0], owed[2]) is not None
+        except Exception:  # noqa: BLE001 — an unreadable store is a reason to retry, not to give up
+            refused = False
+        with _JOURNALS_LOCK:
+            try:
+                d = _json.loads(p.read_text())
+            except Exception:
+                continue
+            if d.get("thread_card_written") or "own_turns" not in d:
+                continue                    # written meanwhile, or the gateway rewrote the journal
+            n = int(d.get("card_attempts") or 0) + 1
+            d["card_attempts"] = n
+            if refused or n >= _CARD_RETRY_CAP:
+                d["card_gaveup"] = True
+                log.warning(f"call {call_id}: call card given up after {n} attempt(s)"
+                            f"{' (thread refused)' if refused else ''}")
+            else:
+                d["card_next_ts"] = now + min(900, 30 * 2 ** n)
+            _atomic_write(p, d)
 
 
 def finalize_from_client(client_call_id="", conv_id=""):
@@ -1101,6 +1146,10 @@ def _start_inject_retry_sweeper(interval_s=15):
                             _attempt_gm_inject(p)
             except Exception as _we:
                 log.error(f"inject-retry-sweeper error: {_we}")
+            try:
+                _retry_owed_cards()       # not an inject: runs with the kill switch off too
+            except Exception as _ce:
+                log.error(f"call-card retry error: {_ce}")
             _t.sleep(interval_s)
 
     _threading.Thread(target=_loop, daemon=True).start()

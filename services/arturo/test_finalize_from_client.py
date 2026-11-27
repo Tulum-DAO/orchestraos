@@ -556,3 +556,81 @@ def test_two_overlapping_finalizes_never_double_a_call_whose_card_failed(tmp_pat
     assert m._archive_client_call(NATIVE, "web_abc123", turns, "fleet") is True     # the overlapping second
     said = [t["content"] for t in m._THREADS.get_thread("web_abc123")["turns"][2:]]
     assert said == ["hi"]
+
+
+def test_a_retried_card_after_gm_has_the_call_still_carries_only_the_callers_lines(tmp_path, monkeypatch):
+    # The pre-check path (gm already has the call) must read the kept own lines too, never the merge.
+    m = _native_proxy(tmp_path, monkeypatch)
+    now = 1_800_000_000.0
+    other = {"call_id": "vc_server_0000other", "started_at": now - 5, "page": "server", "status": "live",
+             "turns": [{"role": "user", "text": "someone else's secret", "ts": now + 2},
+                       {"role": "arturo", "text": "their answer", "ts": now + 4}]}
+    (m.VOICE_CALLS_DIR / "vc_server_0000other.json").write_text(json.dumps(other))
+    store = m._THREADS
+    _native_journal(m, thread_id="dev1_t", turns=[], principal="device:dev1")
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    p = m.VOICE_CALLS_DIR / f"{NATIVE}.json"
+    d = json.loads(p.read_text())
+    d["gm_injected"] = True
+    p.write_text(json.dumps(d))
+    m._THREADS = store
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    lines = [t["content"] for t in m._THREADS.get_thread("dev1_t")["turns"]]
+    assert not any("someone else" in c or "their answer" in c for c in lines), lines
+    assert len(_cards(m, "dev1_t")) == 1
+
+
+def test_the_sweeper_writes_an_owed_card_nothing_else_re_drives(tmp_path, monkeypatch):
+    # In production only the gateway's re-POST re-runs finalize, and it rewrites the journal whole. A card the first
+    # archive failed to write is written by the sweeper's pass instead, once, then never again.
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_abc123", "typed first", "typed answer", principal="fleet")
+    store = m._THREADS
+    _native_journal(m)
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    p = m.VOICE_CALLS_DIR / f"{NATIVE}.json"
+    m._retry_owed_cards(now=2_000_000_000.0)                              # still unreadable: an attempt, backed off
+    d = json.loads(p.read_text())
+    assert d["card_attempts"] == 1 and d["card_next_ts"] > 2_000_000_000.0 and not d.get("thread_card_written")
+    m._THREADS = store
+    m._retry_owed_cards(now=2_000_000_001.0)                              # not due yet: nothing
+    assert _cards(m, "web_abc123") == []
+    m._retry_owed_cards(now=d["card_next_ts"] + 1)
+    assert len(_cards(m, "web_abc123")) == 1
+    d = json.loads(p.read_text())
+    assert d["thread_card_written"] is True and "own_turns" not in d
+    m._retry_owed_cards(now=d.get("card_next_ts", 0) + 10_000)
+    assert len(_cards(m, "web_abc123")) == 1
+
+
+def test_the_sweeper_gives_up_on_a_refused_thread_and_after_its_cap(tmp_path, monkeypatch):
+    m = _native_proxy(tmp_path, monkeypatch)
+    m._THREADS.record_turn("web_mine", "typed", "answer", principal="device:other")    # someone else's thread
+    store = m._THREADS
+    _native_journal(m, thread_id="web_mine", principal="device:dev1")
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    m._THREADS = store
+    m._retry_owed_cards(now=2_000_000_000.0)
+    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert d["card_gaveup"] is True and _cards(m, "web_mine") == []     # refused: final, never retried
+    # and a store that never comes back stops at the cap
+    _native_journal(m)
+    m._THREADS = _Unreadable()
+    assert m.finalize_from_client(client_call_id=NATIVE) is True
+    t = 2_000_000_000.0
+    for _ in range(m._CARD_RETRY_CAP + 3):
+        m._retry_owed_cards(now=t)
+        t += 100_000
+    d = json.loads((m.VOICE_CALLS_DIR / f"{NATIVE}.json").read_text())
+    assert d["card_gaveup"] is True and d["card_attempts"] == m._CARD_RETRY_CAP
+
+
+def test_the_inject_sweeper_runs_the_card_pass_even_with_injects_off():
+    src = (REPO / "services" / "arturo" / "arturo-proxy.py").read_text()
+    loop = src[src.index("def _start_inject_retry_sweeper"):src.index("def _finalize_stale_calls")]
+    gate = loop.index("if _GM_INJECT_ENABLED:")
+    call = loop.index("_retry_owed_cards()")
+    assert call > gate and "\n            try:\n                _retry_owed_cards()" in loop    # its own try, outside the gate
