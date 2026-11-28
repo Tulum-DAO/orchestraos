@@ -282,3 +282,68 @@ test('at the cap, a beat of ordinary (uuid-bearing) items that slides all but on
     assert.equal(tagOf(got[1].id), tagOf(got[0].id), 'the same numbering');
   }
 });
+
+// A Codex rollout, read in ordinal order: `rollout(...)` writes records, `crec` is one message record.
+const crec = (o: number, id: string, role: string, text: string) =>
+  JSON.stringify({ ordinal: o, timestamp: `2026-08-27T10:00:${String(o).padStart(2, '0')}Z`, type: 'response_item',
+    payload: { id, type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] } }) + '\n';
+function rollout(body: string): string {
+  const f = join(dir, `rollout-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`);
+  writeFileSync(f, JSON.stringify({ ordinal: 0, timestamp: '2026-08-27T10:00:00Z', type: 'session_meta',
+    payload: { id: '00000000-0000-7000-8000-000000000002', timestamp: '2026-08-27T10:00:00Z', cwd: '/tmp' } }) + '\n'
+    + JSON.stringify({ ordinal: 1, timestamp: '2026-08-27T10:00:01Z', type: 'turn_context', payload: { cwd: '/tmp', model: 'm' } }) + '\n'
+    + body);
+  return f;
+}
+
+test('a late record that repeats an item already sent, placed before the tail, is still sent', () => {
+  const f = rollout(crec(2, 'u-1', 'user', 'start') + crec(3, 'm-3', 'assistant', 'same words')
+    + [6, 7, 8, 9, 10].map((o) => crec(o, `m-${o}`, 'assistant', `said ${o}`)).join(''));
+  const t = tailer(f);
+  const got: TailEvent[] = [];
+  t.subscribe((e) => got.push(e), undefined, 40);
+  appendFileSync(f, crec(4, 'm-3', 'assistant', 'same words'));   // a second copy of a sent item's key, written late
+  t.tick();
+  assert.equal(got.length, 2, 'the copy is sent');
+  assert.equal(got[1].type, 'snapshot');
+  assert.deepEqual(texts(got[1]).slice(0, 4), ['start', 'same words', 'same words', 'said 6']);
+});
+
+test('below the cap a window never slides: a match that says it did is a restate, not a delta', () => {
+  // The whole log is two items with one key; a record written late lands between them. The last kept item's key
+  // matches the window front, which below the cap cannot be where it moved to.
+  const f = rollout(crec(2, 'm-x', 'assistant', 'twice') + crec(4, 'm-x', 'assistant', 'twice'));
+  const t = tailer(f);
+  const got: TailEvent[] = [];
+  t.subscribe((e) => got.push(e), undefined, 40);
+  assert.deepEqual(texts(got[0]), ['twice', 'twice']);
+  appendFileSync(f, crec(3, 'm-i', 'assistant', 'between'));
+  t.tick();
+  assert.equal(got.length, 2);
+  assert.equal(got[1].type, 'snapshot', 'never a delta that repeats an item the client has');
+  assert.deepEqual(texts(got[1]), ['twice', 'between', 'twice']);
+});
+
+test('below the cap, a new log file under the same session is a new numbering: an old id is never caught up', () => {
+  for (const viaGone of [false, true]) {                // the path swaps directly, or goes away and comes back
+    const first = log(6);
+    let path: string | null = first;
+    const t = new TranscriptTailer({ agentId: 'zz-seq', resolve: () => ({ path, sid: 's' }), limit: 40, interrupted: quiet });
+    const keep: TailEvent[] = [];
+    t.subscribe((e) => keep.push(e), undefined, 40);
+    const old = keep[0].id;                             // a client that knew the first file's 6 items, then dropped
+    if (viaGone) { path = null; t.tick(); }
+    const second = log(3);
+    path = second;
+    t.tick();
+    assert.equal(keep.at(-1)!.type, 'snapshot');
+    assert.equal(keep.at(-1)!.reset, true);
+    appendFileSync(second, line('more 1') + line('more 2') + line('more 3'));
+    t.tick();                                           // 6 items again, none of them the client's
+    const back: TailEvent[] = [];
+    t.subscribe((e) => back.push(e), old, 40);
+    assert.equal(back.length, 1, `not "caught up" (${viaGone ? 'via no file' : 'direct swap'})`);
+    assert.equal(back[0].type, 'snapshot');
+    assert.equal(back[0].items.at(-1).text, 'more 3');
+  }
+});

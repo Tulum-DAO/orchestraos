@@ -129,6 +129,8 @@ export class TranscriptTailer {
   private path: string | null = null;
   private fileSize = -1;
   private items: any[] = [];
+  /** itemKey of each of `items`, kept so the next beat's insertion check does not stringify the old window again. */
+  private keys: string[] = [];
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
   /** The sequence number of the newest kept item: every item this tailer has read counts once (see eventId). */
   private seq = 0;
@@ -185,6 +187,7 @@ export class TranscriptTailer {
       this.path = null;
       this.fileSize = -1;
       this.items = [];
+      this.keys = [];
       this.seq = 0;
       this.epoch = '';
       return { rotated, fresh: 0 };
@@ -243,15 +246,27 @@ export class TranscriptTailer {
     const cut = readCount >= tailItemCap;
     const shorter = !rotated && env.items.length < prevCount;
     const same = !rotated && path === this.path && prevCount > 0 && (!shorter || (cut && size >= this.fileSize));
-    const shift = same ? alignShift(this.items, env.items) : null;
+    let shift = same ? alignShift(this.items, env.items) : null;
+    // Below the cap the window holds the whole log and never slides: a match before the old tail's place is not it.
+    if (shift !== null && shift < 0 && !cut) shift = null;
     const truncated = shorter && shift === null;
     // The new items: those after the last kept one (at the cap, as many as slid out the front).
     const fresh = shift === null ? 0 : Math.max(0, env.items.length - (prevCount + shift));
     // An item new this beat and placed before the old tail (a cut-turn line; a Codex record written out of order, read
     // in ordinal order): every later item moved, which a delta (append only) cannot say. Sent as a snapshot.
-    const sentKeys = shift === null ? null : new Set(this.items.map(itemKey));
-    const insertedBeforeTail = sentKeys !== null
-      && env.items.some((it, i) => i < prevCount + (shift as number) && !sentKeys.has(itemKey(it)));
+    // Counted, not a set: a late copy of an item already sent has a key the window held once.
+    const nextKeys = env.items.map(itemKey);
+    let insertedBeforeTail = false;
+    if (shift !== null) {
+      const sent = new Map<string, number>();
+      for (const k of this.keys) sent.set(k, (sent.get(k) ?? 0) + 1);
+      for (let i = 0; i < prevCount + shift && i < env.items.length; i++) {
+        const k = nextKeys[i];
+        const left = sent.get(k) ?? 0;
+        if (left <= 0) { insertedBeforeTail = true; break; }
+        sent.set(k, left - 1);
+      }
+    }
 
     // Codex reports a response's tokens after its items: `usage` can land on an item a delta
     // already carried. Deltas only append, so a usage change on a sent item is re-sent as a
@@ -271,6 +286,7 @@ export class TranscriptTailer {
     this.fileSize = size;
     this.interruptedSig = isig;
     this.items = env.items;
+    this.keys = nextKeys;
 
     // Below the cap the read held the whole log: the number is its item count, so another tailer's numbering of the same
     // log agrees. A window the cap cut goes on counting across the windows it can line up (from the log's first item, when
@@ -286,7 +302,8 @@ export class TranscriptTailer {
     }
 
     // A shrunk log numbers from its new count under a new tag: an id from before it names other items.
-    if (truncated) this.rev++;
+    // So does another file under the same session (a swap, or none for a while): the tag would not change on its own.
+    if (truncated || (rotated && sid === prevSid)) this.rev++;
     if (rotated || truncated) return { rotated: true, fresh: 0, restated: false };
     if (restated) { this.rev++; return { rotated: false, fresh: 0, restated: true }; }
     // The first read of a log (or of one that was empty): every item is new.
