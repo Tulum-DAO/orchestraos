@@ -809,3 +809,15 @@ def test_C2_the_answer_waits_until_every_queued_message_has_left(box, monkeypatc
     status, body = _send_now(box, {"session": "seat", "message_id": b})
     assert status == 200 and body["also_submitted"] == [a], body
     assert SS.get(G.ORCH_DIR, a)["sent_at"]
+
+
+def test_Q4b_after_an_unconfirmed_chord_the_other_message_never_gets_the_keys_even_once_its_neighbour_left(
+        box, monkeypatch, tmp_path):
+    a, b, seat = _two_queued(monkeypatch, tmp_path, on_chord=None)
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 502 and body["state"] == "unknown", body
+    seat.write([rem(WORDS)])                         # the clicked one is seen leaving later; the other is still queued
+    seat.screen = queued_pane(OTHER)
+    status, body = _send_now(box, {"session": "seat", "message_id": a})
+    assert status == 502 and body["state"] == "unknown", body
+    assert seat.keys().count("C-s") == 1, "the other message got the keys a second time"
