@@ -13,12 +13,12 @@ test('a window that cuts off the opener keeps the turn tags, and render nodes ca
                  say('m3', 4, 'summary: all quiet')];
   const env = normalizeTranscript(lines, 'gm', 's', 2);               // the window drops the opener
   assert.deepEqual(env.items.map((i: any) => [i.uuid, i.audience, i.exchange]),
-    [['m2', 'agent', 'op'], ['m3', 'user', 'op']]);
+    [['m2', 'user', 'op'], ['m3', 'user', 'op']]);
   assert.deepEqual(env.render_items.map((r: any) => [r.kind, r.audience, r.exchange]),
-    [['assistant', 'agent', 'op'], ['assistant', 'user', 'op']]);
+    [['assistant', 'user', 'op'], ['assistant', 'user', 'op']]);
 });
 
-test('a stop-hook line the route drops (isMeta) never splits his turn: his first and last replies are drawn', () => {
+test('a stop-hook line the route drops (isMeta) never splits his turn: every reply of it is drawn', () => {
   const line = (o: any) => JSON.stringify({ timestamp: '2026-10-22T05:00:00Z', ...o });
   const lines = [
     line({ type: 'user', uuid: 'm1', message: { role: 'user', content: 'ship it' } }),
@@ -30,6 +30,6 @@ test('a stop-hook line the route drops (isMeta) never splits his turn: his first
   const { items } = normalizeTranscript(lines, 'gm', 's', 150) as any;
   assert.ok(!items.some((i: any) => i.uuid === 'h1'), 'the hook line is not an item');
   assert.deepEqual(items.map((i: any) => [i.text, i.audience]),
-    [['ship it', 'user'], ['shipping now', 'user'], ['handled the digest', 'agent'], ['shipped', 'user']]);
+    [['ship it', 'user'], ['shipping now', 'user'], ['handled the digest', 'user'], ['shipped', 'user']]);
   assert.ok(items.every((i: any) => i.exchange === 'm1'));
 });
