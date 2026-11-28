@@ -1,6 +1,7 @@
 """Extraction result + grounding. An item survives only if its quote is in the transcript
 verbatim (after normalization); no fuzzy path (design §2, codex round 2)."""
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 _PUNCT = re.compile(r"[^\w\s]")
@@ -93,18 +94,33 @@ def _substantive(text):
     return len(words) >= MIN_CONTENT_WORDS
 
 
+def norm_name(name):
+    """The one form every speaker-name comparison uses: NFC, whitespace collapsed, casefolded."""
+    return unicodedata.normalize("NFC", " ".join(name.split())).casefold() if isinstance(name, str) else ""
+
+
 def _shaw_names():
     """Shaw's own name(s) as a recorder labels him (POSTCALL_SHAW_NAMES, comma list; set by the sweep's
     environment, never written in code)."""
     import os
-    return {n.strip().casefold() for n in (os.environ.get("POSTCALL_SHAW_NAMES") or "").split(",") if n.strip()}
+    return {norm_name(n) for n in (os.environ.get("POSTCALL_SHAW_NAMES") or "").split(",") if n.strip()}
+
+
+def shaw_voices(shaw_label, labels):
+    """The labels that are Shaw's voice. Labels carrying a configured form of his name
+    (POSTCALL_SHAW_NAMES) are all his, since Pocket can split him in two ("Shaw Cole" + "Shaw"; Shaw
+    2026-11-28), and the claim must be one of them, or none count. With no such label, only the
+    claimed label (whose proof ground() checks). Empty when the claim is not a transcript label."""
+    names = _shaw_names()
+    named = {lab for lab in labels if norm_name(lab) in names}
+    if named:
+        return named if shaw_label in named else set()
+    return {shaw_label} if shaw_label in labels else set()
 
 
 def _named_shaw_label(label, call_turns):
-    """A transcript whose speaker label IS Shaw's configured name proves the label by itself."""
-    names = _shaw_names()
-    named = {lab for lab, _, _ in call_turns if lab.strip().casefold() in names}
-    return bool(label and named == {label})     # exactly one label names Shaw, and it is the claimed one
+    """A claimed label that IS one of Shaw's configured names proves itself."""
+    return bool(label) and norm_name(label) in _shaw_names() and any(lab == label for lab, _, _ in call_turns)
 
 
 def ground(call, extraction):
@@ -118,6 +134,11 @@ def ground(call, extraction):
     call_turns = turns(call.transcript)
     diarized = bool(getattr(call, "diarized", True)) and bool(call_turns)
     shaw_label = raw_all.get("shaw_label")
+    names = _shaw_names()
+    if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns) and any(
+            norm_name(lab) in names for lab, _, _ in call_turns):
+        raise AttributionError(f"{call.call_id}: a label names Shaw but shaw_label is {shaw_label!r}")
+    voices = shaw_voices(shaw_label, [lab for lab, _, _ in call_turns])
     if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns):
         evidence = locate_quote(raw_all.get("shaw_label_evidence"), call.transcript)
         if not shaw_label or evidence is None or _speaker_of(evidence, call_turns) != shaw_label:
@@ -132,7 +153,7 @@ def ground(call, extraction):
             continue
         if diarized:
             speaker = _speaker_of(span, call_turns)
-            if speaker is None or (owner == "shaw") != (speaker == shaw_label):
+            if speaker is None or (owner == "shaw") != (speaker in voices):
                 continue
             trust = "inferred"
         else:
