@@ -47,6 +47,7 @@ class Roster:
     label_names: dict = field(default_factory=dict)     # label -> canonical name
     verified_names: set = field(default_factory=set)
     shaw_label: str | None = None                       # as claimed by the extractor
+    shaw_voices: frozenset = frozenset()                # every label that is Shaw (extract.shaw_voices)
     labels: tuple = ()                                  # distinct transcript labels, in order
 
 
@@ -165,13 +166,14 @@ def _proposed(raw, call, labels, shaw_label, people):
         yield label, person
 
 
-def _shortcut(event, invitees, labels, shaw_label, people):
-    """Two-party shortcut: one invitee besides Shaw, exactly two voices, one of them Shaw's."""
-    if event is None or len(invitees) != 1:
+def _shortcut(event, invitees, labels, voices, people):
+    """Two-party shortcut: one invitee besides Shaw, Shaw's voice(s) known, exactly one other voice."""
+    if event is None or len(invitees) != 1 or not voices:
         return None
-    if len(labels) != 2 or shaw_label not in labels:
+    others = [l for l in labels if l not in voices]
+    if len(others) != 1:
         return None
-    other = next(l for l in labels if l != shaw_label)
+    other = others[0]
     person = next(p for p in people if p.invited and p.email == invitees[0].email)
     return other, person
 
@@ -193,9 +195,10 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
     # Pocket-named labels first: the name is the identity (an invitee of exactly that name lends its
     # email). A label naming Shaw is never a participant, even when the extractor claimed another one.
     shaw_names = extract._shaw_names()
+    voices = frozenset(extract.shaw_voices(shaw_label, labels))
     named, lent = {}, set()                             # lent: ids of invitees a named label stands for
     for label in labels:
-        if label == shaw_label or _norm(label) in shaw_names or not _pocket_named(label):
+        if label == shaw_label or label in voices or _norm(label) in shaw_names or not _pocket_named(label):
             continue
         invitee = _invitee_named(people, label)
         named[label] = _Person(name=label.strip(), email=invitee.email if invitee else None,
@@ -208,11 +211,11 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
     # his own voice) AND his label is proven: a generic label (ground() requires a quoted proof whenever
     # there are items) or his configured name. Anything else fails closed: names are shown but stay
     # unverified.
-    shaw_proven = bool(shaw_names) and shaw_label in labels and (
+    shaw_proven = bool(shaw_names) and bool(voices) and (
         not _pocket_named(shaw_label) or _norm(shaw_label) in shaw_names)
 
     pairs = [(l, p) for l, p in _proposed(raw, call, generic, shaw_label, people) if id(p) not in named_ids]
-    shortcut = _shortcut(event, invitees, labels, shaw_label, people) if not named else None
+    shortcut = _shortcut(event, invitees, labels, voices, people) if not named else None
     if shortcut:
         pairs.append(shortcut)
 
@@ -227,7 +230,7 @@ def resolve(call, raw, events, *, shaw_emails, contacts=()):
         if len(by_label[label]) == 1 and len(by_person[id(person)]) == 1:
             mapped[label] = person
 
-    roster = Roster(event=event, shaw_label=shaw_label, labels=labels)
+    roster = Roster(event=event, shaw_label=shaw_label, shaw_voices=voices, labels=labels)
     for label in labels:            # spoken participants, in order of first speech
         person = mapped.get(label)
         if person is None:
@@ -259,11 +262,9 @@ def _shaw_side_verified(roster):
     """Conservative: a Shaw item is verified only when Shaw's label is one of the transcript's voices
     and every OTHER voice is verified (a Pocket-named speaker or a verified invitee). No calendar
     event is required."""
-    if roster.shaw_label not in roster.labels:
-        return False
-    if any(_norm(l) in extract._shaw_names() for l in roster.labels if l != roster.shaw_label):
-        return False                # a label naming Shaw is not the one claimed: the claim is wrong
-    others = [l for l in roster.labels if l != roster.shaw_label]
+    if not roster.shaw_voices:
+        return False                # no claim, or a label names Shaw but another was claimed
+    others = [l for l in roster.labels if l not in roster.shaw_voices]
     return bool(others) and all(roster.label_names.get(l) in roster.verified_names for l in others)
 
 
@@ -281,7 +282,7 @@ def apply_trust(items, roster):
                 fields["counterpart"] = name
                 if name in roster.verified_names:
                     trust = "verified"
-        elif item.owner == "shaw" and shaw_ok and item.speaker == roster.shaw_label:
+        elif item.owner == "shaw" and shaw_ok and item.speaker in roster.shaw_voices:
             trust = "verified"
         out.append(replace(item, trust=trust, fields=fields))
     return out

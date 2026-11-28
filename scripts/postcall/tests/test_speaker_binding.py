@@ -126,13 +126,41 @@ def test_the_name_must_be_a_label_in_the_transcript(monkeypatch):
         extract.ground(_named(label="SPEAKER_00"), _named_raw(label="Pat Example"))
 
 
-def test_two_labels_matching_configured_names_are_not_proof(monkeypatch):
+def test_two_labels_naming_shaw_are_both_his_voice(monkeypatch):
+    """Shaw 2026-11-28 ("Shaw Cole is my name"): Pocket can split him into two labels that both carry
+    a configured form of his name. Both are his voice; the claimed one proves itself (this replaces
+    the "only one label naming Shaw" clause of gm msg_ac5f49bf)."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example,Pat")
+    import dataclasses
+    base = _named()
+    call = dataclasses.replace(base, transcript=base.transcript +
+                               "\n**Pat** _[00:20]_\nI will review the contract draft tonight.\n")
+    raw = _named_raw()
+    raw.raw["items"].append({"owner": "shaw", "kind": "commitment", "quote": "I will review the contract draft tonight.",
+                             "commitment_text": "Review the contract draft", "counterpart": "Dana Reyes"})
+    items = extract.ground(call, raw)
+    assert [(i.owner, i.speaker) for i in items] == [("shaw", "Pat Example"), ("shaw", "Pat")]
+
+
+def test_a_participant_item_from_a_second_shaw_label_is_dropped(monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example,Pat")
+    import dataclasses
+    base = _named()
+    call = dataclasses.replace(base, transcript=base.transcript +
+                               "\n**Pat** _[00:20]_\nI will review the contract draft tonight.\n")
+    raw = _named_raw()
+    raw.raw["items"] = [{"owner": "participant", "kind": "commitment", "quote": "I will review the contract draft tonight.",
+                         "commitment_text": "Review the contract draft", "counterpart": "Pat"}]
+    assert extract.ground(call, raw) == []
+
+
+def test_split_shaw_claim_must_be_one_of_his_labels(monkeypatch):
     monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Pat Example,Pat")
     import dataclasses
     base = _named()
     call = dataclasses.replace(base, transcript=base.transcript + "\n**Pat** _[00:20]_\nSure.\n")
     with pytest.raises(extract.AttributionError):
-        extract.ground(call, _named_raw())
+        extract.ground(call, _named_raw(label="Dana Reyes", evidence="Happy to be here."))
 
 
 

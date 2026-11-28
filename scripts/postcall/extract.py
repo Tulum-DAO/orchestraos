@@ -106,11 +106,21 @@ def _shaw_names():
     return {norm_name(n) for n in (os.environ.get("POSTCALL_SHAW_NAMES") or "").split(",") if n.strip()}
 
 
-def _named_shaw_label(label, call_turns):
-    """A transcript whose speaker label IS Shaw's configured name proves the label by itself."""
+def shaw_voices(shaw_label, labels):
+    """The labels that are Shaw's voice. Labels carrying a configured form of his name
+    (POSTCALL_SHAW_NAMES) are all his, since Pocket can split him in two ("Shaw Cole" + "Cole"; Shaw
+    2026-11-28), and the claim must be one of them, or none count. With no such label, only the
+    claimed label (whose proof ground() checks). Empty when the claim is not a transcript label."""
     names = _shaw_names()
-    named = {lab for lab, _, _ in call_turns if norm_name(lab) in names}
-    return bool(label and named == {label})     # exactly one label names Shaw, and it is the claimed one
+    named = {lab for lab in labels if norm_name(lab) in names}
+    if named:
+        return named if shaw_label in named else set()
+    return {shaw_label} if shaw_label in labels else set()
+
+
+def _named_shaw_label(label, call_turns):
+    """A claimed label that IS one of Shaw's configured names proves itself."""
+    return bool(label) and norm_name(label) in _shaw_names() and any(lab == label for lab, _, _ in call_turns)
 
 
 def ground(call, extraction):
@@ -122,9 +132,10 @@ def ground(call, extraction):
     diarized = bool(getattr(call, "diarized", True)) and bool(call_turns)
     shaw_label = raw_all.get("shaw_label")
     names = _shaw_names()
-    if diarized and raw_all.get("items") and any(norm_name(lab) in names and lab != shaw_label
-                                                 for lab, _, _ in call_turns):
+    if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns) and any(
+            norm_name(lab) in names for lab, _, _ in call_turns):
         raise AttributionError(f"{call.call_id}: a label names Shaw but shaw_label is {shaw_label!r}")
+    voices = shaw_voices(shaw_label, [lab for lab, _, _ in call_turns])
     if diarized and raw_all.get("items") and not _named_shaw_label(shaw_label, call_turns):
         evidence = locate_quote(raw_all.get("shaw_label_evidence"), call.transcript)
         if not shaw_label or evidence is None or _speaker_of(evidence, call_turns) != shaw_label:
@@ -139,7 +150,7 @@ def ground(call, extraction):
             continue
         if diarized:
             speaker = _speaker_of(span, call_turns)
-            if speaker is None or (owner == "shaw") != (speaker == shaw_label):
+            if speaker is None or (owner == "shaw") != (speaker in voices):
                 continue
             trust = "inferred"
         else:
