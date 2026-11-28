@@ -259,13 +259,19 @@ def with_line(roster):
 
 
 def _shaw_side_verified(roster):
-    """Conservative: a Shaw item is verified only when Shaw's label is one of the transcript's voices
-    and every OTHER voice is verified (a Pocket-named speaker or a verified invitee). No calendar
-    event is required."""
+    """A Shaw item is verified when Shaw's voice is known, at least one other voice is verified, and
+    every NAMED other voice (mapped to a person) is verified. A voice nobody could name is ignored
+    (Shaw's choice on apr_e300aa64, 11-28); a voice mapped to an unverified name still holds. No
+    calendar event is required."""
     if not roster.shaw_voices:
         return False                # no claim, or a label names Shaw but another was claimed
     others = [l for l in roster.labels if l not in roster.shaw_voices]
-    return bool(others) and all(roster.label_names.get(l) in roster.verified_names for l in others)
+    named = [l for l in others if l in roster.label_names]
+    if not (named and all(roster.label_names[l] in roster.verified_names for l in named)):
+        return False
+    # An unnamed voice is ignored only when Shaw is identified by his configured name; a Shaw label
+    # proven by a quote alone is weaker, so there every other voice must still be verified.
+    return len(named) == len(others) or extract.norm_name(roster.shaw_label) in extract._shaw_names()
 
 
 def apply_trust(items, roster):
