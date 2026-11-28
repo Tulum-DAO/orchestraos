@@ -279,6 +279,15 @@ normalize_model_1m() {
     esac
 }
 
+# write_private_file <path>: stdin -> <path>, readable by this user only (0600), with no
+# readable window (gm msg_173a8de6: /tmp/agent-init-<id>.md is the seat's whole init prompt,
+# and /tmp is shared by every local user). umask 077 makes the create 0600; the old file is
+# removed first, so one left at a wider mode by an earlier spawn of the same id is never
+# reused; noclobber (O_EXCL) refuses a file or symlink planted in between. Non-zero on failure.
+write_private_file() {
+    ( umask 077 && rm -f -- "$1" && set -o noclobber && cat > "$1" )
+}
+
 # The "by effect" predicate: does a captured status-line report a [1m] model token?
 # The live meter line renders e.g. "│ claude-opus-4-8[1m] │"; bare = a leak.
 model_is_1m() {
@@ -987,7 +996,7 @@ spawn_agent() {
 
     # Write init prompt to file (avoids shell escaping issues with long prompts)
     local init_file="/tmp/agent-init-${agent_id}.md"
-    echo "$init_prompt" > "$init_file"
+    printf '%s\n' "$init_prompt" | write_private_file "$init_file"
 
     # Launch the runtime's CLI in interactive mode (§4.2 dispatch): the binary
     # is chosen by the declared runtime, not hardcoded to claude. The [1m]
