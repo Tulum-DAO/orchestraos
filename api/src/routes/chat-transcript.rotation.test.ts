@@ -58,13 +58,16 @@ const NORMAL: [number, string, number, string | null, string | null, string | nu
 ];
 store(NORMAL, [[SEAT, 3], ['zz-other-seat', 4]]);
 
-const user = (uuid: string, text: string) => JSON.stringify({ type: 'user', uuid, timestamp: '2026-10-22T10:00:00Z', message: { role: 'user', content: text } });
-const reply = (uuid: string, text: string) => JSON.stringify({
-  type: 'assistant', uuid, timestamp: '2026-10-22T10:00:01Z',
+const user = (uuid: string, text: string, ts = '2026-10-22T10:00:00Z') => JSON.stringify({ type: 'user', uuid, timestamp: ts, message: { role: 'user', content: text } });
+const reply = (uuid: string, text: string, ts = '2026-10-22T10:00:01Z') => JSON.stringify({
+  type: 'assistant', uuid, timestamp: ts,
   message: { id: `m-${uuid}`, role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] },
 });
 const OLD_LINES = [user('o1', 'You are zz-rotation-seat. old brief'), user('o2', 'hello old gen'), reply('o3', 'old reply')];
-const CUR_LINES = [user('c1', 'You are zz-rotation-seat. new brief'), reply('c2', 'new reply')];
+// The current generation's brief is its hold phase as a green (before SWAP): never shown (liveFrom). Its chat starts at
+// its first turn after its promotion.
+const CUR_LINES = [user('c0', 'You are zz-rotation-seat. new brief'),
+  user('c1', 'hello new gen', '2026-10-22T12:00:00Z'), reply('c2', 'new reply', '2026-10-22T12:00:01Z')];
 writeFileSync(join(projects, `${OLD}.jsonl`), OLD_LINES.join('\n') + '\n');
 writeFileSync(join(projects, `${CUR}.jsonl`), CUR_LINES.join('\n') + '\n');
 writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({ session_id: CUR, cwd: '/repo' }));
@@ -132,8 +135,9 @@ test('previous tail, ONE divider, then the current generation; each log keeps it
   assert.equal(div.audience, 'user', 'drawn in the conversation, never inside a strip');
   assert.equal(div.exchange, undefined);
   assert.equal(env.items[0].is_system, true, 'the old spawn brief is still a brief');
-  assert.equal(env.items[4].is_system, true, 'and so is the new one');
-  assert.equal(env.items[5].exchange, undefined, 'a reply after the divider never joins an old exchange');
+  assert.ok(!env.items.some((i: any) => i.uuid === 'c0'), 'the new one is its hold phase: cut at its promotion');
+  assert.equal(env.items[4].is_system, undefined, 'the new generation opens on its first real turn');
+  assert.equal(env.items[5].exchange, 'c1', 'a reply after the divider never joins an old exchange: its own');
   const node = env.render_items.find((n: any) => n.kind === 'rotation');
   assert.deepEqual(node, { kind: 'rotation', from_generation: 87, to_generation: 2, from_session: OLD, to_session: CUR, ts: SWAP, key: `rot:${CUR}`, audience: 'user' });
 });
@@ -164,9 +168,10 @@ test('GET /transcript stitches for the seat, and the stream-less callers are unc
   const server = a.listen(0);
   try {
     const base = `http://127.0.0.1:${(server.address() as any).port}`;
-    const env = await (await fetch(`${base}/api/agents/${SEAT}/transcript`)).json() as any;
+    const env = await (await fetch(`${base}/api/agents/${SEAT}/transcript?dividers=1`)).json() as any;
     assert.equal(env.session_id, CUR);
-    assert.deepEqual(env.items.map((i: any) => i.uuid), ['o1', 'o2', 'o3', `rot:${CUR}`, 'c1', 'c2']);
+    // o1 is the old generation's spawn brief: the turn it opened is not the conversation (liveFrom), on the route.
+    assert.deepEqual(env.items.map((i: any) => i.uuid), ['o2', 'o3', `rot:${CUR}`, 'c1', 'c2']);
     const two = await (await fetch(`${base}/api/agents/${SEAT}/transcript?limit=2`)).json() as any;
     assert.deepEqual(two.items.map((i: any) => i.uuid), ['c1', 'c2']);
     // without its predecessor's file the chat is today's
@@ -307,8 +312,8 @@ test('a poll whose current log fills the window never looks for the previous fil
     const two = await (await fetch(`${base}/api/agents/${SEAT}/transcript?limit=2`)).json() as any;
     assert.deepEqual(two.items.map((i: any) => i.uuid), ['c1', 'c2']);
     assert.equal(claudeProjectScans(), before, 'the window was full: no scan');
-    const all = await (await fetch(`${base}/api/agents/${SEAT}/transcript`)).json() as any;
-    assert.deepEqual(all.items.map((i: any) => i.uuid), ['o1', 'o2', 'o3', `rot:${CUR}`, 'c1', 'c2']);
+    const all = await (await fetch(`${base}/api/agents/${SEAT}/transcript?dividers=1`)).json() as any;
+    assert.deepEqual(all.items.map((i: any) => i.uuid), ['o2', 'o3', `rot:${CUR}`, 'c1', 'c2']);
     assert.equal(claudeProjectScans(), before + 1, 'read only when needed, scanned once');
   } finally {
     server.close();

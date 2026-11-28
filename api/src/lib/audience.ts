@@ -69,6 +69,97 @@ export function machineKind(text: unknown): MachineKind | null {
   return null;
 }
 
+/**
+ * The machine WAKES a seat's chat never shows (2026-11-20: "as if the user never knows it's
+ * there"). The TS side of agent-orchestra lineage_daemon/wal/real_seams.py MACHINE_TEXT_PREFIXES, plus the senders and
+ * banners that file does not list. Two kinds:
+ *   rotation  blue-green plumbing: a hydrate digest ([WAL DELTA], "ingest your hydrate digest"), a promote notice
+ *             ([PROMOTE], identity-store), the retire notice ([ROTATION]), lineage mail ([LINEAGE, lineage-daemon).
+ *             The whole turn it opens is left out, the agent's answer included (the hydrate replies).
+ *   beat      a wake that starts real work: a background fire or page (BG FIRE, bg-beat, [BG-PAGE]), the stop
+ *             hook's queue digest. The wake line itself is hidden; what the agent then does stays (folded).
+ * Every pattern is anchored to its emitter's FULL format (review), so an operator pasting "[WAL DELTA]"
+ * or "BG FIRE" while debugging keeps his turn:
+ *   router mail   message-router.py format_injection: "[MSG from X | prio]( [FINAL])?( [LOOP-SUSPECT depth=N])?
+ *                 ((sent Nm ago)|[SENT Nm AGO — ...]) subject — Read /tmp/agent-msg-ID.md and act on it.", optionally
+ *                 forwarded ("[fwd from X] " before it). Matched on its sender, then on its subject.
+ *   mail subjects hydrate_green.py "[WAL DELTA] hydrate from R blue" (bg-hydrate "[WAL DELTA] seed"), promote_notice.py
+ *                 "[PROMOTE] you are canonical", the retired blue's own handoff ("From the retired blue: ..."),
+ *                 b_fire_watcher.py "BG FIRE — S -> STATE" / "BG FIRE: S -> STATE", "[BG-PAGE] R: KIND".
+ *   typed lines   retire_notice.py "[ROTATION] You were RETIRED at TS (swap ID): R generation G is now canonical ..."
+ *                 (TS is "%Y-%m-%d %H:%M:%SZ", with a space; an ISO "T" time is matched too), green_wake.py / bg_beat.py
+ *                 "ingest your hydrate digest", lineage_daemon "[LINEAGE INIT|RESUME|SOFT-HANDOFF|ASSIST] ...",
+ *                 wall_wait.py "bg-beat -> R: ...", the stop hook's "[QUEUE-DIGEST] N pending ..." / "You have N
+ *                 pending ...", and every Stop-hook line ("Stop hook feedback:" at the start, whatever follows).
+ */
+export type WakeKind = 'rotation' | 'beat';
+const ROTATION_SENDERS = new Set(['lineage-daemon', 'identity-store']);
+const BEAT_SENDERS = new Set(['b-fire-watcher', 'fleet-beat-bg', 'bg-beat']);
+const MAIL = /^(?:\[fwd from [^\]\s]+\] )?\[MSG from ([^\s|\]]+) \| [a-z]+\](?: \[FINAL\])?(?: \[LOOP-SUSPECT depth=\d+\])?(?: \(sent \d+m ago\)| \[SENT \d+m AGO\b[^\]]*\])? ([\s\S]*?) — Read \/tmp\/agent-msg-[\w.-]+\.md and act on it\./;
+const ROTATION_SUBJECT = /^(?:\[WAL DELTA\] (?:hydrate from [\w.-]+ blue|seed)\b|\[PROMOTE\] you are canonical\b|From the retired blue\b)/;
+const BEAT_SUBJECT = /^(?:BG FIRE(?: —|:) [\w.-]+ -> |\[BG-PAGE\] [\w.-]+: )/;
+const QUEUE_DIGEST = /\[QUEUE-DIGEST\] (?:\d+ pending\b|You have \d+ pending message)/;
+const ROTATION_TYPED = /^(?:\[ROTATION\] You were RETIRED at [^()\n]{1,40}? \(swap [^)]+\): [\w.-]+ generation \S+ is now canonical\b|ingest your hydrate digest\b|\[LINEAGE (?:INIT|RESUME|SOFT-HANDOFF|ASSIST)\] )/;
+// Every Stop-hook line ("Stop hook feedback:" at the START: a [QUEUE-DIGEST], a Self-audit, anything a hook emits) is
+// the harness talking; the same words later in a person's message are his.
+const BEAT_TYPED = new RegExp(`^(?:bg-beat -> [\\w.-]+: |${QUEUE_DIGEST.source}|Stop hook feedback:)`);
+
+/** A queue entry or a parsed mail line: what its sender and subject (or body) make it. */
+export function mailWake(sender: unknown, subject: unknown): WakeKind | null {
+  const from = String(sender ?? '');
+  const t = String(subject ?? '').trimStart();
+  if (ROTATION_SENDERS.has(from) || ROTATION_SUBJECT.test(t)) return 'rotation';
+  if (BEAT_SENDERS.has(from) || BEAT_SUBJECT.test(t)) return 'beat';
+  return null;
+}
+
+export function wakeKind(text: unknown): WakeKind | null {
+  const t = String(text ?? '').trimStart();
+  const mail = MAIL.exec(t);
+  if (mail) return mailWake(mail[1], mail[2]);
+  if (ROTATION_TYPED.test(t)) return 'rotation';
+  if (BEAT_TYPED.test(t)) return 'beat';
+  return null;
+}
+
+/**
+ * THE PROMOTE WAKE, ALONE (rulings 2026-11-21). The one line identity_store/promote_notice.py's notice
+ * puts in front of a newly promoted seat, in either of the two shapes it arrives in, and NOTHING else:
+ *   (a) router-injected (message-router.py format_injection, the common shape since the drain hook yields to it):
+ *       "[MSG from identity-store | prio]( [FINAL])?( [LOOP-SUSPECT depth=N])? ((sent Nm ago)|[SENT Nm AGO — ...])
+ *       [PROMOTE] you are canonical ... — Read /tmp/agent-msg-ID.md and act on it." plus the router's own
+ *       " To reply: python3 <path>/msg_store.py send --from YOUR_AGENT_ID --to identity-store --type reply
+ *       --subject 're: ...' --body 'your reply'" tail;
+ *   (b) the Stop hook's digest of exactly ONE pending row, that row the notice:
+ *       "Stop hook feedback:\n[QUEUE-DIGEST] 1 pending message(s) for R older than Ns — batch-process now (...):\n
+ *         msg_ID | identity-store | [PROMOTE] you are canonical ..." (either hook copy's per-row tail).
+ * Anchored at both ends: a digest that also lists other mail, or a prompt that carries anything after the envelope,
+ * is not the wake alone.
+ */
+const PROMOTE_MAIL = /^\[MSG from identity-store \| [a-z]+\](?: \[FINAL\])?(?: \[LOOP-SUSPECT depth=\d+\])?(?: \(sent \d+m ago\)| \[SENT \d+m AGO\b[^\]]*\])? \[PROMOTE\] you are canonical\b[^\n]*? — Read \/tmp\/agent-msg-[\w.-]+\.md and act on it\.(?: To reply: python3 \S+ send --from YOUR_AGENT_ID --to identity-store --type reply --subject '[^'\n]*' --body 'your reply')?/;
+const PROMOTE_DIGEST = /^Stop hook feedback:\n\[QUEUE-DIGEST\] 1 pending message\(s\) for [\w.-]+ older than \d+s — batch-process now \([^\n]*\):\n {2}msg_\w+ \| identity-store \| \[PROMOTE\] you are canonical\b[^\n]*$/;
+
+/** The promote wake and nothing else, in either shape. */
+export function promoteWake(text: unknown): boolean {
+  const t = String(text ?? '').trim();
+  if (PROMOTE_DIGEST.test(t)) return true;
+  const m = PROMOTE_MAIL.exec(t);
+  return !!m && m[0].length === t.length;
+}
+
+/** A router-injected promote wake with more after its envelope (an operator's words typed into the same prompt): those
+ *  words, or null when the text is not that. */
+export function promoteEnvelopeRest(text: unknown): string | null {
+  const t = String(text ?? '').trim();
+  const m = PROMOTE_MAIL.exec(t);
+  if (!m || m[0].length === t.length) return null;
+  const rest = t.slice(m[0].length).trim();
+  return rest || null;
+}
+
+/** Router mail (forwarded or not), in its full format: never a person's own words. */
+export const isRouterMail = (text: unknown): boolean => MAIL.test(String(text ?? '').trimStart());
+
 /** Stamp `machine` on a user-role text item (and on queued-batch entries), in place. */
 function stampMachine(it: any): void {
   if (it?.kind === 'text' && it.role === 'user' && !it.is_system) {
@@ -94,6 +185,10 @@ export function openerKind(it: any): OpenerKind {
 // A background job's notice that arrived mid-turn (chat-transcript.ts queuedCommandItems) sits inside
 // the turn it landed in; it does not open one.
 const isOpener = (it: any) => it?.kind === 'text' && it.role === 'user' && !it.mid_turn;
+
+/** On the reply drawn because no turn in the list was a person's: the audience its own turn gave it. Not enumerable,
+ *  so no copy or comparison of the item carries it. */
+export const NEWEST_DRAWN = Symbol('newestDrawn');
 
 /**
  * Stamp `audience` (and `exchange` when known) on every item, in place, and return the list.
@@ -137,9 +232,15 @@ export function tagAudience(items: any[]): any[] {
   // No turn the operator opened anywhere in this log (only mail, hooks, the spawn brief): the
   // newest reply is still drawn, never folded (iOS 334: "if there are no recorded turns,
   // display the most recent message"). One rule, server-side, so every client draws the same.
+  // The reply keeps the audience its turn gave it (NEWEST_DRAWN): a chunk of a log can lack the
+  // person's turn the whole log has, and then takes this back.
   if (!personTurn) {
     for (let k = items.length - 1; k >= 0; k--) {
-      if (items[k]?.kind === 'text' && items[k].role === 'assistant') { items[k].audience = 'user'; break; }
+      if (items[k]?.kind === 'text' && items[k].role === 'assistant') {
+        Object.defineProperty(items[k], NEWEST_DRAWN, { value: items[k].audience, enumerable: false, configurable: true });
+        items[k].audience = 'user';
+        break;
+      }
     }
   }
   return items;

@@ -76,12 +76,12 @@ test('a growth that crosses the cap in one tick is a delta of exactly the new it
   const t = tailer(f);
   const got: TailEvent[] = [];
   t.subscribe((e) => got.push(e), undefined, 40);
-  assert.equal(got[0].id, 's:4', 'below the cap the id is the item count, as before');
+  assert.equal(got[0].id, 's~h1:4', 'below the cap the id is the item count, under the head cut tag (STREAM_CUT)');
   appendFileSync(f, line('x 1') + line('x 2') + line('x 3'));
   t.tick();
   assert.equal(got[1].type, 'delta');
   assert.deepEqual(texts(got[1]), ['x 1', 'x 2', 'x 3']);
-  assert.equal(got[1].id, 's:7');
+  assert.equal(got[1].id, 's~h1:7');
 });
 
 test('a resume at the cap gets exactly what it missed; one whose item slid out of the kept window gets a snapshot', () => {

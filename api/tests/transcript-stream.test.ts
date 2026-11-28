@@ -58,6 +58,9 @@ beforeEach(() => {
   writeFileSync(path, readFileSync(FIXTURE, 'utf-8'));
 });
 
+// Event ids carry the chat's cut version (services/transcript-tail.ts STREAM_CUT): `<sid>~h1:<sequence>`.
+const TAG = 'session-a~h1';
+
 test('subscribe with no Last-Event-ID -> one full snapshot in F0 envelope shape', () => {
   const tailer = makeTailer();
   const events: TailEvent[] = [];
@@ -71,7 +74,7 @@ test('subscribe with no Last-Event-ID -> one full snapshot in F0 envelope shape'
   const expected = fullItems();
   assert.deepStrictEqual(snap.items, expected);
   assert.ok(Array.isArray(snap.render_items), 'snapshot carries server-paired render_items');
-  assert.equal(snap.id, `session-a:${expected.length}`);
+  assert.equal(snap.id, `${TAG}:${expected.length}`);
 });
 
 // Appends write a WHOLE line: the text, then its newline, as a transcript writer does. The fixture already
@@ -94,7 +97,7 @@ test('append to the JSONL -> tick pushes ONLY the new item as a delta', () => {
   assert.equal(delta.items[0].kind, 'text');
   assert.equal(delta.items[0].text, 'tail arrived');
   assert.equal(delta.items[0].uuid, 'u-tail-1');
-  assert.equal(delta.id, `session-a:${before + 1}`);
+  assert.equal(delta.id, `${TAG}:${before + 1}`);
 });
 
 test('no change -> tick emits nothing', () => {
@@ -112,7 +115,7 @@ test('resume with valid Last-Event-ID -> delta of missed items only, no snapshot
 
   const tailer = makeTailer();
   const events: TailEvent[] = [];
-  tailer.subscribe((ev) => events.push(ev), `session-a:${offsetAtDisconnect}`);
+  tailer.subscribe((ev) => events.push(ev), `${TAG}:${offsetAtDisconnect}`);
 
   assert.equal(events.length, 1);
   const delta = events[0];
@@ -125,7 +128,7 @@ test('resume when fully caught up -> no event until the next append', () => {
   const offset = fullItems().length;
   const tailer = makeTailer();
   const events: TailEvent[] = [];
-  tailer.subscribe((ev) => events.push(ev), `session-a:${offset}`);
+  tailer.subscribe((ev) => events.push(ev), `${TAG}:${offset}`);
   assert.equal(events.length, 0);
 
   appendFileSync(path, claudeTextLine('u-tail-2', 'later') + '\n');
@@ -143,7 +146,7 @@ test('stale/foreign Last-Event-ID (wrong sid or offset beyond file) -> full snap
   assert.equal(foreign[0].type, 'snapshot');
 
   const beyond: TailEvent[] = [];
-  tailer.subscribe((ev) => beyond.push(ev), `session-a:${fullItems().length + 99}`);
+  tailer.subscribe((ev) => beyond.push(ev), `${TAG}:${fullItems().length + 99}`);
   assert.equal(beyond.length, 1);
   assert.equal(beyond[0].type, 'snapshot');
 });
@@ -175,7 +178,7 @@ test('snapshot respects the limit window; id still tracks the FULL offset', () =
   const full = fullItems();
   const snap = events[0];
   assert.deepStrictEqual(snap.items, full.slice(-2));
-  assert.equal(snap.id, `session-a:${full.length}`);
+  assert.equal(snap.id, `${TAG}:${full.length}`);
 });
 
 test('unsubscribe stops delivery', () => {
