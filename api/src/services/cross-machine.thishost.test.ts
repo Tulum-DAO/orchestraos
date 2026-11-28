@@ -38,7 +38,10 @@ before(async () => {
 });
 
 after(() => {
-  try { tmux('kill-server'); } catch { /* already gone */ }
+  // The server ends with its last session. Not kill-server: a host may guard it (a tmux wrapper
+  // that refuses it); the refusal, caught below, left one server per run, its socket dir removed
+  // under it and its session kept by a host `remain-on-exit on`.
+  try { tmux('kill-session', '-t', '=gm'); } catch { /* already gone */ }
   rmSync(sock, { recursive: true, force: true });
   rmSync(data, { recursive: true, force: true });
 });
