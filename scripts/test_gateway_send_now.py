@@ -241,8 +241,10 @@ def test_S2_the_chord_submits_the_queued_message_and_says_the_command_was_backgr
     status, body = _send_now(box, {"session": "seat", "message_id": mid})
     assert status == 200 and body["outcome"] == "delivered-now", body
     assert body["step_ended"] == "backgrounded" and body["also_submitted"] == [] and body["message_id"] == mid
+    assert body["also_submitted_kinds"] == []
     assert seat.keys() == ["C-x", "C-s"], "the chord and nothing else: no words typed, no Enter, no Escape"
-    assert SS.get(G.ORCH_DIR, mid) is None, "a row is dropped once its message is sent"
+    row = SS.get(G.ORCH_DIR, mid)
+    assert row["sent_at"] and row["text"] == "", "a sent row is kept as sent, its words dropped"
 
 
 def test_S2_a_reply_cut_short_says_truncated(box, monkeypatch, tmp_path):
@@ -260,7 +262,7 @@ def test_S2_a_task_notification_in_the_queue_goes_too_and_is_named(box, monkeypa
     seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [prompt("go"), enq(TASK), enq(WORDS)],
                  on_chord=absorbed(lambda: [bg_result(), rem(TASK), rem(WORDS)]))
     status, body = _send_now(box, {"session": "seat", "message_id": mid})
-    assert status == 200 and body["also_submitted"] == ["task-notification"], body
+    assert status == 200 and body["also_submitted"] == [] and body["also_submitted_kinds"] == ["task-notification"], body
     assert seat.keys() == ["C-x", "C-s"]
 
 
@@ -273,15 +275,6 @@ def test_S2_the_words_never_reach_any_log_line(box, monkeypatch, tmp_path, caplo
 
 
 # ------------------------------------------------------------------ S3: refusals, nothing sent
-def test_S3_another_persons_message_queued_refuses_and_sends_nothing(box, monkeypatch, tmp_path):
-    mid = _steered()
-    seat = _seat(monkeypatch, tmp_path, queued_pane(OTHER, WORDS), [enq(OTHER), enq(WORDS)])
-    status, body = _send_now(box, {"session": "seat", "message_id": mid})
-    assert status == 409 and body["outcome"] == "refused" and body["reason"] == "other-queued", body
-    assert body["queued"] == 1 and body["error"].endswith("nothing was sent.")
-    assert seat.keys() == []
-
-
 def test_S3_text_in_the_composer_refuses_because_the_chord_would_submit_it(box, monkeypatch, tmp_path):
     mid = _steered()
     seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS, composer=DRAFT), [enq(WORDS)])
@@ -363,7 +356,7 @@ def test_S4_a_message_that_already_left_the_queue_is_already_sent(box, monkeypat
     seat = _seat(monkeypatch, tmp_path, queued_pane(), [enq(WORDS), tool_result(), rem(WORDS)])
     status, body = _send_now(box, {"session": "seat", "message_id": mid})
     assert status == 200 and body["outcome"] == "already-sent", body
-    assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is None
+    assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid)["sent_at"]
 
 
 def test_S4_a_message_the_queue_never_held_is_not_queued(box, monkeypatch, tmp_path):
@@ -511,7 +504,7 @@ def test_R1_a_failure_once_the_keys_may_have_gone_is_unknown_never_nothing_sent(
 def test_R1_a_ledger_that_cannot_drop_after_the_leaving_is_seen_still_says_delivered_now(box, monkeypatch, tmp_path):
     mid = _steered()
     _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)], on_chord=absorbed(lambda: [bg_result(), rem(WORDS)]))
-    monkeypatch.setattr(SS, "drop", lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")))
+    monkeypatch.setattr(SS, "mark_sent", lambda *a, **k: (_ for _ in ()).throw(OSError("read-only")))
     status, body = _send_now(box, {"session": "seat", "message_id": mid})
     assert status == 200 and body["outcome"] == "delivered-now", body
 
@@ -678,3 +671,153 @@ def test_F1_a_dialog_over_the_queue_is_no_evidence_either(box, monkeypatch, tmp_
     status, body = _send_now(box, {"session": "seat", "message_id": mid})
     assert status == 409 and body["reason"] == "prompt-open", body
     assert seat.keys() == [] and SS.get(G.ORCH_DIR, mid) is not None
+
+
+# ------------------------------------------------------------------ Q: Shaw 11-28 (gm msg_13e477af): send now submits ALL queued
+# "I can't Send now with multiple messages queued?" The chord submits the whole queue (measured), like Esc in Claude
+# Code: with other messages queued it sends them all, in queue order, instead of refusing other-queued. Every other
+# id that went is named in also_submitted and marked sent, so a later click on any of them answers already-sent and
+# never presses the chord again.
+def _two_queued(monkeypatch, tmp_path, first=OTHER, second=WORDS, on_chord="both", screen=None):
+    t0 = time.time()
+    a = SS.record(G.ORCH_DIR, "seat", first, now=t0 - 10)
+    b = SS.record(G.ORCH_DIR, "seat", second, now=t0 - 2)
+    # measured shape while a command runs: the command goes to the background and each queued message is absorbed
+    chord = absorbed(lambda: [rem(first), rem(second), bg_result()]) if on_chord == "both" else on_chord
+    seat = _seat(monkeypatch, tmp_path, screen if screen is not None else queued_pane(first, second),
+                 [prompt("run the suite"), enq(first, t0 - 11), enq(second, t0 - 3)], on_chord=chord)
+    return a, b, seat
+
+
+@pytest.mark.parametrize("click", ["second", "first"])
+def test_Q1_two_queued_send_now_submits_both_and_names_the_other(box, monkeypatch, tmp_path, click):
+    a, b, seat = _two_queued(monkeypatch, tmp_path)
+    mid, other = (b, a) if click == "second" else (a, b)
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "delivered-now", body
+    assert body["message_id"] == mid and body["also_submitted"] == [other], body
+    assert body["also_submitted_kinds"] == [] and body["step_ended"] == "backgrounded"
+    assert seat.keys() == ["C-x", "C-s"], "one chord for the whole queue"
+    for m in (a, b):
+        assert SS.get(G.ORCH_DIR, m)["sent_at"], "every message that went is marked sent"
+
+
+def test_Q1_a_later_click_on_the_other_answers_already_sent_and_never_chords_again(box, monkeypatch, tmp_path):
+    a, b, seat = _two_queued(monkeypatch, tmp_path)
+    _send_now(box, {"session": "seat", "message_id": b})
+    seat.screen = queued_pane()                     # nothing queued any more
+    for m in (a, b):
+        status, body = _send_now(box, {"session": "seat", "message_id": m})
+        assert status == 200 and body["outcome"] == "already-sent" and body["message_id"] == m, body
+    assert seat.keys().count("C-s") == 1
+
+
+def test_Q2_a_queued_message_with_no_id_here_goes_too_and_is_named_by_kind(box, monkeypatch, tmp_path):
+    # another agent's mail typed into the turn, or words typed at the terminal: no ledger row, still in the queue;
+    # the chord cannot leave it behind, so it goes too and the answer says so
+    mid = _steered()
+    seat = _seat(monkeypatch, tmp_path, queued_pane(OTHER, WORDS), [enq(OTHER), enq(WORDS)],
+                 on_chord=absorbed(lambda: [rem(OTHER), rem(WORDS), bg_result()]))
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "delivered-now", body
+    assert body["also_submitted"] == [] and body["also_submitted_kinds"] == ["message"], body
+    assert seat.keys() == ["C-x", "C-s"]
+
+
+@pytest.mark.parametrize("screen", [queued_pane(WORDS),            # the screen shows one, the transcript two
+                                    queued_pane(WORDS, OTHER),     # both, in the wrong order
+                                    queued_pane(OTHER, WORDS, "a third")],
+                         ids=["one-of-two-shown", "wrong-order", "a-third-shown"])
+def test_Q3_the_screen_must_show_exactly_the_queue_in_order(box, monkeypatch, tmp_path, screen):
+    a, b, seat = _two_queued(monkeypatch, tmp_path, screen=screen)
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == [] and not SS.get(G.ORCH_DIR, a).get("chorded_at")
+
+
+def test_Q4_a_leaving_not_seen_marks_every_queued_id_so_no_click_chords_twice(box, monkeypatch, tmp_path):
+    a, b, seat = _two_queued(monkeypatch, tmp_path, on_chord=None)
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 502 and body["state"] == "unknown", body
+    status, body = _send_now(box, {"session": "seat", "message_id": a})
+    assert status == 502 and body["state"] == "unknown", body
+    assert seat.keys().count("C-s") == 1, "a click on the other message sent the chord again"
+
+
+def test_Q5_a_refusal_with_two_queued_marks_nothing(box, monkeypatch, tmp_path):
+    a, b, seat = _two_queued(monkeypatch, tmp_path, screen=queued_pane(OTHER, WORDS, composer=DRAFT))
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 423 and body["reason"] == "draft-in-composer", body
+    assert seat.keys() == [] and not any(SS.get(G.ORCH_DIR, m).get("chorded_at") for m in (a, b))
+
+
+def test_Q6_the_other_queued_refusal_is_gone():
+    assert "other-queued" not in G.SEND_NOW_REFUSALS
+
+
+def test_Q7_a_row_marked_sent_answers_already_sent_without_reading_the_pane(box, monkeypatch, tmp_path):
+    mid = _steered()
+    SS.mark_sent(G.ORCH_DIR, [mid])
+    seat = _seat(monkeypatch, tmp_path, queued_pane(WORDS), [enq(WORDS)])
+    monkeypatch.setattr(G, "_seat_transcript_path", lambda sess, meta=None: None)
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["outcome"] == "already-sent", body
+    assert seat.keys() == []
+
+
+def test_Q8_an_old_row_with_the_same_words_is_never_taken_for_a_queued_message(box, monkeypatch, tmp_path):
+    t0 = time.time()
+    stale = SS.record(G.ORCH_DIR, "seat", OTHER, now=t0 - 3600)    # the same words sent an hour ago
+    mid = SS.record(G.ORCH_DIR, "seat", WORDS, now=t0 - 2)
+    seat = _seat(monkeypatch, tmp_path, queued_pane(OTHER, WORDS), [enq(OTHER, t0 - 20), enq(WORDS, t0 - 3)],
+                 on_chord=absorbed(lambda: [rem(OTHER), rem(WORDS), bg_result()]))
+    status, body = _send_now(box, {"session": "seat", "message_id": mid})
+    assert status == 200 and body["also_submitted"] == [] and body["also_submitted_kinds"] == ["message"], body
+    assert not SS.get(G.ORCH_DIR, stale).get("sent_at") and not SS.get(G.ORCH_DIR, stale).get("chorded_at")
+
+
+def test_Q9_another_queued_id_an_earlier_chord_marked_is_unknown_never_the_keys_again(box, monkeypatch, tmp_path):
+    a, b, seat = _two_queued(monkeypatch, tmp_path)
+    SS.mark_chorded(G.ORCH_DIR, [a])                # an earlier send-now for it pressed the keys and could not confirm
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 502 and body["state"] == "unknown", body
+    assert seat.keys() == []
+
+
+# ------------------------------------------------------------------ codex r1 (BLOCK @ aa527801)
+def test_C1_two_unsent_rows_that_could_be_the_other_queued_message_refuse_rather_than_guess(box, monkeypatch, tmp_path):
+    t0 = time.time()
+    earlier = SS.record(G.ORCH_DIR, "seat", OTHER, now=t0 - 12)   # the same words, sent seconds before, never clicked
+    a, b, seat = _two_queued(monkeypatch, tmp_path)               # OTHER's own row at t0 - 10, enqueue at t0 - 11
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == [] and not any(SS.get(G.ORCH_DIR, m).get("chorded_at") for m in (earlier, a, b))
+
+
+def test_C2_the_answer_waits_until_every_queued_message_has_left(box, monkeypatch, tmp_path):
+    # the transcript shows the clicked message leave one read before the other one does
+    a, b, seat = _two_queued(monkeypatch, tmp_path, on_chord=absorbed(lambda: [rem(WORDS)]))
+    real, n = Q.read_rows, {"after": 0}
+
+    def reads(path, *aa, **kk):
+        if seat.keys().count("C-s"):
+            n["after"] += 1
+            if n["after"] == 2:
+                seat.write([rem(OTHER), bg_result()])
+        return real(path, *aa, **kk)
+    monkeypatch.setattr(Q, "read_rows", reads)
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 200 and body["also_submitted"] == [a], body
+    assert SS.get(G.ORCH_DIR, a)["sent_at"]
+
+
+def test_Q4b_after_an_unconfirmed_chord_the_other_message_never_gets_the_keys_even_once_its_neighbour_left(
+        box, monkeypatch, tmp_path):
+    a, b, seat = _two_queued(monkeypatch, tmp_path, on_chord=None)
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 502 and body["state"] == "unknown", body
+    seat.write([rem(WORDS)])                         # the clicked one is seen leaving later; the other is still queued
+    seat.screen = queued_pane(OTHER)
+    status, body = _send_now(box, {"session": "seat", "message_id": a})
+    assert status == 502 and body["state"] == "unknown", body
+    assert seat.keys().count("C-s") == 1, "the other message got the keys a second time"

@@ -84,20 +84,30 @@ test('send: message_id is passed only on delivered-steer and only in the minted 
 
 // ── send-now ─────────────────────────────────────────────────────────────
 
-test('send-now: delivered-now passes the outcome, step_ended and also_submitted, and asks for this seat and id', async () => {
+test('send-now: delivered-now passes the outcome, step_ended and what went with it, and asks for this seat and id', async () => {
   const seen: any[] = [];
+  const OTHER = 'stq_00112233445566ff';
   const calls = await sendNow({ httpStatus: 200, body: { ok: true, outcome: 'delivered-now', message_id: MID,
-    step_ended: 'truncated', also_submitted: ['task-notification'] } }, { message_id: MID }, seen);
+    step_ended: 'truncated', also_submitted: [OTHER], also_submitted_kinds: ['message', 'task-notification'] } },
+    { message_id: MID }, seen);
   assert.equal(calls.status, 200);
   assert.deepEqual(calls.json, { outcome: 'delivered-now', session: 'session-gm', message_id: MID,
-    step_ended: 'truncated', also_submitted: ['task-notification'] });
+    step_ended: 'truncated', also_submitted: [OTHER], also_submitted_kinds: ['message', 'task-notification'] });
   assert.deepEqual(seen, [{ session: 'session-gm', messageId: MID }]);
+});
+
+test('send-now: also_submitted carries only ids of the queued-send shape (Shaw 11-28: every queued message goes)', async () => {
+  const calls = await sendNow({ httpStatus: 200, body: { outcome: 'delivered-now', step_ended: 'none',
+    also_submitted: ['stq_00112233445566ff', 'task-notification', 7, 'stq_XYZ'], also_submitted_kinds: ['message', 3] } });
+  assert.deepEqual(calls.json.also_submitted, ['stq_00112233445566ff']);
+  assert.deepEqual(calls.json.also_submitted_kinds, ['message']);
 });
 
 test('send-now: a step_ended word nobody knows reads unknown, never none', async () => {
   const calls = await sendNow({ httpStatus: 200, body: { outcome: 'delivered-now', step_ended: 'paused' } });
   assert.equal(calls.json.step_ended, 'unknown');
   assert.deepEqual(calls.json.also_submitted, []);
+  assert.deepEqual(calls.json.also_submitted_kinds, []);
 });
 
 test('send-now: already-sent and not-queued are 200 with no step fields', async () => {
@@ -109,12 +119,11 @@ test('send-now: already-sent and not-queued are 200 with no step fields', async 
 });
 
 test('send-now: a refusal is 409 with the gateway reason and its full sentence', async () => {
-  const calls = await sendNow({ httpStatus: 409, body: { ok: false, outcome: 'refused', reason: 'other-queued', queued: 1,
-    error: 'Another message is queued for this agent too, and send-now would submit it as well; nothing was sent.' } });
+  const calls = await sendNow({ httpStatus: 409, body: { ok: false, outcome: 'refused', reason: 'queue-unclear',
+    error: "The agent's screen does not show exactly the queued messages; nothing was sent." } });
   assert.equal(calls.status, 409);
   assert.equal(calls.json.outcome, 'refused');
-  assert.equal(calls.json.reason, 'other-queued');
-  assert.equal(calls.json.queued, 1);
+  assert.equal(calls.json.reason, 'queue-unclear');
   assert.match(calls.json.error, /nothing was sent\.$/);
 });
 
