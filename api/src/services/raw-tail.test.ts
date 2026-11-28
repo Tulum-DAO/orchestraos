@@ -214,6 +214,71 @@ test('a raw read that fails while the parse succeeds is not known (no step), nev
   }
 });
 
+// Gate round 2 on #706, nit 1: a seat whose log stops growing after a failed read (its final reply written) had no step
+// until the next append, which may be the next turn.
+test('a failed raw read is read again on the next tick, without waiting for the log to grow', () => {
+  const f = join(dir, 'read-fails-then-still.jsonl');
+  writeFileSync(f, [asked('go'), said('All done.')].join('\n') + '\n');
+  const real = RawTail.prototype.update;
+  let fails = 2, calls = 0;
+  RawTail.prototype.update = function (this: RawTail, p: string) {
+    calls++;
+    if (fails-- > 0) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+    return real.call(this, p);
+  };
+  try {
+    const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'r' }),
+      interrupted: { read: () => [], sig: () => '' } });         // fixed: the still ticks take the no-op path
+    const off = t.subscribe(() => {});
+    const failed = t.turn();
+    assert.equal(failed.known, false, 'the read failed');
+    t.tick();                                                   // the log has not grown: read again, fails again
+    assert.equal(calls, 2, 'read again on a tick the log did not grow');
+    assert.equal(t.turn(), failed, 'a second failure changes nothing: the same turn, not parsed again');
+    t.tick();                                                   // still not grown: read again, and it reads
+    assert.equal(t.turn().known, true, 'read again, the tail is known');
+    const n = calls;
+    t.tick();                                                   // known and unchanged: no raw read at all
+    assert.equal(calls, n, 'a tail that read is not re-read while the log is still');
+    off();
+  } finally {
+    RawTail.prototype.update = real;
+  }
+});
+
+// Gate round 1 on #717: a retry that fails partway through a fresh read (its fields already set) must not leave the tail
+// looking read: the next still tick would match size and mtime and never read it again.
+test('a retry that fails partway through a read is read again on the next still tick', () => {
+  const f = join(dir, 'read-fails-partway.jsonl');
+  writeFileSync(f, [asked('go'), said('All done.')].join('\n') + '\n');
+  const realUpdate = RawTail.prototype.update;
+  const proto = RawTail.prototype as any;
+  const realProbe = proto.keepProbe;
+  let updateFails = 1, probeFails = 1;
+  RawTail.prototype.update = function (this: RawTail, p: string) {
+    if (updateFails-- > 0) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+    return realUpdate.call(this, p);
+  };
+  proto.keepProbe = function (this: RawTail, fd: number) {
+    if (probeFails-- > 0) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    return realProbe.call(this, fd);
+  };
+  try {
+    const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'p' }),
+      interrupted: { read: () => [], sig: () => '' } });
+    const off = t.subscribe(() => {});
+    assert.equal(t.turn().known, false, 'the first read failed');
+    t.tick();                                                   // the retry's fresh read fails after setting its fields
+    assert.equal(t.turn().known, false);
+    t.tick();                                                   // still: read again from scratch, and it reads
+    assert.equal(t.turn().known, true, 'a partway failure is no read');
+    off();
+  } finally {
+    RawTail.prototype.update = realUpdate;
+    proto.keepProbe = realProbe;
+  }
+});
+
 test('the first read counts each byte\'s newlines once, not the growing buffer again per block', () => {
   const f = join(dir, 'wide.jsonl');
   const lines = Array.from({ length: 300 }, (_, i) => said(`wide ${i} ${'w'.repeat(18 * 1024)}`));

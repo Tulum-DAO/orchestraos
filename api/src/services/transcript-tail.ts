@@ -230,6 +230,9 @@ export class TranscriptTailer {
     let rsig = '';
     try { rsig = this.keepSidechain ? '' : storeRules(sid).sig; } catch { rsig = ''; }
     if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig && rsig === this.rulesSig) {
+      // A raw read that failed (a transient EMFILE) is tried again now, not only once the log grows: a seat whose
+      // final reply is written may not append again until its next turn, and had no step all that while.
+      if (this.raw.failed) { try { this.raw.update(path); } catch { this.raw.fail(); } }
       return { rotated: false, fresh: 0 };
     }
 

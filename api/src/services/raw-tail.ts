@@ -52,22 +52,26 @@ export class RawTail {
   private midLine = false;   // `end` is inside a line longer than maxBytes: the next newline ends a piece, not a line
   /** Bumped whenever `lines` changes, so a reader can keep what it worked out from the same lines. */
   version = 0;
+  /** The last read failed (fail()): the caller reads again on its next tick, whether or not the log grew. */
+  failed = false;
 
   constructor(private readonly max = RAW_TAIL_LINES, private readonly maxBytes = RAW_TAIL_MAX_BYTES) {}
 
   /** The log could not be read: keep nothing and say so (`cut`, no lines: live-step's turn is not known, so no step),
-   *  and read it fresh next time. */
+   *  and read it fresh next time. Every field is cleared, also when it had already failed: a read that failed partway
+   *  (its fields set) must not look read. A read that fails again keeps the same lines and version. */
   fail(): void {
+    const was = this.failed;
     this.path = null; this.ino = -1; this.mtimeMs = -1; this.end = 0; this.partialBytes = 0; this.probe = Buffer.alloc(0);
-    this.midLine = false; this.lines = []; this.cut = true;
-    this.version++;
+    this.midLine = false; this.lines = []; this.cut = true; this.failed = true;
+    if (!was) this.version++;
   }
 
   /** Forget the log (no session, or a new one). */
   reset(): void {
-    if (this.path === null && !this.lines.length) return;
+    if (this.path === null && !this.lines.length && !this.failed) return;
     this.path = null; this.ino = -1; this.mtimeMs = -1; this.end = 0; this.partialBytes = 0; this.probe = Buffer.alloc(0);
-    this.midLine = false; this.lines = []; this.cut = false;
+    this.midLine = false; this.lines = []; this.cut = false; this.failed = false;
     this.version++;
   }
 
@@ -152,6 +156,7 @@ export class RawTail {
       this.keepProbe(fd);
       this.lines = lines.slice(-this.max);
       this.cut = lo > 0 && this.lines.length < this.max;
+      this.failed = false;
       this.version++;
     } finally { closeSync(fd); }
   }
