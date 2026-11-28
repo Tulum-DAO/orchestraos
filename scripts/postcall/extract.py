@@ -118,6 +118,12 @@ def shaw_voices(shaw_label, labels):
     return {shaw_label} if shaw_label in labels else set()
 
 
+def _names_shaw(text):
+    """True when `text` contains a word of one of Shaw's configured names ("Hi, this is Shaw")."""
+    words = set(re.findall(r"[^\W\d_]+", norm_name(text)))
+    return any(w in words for n in _shaw_names() for w in re.findall(r"[^\W\d_]+", n) if len(w) >= 2)
+
+
 def _named_shaw_label(label, call_turns):
     """A claimed label that IS one of Shaw's configured names proves itself."""
     return bool(label) and norm_name(label) in _shaw_names() and any(lab == label for lab, _, _ in call_turns)
@@ -143,6 +149,9 @@ def ground(call, extraction):
         evidence = locate_quote(raw_all.get("shaw_label_evidence"), call.transcript)
         if not shaw_label or evidence is None or _speaker_of(evidence, call_turns) != shaw_label:
             raise AttributionError(f"{call.call_id}: shaw_label {shaw_label!r} not evidenced in that speaker's turn")
+        if names and not _names_shaw(raw_all.get("shaw_label_evidence")):
+            # Proof is a self-introduction that names him, not any sentence from the chosen turn.
+            raise AttributionError(f"{call.call_id}: shaw_label {shaw_label!r} evidence does not name Shaw")
     items = []
     for raw in raw_all.get("items") or []:
         span = locate_quote(raw.get("quote"), call.transcript)
