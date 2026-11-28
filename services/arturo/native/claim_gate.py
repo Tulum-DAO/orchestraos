@@ -39,12 +39,26 @@ _ACTION_RES += [
 # STATE claims: something is done / running / saved. Backed by ANY successful tool call this turn (a status read is
 # evidence: "the build is finished" after get_agent_output said so). Present / present-perfect only: "it was created
 # yesterday" is history, not a claim (gm msg_04c7d9bd).
+_STATE_SUBJ = r"(?:it|that|this|the (?:task|seat|agent|note|message))"
+_STATE_WORD = (r"(?:done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
+               r"on its way|up|live)")
 _STATE_RES = [
     re.compile(r"\b(?:it|that|this|the (?:task|seat|agent|note|message))(?:'s| is| has been)\s+(?:now\s+)?"
                r"(?P<word>done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
                r"on its way|under ?way|up|live)\b", re.I),
     re.compile(r"\b(?:all )?(?:done|finished)[.!]|\btaken care of\b|\bconsider it done\b", re.I),
 ]
+# A TEMPORAL clause says when something will be so, not that it is: "I'll let you know when it's done" (codex round 8
+# on #698, parent msg_00c4361e). Only the clause itself is set aside, so "It's done, I'll tell you when the next one
+# is" and "When you asked, it's done" stay claims. It is a prefix of the words, so it holds while they stream in.
+# Adverbs that claim are not openers: "just like before it is saved" (no "before"), "for once it's done on time" and
+# "at once" (codex rounds 1-2 on #705). A clause followed by "already" / "fine" / "anyway" says it is so now ("why
+# restart it when it's running fine?"), so it stays a claim (review round 3).
+_TEMPORAL_RE = re.compile(
+    rf"\b(?:when(?:ever)?|(?<!for )(?<!at )once|after|until|till|as soon as)\s+"
+    rf"(?:{_STATE_SUBJ}(?:'s|\s+is|\s+has been|\s+gets|\s+will be|'ll be)\s+)?(?:all\s+)?(?:{_STATE_WORD}|finished)\b"
+    r"(?!,?\s+(?:already|fine|anyway)\b)",
+    re.I)
 # NOT claims, by design: progress/announcement tense ("I'm starting a seat called X to ..." is how the spawn read-back
 # is said BEFORE the call), the future ("I'll start ..."), capability ("I can start one"), questions, other people's
 # actions ("you started"), and narration to Shaw ("I told you", "I asked you").
@@ -68,8 +82,9 @@ def claim_kinds(text):
     and it's done" was checked only as a start). Kinds: ("action", class), ("state", "progress"), ("state", None)."""
     text = text or ""
     kinds = list(dict.fromkeys(("action", cls) for cls, r in _ACTION_RES if r.search(text)))
-    words = [m.group("word") for m in _STATE_RES[0].finditer(text)]
-    other = any(r.search(text) for r in _STATE_RES[1:])
+    said = _TEMPORAL_RE.sub(" ", text)                       # state only: a temporal clause hides no action claim
+    words = [m.group("word") for m in _STATE_RES[0].finditer(said)]
+    other = any(r.search(said) for r in _STATE_RES[1:])
     if words and not other and all(_PROGRESS.match(w) for w in words):
         kinds.append(("state", "progress"))                 # every state claim in it is progress, nothing completes
     elif words or other:
