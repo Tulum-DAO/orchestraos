@@ -373,6 +373,111 @@ test('an entry over the cache budget is never kept, from the tail path or a stit
   }
 });
 
+test('a reply whose blocks other lines split (parallel tool calls): a chunk never starts between its blocks, usage on the first', () => {
+  // Claude Code writes parallel tool calls as one reply (one message.id) whose tool_use blocks are separate lines with
+  // the tool results and attachments written between them. Its usage goes on the reply's FIRST drawn item: a chunk that
+  // starts after the first block would put it on a later one.
+  const { path, parser } = fresh();
+  const result = (uuid: string, forTool: string) => JSON.stringify({ type: 'user', uuid, timestamp: T(++seq),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: forTool, content: `ok ${'y'.repeat(300)}` }] } });
+  const attachment = (uuid: string) => JSON.stringify({ type: 'attachment', uuid, timestamp: T(++seq),
+    attachment: { type: 'hook_success', content: '' } });
+  const call = (uuid: string, tool: string) => JSON.stringify({ type: 'assistant', uuid, timestamp: T(++seq),
+    message: { id: 'msg_par', role: 'assistant', content: [{ type: 'tool_use', id: tool, name: 'Bash', input: { command: 'ls' } }],
+      usage: { input_tokens: 9000, output_tokens: 3 } } });
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  lines.push(user('run two things at once', 'u-par'));
+  lines.push(call('a-par-1', 'toolu_p1'), result('r-par-1', 'toolu_p1'), attachment('x-par-1'), call('a-par-2', 'toolu_p2'),
+    result('r-par-2', 'toolu_p2'), attachment('x-par-2'));
+  for (let i = 0; i < 10; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const whole = oracle(path);
+  const usageOf = (items: readonly any[]) => items.filter((it: any) => String(it.uuid).startsWith('a-par-')).map((it: any) => [it.uuid, it.usage?.input_tokens ?? null]);
+  assert.deepEqual(usageOf(whole), [['a-par-1', 9000], ['a-par-2', null]], 'precondition: the whole file counts the reply once, on its first block');
+  // A start on any line between the reply's first and last block: moved back to its first block.
+  for (const at of ['r-par-1', 'x-par-1', 'a-par-2']) {
+    clearLogCache();
+    const tail = cachedLogTail(path, parser, size - offsetOf(path, at));
+    assert.ok(tail.start <= offsetOf(path, 'a-par-1'), `a start at ${at}: the chunk starts at ${tail.start}, after the reply's first block`);
+    assert.deepEqual(usageOf(tail.items), usageOf(whole), `a start at ${at}`);
+    clearLogCache();
+    const range = logRange(path, parser, offsetOf(path, at), size);
+    assert.deepEqual(usageOf(range.items), usageOf(whole), `a cursor window from ${at}`);
+  }
+  // A sidechain row between the blocks (an old log's subagent line, with its own message id) is no reply of the seat's.
+  const { path: p2 } = fresh();
+  const side = JSON.stringify({ type: 'assistant', uuid: 's-side', isSidechain: true, timestamp: T(++seq),
+    message: { id: 'msg_side', role: 'assistant', content: [{ type: 'text', text: 'subagent' }], usage: { input_tokens: 1, output_tokens: 1 } } });
+  const withSide = lines.flatMap((l) => (l.includes('"uuid":"x-par-1"') ? [l, side] : [l]));
+  writeFileSync(p2, withSide.join('\n') + '\n');
+  const size2 = readFileSync(p2).length;
+  const whole2 = oracle(p2);
+  for (const at of ['s-side', 'a-par-2']) {
+    clearLogCache();
+    const tail = cachedLogTail(p2, parser, size2 - offsetOf(p2, at));
+    assert.deepEqual(usageOf(tail.items), usageOf(whole2), `with a sidechain row, a start at ${at}`);
+  }
+  // A subagent's own log (every row sidechain, read with the sidechain kept): its replies are the ones that count.
+  const { path: p3 } = fresh();
+  const sub = lines.map((l) => JSON.stringify({ ...JSON.parse(l), isSidechain: true }));
+  writeFileSync(p3, sub.join('\n') + '\n');
+  const subParser = logParser(false, true);
+  const size3 = readFileSync(p3).length;
+  const whole3 = logItems(sub, false, true);
+  assert.deepEqual(usageOf(whole3), usageOf(whole), 'precondition: the subagent parse counts the reply on its first block');
+  for (const at of ['r-par-1', 'a-par-2']) {
+    clearLogCache();
+    const tail = cachedLogTail(p3, subParser, size3 - offsetOf(p3, at));
+    assert.deepEqual(usageOf(tail.items), usageOf(whole3), `a subagent log, a start at ${at}`);
+  }
+  // A start after the reply's last block, or before its first, is not moved.
+  clearLogCache();
+  assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'r-par-2')).start, offsetOf(path, 'r-par-2'));
+  clearLogCache();
+  assert.equal(cachedLogTail(path, parser, size - offsetOf(path, 'u-par')).start, offsetOf(path, 'u-par'));
+});
+
+test('a long run of lines that are no reply above a start (attachments, results): the start stays, no whole-file parse', () => {
+  const { path, parser } = fresh();
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  for (let i = 0; i < 400; i++) lines.push(JSON.stringify({ type: 'attachment', uuid: `x-run-${i}`, timestamp: T(++seq), attachment: { type: 'hook_success', content: 'z'.repeat(1000) } }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const full0 = logCacheFullParses();
+  const tail = cachedLogTail(path, parser, 64 * 1024);
+  assert.ok(tail.start > 0, `a 64 KiB tail starts at ${tail.start}`);
+  assert.equal(logCacheFullParses(), full0, 'no whole-file parse');
+  clearLogCache();
+  const size = readFileSync(path).length;
+  const range = logRange(path, parser, size - 64 * 1024, size - 32 * 1024);
+  assert.ok(range.start > 0, `a cursor window starts at ${range.start}`);
+});
+
+test('a reply of many parallel calls, spread over more lines than the back-scan guard: a start at its last block moves to its first, no whole-file parse', () => {
+  const { path, parser } = fresh();
+  const lines: string[] = [];
+  for (let i = 0; i < 30; i++) lines.push(user(`q ${i} ${'x'.repeat(1500)}`), assistant(`msg_${i}`, `a ${i} ${'x'.repeat(1500)}`, { input_tokens: 100 + i, output_tokens: 5 }));
+  lines.push(user('run many things at once', 'u-many'));
+  for (let i = 0; i < 30; i++) {
+    lines.push(JSON.stringify({ type: 'assistant', uuid: `a-many-${i}`, timestamp: T(++seq), message: { id: 'msg_many', role: 'assistant',
+      content: [{ type: 'tool_use', id: `toolu_m${i}`, name: 'Bash', input: { command: 'ls' } }], usage: { input_tokens: 7000, output_tokens: 2 } } }),
+    JSON.stringify({ type: 'user', uuid: `r-many-${i}`, timestamp: T(++seq), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_m${i}`, content: 'ok' }] } }),
+    JSON.stringify({ type: 'attachment', uuid: `x-many-${i}`, timestamp: T(++seq), attachment: { type: 'hook_success', content: '' } }));
+  }
+  for (let i = 0; i < 5; i++) lines.push(user(`late ${i}`), assistant(`msg_late_${i}`, `late answer ${i}`, { input_tokens: 1, output_tokens: 1 }));
+  writeFileSync(path, lines.join('\n') + '\n');
+  const size = readFileSync(path).length;
+  const whole = oracle(path);
+  const full0 = logCacheFullParses();
+  const tail = cachedLogTail(path, parser, size - offsetOf(path, 'a-many-29'));
+  assert.equal(tail.start, offsetOf(path, 'a-many-0'), 'the start moves to the reply\'s first block');
+  assert.equal(logCacheFullParses(), full0, 'no whole-file parse');
+  const usage = (items: readonly any[]) => items.filter((it: any) => String(it.uuid).startsWith('a-many-')).map((it: any) => it.usage?.input_tokens ?? null);
+  assert.deepEqual(usage(tail.items), usage(whole));
+});
+
 test('a reply of more lines than the back-scan guard: the chunk still starts outside it (the whole file, never inside)', () => {
   const { path, parser } = fresh();
   const lines: string[] = [user('q', 'u-first')];
