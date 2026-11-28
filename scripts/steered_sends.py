@@ -5,8 +5,12 @@ submits it at once with the CLI's own chord, and needs to know which message the
 memory. One row per delivered-steer send: {id, session, text (exactly as typed, so a long message is its chip-dodge
 banner), at}. The id goes back on the /agent-message 200 as message_id.
 
-The rows hold a person's words, so: the file is 0600, it is capped by count AND age (MAX_ROWS, MAX_AGE_S), a row is
-dropped once its message is sent now or seen leaving the queue, and nothing here logs text. Pure over a data dir
+The chord submits the whole queue (Shaw 2026-11-28: send now sends every queued message), so a row whose message went
+is kept as SENT ({sent_at}, its words dropped) until it ages out: a later send-now for it answers already-sent and
+never presses the chord again.
+
+The rows hold a person's words, so: the file is 0600, it is capped by count AND age (MAX_ROWS, MAX_AGE_S), a row's
+words are dropped once its message is sent (or the row itself, when it never was), and nothing here logs text. Pure over a data dir
 passed on every call (never a path frozen at import), so tests drive it with a temp dir.
 """
 import fcntl
@@ -121,31 +125,59 @@ def drop(data_dir, message_id, now=None):
             _write(path, keep)
 
 
-def _set_chorded(data_dir, message_id, value):
+def _ids(message_ids):
+    return [message_ids] if isinstance(message_ids, str) else list(message_ids)
+
+
+def _set_chorded(data_dir, message_ids, value):
+    want = set(_ids(message_ids))
     with _locked(data_dir) as path:
         rows = _read(path)
-        hit = False
+        hit = set()
         for r in rows:
-            if r["id"] == message_id:
-                hit = True
+            if r["id"] in want:
+                hit.add(r["id"])
                 if value is None:
                     r.pop("chorded_at", None)
                 else:
                     r["chorded_at"] = value
-        if not hit:
+        if hit != want:
             raise OSError("no such steered send")
         _write(path, rows)
 
 
-def mark_chorded(data_dir, message_id, now=None):
-    """The send-now keys are about to go for this message: a later send-now never sends them again. Raises OSError
-    when the mark cannot be written (the caller then sends nothing)."""
-    _set_chorded(data_dir, message_id, time.time() if now is None else now)
+def mark_chorded(data_dir, message_ids, now=None):
+    """The send-now keys are about to go for these messages (one id, or every queued one the chord will submit): a
+    later send-now for any of them never sends the keys again. Raises OSError when the mark cannot be written for
+    every one (the caller then sends nothing)."""
+    _set_chorded(data_dir, message_ids, time.time() if now is None else now)
 
 
-def unmark_chorded(data_dir, message_id):
-    """The keys never reached the pane: the message may be sent now again."""
+def unmark_chorded(data_dir, message_ids):
+    """The keys never reached the pane: the messages may be sent now again."""
     try:
-        _set_chorded(data_dir, message_id, None)
+        _set_chorded(data_dir, message_ids, None)
     except OSError:
         pass
+
+
+def mark_sent(data_dir, message_ids, now=None):
+    """These messages left the queue by being sent: each row is kept as {sent_at} with its words dropped, so a later
+    send-now for it answers already-sent. An id with no row is skipped."""
+    now = time.time() if now is None else now
+    want = set(_ids(message_ids))
+    with _locked(data_dir) as path:
+        rows = _read(path)
+        for r in rows:
+            if r["id"] in want:
+                r["sent_at"] = now
+                r["text"] = ""
+        _write(path, _prune(rows, now))
+
+
+def unsent_for(data_dir, session, now=None):
+    """This seat's rows whose message is not known to be sent, oldest first (send-now pairs them with the other
+    messages in the CLI's queue)."""
+    now = time.time() if now is None else now
+    return [r for r in _read(ledger_path(data_dir))
+            if r.get("session") == str(session) and not r.get("sent_at") and now - float(r.get("at") or 0) <= MAX_AGE_S]

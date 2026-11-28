@@ -646,10 +646,10 @@ const SEND_NOW_WORDS = {
 const sentence = (v: unknown, fallback: string) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 400) : fallback);
 
 /** POST /api/agents/:id/send-now {message_id} -> the CLI's own send-now for a message it already holds in its queue.
- *  200 {outcome: delivered-now | already-sent | not-queued, session, message_id, step_ended?, also_submitted?};
+ *  200 {outcome: delivered-now | already-sent | not-queued, session, message_id, step_ended?, also_submitted? (the
+ *  other queued ids that went with it: the chord submits the whole queue), also_submitted_kinds?};
  *  404 {outcome:"unknown-id"} for an id the gateway does not know;
- *  409 {outcome:"refused", reason, error} when anything else would go with it (another queued message) or the pane is
- *  not safe, 423 the same shape when someone is at the pane (draft-in-composer, terminal-attached); 501 {outcome:"unsupported"} for a runtime with no such key; 502 {state:"unknown"} when the keys
+ *  409 {outcome:"refused", reason, error} when the pane is not safe, 423 the same shape when someone is at the pane (draft-in-composer, terminal-attached); 501 {outcome:"unsupported"} for a runtime with no such key; 502 {state:"unknown"} when the keys
  *  went and the leaving was not seen (never retried). Who asked is the principal (actingAgent); the body is the id only. */
 export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, res: Response): Promise<void> {
   const agentId = String(req.params.id || '').trim();
@@ -683,7 +683,12 @@ export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, r
       outcome: b.outcome, session, message_id: messageId,
       ...(delivered ? {
         step_ended: (STEP_ENDED as readonly string[]).includes(String(b.step_ended)) ? b.step_ended : 'unknown',
-        also_submitted: Array.isArray(b.also_submitted) ? b.also_submitted.filter((k: unknown) => typeof k === 'string') : [],
+        // Every other queued message goes with the chord (Shaw 2026-11-28): the ids that went, and the kinds of queued
+        // items with no id (another agent's mail, a task notification).
+        also_submitted: Array.isArray(b.also_submitted)
+          ? b.also_submitted.filter((k: unknown) => typeof k === 'string' && STEER_ID.test(k)) : [],
+        also_submitted_kinds: Array.isArray(b.also_submitted_kinds)
+          ? b.also_submitted_kinds.filter((k: unknown) => typeof k === 'string').map((k: string) => k.slice(0, 40)) : [],
       } : {}),
     });
     return;
@@ -698,7 +703,6 @@ export async function handleAgentSendNow(deps: AgentSendNowDeps, req: Request, r
     res.status(gw.httpStatus).json({
       outcome: 'refused', reason: typeof b.reason === 'string' ? b.reason : 'refused', session,
       error: sentence(b.error, SEND_NOW_WORDS.refused),
-      ...(typeof b.queued === 'number' ? { queued: b.queued } : {}),
     });
     return;
   }
