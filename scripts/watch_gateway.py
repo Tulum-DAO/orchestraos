@@ -7515,23 +7515,28 @@ def _screen_shows(screen_text, text) -> bool:
 
 
 def _pair_queued(session, message_id, people):
-    """The ledger id of each other queued person-kind item, when this seat has an unsent row for exactly it: the same
-    words, written within the send window after its enqueue, each row used once. {item idx: id}; an item with no
-    row (another agent's mail typed into the turn, words typed at the terminal) has none."""
+    """The ledger id of each other queued person-kind item, when this seat has exactly one unsent row that can be it:
+    the same words, written within the send window after its enqueue. {item idx: id}; an item with no such row
+    (another agent's mail typed into the turn, words typed at the terminal) has none. None when any pairing is
+    ambiguous (two rows that could be one item, or one row that could be two items: the same words sent close
+    together): which id went cannot be told, so the caller refuses rather than guess."""
     from scripts import claude_queue as Q
     from scripts import steered_sends as SS
     rows = [r for r in SS.unsent_for(ORCH_DIR, session) if r["id"] != message_id]
-    used, out = set(), {}
+    out, claimed = {}, {}
     for it in people:
         if it["at"] is None:
             continue
-        for r in rows:
-            at = float(r.get("at") or 0)
-            if (r["id"] not in used and Q.same_text(it["content"], r.get("text") or "")
-                    and it["at"] - SEND_NOW_UNTIL_SLACK_S <= at <= it["at"] + SEND_NOW_SINCE_SLACK_S):
-                used.add(r["id"])
-                out[it["idx"]] = r["id"]
-                break
+        cands = [r["id"] for r in rows if Q.same_text(it["content"], r.get("text") or "")
+                 and it["at"] - SEND_NOW_UNTIL_SLACK_S <= float(r.get("at") or 0) <= it["at"] + SEND_NOW_SINCE_SLACK_S]
+        for c in cands:
+            claimed[c] = claimed.get(c, 0) + 1
+        if len(cands) > 1:
+            return None
+        if cands:
+            out[it["idx"]] = cands[0]
+    if any(n > 1 for n in claimed.values()):
+        return None
     return out
 
 
@@ -7626,6 +7631,8 @@ def _send_now(session, message_id):
             people = [o for o in pic["others"] if o["kind"] == "person"]
             queued = sorted([item] + people, key=lambda o: o["idx"])
             paired = _pair_queued(session, message_id, people)
+            if paired is None:
+                return _send_now_refused("queue-unclear")
             ids = [message_id] + [paired[o["idx"]] for o in people if o["idx"] in paired]
             if any((SS.get(ORCH_DIR, m) or {}).get("chorded_at") for m in ids[1:]):
                 # An earlier send-now pressed the keys for a message still queued with this one: never the keys twice.
@@ -7665,8 +7672,14 @@ def _send_now(session, message_id):
                     _time.sleep(SEND_NOW_POLL_S)
                     rows = Q.read_rows(path)
                     now = Q.find(rows, text, **window)
-                    if now["item"] and now["item"]["left"]:
-                        still = {(o["content"], o["at"]) for o in now["others"]}  # never by row index: the tail moves
+                    left = bool(now["item"] and now["item"]["left"])
+                    still = {(o["content"], o["at"]) for o in now["others"]}  # never by row index: the tail moves
+                    # The chord submits the whole queue: wait until every queued message has left, not just this one
+                    # (the rows land one by one). At the last poll, what has left is what the answer names; a message
+                    # still queued keeps its mark, so it never gets the keys again.
+                    if left and (any((o["content"], o["at"]) in still for o in people) and _ < SEND_NOW_POLLS - 1):
+                        continue
+                    if left:
                         gone = [o for o in pic["others"] if (o["content"], o["at"]) not in still]
                         went_ids = [paired[o["idx"]] for o in gone if o["idx"] in paired]
                         kinds = sorted({o["kind"] if o["kind"] != "person" else "message"

@@ -782,3 +782,30 @@ def test_Q9_another_queued_id_an_earlier_chord_marked_is_unknown_never_the_keys_
     status, body = _send_now(box, {"session": "seat", "message_id": b})
     assert status == 502 and body["state"] == "unknown", body
     assert seat.keys() == []
+
+
+# ------------------------------------------------------------------ codex r1 (BLOCK @ aa527801)
+def test_C1_two_unsent_rows_that_could_be_the_other_queued_message_refuse_rather_than_guess(box, monkeypatch, tmp_path):
+    t0 = time.time()
+    earlier = SS.record(G.ORCH_DIR, "seat", OTHER, now=t0 - 12)   # the same words, sent seconds before, never clicked
+    a, b, seat = _two_queued(monkeypatch, tmp_path)               # OTHER's own row at t0 - 10, enqueue at t0 - 11
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 409 and body["reason"] == "queue-unclear", body
+    assert seat.keys() == [] and not any(SS.get(G.ORCH_DIR, m).get("chorded_at") for m in (earlier, a, b))
+
+
+def test_C2_the_answer_waits_until_every_queued_message_has_left(box, monkeypatch, tmp_path):
+    # the transcript shows the clicked message leave one read before the other one does
+    a, b, seat = _two_queued(monkeypatch, tmp_path, on_chord=absorbed(lambda: [rem(WORDS)]))
+    real, n = Q.read_rows, {"after": 0}
+
+    def reads(path, *aa, **kk):
+        if seat.keys().count("C-s"):
+            n["after"] += 1
+            if n["after"] == 2:
+                seat.write([rem(OTHER), bg_result()])
+        return real(path, *aa, **kk)
+    monkeypatch.setattr(Q, "read_rows", reads)
+    status, body = _send_now(box, {"session": "seat", "message_id": b})
+    assert status == 200 and body["also_submitted"] == [a], body
+    assert SS.get(G.ORCH_DIR, a)["sent_at"]
