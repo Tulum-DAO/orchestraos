@@ -92,9 +92,13 @@ export function alignShift(prev: any[], next: any[]): number | null {
   if (!prev.length) return 0;
   const last = prev.length - 1;
   const run = prev.slice(Math.max(0, last - ALIGN_RUN + 1)).map(itemKey).reverse();
+  // At the window front fewer items precede a match. One key alone there counts only when it carries a uuid (its log
+  // line's own); a uuid-less item's key can repeat, so a burst of them could match a copy of it.
+  const alone = !!prev[last]?.uuid;
   const fits = (j: number): boolean => {
-    for (let d = 0; d < run.length && j - d >= 0; d++) if (itemKey(next[j - d]) !== run[d]) return false;
-    return true;
+    let d = 0;
+    for (; d < run.length && j - d >= 0; d++) if (itemKey(next[j - d]) !== run[d]) return false;
+    return alone || d >= Math.min(run.length, 2);
   };
   for (let d = 0; d <= Math.max(last, next.length - 1 - last); d++) {
     if (last - d >= 0 && last - d < next.length && fits(last - d)) return d ? -d : 0;
@@ -243,11 +247,11 @@ export class TranscriptTailer {
     const truncated = shorter && shift === null;
     // The new items: those after the last kept one (at the cap, as many as slid out the front).
     const fresh = shift === null ? 0 : Math.max(0, env.items.length - (prevCount + shift));
-    // A cut-turn line new this beat and placed before the old tail: every later item moved, which
-    // a delta (append only) cannot say. Sent as a snapshot.
-    const sentUuids = new Set(this.items.map((it) => it?.uuid));
-    const insertedBeforeTail = shift !== null
-      && env.items.some((it, i) => it?.interrupted_turn && !sentUuids.has(it.uuid) && i < prevCount + shift);
+    // An item new this beat and placed before the old tail (a cut-turn line; a Codex record written out of order, read
+    // in ordinal order): every later item moved, which a delta (append only) cannot say. Sent as a snapshot.
+    const sentKeys = shift === null ? null : new Set(this.items.map(itemKey));
+    const insertedBeforeTail = sentKeys !== null
+      && env.items.some((it, i) => i < prevCount + (shift as number) && !sentKeys.has(itemKey(it)));
 
     // Codex reports a response's tokens after its items: `usage` can land on an item a delta
     // already carried. Deltas only append, so a usage change on a sent item is re-sent as a
@@ -281,6 +285,8 @@ export class TranscriptTailer {
       this.epoch = `e${(++epochs).toString(36)}${BOOT}`;
     }
 
+    // A shrunk log numbers from its new count under a new tag: an id from before it names other items.
+    if (truncated) this.rev++;
     if (rotated || truncated) return { rotated: true, fresh: 0, restated: false };
     if (restated) { this.rev++; return { rotated: false, fresh: 0, restated: true }; }
     // The first read of a log (or of one that was empty): every item is new.
