@@ -17,7 +17,7 @@ import subprocess
 
 from postcall.extract import Extraction
 
-PROMPT_VERSION = "cmt-v2"
+PROMPT_VERSION = "cmt-v3"
 MAX_TRANSCRIPT_CHARS = 60_000
 _OWNERS = ("shaw", "participant")
 _PREFIX = ["nice", "-n", "19", "taskset", "-c", "6,7"]  # niced and pinned, like the rest of postcall
@@ -35,8 +35,12 @@ stitch two turns together and never paraphrase.
 - kind "intention" is only allowed for owner "shaw"; a participant's item is always "commitment".
 - agent_work is one line naming a draft, research or internal artefact an agent could produce. \
 An agent NEVER sends anything as Shaw.
+- Shaw is one of the diarized speakers in EVERY recording (only about 1 call in 1000 lacks him). \
+Your job is to find WHICH label is Shaw; never decide that Shaw is absent. Shaw's commitments \
+come from his label's turns; every other label is a counterpart.
 - Identify which diarization label is Shaw and quote, verbatim from Shaw's own turn, the sentence \
-that proves it (a self-introduction, or being addressed by name).
+that proves it (a self-introduction, or being addressed by name). If no sentence proves it, still \
+give your best label but leave shaw_label_evidence empty; never quote a sentence that does not prove it.
 
 Return ONLY minified JSON, no prose and no code fences:
 {{"shaw_label":"<diarization label that is Shaw, e.g. SPEAKER_00>","shaw_label_evidence":"<verbatim \

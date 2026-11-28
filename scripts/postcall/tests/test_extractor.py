@@ -64,9 +64,18 @@ def test_argv_is_niced_pinned_headless_and_carries_prompt_and_transcript():
     assert argv[6] == "claude" and argv[7] == "-p"
     prompt = argv[-1]
     assert call.transcript in prompt
-    assert extractor.PROMPT_VERSION == "cmt-v2"
+    assert extractor.PROMPT_VERSION == "cmt-v3"
     assert extractor.PROMPT_VERSION in prompt
     assert "owner" in prompt and "participant" in prompt and "verbatim" in prompt.lower()
+
+
+def test_prompt_states_shaw_is_always_a_speaker():
+    """Shaw's standing fact (gm msg_f044ef4d): Shaw is one of the diarized speakers in every
+    recording; the extractor picks WHICH label is Shaw, never WHETHER he is present."""
+    prompt = extractor.build_prompt("x")[0]
+    assert "Shaw is one of the diarized speakers in EVERY recording" in prompt
+    assert "never decide that Shaw is absent" in prompt
+    assert "leave shaw_label_evidence empty" in prompt          # an unproven guess fails closed in ground()
 
 
 def test_claude_bin_from_param_or_env(monkeypatch):
