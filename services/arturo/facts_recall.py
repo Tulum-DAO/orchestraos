@@ -29,6 +29,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    from services.arturo import facts_index
+except ImportError:                                    # loaded as a top-level module (the proxy's fallback import)
+    import facts_index
+
 log = logging.getLogger("arturo-facts-recall")
 
 FLAG = "ARTURO_FACTS_RECALL"
@@ -371,12 +376,28 @@ def query_facts_json(path, keywords, k=K):
     return _score(cands, keywords, k)
 
 
-def query_sources(keywords, k=K, dbpath=None, jsonpath=None):
+def query_sources(keywords, k=K, dbpath=None, jsonpath=None, text=None):
     """ONE entrypoint over every facts source on the box — the sqlite ingest store
     when it exists (private nightly cron) and the dashboard JSON store — merged and
     re-ranked on the shared scale. Both the passive FACTS block and the knowledge
     tool read through here so a fact written on the dashboard surfaces on every
-    path Arturo answers from."""
+    path Arturo answers from.
+
+    With `text` (the caller's own words) and ARTURO_FACTS_HYBRID=1, the ranking is
+    the hybrid one (query_hybrid). Any other case, and any time the hybrid index is
+    not ready, returns exactly the keyword ranking below."""
+    if text and facts_index.enabled():
+        try:
+            hy = query_hybrid(text, keywords, k=k, dbpath=dbpath, jsonpath=jsonpath)
+        except Exception as e:                         # noqa: BLE001 — hybrid trouble = keyword recall
+            log.error(f"facts-recall: hybrid error, keyword recall used (non-fatal): {e}")
+            hy = None
+        if hy is not None:
+            return hy
+    return _query_sources_keyword(keywords, k=k, dbpath=dbpath, jsonpath=jsonpath)
+
+
+def _query_sources_keyword(keywords, k=K, dbpath=None, jsonpath=None):
     dbpath = dbpath or default_db_path()
     jsonpath = jsonpath or default_json_path()
     cands = []
@@ -389,6 +410,91 @@ def query_sources(keywords, k=K, dbpath=None, jsonpath=None):
     for c in cands:                                    # re-rank: give the scorer confidence back
         c.setdefault("confidence", 1.0)
     return _score(cands, keywords, k)
+
+
+def _facts_by_id(dbpath, fact_ids):
+    """facts.db rows for these ids, as scorer dicts, with the same state and noise filters as query_facts:
+    the index only points; what may be served is decided here, on the live row. Unknown ids drop out."""
+    if not fact_ids:
+        return {}
+    noise_clause = " AND ".join(["lower(ltrim(text)) NOT LIKE ?"] * len(_NOISE_PREFIXES))
+    con = _connect_ro(dbpath)
+    try:
+        rows = con.execute(
+            "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+            f"WHERE fact_id IN ({','.join('?' * len(fact_ids))}) AND COALESCE(state,'active') != 'superseded'"
+            + ((" AND " + noise_clause) if noise_clause else ""),
+            list(fact_ids) + [p + "%" for p in _NOISE_PREFIXES]).fetchall()
+    finally:
+        con.close()
+    return {f["fact_id"]: f for f in _row_dicts(rows) if not _is_noise(f["text"])}
+
+
+TAIL_LIMIT = 5000            # unindexed facts.db rows a lookup will keyword-scan; more means sync is broken
+
+
+def _query_tail(dbpath, src_mark, keywords):
+    """Keyword-ranked facts.db rows past `src_mark` (not in the index yet), same filters and scorer as
+    query_facts. [] when there are none or no keywords; None when more than TAIL_LIMIT rows wait, which
+    sends the whole lookup back to keyword recall rather than serve an index that far behind."""
+    con = _connect_ro(dbpath)
+    try:
+        waiting = con.execute("SELECT COUNT(*) FROM (SELECT 1 FROM facts WHERE rowid > ? LIMIT ?)",
+                              (src_mark, TAIL_LIMIT + 1)).fetchone()[0]
+        if waiting > TAIL_LIMIT:
+            return None
+        if not waiting or not keywords:
+            return []
+        like = " OR ".join(["text LIKE ?"] * len(keywords))
+        noise_clause = " AND ".join(["lower(ltrim(text)) NOT LIKE ?"] * len(_NOISE_PREFIXES))
+        rows = con.execute(
+            "SELECT fact_id, ts, kind, text, expiry_class, confidence FROM facts "
+            f"WHERE rowid > ? AND ({like}) AND COALESCE(state,'active') != 'superseded'"
+            + ((" AND " + noise_clause) if noise_clause else ""),
+            [src_mark] + [f"%{kw}%" for kw in keywords] + [p + "%" for p in _NOISE_PREFIXES]).fetchall()
+    finally:
+        con.close()
+    return _score(_row_dicts(rows), keywords, facts_index.DEPTH)
+
+
+def query_hybrid(text, keywords, k=K, dbpath=None, jsonpath=None, index_path=None):
+    """Hybrid recall, the operator's chosen design: FTS5 bm25 + MiniLM vectors, fused by reciprocal rank.
+    Returns None when the index cannot answer yet (the caller then serves the keyword ranking unchanged).
+
+    Ranked lists fused:
+      1. FTS5 bm25 over the indexed fact text (its rarest words; see facts_index.fts_match), re-ranked by how
+         many of the question's keywords each fact holds;
+      2. cosine similarity of the question to every fact vector, which finds the same fact in other words;
+      3. keyword recall over the facts.db rows the index does not hold yet (ingested since the last sync);
+      4. the dashboard JSON store's keyword ranking, which the index does not cover.
+    facts.db's LIKE scan is NOT re-run here: it costs as much as the whole hybrid lookup (p95 63 ms measured
+    2026-11-27), and on 230 labelled queries lists 1+2 lost none of its answers (the step-1 gate in the PR)."""
+    dbpath = dbpath or default_db_path()
+    if not os.path.exists(dbpath):
+        return None
+    lists = facts_index.search(text, index_path=index_path, keywords=keywords)
+    if lists is None:
+        return None
+    fts_ids, vec_ids, src_mark = lists
+    tail = _query_tail(dbpath, src_mark, keywords)
+    if tail is None:
+        return None
+    rows = _facts_by_id(dbpath, list(dict.fromkeys(fts_ids + vec_ids)))
+    rows.update({f["fact_id"]: f for f in tail})
+    jsonpath = jsonpath or default_json_path()
+    js = query_facts_json(jsonpath, keywords, k=facts_index.DEPTH) if keywords else []
+    rows.update({f["fact_id"]: f for f in js})
+    # an id the live store no longer serves (superseded, noise, gone) takes no place in any list
+    ranked = ([[i for i in lst if i in rows] for lst in (fts_ids, vec_ids)]
+              + [[f["fact_id"] for f in tail], [f["fact_id"] for f in js]])
+    score = facts_index.rrf(ranked)
+    order = sorted(score, key=lambda i: (score[i], rows[i].get("ts") or ""), reverse=True)
+    # each ranker's best answer goes first. Fusion alone lets facts that sit mid-list in BOTH lists push out a
+    # fact one ranker is sure of (measured: 5 of 230 answers keyword recall found were lost that way)
+    order = list(dict.fromkeys([lst[0] for lst in ranked if lst] + order))
+    return [{"fact_id": i, "ts": rows[i].get("ts"), "kind": rows[i].get("kind") or "fact",
+             "text": rows[i].get("text") or "", "expiry_class": rows[i].get("expiry_class") or "standard"}
+            for i in order[:k]]
 
 
 def _render(facts):
@@ -451,6 +557,8 @@ def warm_cache(dbpath=None):
         if not os.path.exists(dbpath) and not os.path.exists(default_json_path()):
             return 0.0
         query_sources(["__bootwarm__"], k=K, dbpath=dbpath)
+        if facts_index.enabled():
+            facts_index.search("boot warm")             # starts the embedder + vector load off the turn path
         ms = (time.perf_counter() - t0) * 1000.0
         log.info(f"facts-recall: cache warm in {ms:.0f}ms")
         return ms
@@ -488,7 +596,7 @@ def facts_preamble(user_text, dbpath=None, budget_ms=None):
     def _work():
         try:
             _t0 = time.perf_counter()
-            result["r"] = query_sources(keywords, k=K, dbpath=dbpath)
+            result["r"] = query_sources(keywords, k=K, dbpath=dbpath, text=text)
             result["ms"] = (time.perf_counter() - _t0) * 1000.0
         except Exception as e:               # noqa: BLE001 — degrade, never raise into the turn
             result["e"] = e
