@@ -270,7 +270,7 @@ def test_generic_misclaim_without_configured_names_verifies_nobody(base):
     assert shaw_it.trust == "inferred" and part_it.trust == "inferred"
 
 
-# --- Shaw split into several labels (Shaw 2026-11-28: "Shaw Cole is my name") ---------------------
+# --- Shaw split into several labels (Shaw 2026-11-28: always "Shaw Cole" or "Shaw") ---------------
 
 SPLIT = """# Synthetic Split
 
@@ -282,23 +282,32 @@ Thanks for joining, good to see you.
 **Dana Reyes** _[00:06]_
 Likewise. I will share the API credentials with you tomorrow morning.
 
-**Cole** _[00:10]_
+**Shaw** _[00:10]_
 I'll send you the pricing deck by Friday.
 """
 
 
 def test_split_shaw_labels_are_never_participants_and_others_verify(base, monkeypatch):
-    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw,Cole")
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw")
     call = dataclasses.replace(base, transcript=SPLIT)
     roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
     assert roster.label_names == {"Dana Reyes": "Dana Reyes"} and roster.verified_names == {"Dana Reyes"}
-    a, b, dana = participants.apply_trust([_item("shaw", "Shaw Cole"), _item("shaw", "Cole"),
+    a, b, dana = participants.apply_trust([_item("shaw", "Shaw Cole"), _item("shaw", "Shaw"),
                                            _item("participant", "Dana Reyes")], roster)
     assert (a.trust, b.trust, dana.trust) == ("verified", "verified", "verified")
 
 
 def test_split_shaw_two_party_shortcut_counts_only_non_shaw_voices(base, monkeypatch):
-    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Cole")
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw")
     call = dataclasses.replace(base, transcript=SPLIT.replace("**Dana Reyes**", "**SPEAKER_01**"))
     roster = participants.resolve(call, _raw(), _calendar_with_dana(), shaw_emails=SHAW)
     assert roster.label_names == {"SPEAKER_01": "Dana Reyes"} and roster.verified_names == {"Dana Reyes"}
+
+
+def test_a_lone_cole_is_a_participant_not_shaw(base, monkeypatch):
+    """Shaw 2026-11-28: "Cole" alone can be someone else (e.g. Cole Stalcup); with his names configured
+    as "Shaw Cole,Shaw" it is a Pocket-named participant."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw")
+    call = dataclasses.replace(base, transcript=SPLIT.replace("**Shaw** _[00:10]_", "**Cole** _[00:10]_"))
+    roster = participants.resolve(call, _raw(), [], shaw_emails=SHAW)
+    assert roster.shaw_voices == {"Shaw Cole"} and "Cole" in roster.verified_names

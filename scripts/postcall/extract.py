@@ -108,7 +108,7 @@ def _shaw_names():
 
 def shaw_voices(shaw_label, labels):
     """The labels that are Shaw's voice. Labels carrying a configured form of his name
-    (POSTCALL_SHAW_NAMES) are all his, since Pocket can split him in two ("Shaw Cole" + "Cole"; Shaw
+    (POSTCALL_SHAW_NAMES) are all his, since Pocket can split him in two ("Shaw Cole" + "Shaw"; Shaw
     2026-11-28), and the claim must be one of them, or none count. With no such label, only the
     claimed label (whose proof ground() checks). Empty when the claim is not a transcript label."""
     names = _shaw_names()
