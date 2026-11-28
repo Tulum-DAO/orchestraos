@@ -53,6 +53,9 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+if ROOT not in sys.path:
+    sys.path.append(ROOT)
+from orchestra_cli import settings as _settings  # noqa: E402
 
 IN_MODIFY, IN_CLOSE_WRITE, IN_MOVED_TO, IN_CREATE = 0x2, 0x8, 0x80, 0x100
 DB_NAMES = {"tasks.db", "tasks.db-wal"}
@@ -99,21 +102,57 @@ class Inotify:
 _CONN = {}
 
 
-def pending_ids(db: str, agent: str, tenant: str) -> list:
+_TENANCY = None
+
+
+def read_tenants() -> list:
+    """This install's read tenants (msg_store writes the first): $ORCHESTRA_TENANT / [messages] tenant /
+    [operator] id, then [messages] also_read. Resolved once per process from orchestra.toml alone."""
+    global _TENANCY
+    if _TENANCY is None:
+        _TENANCY = _settings.message_tenancy()[1]
+    return list(_TENANCY)
+
+
+def _tenant_clause(tenant):
+    reads = [tenant] if tenant is not None else read_tenants()
+    return f"tenant_id IN ({','.join('?' * len(reads))})", reads
+
+
+def pending_ids(db: str, agent: str, tenant: "str | None" = None) -> list:
     """Ids of pending rows for `agent`. Reads ids only - never subject/body.
+    tenant=None: the install's read tenants (strict, the same set msg_store.inbox reads); an explicit
+    tenant reads exactly that one.
     One read-only connection is reused (autocommit, so no read txn is held between checks)."""
+    clause, tparams = _tenant_clause(tenant)
     conn = _CONN.get(db)
     if conn is None:
         conn = _CONN[db] = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5,
                                            isolation_level=None)
     try:
         return [r[0] for r in conn.execute(
-            "SELECT id FROM messages WHERE to_agent=? AND status='pending' AND tenant_id=? "
-            "ORDER BY created_at ASC", (agent, tenant))]
+            f"SELECT id FROM messages WHERE to_agent=? AND status='pending' AND {clause} "
+            "ORDER BY created_at ASC", [agent] + tparams)]
     except sqlite3.Error:
         _CONN.pop(db, None)
         conn.close()
         raise
+
+
+def unread_other_tenants(db: str, agent: str, tenant: "str | None" = None) -> dict:
+    """{tenant: count} of pending rows for `agent` under tenants this watcher does NOT read. Counts only.
+    The watcher logs a change in this so mail is never hidden in silence (2026-11-27: 36 h)."""
+    clause, tparams = _tenant_clause(tenant)
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            return {str(t): n for t, n in conn.execute(
+                "SELECT COALESCE(tenant_id, '<null>'), count(*) FROM messages WHERE to_agent=? "
+                f"AND status='pending' AND (tenant_id IS NULL OR NOT ({clause})) GROUP BY 1", [agent] + tparams)}
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}
 
 
 # ---------------------------------------------------------------- pane / seat
@@ -286,7 +325,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="instant mechanical mail wake for a Grok seat")
     ap.add_argument("--agent", required=True)
     ap.add_argument("--session", default=None, help="tmux session (default: --agent)")
-    ap.add_argument("--tenant", default=os.environ.get("ORCHESTRA_TENANT") or "operator")
+    ap.add_argument("--tenant", default=None,
+                    help="strict: only this tenant (default: the install's tenant + [messages] also_read)")
     ap.add_argument("--db", default=None, help="msg_store db (default: MSG_DB_PATH or <data dir>/state/tasks.db)")
     ap.add_argument("--orphan-exit-s", type=float, default=120.0,
                     help="exit once the tmux session has been gone this long (0 = never)")
@@ -322,6 +362,7 @@ def main(argv=None) -> int:
     ino = Inotify(os.path.dirname(a.db), IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE)
     log(f"watching {a.db} for {a.agent} -> tmux {session} (pid {os.getpid()})")
     last_blocker = None
+    last_other = {}
     waiting = False                     # un-nudged mail exists, seat not yet idle
     last_check = 0.0
     gone_since = None
@@ -344,6 +385,13 @@ def main(argv=None) -> int:
                 time.sleep(max(a.debounce_s, a.min_interval_s - (time.monotonic() - last_check)))
                 ino.wait(0)             # drain the burst
         last_check = time.monotonic()
+        other = unread_other_tenants(a.db, a.agent, a.tenant)
+        if other != last_other:
+            if other:
+                log(f"{sum(other.values())} pending row(s) for {a.agent} under tenant(s) {sorted(other)} are NOT "
+                    f"read here (reads {[a.tenant] if a.tenant else read_tenants()}); add them to [messages] "
+                    f"also_read if they are this install's")
+            last_other = other
         try:
             ids = pending_ids(a.db, a.agent, a.tenant)
         except sqlite3.Error as e:

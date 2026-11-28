@@ -56,7 +56,7 @@ def test_a_slow_tool_answers_accepted_at_the_detach_time_and_its_result_comes_la
     assert r.execute(_B(), "c1", "list_agents", "{}") is RUNNING        # a fast result still comes back in the turn
     clock[0] += 0.2
     out = r.execute(_B(), "c1", "list_agents", "{}")
-    assert out["receipt"] == "accepted" and out["status"] == "running" and "still running" in out["result"]
+    assert out["receipt"] == "accepted" and out["status"] == "running" and "not done" in out["result"]
     assert late == []
     gate.set()
     assert _wait(lambda: late)

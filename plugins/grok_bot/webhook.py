@@ -231,7 +231,8 @@ def check_once(p: dict, agent: str, tenant: str, sent: set, attempts: int = 3) -
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="POST a webhook when the Grok Bot's mailbox has new mail")
     ap.add_argument("--agent", default="grok-bot")
-    ap.add_argument("--tenant", default=os.environ.get("ORCHESTRA_TENANT") or "operator")
+    ap.add_argument("--tenant", default=None,
+                    help="strict: only this tenant (default: the install's tenant + [messages] also_read)")
     ap.add_argument("--debounce-s", type=float, default=2.0)
     ap.add_argument("--safety-s", type=float, default=120.0)
     ap.add_argument("--retry-s", type=float, default=30.0, help="re-check this often while a POST is owed")

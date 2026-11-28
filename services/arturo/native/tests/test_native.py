@@ -1484,7 +1484,7 @@ def test_the_report_has_a_tool_timeline_naming_each_tool_and_what_followed_its_r
     feed(fx.speech(0.3), 13.0)
     rows = {r["call_id"]: r for r in sess.report()["tool_timeline"]}
     assert rows["c1"] == {"call_id": "c1", "name": "list_agents", "requested_s": 1.0, "ready_s": 1.4,
-                          "result_s": 2.0, "first_audio_s": 3.0, "next": "tool:knowledge"}
+                          "result_s": 2.0, "first_audio_s": 3.0, "next": "tool:knowledge", "handed_over": False}
     assert rows["c2"]["name"] == "knowledge" and rows["c2"]["result_s"] == 2.5
     assert rows["c2"]["first_audio_s"] == 3.0 and rows["c2"]["next"] == "audio"
 

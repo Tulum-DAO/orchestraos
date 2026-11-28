@@ -29,11 +29,12 @@ _CLASSES = {
            r"went ahead and \w+)",
 }
 _ACTION_RES = [(cls, re.compile(rf"\b{_SUBJ}\s+{_ADV}(?:got (?:it|that) )?{verb}", re.I)) for cls, verb in _CLASSES.items()]
-# "I've got it started" / subjectless "Started." "Sent." "Saved." at the start of a sentence
+# "I've got it started" / subjectless "Started." "Sent." "Saved." at the start of a sentence or clause (";" ":" ","
+# count: "It's under way; Started." must not hide the "Started." main blocks alone, #698's invariant test)
 _ACTION_RES += [
-    ("start", re.compile(r"(?:^|[.!?]\s+)(?:started|spawned|launched)[.!,]", re.I)),
-    ("message", re.compile(r"(?:^|[.!?]\s+)sent[.!,]", re.I)),
-    ("save", re.compile(r"(?:^|[.!?]\s+)(?:saved|noted)[.!,]", re.I)),
+    ("start", re.compile(r"(?:^|[.!?;:,]\s+)(?:started|spawned|launched)[.!,]", re.I)),
+    ("message", re.compile(r"(?:^|[.!?;:,]\s+)sent[.!,]", re.I)),
+    ("save", re.compile(r"(?:^|[.!?;:,]\s+)(?:saved|noted)[.!,]", re.I)),
 ]
 # STATE claims: something is done / running / saved. Backed by ANY successful tool call this turn (a status read is
 # evidence: "the build is finished" after get_agent_output said so). Present / present-perfect only: "it was created
@@ -42,7 +43,9 @@ _STATE_SUBJ = r"(?:it|that|this|the (?:task|seat|agent|note|message))"
 _STATE_WORD = (r"(?:done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
                r"on its way|up|live)")
 _STATE_RES = [
-    re.compile(rf"\b{_STATE_SUBJ}(?:'s| is| has been)\s+{_STATE_WORD}\b", re.I),
+    re.compile(r"\b(?:it|that|this|the (?:task|seat|agent|note|message))(?:'s| is| has been)\s+(?:now\s+)?"
+               r"(?P<word>done|saved|started|sent|running|set up|created|launched|queued|noted|taken care of|handled|"
+               r"on its way|under ?way|up|live)\b", re.I),
     re.compile(r"\b(?:all )?(?:done|finished)[.!]|\btaken care of\b|\bconsider it done\b", re.I),
 ]
 # A TEMPORAL clause says when something will be so, not that it is: "I'll let you know when it's done" (codex round 8
@@ -61,15 +64,38 @@ _TEMPORAL_RE = re.compile(
 # actions ("you started"), and narration to Shaw ("I told you", "I asked you").
 
 
+# PROGRESS state claims ("that's running now", "it's under way") say work is going, not that it is done: a tool still
+# running after its "accepted" receipt backs these (Shaw 2026-11-27: "that's running now" and other phrases besides
+# "I've started it"); every other state claim needs a finished result.
+# "started" is NOT progress: "the agent has been started" claims a finished start (start-class evidence, codex on #698).
+_PROGRESS = re.compile(r"^(?:running|queued|on its way|under ?way)$", re.I)
+# THE INVARIANT (#698, arturo-context-dev msg_0e179be5): a progress phrase never lets through a completion that main's
+# gate blocks on its own. claim_kinds runs every recogniser over the WHOLE utterance and returns every claim, and the
+# gate requires each to be backed: a completion main recognises alone is still its own claim beside "that's running
+# now". A completion main ALSO misses alone ("your note has been written down", "it went through") is a gap in the
+# base recognisers, not this path (follow-up). No word blocklists here: they cut off natural receipts ("I'll keep you
+# posted", codex round 7).
+
+
+def claim_kinds(text):
+    """EVERY claim in the utterance, each of which must be backed on its own (codex round 3 on #698: "I've started it
+    and it's done" was checked only as a start). Kinds: ("action", class), ("state", "progress"), ("state", None)."""
+    text = text or ""
+    kinds = list(dict.fromkeys(("action", cls) for cls, r in _ACTION_RES if r.search(text)))
+    said = _TEMPORAL_RE.sub(" ", text)                       # state only: a temporal clause hides no action claim
+    words = [m.group("word") for m in _STATE_RES[0].finditer(said)]
+    other = any(r.search(said) for r in _STATE_RES[1:])
+    if words and not other and all(_PROGRESS.match(w) for w in words):
+        kinds.append(("state", "progress"))                 # every state claim in it is progress, nothing completes
+    elif words or other:
+        kinds.append(("state", None))
+    return kinds
+
+
 def claim_kind(text):
-    """("action", class) | ("state", None) | None."""
-    for cls, r in _ACTION_RES:
-        if r.search(text or ""):
-            return ("action", cls)
-    said = _TEMPORAL_RE.sub(" ", text or "")
-    if any(r.search(said) for r in _STATE_RES):
-        return ("state", None)
-    return None
+    """The first claim in the utterance (claim_kinds has them all): ("action", class) | ("state", ...) | None."""
+    ks = claim_kinds(text)
+    return ks[0] if ks else None
 
 
 def is_claim(text):
@@ -101,8 +127,8 @@ class ClaimGate:
         if self._released_wordless and not self._late_counted and self.text.strip():
             self.late += 1
             self._late_counted = True
-        kind = claim_kind(self.text) if self.enabled and not self.blocked else None
-        if kind and not self.is_backed(kind):
+        kinds = claim_kinds(self.text) if self.enabled and not self.blocked else []
+        if any(not self.is_backed(k) for k in kinds):        # every claim in it needs its own backing
             self.blocked, self.blocked_text = True, self.text.strip()
             self.blocks.append(self.blocked_text[-200:])
             self.correction_owed = True

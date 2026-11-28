@@ -48,7 +48,8 @@ def test_a_state_word_in_a_temporal_clause_is_no_claim(said):
 
 @pytest.mark.parametrize("said", BARE)
 def test_a_bare_state_claim_stays_a_claim(said):
-    assert claim_gate.claim_kind(said) == ("state", None), said
+    # a state claim of either kind: since #698 "it's running fine" is a progress claim, the rest are completions
+    assert claim_gate.claim_kind(said) in {("state", None), ("state", "progress")}, said
 
 
 def _stream(text, backed=False):

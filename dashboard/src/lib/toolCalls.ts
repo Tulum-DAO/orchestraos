@@ -130,16 +130,19 @@ export function runSummary(calls: ToolCallView[], interrupted = false): {
   return { lead, headline: s.headline, tone };
 }
 
-/** A voice call's card header: runSummary's lead, but counting every row it opens to ("used 3 tools, 1 failed"), as
- *  three rows under "used 2 tools" read as a contradiction there. Only the call card uses it; the kit's other groups
- *  keep counting what worked. */
+/** A voice call's card header: runSummary's lead ("Finished", not "Worked", once anything failed), counting every row
+ *  it opens to ("used 3 tools, 1 failed"), as three rows under "used 2 tools" read as a contradiction there. Only the
+ *  call card uses it; the kit's other groups keep their own lead and count what worked. */
 export function callRunSummary(calls: ToolCallView[], interrupted = false): ReturnType<typeof runSummary> {
   const n = (status: ToolStatus) => calls.filter((c) => c.status === status).length;
   const stillRunning = n('running');
   const clauses = [`used ${calls.length} ${calls.length === 1 ? 'tool' : 'tools'}`];
   if (n('failed')) clauses.push(`${n('failed')} failed`);
   if (stillRunning) clauses.push(interrupted ? `${stillRunning} interrupted` : `${stillRunning} running`);
-  return { ...runSummary(calls, interrupted), headline: clauses.join(', ') };
+  const s = runSummary(calls, interrupted);
+  // Any failure: the call finished, it did not just "work" (gm, on the live card: "Worked — 1 failed" read as all-good).
+  const lead = n('failed') ? s.lead.replace(/^Worked for /, 'Finished in ').replace(/^Worked$/, 'Finished') : s.lead;
+  return { ...s, lead, headline: clauses.join(', ') };
 }
 
 /** Bubbles' thin line for one call (components/kit/ToolCard.tsx ToolLines): the tool's name and a short summary of

@@ -234,6 +234,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/agent-model"): "message",
     # Releasing waiting mail early sends it, so it takes the same verb as sending.
     ("POST", "/deliver-now"): "message",
+    # Submitting a person's message the CLI already holds in its queue (ctrl+x ctrl+s) sends it, the same verb.
+    # A person's surface only, checked in the handler.
+    ("POST", "/agent-send-now"): "message",
     ("POST", "/upload"): "message",
     # Read a sent file back for chat previews. HEAD is its own method to the middleware, so it is
     # declared too, or it would 403 as "route declares no scope".
@@ -4373,10 +4376,14 @@ def chipsafe_text(text, tmp_dir=None):
             fh.write(t)
     except OSError:
         return t, None
+    return _chip_banner(t, path), path
+
+
+def _chip_banner(t, path):
+    """The one line a long message is typed as (chipsafe_text): also what the CLI queues, so send-now matches it."""
     head = " ".join(t.split())[:120]
-    banner = (f"[LONG-MSG chip-dodge] {head}… — FULL TEXT ({len(t)} chars): "
-              f"read {path}")
-    return banner, path
+    return (f"[LONG-MSG chip-dodge] {head}… — FULL TEXT ({len(t)} chars): "
+            f"read {path}")
 
 
 def _is_prompt_line(line: str) -> bool:
@@ -7436,10 +7443,242 @@ async def handle_agent_message(request):
         # (the seat reads it at its next step), or Escape + typed (read at once). Held answers say "held" above.
         info = {**info, "outcome": ("interrupted" if info.get("interrupted")
                                     else "delivered-steer" if info.get("queued_mid_turn") else "delivered-now")}
+        if info["outcome"] == "delivered-steer" and instant:   # a person's words only: the ledger is for send-now
+            mid = await asyncio.get_event_loop().run_in_executor(None, lambda: _record_steered(session, text, info))
+            if mid:
+                info = {**info, "message_id": mid}
     elif instant and not is_slash and _person_refusal_words(info):
         info = {**info, "detector_activity": info.get("activity") or "", "activity": _person_refusal_words(info)}
     return _json({"ok": ok, "delivered": ok, **info},
                  status=200 if ok else 502)
+
+
+def _record_steered(session, text, info):
+    """A person's words typed into a running Claude Code turn: kept (scripts/steered_sends.py) so a later send-now can
+    find exactly this message in the CLI's queue. Returns its id, or None (another runtime, a headless seat, or a
+    ledger that cannot be written: the send already happened, so this never fails it). Never logs the words."""
+    from scripts import steered_sends as SS
+    try:
+        if info.get("headless") or _status_runtime(_agent_status().get_agent_status(session) or {}) != "claude":
+            return None
+        ptr = info.get("chip_dodge_pointer")
+        t = (text or "").rstrip("\r\n")
+        return SS.record(ORCH_DIR, session, _chip_banner(t, ptr) if ptr else t)
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never the send
+        log.warning(f"steered-send ledger write failed for {session}: {type(e).__name__}")
+        return None
+
+
+#: Send-now (POST /agent-send-now): how long the transcript is watched for the message to leave the queue after
+#: the chord, how often, and the window around the ledger row's time its enqueue must fall in (the row is written
+#: after the submit is verified, seconds after the CLI queued it; a later re-send of the same words falls outside).
+SEND_NOW_POLL_S = 0.25
+SEND_NOW_POLLS = 20                     # 5 s
+SEND_NOW_SINCE_SLACK_S = 60.0
+SEND_NOW_UNTIL_SLACK_S = 5.0
+#: The full sentence a person reads for each refusal (nothing was sent in any of them).
+SEND_NOW_REFUSALS = {
+    "other-agent": "That message was sent to a different agent; nothing was sent.",
+    "other-queued": ("Another message is queued for this agent too, and send-now would submit it as well; "
+                     "nothing was sent."),
+    "draft-in-composer": ("Text is typed in this agent's composer, and send-now would submit it too; "
+                          "send or clear it first. Nothing was sent."),
+    "terminal-attached": "Someone has this agent's terminal open; send it from there.",
+    "composer-chip": "A pasted chip sits unsent in this agent's composer; nothing was sent.",
+    "prompt-open": "A menu or permission prompt is open on this agent; nothing was sent.",
+    "queue-unclear": "The agent's screen does not show exactly this message queued; nothing was sent.",
+    "no-transcript": "This agent's transcript could not be read, so its queue cannot be checked; nothing was sent.",
+    "busy": "Another sender is typing into this agent right now; try again in a moment. Nothing was sent.",
+    "send-failed": "The send-now keys could not reach the agent's pane; nothing was sent.",
+    "not-a-person": "Only a person's own app can send a queued message now.",
+}
+_RECHECK_TO_REFUSAL = {"composer_text": "draft-in-composer", "stranded_chip": "composer-chip",
+                       "permission_pending": "prompt-open", "no_composer": "prompt-open"}
+SEND_NOW_HALF = ("Only the first of the two send-now keys reached the agent; its next keystroke may complete them. "
+                 "The message may or may not go; nothing will be retried.")
+SEND_NOW_UNKNOWN = ("The send-now keys went to the agent, but its transcript did not show the message leaving the "
+                    "queue in time. It may still go; nothing will be retried.")
+
+
+#: Someone is at the pane (a draft, an attached terminal): 423, never 409, which the dashboard reads elsewhere as
+#: "already answered".
+SEND_NOW_LOCKED = ("draft-in-composer", "terminal-attached")
+
+
+def _send_now_refused(reason, status=None, **extra):
+    status = status or (423 if reason in SEND_NOW_LOCKED else 409)
+    return status, {"ok": False, "outcome": "refused", "reason": reason, "error": SEND_NOW_REFUSALS[reason], **extra}
+
+
+def _screen_shows(screen_text, text) -> bool:
+    """The whole message, never a prefix: a row the CLI cut short ("…") cannot say which message it is."""
+    from scripts import claude_queue as Q
+    return Q.same_text(screen_text, text)
+
+
+def _send_now(session, message_id):
+    """Submit a person's message that Claude Code holds in its own queue, with the CLI's own send-now chord
+    (ctrl+x ctrl+s). Returns (http status, body). MEASURED on Claude Code 2.1.284 (docs/DELIVERY.md "Send now"):
+    the chord submits the WHOLE queue and any typed draft, and it ends the current step early (a running command
+    moves to the background; a reply being written is cut short). So nothing is sent unless, under the pane lock
+    and immediately before the keys: the ledger row is this seat's, the transcript queue holds this message and no
+    other person's, no terminal is attached, the composer is empty and safe, and the screen shows exactly this one
+    message queued. After the keys, the transcript must show it leave the queue within SEND_NOW_POLLS x
+    SEND_NOW_POLL_S, else 502 unknown, never a retry. From the moment the row is marked, any failure is "unknown":
+    the keys may have gone, so the answer never says nothing was sent."""
+    import time as _time
+    from scripts import claude_queue as Q
+    from scripts import steered_sends as SS
+    row = SS.get(ORCH_DIR, message_id)
+    if row is None:
+        return 404, {"ok": False, "outcome": "unknown-id", "message_id": message_id,
+                     "error": "That message is not known here (older than a day, or never queued); nothing was sent."}
+    if row.get("session") != session:
+        return _send_now_refused("other-agent")
+    st = _agent_status().get_agent_status(session) or {}
+    if _status_runtime(st) != "claude":
+        return 501, {"ok": False, "outcome": "unsupported",
+                     "error": "Send-now works only for Claude Code agents; this one has no such key."}
+    reg = _load_json(ORCH_DIR / "registry.json") or {}
+    _name, meta = _resolve_sess_meta(reg.get("agents", {}) if isinstance(reg, dict) else {}).get(session, (session, {}))
+    path = _seat_transcript_path(session, meta)
+    if not path:
+        return _send_now_refused("no-transcript")
+    at = float(row.get("at") or 0)
+    # The CLI queued it before the gateway verified the submit and wrote the row: its enqueue sits just before the
+    # row's time. A later re-send of the same words is never this message.
+    window = {"since": at - SEND_NOW_SINCE_SLACK_S, "until": at + SEND_NOW_UNTIL_SLACK_S}
+    text = row.get("text") or ""
+
+    def screen_says_empty():
+        """None when the screen shows the CLI's queue empty, else the refusal: positive evidence only. A screen that
+        cannot be read, or a menu or permission dialog over the queue, says nothing; a row that merely fails to match
+        exactly (a word the CLI wrapped mid-word) is no evidence the message is gone."""
+        raw = _capture_pane(session, lines=0, ansi=True)
+        if raw is None:
+            return "queue-unclear"
+        unsafe = _mid_turn_recheck(session, force=False, raw=raw)
+        if unsafe and unsafe["why"] in ("no_composer", "permission_pending"):
+            return "prompt-open"
+        return "queue-unclear" if (Q.screen_queue(raw) or []) else None
+
+    with _pane_guard(session) as held:
+        if not held:
+            return _send_now_refused("busy")
+        with _session_send_lock(session):
+            pic = Q.find(Q.read_rows(path), text, **window)
+            item = pic["item"]
+            if pic["matches"] > 1:
+                # The same words queued twice around this send: which one is this message cannot be told.
+                return _send_now_refused("queue-unclear")
+            if item is None or item["left"]:
+                # "Left" from the rows alone can be a dequeue paired wrongly (a tail that starts mid-queue), and "never
+                # queued" can be a tail too short: either is said only when the screen shows nothing queued at all.
+                refusal = screen_says_empty()
+                if refusal:
+                    return _send_now_refused(refusal)
+                SS.drop(ORCH_DIR, message_id)
+                # Only a dequeue or an absorbed_mid_turn remove was measured as delivery; any other remove (a message
+                # pulled back to edit) took it out of the queue without sending it.
+                delivered = item is not None and Q.left_as_delivery(item)
+                return 200, {"ok": True, "outcome": "already-sent" if delivered else "not-queued",
+                             "message_id": message_id}
+            fresh = SS.get(ORCH_DIR, message_id)          # re-read under the lock: a concurrent call may have marked it
+            if fresh is None:
+                return 404, {"ok": False, "outcome": "unknown-id", "message_id": message_id,
+                             "error": "That message is not known here (older than a day, or never queued); "
+                                      "nothing was sent."}
+            if fresh.get("chorded_at"):
+                # An earlier send-now sent the keys and could not confirm: never the keys twice for one message.
+                return 502, {"ok": False, "state": "unknown", "outcome": "unknown", "message_id": message_id,
+                             "error": SEND_NOW_UNKNOWN}
+            people = [o for o in pic["others"] if o["kind"] == "person"]
+            if people:
+                return _send_now_refused("other-queued", queued=len(people))
+            if _client_attached(session):
+                # A person at the terminal could type between the last look and the keys, and the chord would submit
+                # that too (fails closed when tmux cannot say). They are at the pane: the chord is theirs to press.
+                return _send_now_refused("terminal-attached")
+            # THE LAST LOOK before the keys (measured: the chord submits a typed draft with the queue).
+            raw = _capture_pane(session, lines=0, ansi=True)
+            shown = Q.screen_queue(raw or "")
+            unsafe = _mid_turn_recheck(session, force=False, raw=raw if raw is not None else "")
+            if unsafe:
+                return _send_now_refused(_RECHECK_TO_REFUSAL.get(unsafe["why"], "prompt-open"))
+            if not shown or len(shown) != 1 or not _screen_shows(shown[0], text):
+                return _send_now_refused("queue-unclear")
+            try:
+                SS.mark_chorded(ORCH_DIR, message_id)       # FAIL CLOSED: an unmarked chord could go twice
+            except OSError:
+                return _send_now_refused("send-failed", status=502)
+            unknown = {"ok": False, "state": "unknown", "outcome": "unknown", "message_id": message_id,
+                       "error": SEND_NOW_UNKNOWN}
+            try:
+                if _tmux("send-keys", "-t", _st(session), "C-x").returncode != 0:
+                    SS.unmark_chorded(ORCH_DIR, message_id)     # tmux refused the first key: nothing reached the pane
+                    return _send_now_refused("send-failed", status=502)
+                keys_at = _time.time()
+                if _tmux("send-keys", "-t", _st(session), "C-s").returncode != 0:
+                    # ctrl+x went and ctrl+s did not: the CLI waits for the chord's second key, and the next key into
+                    # the pane completes it. Nothing here can clear that safely; the answer says so.
+                    log.warning(f"SEND-NOW {session} {message_id}: ctrl+s refused after ctrl+x (chord half-pressed)")
+                    return 502, {**unknown, "error": SEND_NOW_HALF}
+                system_before = [o for o in pic["others"] if o["kind"] != "person"]
+                for _ in range(SEND_NOW_POLLS):
+                    _time.sleep(SEND_NOW_POLL_S)
+                    rows = Q.read_rows(path)
+                    now = Q.find(rows, text, **window)
+                    if now["item"] and now["item"]["left"]:
+                        try:
+                            SS.drop(ORCH_DIR, message_id)
+                        except OSError as e:                # the message went: the answer says so all the same
+                            log.warning(f"SEND-NOW {session} {message_id}: ledger drop failed ({type(e).__name__})")
+                        still = {(o["content"], o["at"]) for o in now["others"]}  # never by row index: the tail moves
+                        went = sorted({o["kind"] for o in system_before if (o["content"], o["at"]) not in still})
+                        return 200, {"ok": True, "outcome": "delivered-now", "message_id": message_id,
+                                     "step_ended": Q.step_ended(rows, now["item"], since=keys_at - 1.0),
+                                     "also_submitted": went}
+                return 502, unknown
+            except Exception as e:  # noqa: BLE001 — the keys may have gone: unknown, never "nothing was sent"
+                log.warning(f"SEND-NOW {session} {message_id}: failed after the mark ({type(e).__name__}); unknown")
+                return 502, unknown
+
+
+async def handle_agent_send_now(request):
+    """POST /agent-send-now {session, message_id} -> submit a person's message Claude Code already holds in its queue
+    (outcome delivered-steer, the id from that send's answer). 200 {outcome: delivered-now | already-sent |
+    not-queued, step_ended?, also_submitted?}; 409 {outcome: refused, reason, error} when anything else would go with
+    it or the pane is not safe (423 when someone is at the pane: a draft, an attached terminal); 501 unsupported for another runtime or a headless seat; 502 {state: unknown} when the
+    keys went and the leaving was not seen. A person's surface only. See _send_now."""
+    import asyncio
+    from scripts import steered_sends as SS
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    session = str((data or {}).get("session", "")).strip()
+    message_id = str((data or {}).get("message_id", "")).strip()
+    if not session or not SS.valid_id(message_id):
+        return _json({"ok": False, "error": "session and a message_id from a delivered-steer send are required"},
+                     status=400)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    if not _person_surface(request):
+        log.info(f"SEND-NOW -> {session} {message_id}: refused, not a person's surface {_caller_desc(request)}")
+        status, body = _send_now_refused("not-a-person", status=403)
+        return _json(body, status=status)
+    if _headless_seat_for(session):
+        return _json({"ok": False, "outcome": "unsupported",
+                      "error": "This agent runs without a terminal pane, so it has no send-now key."}, status=501)
+    if session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    status, body = await asyncio.get_event_loop().run_in_executor(None, lambda: _send_now(session, message_id))
+    log.info(f"SEND-NOW person -> {session} {message_id}: {body.get('outcome')} {body.get('reason') or ''} "
+             f"{body.get('step_ended') or ''} {_caller_desc(request)}")
+    return _json(body, status=status)
 
 
 async def _record_operator_message(request, session, text):
@@ -12797,6 +13036,7 @@ def build_app():
     app.router.add_get("/away", handle_away)
     app.router.add_get("/voice-memory", handle_voice_memory)
     app.router.add_post("/agent-message", handle_agent_message)
+    app.router.add_post("/agent-send-now", handle_agent_send_now)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)
     app.router.add_post("/agent-dev", handle_agent_dev)
     app.router.add_get("/agent-model", handle_agent_model)

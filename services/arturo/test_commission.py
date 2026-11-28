@@ -361,3 +361,14 @@ def test_gm_command_tool_lets_arturo_name_gm(mod):
     desc = next(t["function"]["description"] for t in mod.TOOLS if t["function"]["name"] == "gm_command")
     assert "never name it aloud" not in desc and "not a separate person" not in desc
     assert "gm" in desc and "never claim" in desc.lower()
+
+
+# ---- an empty ORCHESTRA_DIR is unset, as the native server reads it (native/server.py: `get(...) or <repo>`) --------
+# The proxy read "" as Path("") (the process's cwd), so the two disagreed on where the native tool ledger is.
+
+def test_an_empty_orchestra_dir_is_the_checkout_like_the_native_server(mod):
+    native_root = pathlib.Path("services/arturo/native/server.py").resolve().parents[3]
+    assert mod._REPO_ROOT == native_root
+    assert mod._orchestra_dir({"ORCHESTRA_DIR": ""}) == native_root
+    assert mod._orchestra_dir({}) == native_root
+    assert mod._orchestra_dir({"ORCHESTRA_DIR": "/srv/data"}) == pathlib.Path("/srv/data")

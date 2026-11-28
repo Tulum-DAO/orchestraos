@@ -174,13 +174,15 @@ function lineStartAt(path: string, pos: number): number {
 }
 
 /** The uuid and message id of the JSON line starting at `off`, or null when that line is not one JSON value with a uuid. */
-function keysOfLineAt(path: string, off: number, size: number): { uuid: string; mid: string | null } | null {
+function keysOfLineAt(path: string, off: number, size: number):
+    { uuid: string; mid: string | null; assistant: boolean; sidechain: boolean; next: number } | null {
   let end = off;
   let text = '';
+  let next = size;
   while (end < size) {
     const block = readRange(path, end, Math.min(size, end + SCAN_BLOCK));
     const nl = block.indexOf(0x0a);
-    if (nl >= 0) { text += block.subarray(0, nl).toString('utf-8'); break; }
+    if (nl >= 0) { text += block.subarray(0, nl).toString('utf-8'); next = end + nl + 1; break; }
     text += block.toString('utf-8');
     end += block.length;
     if (!block.length) break;
@@ -190,7 +192,9 @@ function keysOfLineAt(path: string, off: number, size: number): { uuid: string; 
     const u = o?.uuid;
     if (typeof u !== 'string' || !u) return null;
     const m = o?.message?.id;
-    return { uuid: u, mid: typeof m === 'string' && m ? m : null };
+    // `next`: where the line after it starts (read on the way: a long line is not read again going forward).
+    return { uuid: u, mid: typeof m === 'string' && m ? m : null, assistant: o?.type === 'assistant',
+      sidechain: o?.isSidechain === true, next };
   } catch {
     return null;
   }
@@ -312,7 +316,7 @@ function read<S>(path: string, parser: LogParser<S>, want: number): Entry {
   }
   // A tail read: from the line start at or under size - want, moved back while the line before shares the first
   // line's uuid (one Claude reply's lines never straddle a chunk edge, so parts and refs equal the whole-file build's).
-  const start = Number.isFinite(want) && want < st.size ? chunkStartAt(path, st.size - want, st.size) : 0;
+  const start = Number.isFinite(want) && want < st.size ? chunkStartAt(path, st.size - want, st.size, sidechainOf(parser)) : 0;
   // A widening of the entry this file has (same bytes, a start above the entry's): the lines between are parsed on
   // their own and put above the entry's raw items, when the grammar says the join is exact (clean). Otherwise, below:
   // the range is read whole again.
@@ -346,7 +350,7 @@ function read<S>(path: string, parser: LogParser<S>, want: number): Entry {
 export function logRange<S>(path: string, parser: LogParser<S>, lo: number, hi: number): CachedLog & { end: number; eof: boolean } {
   const st = statSync(path);
   const slot = `${parser.key}\n${path}`;
-  const start = lo <= 0 ? 0 : chunkStartAt(path, Math.min(lo, st.size), st.size);
+  const start = lo <= 0 ? 0 : chunkStartAt(path, Math.min(lo, st.size), st.size, sidechainOf(parser));
   const end = hi >= st.size ? st.size : lineEndAt(path, Math.max(hi, start), st.size);
   if (start === 0 && end === st.size) { forget(slot); return { ...cachedLog(path, parser), end: st.size, eof: true }; }
   // The window read before, widened: only the lines outside it are parsed (above it on their own, when the join is
@@ -428,10 +432,14 @@ function forget(slot: string): void {
 
 /** The start of a chunk that holds byte `pos`: the start of its line, moved back while the line before belongs to
  *  the same record group (sameRecord: one Claude reply's lines never straddle a chunk edge, by uuid or message id). */
-function chunkStartAt(path: string, pos: number, size: number): number {
+/** Whether a parser reads a subagent's own log (its sidechain rows kept: chat-transcript.ts logParser's key). */
+const sidechainOf = (parser: { key: string }): boolean => parser.key.endsWith(':sidechain');
+
+function chunkStartAt(path: string, pos: number, size: number, sidechain = false): number {
   let start = lineStartAt(path, pos);
+  let k: ReturnType<typeof keysOfLineAt> = null;
   if (start > 0) {
-    let k = keysOfLineAt(path, start, size);
+    k = keysOfLineAt(path, start, size);
     for (let guard = 0; k && start > 0; guard++) {
       if (guard >= BACK_SCAN_MAX) return 0;   // a record group longer than the scan: the whole file, never a start inside it
       const prev = lineStartAt(path, start - 1);
@@ -441,7 +449,53 @@ function chunkStartAt(path: string, pos: number, size: number): number {
       k = pk;
     }
   }
-  return start;
+  return start > 0 ? replyStart(path, start, size, k, sidechain) : start;
+}
+
+/** A chunk start never falls between two blocks of one reply that other lines split: parallel tool calls are one reply
+ *  (one message.id) written as tool_use, its result, an attachment, the next tool_use. The reply's usage goes on its
+ *  first drawn item (chat-transcript.ts parseClaudeLines), so a chunk that started after that block would put it on a
+ *  later one. `start` (a record group's first line) moves back to the reply's first block when the nearest reply above
+ *  it goes on below it. Measured on real logs: 3 to 5 lines split a reply's blocks. Past a scan's guard the start stays
+ *  (see below). `sidechain`: the log is a subagent's own, read with its sidechain rows kept. */
+function replyStart(path: string, start: number, size: number,
+                    atStart: { mid: string | null; assistant: boolean; sidechain: boolean; next: number } | null,
+                    sidechain: boolean): number {
+  // The nearest reply line above, over the lines that are not one (results, attachments, user turns, and the sidechain
+  // rows of a seat's own log; in a subagent's log, read with them kept, they are its replies). None within the scan: the
+  // start stays. A tradeoff, not a proof: a reply's blocks measured 3 to 5 lines apart, so a run longer than the scan is
+  // taken as no reply's middle (a reply split wider than that still gets a start inside it, never a whole-file read).
+  const replyMid = (k: { mid: string | null; assistant: boolean; sidechain: boolean } | null): string | null =>
+    (k?.assistant && k.sidechain === sidechain ? k.mid : null);
+  let at = start;
+  let mid: string | null = null;
+  for (let guard = 0; !mid; guard++) {
+    if (at <= 0 || guard >= BACK_SCAN_MAX) return start;
+    at = lineStartAt(path, at - 1);
+    mid = replyMid(keysOfLineAt(path, at, size));
+  }
+  // Does that reply go on at or below the start? Its next assistant line says (usually the start line or the next).
+  let off = start;
+  let goesOn = false;
+  for (let guard = 0; off < size; guard++) {
+    if (guard >= BACK_SCAN_MAX) break;        // no reply line within the scan: that reply has ended
+    const k = guard === 0 && atStart ? atStart : keysOfLineAt(path, off, size);
+    const m = replyMid(k);
+    if (m) { goesOn = m === mid; break; }
+    off = k ? k.next : lineEndAt(path, off, size);
+  }
+  if (!goesOn) return start;
+  // It straddles the start: back to its first block, over its own blocks and the lines between them (the guard counts
+  // the lines since the last block found: a reply of many parallel calls spans more than the guard; past it, the same
+  // tradeoff as above).
+  let first = at;
+  for (let guard = 0; at > 0 && guard < BACK_SCAN_MAX; guard++) {
+    at = lineStartAt(path, at - 1);
+    const m = replyMid(keysOfLineAt(path, at, size));
+    if (m === mid) { first = at; guard = -1; }
+    else if (m) break;
+  }
+  return first;
 }
 /** How many lines back a chunk start is moved over one record group before the whole file is read instead. */
 const BACK_SCAN_MAX = 64;

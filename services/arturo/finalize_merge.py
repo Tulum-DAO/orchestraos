@@ -168,8 +168,10 @@ def native_tool_turns(conv_id, ledger_path):
         text = res.get("result")
         if text is None and res.get("error"):             # a failed run carries error/detail, not result
             text = ": ".join(str(x) for x in (res.get("error"), res.get("detail")) if x)
-        # the run's own outcome: a gm_command that only promised "gm has it" is ok:false, not done
+        # the run's own outcome: a gm_command that only promised "gm has it" is ok:false, not done; a tool handed over
+        # and still running when the call ended (#680) holds the ledger's IN_PROGRESS placeholder: running, not failed
+        status = "done" if res.get("ok") is True else "running" if res.get("error") == "IN_PROGRESS" else "not_ok"
         out.append({"role": "tool", "tool": name, "input": args if isinstance(args, dict) else {},
-                    "result": ("" if text is None else str(text))[:300], "status": "done" if res.get("ok") is True else "not_ok",
+                    "result": ("" if text is None else str(text))[:300], "status": status,
                     "ts": float(created), "call_id": call_id, "source": "native"})
     return out
