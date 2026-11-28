@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyTextDelta, applyToolCall, applyToolResult, groupParts, type TurnPart } from './turnParts.js';
+import { applyTextDelta, applyToolCall, applyToolResult, groupParts, jobChip, type TurnPart } from './turnParts.js';
 
 const call = (call_id: string, name = 'list_agents', args_summary = '{}') => ({ call_id, name, args_summary });
 
@@ -94,4 +94,13 @@ test('back-to-back tool-only turns of a call fold into one run; words between th
   assert.equal(turns[1].parts!.length, 1);
   const twins = foldToolTurns([{ role: 'arturo', text: '', parts: [tool('tool')] }, { role: 'arturo', text: '', parts: [tool('tool')] }]);
   assert.deepEqual(twins[0].parts!.map((p) => p.callId), ['tool', 'tool#1']);   // one card never repeats a row id
+});
+
+// gm on the live call card (2026-11-27): a call's own tool runs drew "Background job · open" under the call card. A run
+// the call made (a call_tool row, or the live call's tool turn) is not a job in Arturo's tray: no chip for it.
+test("the job chip is for a turn's background work, never for a call's own tool runs", () => {
+  const tools = [{ name: 'gm_command' }, { name: 'research' }];
+  assert.equal(jobChip({}, tools), true);                                 // a typed turn that started research
+  assert.equal(jobChip({ callTools: true }, tools), false);               // the call's own runs
+  assert.equal(jobChip({}, [{ name: 'list_agents' }]), false);
 });

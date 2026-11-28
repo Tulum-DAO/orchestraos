@@ -94,3 +94,11 @@ test("a voice call's card asks for the every-row header; the kit's other cards k
   assert.match(card, /everyTool = false/);
   assert.match(card, /\(everyTool \? callRunSummary : runSummary\)\(calls, interrupted\)/);
 });
+
+test("a call card asks jobChip for its chip and is handed the turn's callTools flag", () => {
+  const call = src('components/kit/CallCard.tsx');
+  assert.match(call, /jobChip\(t, g\.tools\)/);
+  assert.doesNotMatch(call, /JOB_TOOLS/);
+  const view = src('components/kit/ThreadView.tsx');
+  assert.match(view, /<CallCard [^\n]*callTools/);
+});

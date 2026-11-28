@@ -30,13 +30,13 @@ import { MessageText } from './Message';
 import { AgentTurn, UserTurn } from './Turns';
 import type { Skin } from './Markdown';
 import { fromPart } from '../../lib/toolCalls';
-import { foldToolTurns, groupParts, hasToolParts, type TurnPart } from '../../lib/turnParts';
+import { foldToolTurns, groupParts, hasToolParts, jobChip, type TurnPart } from '../../lib/turnParts';
 import { fetchVoiceCall } from '../../lib/api';
 import { fmtClock, recordLines, transcriptText, type CallLine, type CallRecord } from '../../lib/threadKit/calls';
 import { assistantName } from '../../lib/assistantName';
 
 /** `key`: the turn's own name in the thread (stable as older turns of the call load above it). */
-export interface CallBubble { role: 'user' | 'arturo'; text: string; parts?: TurnPart[]; key?: string }
+export interface CallBubble { role: 'user' | 'arturo'; text: string; parts?: TurnPart[]; key?: string; callTools?: boolean }
 
 // One read per call per page load, however often the feed re-renders. A miss is not remembered: a call that has just
 // ended may not be saved yet.
@@ -82,8 +82,6 @@ export interface CallCardProps {
   engine?: 'native' | 'relay' | null;
 }
 
-/** Arturo's tools that hand the work to a background job (services/arturo: async_task and the tools built on it). */
-const JOB_TOOLS = new Set(['async_task', 'research', 'deep_query', 'deep_think', 'ask_gm', 'spawn_agent']);
 /** Open Arturo's job drawer (components/arturo/JobTray.tsx listens). */
 export const OPEN_JOBS_EVENT = 'orchestra:open-jobs';
 const openJobs = () => window.dispatchEvent(new Event(OPEN_JOBS_EVENT));
@@ -285,7 +283,7 @@ function OneCallCard({ callId, turns = [], live = false, startTs, endTs, liveSin
                   <div key={`${t.key ?? i}-${gi}`} className="call-tools">
                     <ToolCard calls={g.tools.map(fromPart)} skin={skin} everyTool />
                     {/* Arturo handed work to a job: a chip that opens his job drawer (JobTray) */}
-                    {g.tools.some((x) => JOB_TOOLS.has(x.name)) && (
+                    {jobChip(t, g.tools) && (
                       <button type="button" className="call-job-chip mt-1 inline-flex items-center gap-1.5 rounded-full border border-line bg-field px-2.5 py-0.5 text-px12 text-ink-2 hover:text-ink"
                               onClick={openJobs} data-job-chip>
                         Background job · open
