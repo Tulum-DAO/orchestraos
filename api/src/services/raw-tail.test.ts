@@ -227,7 +227,8 @@ test('a failed raw read is read again on the next tick, without waiting for the 
     return real.call(this, p);
   };
   try {
-    const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'r' }) });
+    const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'r' }),
+      interrupted: { read: () => [], sig: () => '' } });         // fixed: the still ticks take the no-op path
     const off = t.subscribe(() => {});
     const failed = t.turn();
     assert.equal(failed.known, false, 'the read failed');
@@ -242,6 +243,39 @@ test('a failed raw read is read again on the next tick, without waiting for the 
     off();
   } finally {
     RawTail.prototype.update = real;
+  }
+});
+
+// Gate round 1 on #717: a retry that fails partway through a fresh read (its fields already set) must not leave the tail
+// looking read: the next still tick would match size and mtime and never read it again.
+test('a retry that fails partway through a read is read again on the next still tick', () => {
+  const f = join(dir, 'read-fails-partway.jsonl');
+  writeFileSync(f, [asked('go'), said('All done.')].join('\n') + '\n');
+  const realUpdate = RawTail.prototype.update;
+  const proto = RawTail.prototype as any;
+  const realProbe = proto.keepProbe;
+  let updateFails = 1, probeFails = 1;
+  RawTail.prototype.update = function (this: RawTail, p: string) {
+    if (updateFails-- > 0) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+    return realUpdate.call(this, p);
+  };
+  proto.keepProbe = function (this: RawTail, fd: number) {
+    if (probeFails-- > 0) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    return realProbe.call(this, fd);
+  };
+  try {
+    const t = new TranscriptTailer({ agentId: 'seat', resolve: () => ({ path: f, sid: 'p' }),
+      interrupted: { read: () => [], sig: () => '' } });
+    const off = t.subscribe(() => {});
+    assert.equal(t.turn().known, false, 'the first read failed');
+    t.tick();                                                   // the retry's fresh read fails after setting its fields
+    assert.equal(t.turn().known, false);
+    t.tick();                                                   // still: read again from scratch, and it reads
+    assert.equal(t.turn().known, true, 'a partway failure is no read');
+    off();
+  } finally {
+    RawTail.prototype.update = realUpdate;
+    proto.keepProbe = realProbe;
   }
 });
 

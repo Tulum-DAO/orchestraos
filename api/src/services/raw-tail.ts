@@ -58,12 +58,13 @@ export class RawTail {
   constructor(private readonly max = RAW_TAIL_LINES, private readonly maxBytes = RAW_TAIL_MAX_BYTES) {}
 
   /** The log could not be read: keep nothing and say so (`cut`, no lines: live-step's turn is not known, so no step),
-   *  and read it fresh next time. A read that fails again changes nothing (same lines, same version). */
+   *  and read it fresh next time. Every field is cleared, also when it had already failed: a read that failed partway
+   *  (its fields set) must not look read. A read that fails again keeps the same lines and version. */
   fail(): void {
-    if (this.failed) return;
+    const was = this.failed;
     this.path = null; this.ino = -1; this.mtimeMs = -1; this.end = 0; this.partialBytes = 0; this.probe = Buffer.alloc(0);
     this.midLine = false; this.lines = []; this.cut = true; this.failed = true;
-    this.version++;
+    if (!was) this.version++;
   }
 
   /** Forget the log (no session, or a new one). */
