@@ -3801,7 +3801,7 @@ def _file_commission_row(session, task):
         store = _message_store()
         subject = (task or f"commissioned {session}").strip().splitlines()[0][:80]
         return store.send(from_agent="arturo", to_agent=session, type="task", subject=subject,
-                          body=task or subject, priority="medium", source="arturo", tenant_id="operator")
+                          body=task or subject, priority="medium", source="arturo")
     except Exception as e:  # noqa: BLE001
         log.warning(f"commission row for {session} not filed: {e}")
         return ""
@@ -5295,7 +5295,7 @@ def _execute_tool_raw(name, args, user_turns=None):
             msg_id = store.send(
                 from_agent=from_agent, to_agent=to_agent,
                 type="task", subject=subject, body=body,
-                priority=priority, source="jarvis", tenant_id="operator",
+                priority=priority, source="jarvis",
             )
             return f"Message sent to {to_agent}: [{msg_id}] {subject}. Router will deliver when {to_agent} is idle."
         except Exception as e:
@@ -5324,7 +5324,7 @@ def _execute_tool_raw(name, args, user_turns=None):
                     lines.append(f"  [{m.get('created_at','')[:19]}] {m.get('from_agent','')} → {m.get('to_agent','')}: {m.get('subject','')[:60]} [{m.get('status','')}]")
                 return "\n".join(lines)
             else:
-                msgs = store.inbox(agent_id, tenant_id="operator")
+                msgs = store.inbox(agent_id)
                 pending = [m for m in msgs if m.get("status") == "pending"]
                 parts = [f"Inbox for {agent_id}: {len(pending)} pending messages"]
                 for m in pending[:5]:

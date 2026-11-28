@@ -77,6 +77,8 @@ class Settings:
     db_checkpoint_enabled: bool = True
     db_checkpoint_interval: int = 300
     runtime_dir: Path = Path(DEFAULT_RUNTIME_DIR)
+    # The ONE tenant every message is written under and read by (see message_tenant_from()).
+    message_tenant: str = "operator"
 
     @property
     def token_file(self) -> Path:
@@ -270,8 +272,62 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         db_checkpoint_enabled=bool(_get(raw, "db_checkpoint", "enabled", True)),
         db_checkpoint_interval=int(_get(raw, "db_checkpoint", "interval_seconds", 300)),
         runtime_dir=Path(os.path.expanduser(str(rot.get("runtime_dir", DEFAULT_RUNTIME_DIR)))),
+        message_tenant=message_tenant_from(raw),
     )
     return st
+
+
+def message_tenant_from(raw: dict | None) -> str:
+    """The tenant every message is written under.
+
+    Precedence: $ORCHESTRA_TENANT > [messages] tenant > [operator] id > "operator".
+    One value for writers AND readers: a reader filtering a tenant no writer uses hides mail
+    (2026-11-27: seven messages stranded, one for 36 h, between "operator" and "shaw")."""
+    env = os.environ.get("ORCHESTRA_TENANT", "").strip()
+    if env:
+        return env
+    raw = raw or {}
+    for section, key in (("messages", "tenant"), ("operator", "id")):
+        v = str(_get(raw, section, key, "") or "").strip()
+        if v:
+            return v
+    return "operator"
+
+
+def message_also_read_from(raw: dict | None) -> list:
+    """Other tenant names that are the SAME owner as the message tenant (an install that renamed
+    itself, or two trees sharing one bus): readers read them too. Explicit only, never inferred.
+    $ORCHESTRA_TENANT_ALSO_READ (comma list) > [messages] also_read (list)."""
+    env = os.environ.get("ORCHESTRA_TENANT_ALSO_READ")
+    if env is not None:
+        vals = env.split(",")
+    else:
+        vals = _get(raw or {}, "messages", "also_read", []) or []
+        if isinstance(vals, str):
+            vals = [vals]
+    out = []
+    for v in vals:
+        v = str(v).strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def message_tenancy(repo_root: Path | None = None, config_path: Path | None = None) -> tuple:
+    """(tenant, read_tenants) for this install, read from orchestra.toml ALONE, so an unrelated bad
+    setting (a non-numeric port) can never change who owns a message. read_tenants = the tenant
+    first, then also_read. An unreadable config resolves from the environment, then "operator"."""
+    root = Path(repo_root or repo_root_from_env()).resolve()
+    path = Path(config_path or config_path_for(root))
+    raw: dict = {}
+    try:
+        if path.exists():
+            raw = read_toml(path)
+    except Exception:  # noqa: BLE001 - never stop mail over a config parse error
+        raw = {}
+    tenant = message_tenant_from(raw)
+    reads = [tenant] + [t for t in message_also_read_from(raw) if t != tenant]
+    return tenant, reads
 
 
 def _connectable(host: str) -> str:

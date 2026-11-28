@@ -114,6 +114,15 @@ id = "operator"
 # from the server on purpose: a cloud server usually runs in UTC, not where you are.
 timezone = ""
 
+[messages]
+# The ONE tenant every message is written under (msg_store send, the Grok mail watcher, Arturo).
+# Empty = [operator] id. $ORCHESTRA_TENANT overrides both.
+tenant = ""
+# Other names that are the SAME owner as `tenant` (an old name your bus still holds rows under).
+# Readers read exactly `tenant` + these, never any other tenant; pending mail under any other
+# tenant is reported by count on stderr, never shown. $ORCHESTRA_TENANT_ALSO_READ (comma list) overrides.
+also_read = []
+
 [machines]
 # The dashboard's Mac+VPS status view (api/src/routes/system.ts) is still
 # shaped for a two-machine (laptop + VPS) reference topology, not a generic
