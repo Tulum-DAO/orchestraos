@@ -116,3 +116,38 @@ def test_prompt_keeps_the_self_introduction_proof_and_drops_the_rate():
     prompt = extractor.build_prompt("x")[0]
     assert "a self-introduction" in prompt and "verbatim from Shaw's own turn" in prompt
     assert "1000" not in prompt
+
+
+# --- Grok first pass on #713 ---------------------------------------------------------------------
+
+GENERIC_THREE = GENERIC.replace("**SPEAKER_01** _[00:06]_\nGreat to meet you.",
+                                "**Dana Reyes** _[00:06]_\nGreat to meet you.\n\n**SPEAKER_02** _[00:08]_\nHi.")
+
+
+def test_unnamed_voice_still_holds_when_shaw_is_only_evidence_proven(base, monkeypatch):
+    """The unnamed-voice relaxation needs Shaw identified by his configured name, not a quote."""
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw")
+    call = dataclasses.replace(base, transcript=GENERIC_THREE)
+    roster = participants.resolve(call, {"shaw_label": "SPEAKER_00", "items": []}, [], shaw_emails=SHAW)
+    assert roster.verified_names == {"Dana Reyes"}
+    assert participants.apply_trust([_item("shaw", "SPEAKER_00")], roster)[0].trust == "inferred"
+
+
+def test_surname_alone_does_not_prove_shaw(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw")
+    call = dataclasses.replace(base, transcript=GENERIC.replace("Hi, this is Shaw from the studio.",
+                                                                "Hi, Cole here from the studio."))
+    with pytest.raises(extract.AttributionError):
+        _ground(call, "SPEAKER_00", "Hi, Cole here from the studio.")
+
+
+def test_name_word_inside_another_word_does_not_prove_shaw(base, monkeypatch):
+    monkeypatch.setenv("POSTCALL_SHAW_NAMES", "Shaw Cole,Shaw")
+    call = dataclasses.replace(base, transcript=GENERIC.replace("Hi, this is Shaw from the studio.",
+                                                                "Hi, this is Shawna from the studio."))
+    with pytest.raises(extract.AttributionError):
+        _ground(call, "SPEAKER_00", "Hi, this is Shawna from the studio.")
+
+
+def test_prompt_no_longer_offers_being_addressed_by_name_as_proof():
+    assert "being addressed by name" not in extractor.build_prompt("x")[0]

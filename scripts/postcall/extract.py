@@ -119,9 +119,16 @@ def shaw_voices(shaw_label, labels):
 
 
 def _names_shaw(text):
-    """True when `text` contains a word of one of Shaw's configured names ("Hi, this is Shaw")."""
-    words = set(re.findall(r"[^\W\d_]+", norm_name(text)))
-    return any(w in words for n in _shaw_names() for w in re.findall(r"[^\W\d_]+", n) if len(w) >= 2)
+    """True when `text` names Shaw: one of his configured names in full, or its given name (first
+    word), as whole words ("Hi, this is Shaw"). A surname alone ("Cole") never does: a lone "Cole" can
+    be someone else (Shaw 2026-11-28)."""
+    words = re.findall(r"[^\W\d_]+", norm_name(text))
+    joined = " " + " ".join(words) + " "
+    for n in _shaw_names():
+        parts = re.findall(r"[^\W\d_]+", n)
+        if parts and (f" {' '.join(parts)} " in joined or parts[0] in words):
+            return True
+    return False
 
 
 def _named_shaw_label(label, call_turns):
