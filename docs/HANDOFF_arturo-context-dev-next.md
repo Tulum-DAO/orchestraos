@@ -20,6 +20,7 @@
 - **Dates (gm msg_d9158653, Shaw: accelerate):** #674 live 23:00 Tulum TONIGHT (needs Shaw's approve by ~22:30 + respawn); leg-2 probe numbers 21:00 Tulum tonight (T2), fix PR 10:00 tomorrow.
 
 ## 2. Open Loops (in order)
+- [ ] **07:1xZ 11-28:** builders released (orchestra-builder msg_c07b5f3b, orchestraos-builder too). On builder's flip mail: re-run read_tenants() from native-a6226cd (expect ['shaw','operator']) and mail it back. gm (msg_2aaa07da): NO synthetic session; watch Shaw's NEXT call card (~/.orchestra/state/arturo/native/calls newest) and mail gm its tool-run count. Rollback native-c370a2e stands until that call lands.
 - [ ] **gm GO msg_0041b4f9 (07:00Z 11-28) native respawn a6226cd:** suite green at a6226cd first (count), quiet minute (relay journal), respawn-pane -k cd-only, verify new pid :5076 + healthz + read_tenants()==['operator'] from worktree + ONE tool round-trip on the new process; rollback native-c370a2e. Then mail orchestra-builder 'native carries #711', gm DONE pid+counts. #705 rides the next respawn.
 - [ ] **NEXT PRs (gm, in order):** follow-up (1) #704 partial-archive guard persisted as a marker in the thread; then (3) claim gate catches completions said alone ("written down", "went through", "already saved", "was delivered").
 - [ ] **BACKLOG (dated 2026-11-28, gm):** (2) gateway journal rewrite races proxy journal writes; (5) fallback_started_s leg (session_started_s/first_audio_s are the rejected session's on fallback); (6) #675 time-overlap journal link + default roots differ when ORCHESTRA_DIR unset.
