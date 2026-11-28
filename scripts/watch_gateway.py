@@ -12021,10 +12021,11 @@ async def handle_surface_post(request):
     return _json({"ok": True})
 
 
-def _record_surface(device, route, hint, stack, focused, conv_id=None, cards=None):
+def _record_surface(device, route, hint, stack, focused, conv_id=None, cards=None, host=None):
     """Write one device's slot of active-surface.json (+ the call's sidecar). Shared by POST /surface
     and the browser's live call, which reports its page over the call socket. `cards`, already
-    clipped (_screen_cards), rides in the slot for the voice brain's readout; absent = none."""
+    clipped (_screen_cards), rides in the slot for the voice brain's readout; absent = none. `host`, already
+    bounded (_host_page_of), is the app Arturo is used from (the finance tracker) and its page."""
     import hashlib
     import time
     now = time.time()
@@ -12036,7 +12037,7 @@ def _record_surface(device, route, hint, stack, focused, conv_id=None, cards=Non
         doc = {"devices": {}}
     doc["devices"][device] = {"route": route, "hint": hint, "device": device,
                               "stack": stack, "focused": focused, "updated_at": now,
-                              **({"cards": cards} if cards else {})}
+                              **({"cards": cards} if cards else {}), **({"host": host} if host else {})}
     doc["current"] = _surface_current(doc["devices"], now)
     SURFACE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = SURFACE_PATH.with_suffix(".tmp")
@@ -12079,7 +12080,19 @@ def _screen_cards(raw):
     return picked if picked and picked.get("cards") else None
 
 
-def _record_web_call_surface(route, focused_entity, conv_id=None, cards=None):
+def _host_page_of(raw):
+    """The app a web call is made from and its page ({app, route, title?, summary?}, bounded by
+    services/arturo/host_page.py), or None: none sent, a bad record, or the reader is missing."""
+    if not raw:
+        return None
+    try:
+        from services.arturo.host_page import from_frame
+        return from_frame(raw)
+    except Exception:  # noqa: BLE001 — the page alone still goes through
+        return None
+
+
+def _record_web_call_surface(route, focused_entity, conv_id=None, cards=None, host=None):
     """The dashboard's page during a live call ({route, focusedEntity:"kind:id", cards?} from the call
     socket) as the `web` device's surface, so the voice brain's screen readout and read_screen_context
     see it like the phone's, the cards on screen included. Bounded and validated like POST /surface; a
@@ -12096,7 +12109,7 @@ def _record_web_call_surface(route, focused_entity, conv_id=None, cards=None):
     hint = f"viewing {entity['kind']} {entity['id']}" if entity else None
     stack = [{"z": 0, "role": "base", "route": route, "entity": entity, "hint": hint}]
     _record_surface("web", route, hint, stack, _surface_focused(stack), conv_id,
-                    cards=_screen_cards(cards))
+                    cards=_screen_cards(cards), host=_host_page_of(host))
     return True
 
 
