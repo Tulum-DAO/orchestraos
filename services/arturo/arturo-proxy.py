@@ -51,7 +51,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # DATA dir (state/, logs/, registry.json) — from orchestra.toml via the supervisor /
 # orchestra-env.sh; defaults to the checkout so a bare run still works.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
+
+
+def _orchestra_dir(env=os.environ):
+    """An empty ORCHESTRA_DIR is unset (the checkout), as the native server reads it: "" used to be Path(""), the
+    process's cwd, so the two disagreed on where the native tool ledger is."""
+    return Path(env.get("ORCHESTRA_DIR") or str(_REPO_ROOT))
+
+
+ORCHESTRA_DIR = _orchestra_dir()
 from services.arturo import secrets_vault as _secrets_vault
 try:
     from services.arturo import source_health as _source_health   # fresh/stale/missing gate on prompt sources
@@ -779,6 +787,73 @@ def _settle_for_finalize(conv_id="", cap_s=10.0, quiet_s=1.0):
     log.warning(f"finalize settle cap hit ({cap_s}s) for conv={conv_id or '(none)'} — proceeding")
 
 
+def _card_owed(client, own_turns):
+    """(thread, the caller's own lines, caller) when this client journal still owes its Arturo thread a call card."""
+    tid = client.get("thread_id")
+    if (tid and not client.get("thread_card_written") and not client.get("card_gaveup") and not client.get("agent")
+            and _call_threads.valid_thread_id(tid)):
+        return tid, list(own_turns), client.get("thread_principal")
+    return None
+
+
+def _write_call_card(cpath, call_id, thread_id, turns, principal):
+    """The card goes in (once: the thread is asked), and only then is the journal marked: a failed one is owed still."""
+    if not _archive_client_call(call_id, thread_id, turns, principal):
+        return False
+    from services.arturo.call_journal import _atomic_write
+    import json as _json
+    with _JOURNALS_LOCK:
+        try:
+            d = _json.loads(cpath.read_text())
+            d["thread_card_written"] = True
+            d.pop("own_turns", None)
+            _atomic_write(cpath, d)
+        except Exception as e:  # noqa: BLE001 — the card is in; the thread's own once check covers a re-drive
+            log.warning(f"call {call_id}: card written but the journal was not marked: {e!r}")
+    return True
+
+
+_CARD_RETRY_CAP = 8
+
+
+def _retry_owed_cards(now=None):
+    """One sweeper pass: a call card a failed archive still owes (the journal kept the caller's own lines) is written
+    here. Nothing else re-drives a finalize but the gateway's re-POST, which rewrites the journal whole. Backed off
+    (30 s, doubling, 15 min at most) and capped. A refusal counts as a failed attempt rather than ending it at once: a
+    locked store reads as a refusal for a device caller, and a refused thread is never written anyway."""
+    import json as _json
+    from services.arturo.call_journal import _atomic_write
+    now = time.time() if now is None else now
+    for p in VOICE_CALLS_DIR.glob("vc_client_*.json"):
+        try:
+            d = _json.loads(p.read_text())
+        except Exception:
+            continue
+        if "own_turns" not in d or (d.get("card_next_ts") or 0) > now:
+            continue
+        owed = _card_owed(d, d["own_turns"])
+        if not owed:
+            continue
+        call_id = d.get("call_id") or p.stem
+        if _write_call_card(p, call_id, *owed):
+            continue
+        with _JOURNALS_LOCK:
+            try:
+                d = _json.loads(p.read_text())
+            except Exception:
+                continue
+            if d.get("thread_card_written") or "own_turns" not in d:
+                continue                    # written meanwhile, or the gateway rewrote the journal
+            n = int(d.get("card_attempts") or 0) + 1
+            d["card_attempts"] = n
+            if n >= _CARD_RETRY_CAP:
+                d["card_gaveup"] = True
+                log.warning(f"call {call_id}: call card given up after {n} attempts")
+            else:
+                d["card_next_ts"] = now + min(900, 30 * 2 ** (n - 1))
+            _atomic_write(p, d)
+
+
 def finalize_from_client(client_call_id="", conv_id=""):
     # A.5 client-authoritative finalize: the client journal (source=client, status=ended, full-text
     # spine) is the trigger. Merge the overlapping SERVER journal's TOOL turns + the surface sidecar
@@ -795,6 +870,18 @@ def finalize_from_client(client_call_id="", conv_id=""):
 
     # settle BEFORE taking the lock (poll-sleep holds no lock)
     _settle_for_finalize(conv_id=conv_id)
+
+    # gm already has this call, so the merge below is skipped; a call card a failed archive still owes is written.
+    owed = None
+    with _JOURNALS_LOCK:
+        try:
+            _d = _json.loads(cpath.read_text())
+        except Exception:
+            _d = {}
+        if _d.get("gm_injected") or _d.get("gm_inject_gaveup"):
+            owed = _card_owed(_d, _d["own_turns"] if "own_turns" in _d else _d.get("turns", []))
+    if owed:
+        _write_call_card(cpath, _d.get("call_id") or cpath.stem, *owed)
 
     do_inject = False
     summary = ""
@@ -852,7 +939,7 @@ def finalize_from_client(client_call_id="", conv_id=""):
         # The caller's OWN lines, before the merge: the thread gets these and nothing else. The merge can link any
         # overlapping server journal (the time-window fallback) and recovers a role this journal lacks from it, so
         # merged user/arturo lines may be another call's; they stay in the journal and the gm record only.
-        own_turns = list(client.get("turns", []))
+        own_turns = list(client["own_turns"] if "own_turns" in client else client.get("turns", []))
         merged = _fm.merge_timeline(client.get("turns", []), server_turns, surface_events)
         summary = _endcall.sanitize_summary(_fm.summarize(merged))
         client["turns"] = merged
@@ -884,14 +971,13 @@ def finalize_from_client(client_call_id="", conv_id=""):
             client["gm_inject_suppressed"] = True
             log.info(f"finalize_from_client: {cpath.name} is a trivial split-call stub — inject SUPPRESSED")
         # Item 10: a client journal that names its Arturo thread (the dashboard's native engine) gets its call card
-        # there. Claimed HERE, in the same write as the merge, so a re-driven finalize never writes it twice; the
-        # thread write itself happens after the lock. An agent's call lives in that agent's chat (as on the relay).
-        _tid = client.get("thread_id")
-        if (_tid and not client.get("thread_card_written") and not client.get("agent")
-                and _call_threads.valid_thread_id(_tid)):
-            client["thread_card_written"] = True
-            card_thread = _tid
-            card_principal = client.get("thread_principal")
+        # there, after the lock. It is marked written only once it is in the thread (the thread's own once check
+        # stops a double), so a card that failed is written by the call's next finalize; until then the journal
+        # keeps the caller's own lines, since its turns are now the merge. An agent's call lives in that agent's chat.
+        card = _card_owed(client, own_turns)
+        if card:
+            card_thread, own_turns, card_principal = card
+            client["own_turns"] = own_turns
         from services.arturo.call_journal import _atomic_write
         _atomic_write(cpath, client)
         # flip + supersede the server shard (so the watchdog's superseded_by guard suppresses it)
@@ -923,7 +1009,7 @@ def finalize_from_client(client_call_id="", conv_id=""):
         log.error(f"finalize_from_client: sidecar unlink error: {_ue}")
 
     if card_thread:
-        _archive_client_call(inj_call_id or cpath.stem, card_thread, own_turns, card_principal)
+        _write_call_card(cpath, inj_call_id or cpath.stem, card_thread, own_turns, card_principal)
 
     if do_inject:
         # First attempt now; the background sweeper re-drives until gm accepts (DELIB-BUG-1).
@@ -1056,6 +1142,10 @@ def _start_inject_retry_sweeper(interval_s=15):
                             _attempt_gm_inject(p)
             except Exception as _we:
                 log.error(f"inject-retry-sweeper error: {_we}")
+            try:
+                _retry_owed_cards()       # not an inject: runs with the kill switch off too
+            except Exception as _ce:
+                log.error(f"call-card retry error: {_ce}")
             _t.sleep(interval_s)
 
     _threading.Thread(target=_loop, daemon=True).start()
@@ -8015,7 +8105,7 @@ def thread_delete_endpoint(conversation_id):
 
 
 def _semantic_db_path():
-    return Path(os.environ.get("ORCHESTRA_DIR", str(ORCHESTRA_DIR))) / "state" / "semantic-memory.db"
+    return Path(os.environ.get("ORCHESTRA_DIR") or str(ORCHESTRA_DIR)) / "state" / "semantic-memory.db"
 
 
 def _spawn_warm(argv, env=None):
@@ -9018,6 +9108,9 @@ def _call_end_marker(cid):
 # lines in its thread (call_tool_lines.py).
 from services.arturo import call_tool_lines as _call_tool_lines
 _ARCHIVE_LOCK = _threading.Lock()   # one native call archive at a time (the once check and its write)
+# (thread, call) archives whose lines landed without their card: the thread holds no card for the once check to find,
+# so an overlapping finalize that already chose the card is stopped here instead (the journal is marked after).
+_ARCHIVE_PARTIAL = set()
 
 
 def _archive_client_call(call_id, thread_id, turns, principal=None):
@@ -9037,6 +9130,9 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
         # the write hold one lock, so two finalizes of the same call (each on its own thread) cannot both pass it.
         # has_meta raises on a store it cannot read: the except below then writes nothing (never post blind).
         with _ARCHIVE_LOCK:
+            if (thread_id, call_id) in _ARCHIVE_PARTIAL:
+                log.info(f"call {call_id}: thread {thread_id[:24]} already holds its lines: not written again")
+                return True
             if _THREADS.has_meta(thread_id, kind="call_end", call_id=call_id):
                 log.info(f"call {call_id}: thread {thread_id[:24]} already holds its call card: not written again")
                 return True
@@ -9048,6 +9144,15 @@ def _archive_client_call(call_id, thread_id, turns, principal=None):
             if not ct.archive(call_id, thread_id, turns, principal=owner):
                 log.warning(f"call {call_id}: thread id {thread_id[:24]!r} refused: no call card written")
                 return False
+            lines, card = ct.archived
+            if not card and not lines:
+                # Nothing landed (a store that took no write): the card is still owed, and a retry repeats nothing.
+                log.warning(f"call {call_id}: nothing was written to thread {thread_id[:24]}: the card is still owed")
+                return False
+            if not card:
+                # Some lines landed but not the card: a retry would write them twice, so this call is done as it is.
+                _ARCHIVE_PARTIAL.add((thread_id, call_id))
+                log.warning(f"call {call_id}: {lines} line(s) but no call card reached thread {thread_id[:24]}")
         log.info(f"call {call_id}: lines + call card written to thread {thread_id[:24]}")
         _maybe_gist(thread_id, force=True)       # a call ended: its conversation's summary catches up
         return True

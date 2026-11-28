@@ -33,6 +33,7 @@ class CallThreads:
         self._by_call = {}                  # relay cid -> thread id
         self._by_thread = {}                # thread id -> relay cid (the live call in that thread)
         self._principal = {}                # relay cid -> who started it (the thread's owner if it is new)
+        self.archived = (0, False)          # archive's last call: (lines that landed, whether its card landed)
 
     def bind(self, cid, thread_id, principal=None):
         """First audio chunk of a call that named its thread. Later chunks are no-ops; a call never moves."""
@@ -57,6 +58,8 @@ class CallThreads:
             return self._by_thread.get(thread_id)
 
     def _write(self, cid, thread_id, role, text, meta=None, ts=None, principal=None):
+        """True when the line landed in the thread (whatever its memory echo does after)."""
+        seq = None
         try:
             seq = self.store.append_message(thread_id, role, text, mode="voice", meta=meta,
                                             principal=principal or self._principal.get(cid), ts=ts)
@@ -67,6 +70,7 @@ class CallThreads:
                 self.on_line(thread_id, role, brain_content(role, text, "voice", meta))
         except Exception as e:  # noqa: BLE001 — the archive is never worth breaking a call
             log.warning(f"call {cid[:8]}: archiving a line failed: {e!r}")
+        return seq is not None
 
     def observe(self, cid, ev):
         """One relay event, as the browser will get it. Only FINAL lines are archived."""
@@ -108,9 +112,11 @@ class CallThreads:
         are call-journal turns ({role: user|arturo|tool|surface, text, ts}). Every tool the call ran is a line too,
         where it happened (call_tool_lines: the journal's own tool turns, and the runs `tool_turns` finds outside
         it); a surface turn is not a line anyone saw. Like the live path, the card is written even for a call with
-        no lines. Never raises."""
+        no lines. Never raises. What landed is left in `archived`: a write can fail without raising."""
+        self.archived = (0, False)
         if not cid or not valid_thread_id(thread_id):
             return False
+        landed = 0
         from services.arturo import call_tool_lines
         turns = [t for t in turns or () if isinstance(t, dict)]
         if self.tool_turns is not None:
@@ -125,7 +131,7 @@ class CallThreads:
             if t.get("role") == "tool":
                 try:
                     ts = call_tool_lines._ts(t)
-                    self._write(cid, thread_id, "assistant", call_tool_lines.line_for(t), ts=ts, principal=principal,
+                    landed += self._write(cid, thread_id, "assistant", call_tool_lines.line_for(t), ts=ts, principal=principal,
                                 meta={"kind": call_tool_lines.KIND, "tool": str(t.get("tool") or t.get("name") or "tool"),
                                       "ok": call_tool_lines.line_ok(t), "tool_call_id": t.get("tool_call_id") or ""})
                 except Exception as e:  # noqa: BLE001
@@ -137,11 +143,13 @@ class CallThreads:
                 continue
             ts = t.get("ts")
             ts = ts if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0 else None
-            self._write(cid, thread_id, role, text, ts=ts, principal=principal)
+            landed += self._write(cid, thread_id, role, text, ts=ts, principal=principal)
+        card = False
         if self.end_marker is not None:
             try:
                 text, meta = self.end_marker(cid)
-                self._write(cid, thread_id, "assistant", text, meta=meta, principal=principal)
+                card = self._write(cid, thread_id, "assistant", text, meta=meta, principal=principal)
             except Exception as e:  # noqa: BLE001
                 log.warning(f"call {cid[:8]}: end marker failed: {e!r}")
+        self.archived = (landed, card)
         return True

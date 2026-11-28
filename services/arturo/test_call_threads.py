@@ -191,3 +191,24 @@ def test_archive_writes_a_finished_calls_lines_then_its_card(tmp_path):
     assert got[0]["ts"] == 1000.0 and got[3]["meta"] == {"kind": "call_end", "call_id": "vc_client_1"}
     assert got[1]["meta"] == {"kind": "call_tool", "tool": "x", "ok": True, "tool_call_id": ""}   # a tool run is a line
     assert seen[-1] == ("web_n1", "assistant", CALL_ENDED_LINE)
+    assert ct.archived == (3, True)                       # what landed: three lines, then the card
+
+
+def test_archive_says_what_landed_when_a_write_fails_without_raising(tmp_path):
+    # append_message answers None when it cannot write: archive still returns True, and `archived` says so.
+    s = ThreadStore(tmp_path / "t.db")
+    s.append_message = lambda *a, **k: None
+    ct = CallThreads(s, end_marker=lambda cid: ("Call ended.", {"kind": "call_end", "call_id": cid}))
+    assert ct.archive("vc_client_1", "web_n1", [{"role": "user", "text": "hi", "ts": 1000.0}], principal="fleet")
+    assert ct.archived == (0, False)
+
+
+def test_a_line_that_landed_counts_even_when_its_memory_echo_throws(tmp_path):
+    # The line is in the thread; on_line failing after it must not make a retry write it again.
+    s = ThreadStore(tmp_path / "t.db")
+
+    def boom(*a):
+        raise RuntimeError("memory down")
+    ct = CallThreads(s, on_line=boom, end_marker=lambda cid: ("Call ended.", {"kind": "call_end", "call_id": cid}))
+    assert ct.archive("vc_client_1", "web_n1", [{"role": "user", "text": "hi", "ts": 1000.0}], principal="fleet")
+    assert ct.archived == (1, True)
